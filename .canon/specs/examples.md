@@ -5,7 +5,6 @@ Initialize canon in a project:
 ```sh
 $ canon init
 Created .canon/check.yml
-Added .canon/.state/ to .gitignore
 ```
 
 Install the pre-commit hook:
