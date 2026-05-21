@@ -11,7 +11,10 @@ pub(crate) fn ensure_dir_without_symlinks(path: &Path) -> Result<(), String> {
     let mut current = PathBuf::new();
     for component in path.components() {
         match component {
-            Component::Prefix(prefix) => current.push(prefix.as_os_str()),
+            Component::Prefix(prefix) => {
+                current.push(prefix.as_os_str());
+                continue;
+            }
             Component::RootDir => {
                 current.push(component.as_os_str());
                 continue;
