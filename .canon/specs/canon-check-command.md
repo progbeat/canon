@@ -87,8 +87,9 @@ human review.
 
 ## Instructions to Agent
 
-Assuming no Ctrl-C or other interruption, the check run may emit instructions
-for the agent that ran `canon check` like this:
+Assuming no Ctrl-C or other interruption, when `canon check` is called without
+arguments, the check run may emit instructions for the agent that ran it like
+this:
 
 ```
 def print_agent_messages(num_failed, num_fixes, num_regressions):
