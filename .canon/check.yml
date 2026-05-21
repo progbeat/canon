@@ -51,7 +51,7 @@ expectations:
     cooldown: 3d
 
   # Persistent state management
-  - q: "Let CANON_STATE_DIR=$(git rev-parse --git-path canon). Does every canon command store all canon-owned non-temporary persistent state under CANON_STATE_DIR?"
+  - q: "Let CANON_STATE_DIR=.canon/.state. Does every canon command store all canon-owned non-temporary persistent state under CANON_STATE_DIR?"
     a: "yes"
     cooldown: 7d
     thinking: low
@@ -64,7 +64,7 @@ expectations:
     a: "yes"
 
   # Init and hooks
-  - q: "Does `canon init` create `.canon/check.yml` from an embedded default template and fail without overwriting when `.canon/check.yml` already exists?"
+  - q: "Does `canon init` create `.canon/check.yml` from an embedded default template, ensure `.gitignore` ignores `.canon/.state/`, and fail without overwriting when `.canon/check.yml` already exists?"
     a: "yes"
 
   - q: "Is the local Git configuration for this repository set to run the repository pre-commit hook?"

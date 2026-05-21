@@ -12,7 +12,7 @@ def stochastic_round(x):
 
 def lazy_full_scope_reset(num_evaluated_expectations, skipped_expectations):
     """
-    num_evaluated_expectations: Number of evaluated expectations. Cache hits do not count.
+    num_evaluated_expectations: Number of expectations processed by the evaluator agent.
     skipped_expectations: Non-selected expectations.
     """
     candidates = [e for e in skipped_expectations if e.scope != ["."]]
