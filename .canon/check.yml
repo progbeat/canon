@@ -95,5 +95,5 @@ expectations:
   - q: "Are expectation ID prefixes limited to human-readable output and CLI selection, with all non-temporary persistent state under CANON_STATE_DIR storing expectation references by full ID rather than minimal or user-provided prefixes?"
     a: "yes"
 
-  - q: "Does every `canon` command write and flush each next piece of stdout or stderr as soon as that piece is computed, rather than waiting for later work or command completion?"
+  - q: "Does every `canon` command flush stdout and stderr incrementally once output becomes eligible to be emitted, without holding it until unrelated later work or command completion?"
     a: "yes"
