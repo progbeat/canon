@@ -66,7 +66,7 @@ pub(crate) fn report_output_skipped_count(report: &CheckRunReport) -> usize {
     debug_assert!(report.silent <= report.skipped);
     // The check-output contract reports final non-selected expectations. That
     // includes CLI-selector exclusions plus expectations deselected later by
-    // cooldown or silent exact-cache passes.
+    // cooldown.
     report.skipped
 }
 
@@ -136,10 +136,7 @@ pub(crate) fn render_token_usage_summary(usage: TokenUsage) -> String {
 pub(crate) fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -> String {
     // Summary order is fixed to match the spec and pytest-style labels:
     // failed, error/errors, passed, skipped.
-    // `report.skipped` is the final non-selected count. Silent exact-cache
-    // passes are not selected at final reporting time: they produce no
-    // per-expectation stdout and count only in the public skipped total. Failed
-    // exact-cache hits remain selected and count as failures.
+    // `report.skipped` is the final non-selected count.
     let mut passed = 0usize;
     let mut failed = 0usize;
     let mut errors = 0usize;

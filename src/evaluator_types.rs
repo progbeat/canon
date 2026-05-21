@@ -7,7 +7,7 @@ use std::path::Path;
 pub(crate) trait EvaluatorRunner {
     fn start_session(
         &mut self,
-        root: &Path,
+        session_cwd: &Path,
         instructions: &str,
         agent: &AgentConfig,
         model: Option<&str>,

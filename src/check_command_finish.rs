@@ -147,10 +147,16 @@ pub(crate) fn check_agent_message(
         .iter()
         .filter(|record| !record.passed() && !record_requires_human_review(record))
         .count();
-    if num_regressions > 0 || (num_failed > 0 && num_fixes == 0) {
+    let num_errors = report
+        .records
+        .iter()
+        .filter(|record| !record.passed() && record_requires_human_review(record))
+        .count();
+    let num_non_ok = num_failed + num_errors;
+    if num_regressions > 0 || (num_non_ok > 0 && num_fixes == 0) {
         return Ok(FIX_ISSUES_MESSAGE.to_string());
     }
-    if num_failed == 0 && num_fixes == 0 {
+    if num_non_ok == 0 && num_fixes == 0 {
         return Ok(ALL_CHECKS_PASSED_MESSAGE.to_string());
     }
     Ok(pass_improvement_notice(num_fixes).expect("positive fix count"))

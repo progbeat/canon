@@ -14,7 +14,7 @@ fn hook_install_creates_reusable_pre_commit_hook() {
     );
     assert_eq!(
         DEFAULT_PRE_COMMIT_HOOK.matches("canon gate failed").count(),
-        1
+        0
     );
     assert!(!DEFAULT_PRE_COMMIT_HOOK.contains("target/debug/canon"));
     assert!(!DEFAULT_PRE_COMMIT_HOOK.contains(".codex-plugin"));
@@ -37,9 +37,9 @@ fn hook_install_refuses_non_exact_existing_canon_pre_commit_hook() {
     let root = temp_home("hook-install-update");
     let hook_path = root.join(PRE_COMMIT_HOOK_PATH);
     fs::create_dir_all(hook_path.parent().unwrap()).unwrap();
-    let previous_hook = DEFAULT_PRE_COMMIT_HOOK.replace(
-        "echo \"canon pre-commit: running canon gate\"",
-        "if [ -n \"$(git status --porcelain -- .canon/)\" ]; then\n  echo \"canon pre-commit: .canon/ has uncommitted changes\" >&2\n  git status --porcelain -- .canon/ >&2\n  echo \"Clean .canon/ before committing.\" >&2\n  exit 1\nfi\n\necho \"canon pre-commit: running canon gate\"",
+    let previous_hook = format!(
+        "{}\n# legacy dirty .canon check removed from current hook\n",
+        DEFAULT_PRE_COMMIT_HOOK
     );
     fs::write(&hook_path, previous_hook).unwrap();
 
@@ -82,6 +82,21 @@ fn hook_install_refuses_nonstandard_git_hooks_path() {
 
     assert!(err.contains("Can't safely install pre-commit hook"));
     assert!(!root.join(PRE_COMMIT_HOOK_PATH).exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn hook_install_refuses_existing_default_pre_commit_hook() {
+    let root = git_project("hook-install-default-existing");
+    let default_hook = root.join(".git/hooks/pre-commit");
+    fs::create_dir_all(default_hook.parent().unwrap()).unwrap();
+    fs::write(&default_hook, "custom default hook").unwrap();
+
+    let err = run_hook_install(&root).unwrap_err();
+
+    assert!(err.contains("Can't safely install pre-commit hook"));
+    assert!(!root.join(PRE_COMMIT_HOOK_PATH).exists());
+    assert_eq!(current_git_hooks_path_for_worktree(&root).unwrap(), None);
     let _ = fs::remove_dir_all(root);
 }
 

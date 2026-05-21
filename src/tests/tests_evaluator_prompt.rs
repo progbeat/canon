@@ -69,7 +69,8 @@ expectations:
     )
     .unwrap();
     let instructions = developer_instructions(&config.agent, &full_scope());
-    let answer_policy = include_str!("../instructions/evaluator_answer_policy.txt").trim_end();
+    let answer_policy =
+        include_str!("../../resources/prompts/evaluator_answer_policy.txt").trim_end();
     assert!(instructions.contains("Project-specific evaluator policy loaded from check.yml"));
     assert!(instructions.contains("Answer from files only."));
     assert!(instructions.contains("Prefer `rg` and `rg --files`"));
@@ -77,6 +78,7 @@ expectations:
     assert!(instructions.contains(response_format_block()));
     assert!(instructions.contains("project-relative refs enclosed in backticks"));
     assert!(instructions.contains("Never include a path outside the enforced scope"));
+    assert!(instructions.contains("Embedded question text loaded from a denied file"));
     assert!(instructions.contains(answer_policy));
     assert!(!instructions.contains("Instruction-boundary policy"));
 }

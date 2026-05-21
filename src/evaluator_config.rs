@@ -9,7 +9,7 @@ use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 use std::env;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const EVALUATOR_MODEL_CATALOG_DIR: &str = "canon/evaluator-model-catalogs";
@@ -109,9 +109,8 @@ pub(crate) fn deny_evaluator_project_paths(
 
 pub(crate) fn evaluator_deny_permission_patterns(agent: &AgentConfig) -> Vec<String> {
     let mut patterns = Vec::new();
-    // `effective_ignore_patterns` includes the mandatory `.git/canon/logs` and
-    // `.git/canon/logs/**` denies, so even a full-scope `.` read cannot expose
-    // runtime logs to evaluator sessions.
+    // `effective_ignore_patterns` includes the mandatory `.git/canon/**` deny,
+    // so even a full-scope `.` read cannot expose runtime state to evaluator sessions.
     for pattern in effective_ignore_patterns(agent) {
         let pattern = normalize_repo_path(&pattern).unwrap_or(pattern);
         // A recursive deny must also deny the directory entry itself, otherwise
@@ -309,8 +308,14 @@ fn push_unique_model_slug(models: &mut Vec<String>, model: &str) {
     }
 }
 
-fn write_evaluator_model_catalog(root: &Path, models: &[String]) -> Result<PathBuf, String> {
-    let dir = resolve_git_path(root, EVALUATOR_MODEL_CATALOG_DIR)?;
+fn write_evaluator_model_catalog(
+    root: &Path,
+    models: &[String],
+) -> Result<std::path::PathBuf, String> {
+    let root = root
+        .canonicalize()
+        .map_err(|err| format!("failed to canonicalize evaluator root: {}", err))?;
+    let dir = resolve_git_path(&root, EVALUATOR_MODEL_CATALOG_DIR)?;
     let path = dir.join(format!("{}.json", std::process::id()));
     let temp_path = dir.join(format!(
         "{}.{}.tmp",

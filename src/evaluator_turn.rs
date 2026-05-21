@@ -104,11 +104,10 @@ pub(crate) fn record_from_response(
 // the full interrogation policy; with only this file visible, full-policy
 // questions require `idk` rather than a pass/fail conclusion. Cross-turn policy
 // such as restricted `idk` full-scope retries, narrowing verification, and
-// cache orchestration is in `check.rs`, `check_interrogation_records.rs`, and
-// `check_cache.rs`. Evaluator thread lifecycle observability is also outside
-// this per-turn module: `check_interrogation.rs` writes `thread.start` and
-// `thread.reuse`, including the base and developer instructions sent to the
-// evaluator.
+// history writes is in `check.rs` and `check_interrogation_records.rs`.
+// Evaluator thread lifecycle observability is also outside this per-turn
+// module: `check_interrogation.rs` writes `thread.start` and `thread.reuse`,
+// including the base and developer instructions sent to the evaluator.
 pub(crate) struct EvaluatorTurnContext<'a> {
     pub(crate) session_id: &'a str,
     pub(crate) model: Option<&'a str>,

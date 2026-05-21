@@ -3,7 +3,7 @@ use crate::check_types::CheckRecord;
 use crate::evaluator_prompt::response_format_block;
 use crate::logging::DiagnosticLogWriter;
 use crate::tests::{
-    answer, check_config_yaml, check_options, git_project, parse_check_config, FakeRunner,
+    answer, check_config_yaml, check_options, git_project, parse_check_config, FakeRunner, TestDir,
 };
 use crate::token_usage_types::{EvaluatorTurnUsage, TokenUsage};
 use std::fs;
@@ -70,6 +70,33 @@ fn check_runner_hides_expected_answers_and_reuses_session() {
         .prompts
         .iter()
         .all(|prompt| !prompt.contains(response_format_heading)));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_runner_starts_sessions_from_snapshot_root() {
+    let root = git_project("check-runner-real-root");
+    let snapshot = TestDir::new("check-runner-snapshot-root");
+    let snapshot_root = snapshot.path();
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let mut runner = FakeRunner::new(&[&answer("yes", "README.md says enough", &["."])]);
+    let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
+
+    let records = run_check_with_runner(
+        &root,
+        &snapshot_root,
+        &config,
+        &options,
+        &mut runner,
+        Some(&mut diagnostic_log),
+        None,
+    )
+    .unwrap();
+
+    assert!(records.records.iter().all(CheckRecord::passed));
+    assert_eq!(runner.start_roots, vec![snapshot_root]);
+    assert_ne!(runner.start_roots, vec![root.clone()]);
     let _ = fs::remove_dir_all(root);
 }
 

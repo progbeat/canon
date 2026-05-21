@@ -299,7 +299,7 @@ fn evaluator_model_catalog_json_removes_model_prompt_and_patch_tool() {
 #[test]
 fn evaluator_codex_home_preserves_auth_without_skills_or_plugins() {
     let _guard = ENV_LOCK.lock().expect("lock test environment");
-    let env_snapshot = EnvSnapshot::capture(&["CODEX_HOME"]);
+    let env_snapshot = EnvSnapshot::capture(&["CODEX_HOME", "CODEX_SANDBOX"]);
     let source_home = TestDir::new("codex-home-source");
     let user_skill = source_home.path().join("skills/team/SKILL.md");
     let plugin_skill = source_home
@@ -311,13 +311,38 @@ fn evaluator_codex_home_preserves_auth_without_skills_or_plugins() {
     fs::write(&plugin_skill, "name: audit\n").unwrap();
     fs::write(source_home.path().join("auth.json"), "{}\n").unwrap();
     env_snapshot.set("CODEX_HOME", source_home.path());
+    env_snapshot.remove("CODEX_SANDBOX");
 
     let root = git_project("app-server-empty-codex-home");
     let evaluator_home = prepare_evaluator_codex_home(&root).unwrap();
 
-    assert_eq!(evaluator_home, env::temp_dir().join("canon").join(".codex"));
+    assert_eq!(
+        evaluator_home,
+        env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join("canon")
+            .join(".codex")
+    );
     assert!(!evaluator_home.starts_with(&root));
-    assert!(evaluator_home.join("auth.json").exists());
+    let auth_path = evaluator_home.join("auth.json");
+    assert!(auth_path.exists());
+    #[cfg(unix)]
+    {
+        assert!(fs::symlink_metadata(&auth_path)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            fs::read_link(&auth_path).unwrap(),
+            source_home.path().join("auth.json")
+        );
+    }
+    #[cfg(not(unix))]
+    assert!(!fs::symlink_metadata(&auth_path)
+        .unwrap()
+        .file_type()
+        .is_symlink());
     assert!(evaluator_home.join("skills").is_dir());
     assert!(evaluator_home.join("plugins").is_dir());
     assert!(evaluator_home
@@ -327,6 +352,40 @@ fn evaluator_codex_home_preserves_auth_without_skills_or_plugins() {
     assert!(!evaluator_home
         .join("plugins/cache/example-plugin/skills/audit/SKILL.md")
         .exists());
+    let _ = fs::remove_dir_all(evaluator_home);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn evaluator_codex_home_symlinks_auth_inside_codex_sandbox() {
+    let _guard = ENV_LOCK.lock().expect("lock test environment");
+    let env_snapshot = EnvSnapshot::capture(&["CODEX_HOME", "CODEX_SANDBOX"]);
+    let source_home = TestDir::new("codex-home-source-sandbox");
+    fs::write(source_home.path().join("auth.json"), "{}\n").unwrap();
+    env_snapshot.set("CODEX_HOME", source_home.path());
+    env_snapshot.set("CODEX_SANDBOX", "seatbelt");
+
+    let root = git_project("app-server-copied-codex-home");
+    let evaluator_home = prepare_evaluator_codex_home(&root).unwrap();
+
+    let auth_path = evaluator_home.join("auth.json");
+    assert!(auth_path.exists());
+    #[cfg(unix)]
+    {
+        assert!(fs::symlink_metadata(&auth_path)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            fs::read_link(&auth_path).unwrap(),
+            source_home.path().join("auth.json")
+        );
+    }
+    #[cfg(not(unix))]
+    assert!(!fs::symlink_metadata(&auth_path)
+        .unwrap()
+        .file_type()
+        .is_symlink());
     let _ = fs::remove_dir_all(evaluator_home);
     let _ = fs::remove_dir_all(root);
 }

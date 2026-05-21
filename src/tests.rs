@@ -13,9 +13,6 @@ use crate::app_server_transport::{
     thread_reuse_policy_should_retire,
 };
 use crate::check::run_check_with_runner;
-use crate::check_cache::{
-    cached_failure_for_expectation, final_selected_after_current_pass_cache, write_cache_hit,
-};
 use crate::check_command::run_check_command;
 use crate::check_command::{check_command_writes_agent_message, prepare_check_execution};
 use crate::check_command_args::parse_check_command_args;

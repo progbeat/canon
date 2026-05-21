@@ -282,6 +282,10 @@ pub(crate) fn prepare_check_execution(
             return Err(err);
         }
     };
+    // The app-server starts from the real project root so Canon-owned runtime
+    // state and model catalog config stay under that repository's `.git/canon`.
+    // Evaluator sessions get the staged snapshot as `thread/start.cwd` in
+    // `check_interrogation::start_thread_session`.
     let runner = LazyAppServerRunner::new(root, check_config_loads_plugins(config), &config.agent);
     Ok(PreparedCheckExecution {
         staged_view,

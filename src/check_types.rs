@@ -240,9 +240,8 @@ impl CheckRecord {
 
 pub(crate) struct CheckOptions {
     // CLI-expanded expectation candidates. This is not the final selected set:
-    // cooldown and silent exact-cache passes can remove candidates before the
-    // check report records its selected/skipped counts. Exact cache lookup can
-    // still reuse failed records; those stay selected and are reported.
+    // cooldown can remove candidates before the check report records its
+    // selected/skipped counts.
     pub(crate) selected: Vec<SelectedExpectation>,
     pub(crate) non_selected: Vec<SelectedExpectation>,
     pub(crate) skipped: usize,
@@ -303,18 +302,15 @@ pub(crate) struct NarrowingStats {
 pub(crate) struct CheckRunReport {
     pub(crate) records: Vec<CheckRecord>,
     pub(crate) non_selected: Vec<SelectedExpectation>,
-    // Freshly evaluated expectations in this run. Reused cache records do not
-    // count, even when they are emitted as FAILED output.
+    // Freshly evaluated expectations in this run.
     pub(crate) evaluated: usize,
     // Final selected count after every selection rule has run. This excludes
-    // command-selector misses, cooldown matches, and silent exact-cache passes.
-    // Failed exact-cache hits stay selected because they produce FAILED output.
+    // command-selector misses and cooldown matches.
     pub(crate) selected: usize,
-    // Final non-selected count. Silent exact-cache passes are non-selected for
-    // reporting because they produce no per-expectation stdout.
+    // Final non-selected count.
     pub(crate) skipped: usize,
     // Non-selected expectations that intentionally produce no per-expectation
-    // stdout, currently cooldown matches and silent exact-cache passes.
+    // stdout, currently cooldown matches.
     pub(crate) silent: usize,
     // Kept for internal assertions around scope-narrowing behavior; public
     // output and runtime logs rely on the per-event narrowing records instead.

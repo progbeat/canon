@@ -96,7 +96,7 @@ impl FakeRunner {
 impl EvaluatorRunner for FakeRunner {
     fn start_session(
         &mut self,
-        root: &Path,
+        session_cwd: &Path,
         instructions: &str,
         agent: &AgentConfig,
         model: Option<&str>,
@@ -105,7 +105,7 @@ impl EvaluatorRunner for FakeRunner {
     ) -> Result<String, EvaluatorError> {
         self.starts += 1;
         self.start_instructions.push(instructions.to_string());
-        self.start_roots.push(root.to_path_buf());
+        self.start_roots.push(session_cwd.to_path_buf());
         self.start_ignores.push(effective_ignore_patterns(agent));
         self.start_models
             .push(model.or(agent.model.primary.as_deref()).map(str::to_string));

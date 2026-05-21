@@ -17,6 +17,8 @@ pub(crate) struct AppServerRunner {
     pub(crate) stdin: ChildStdin,
     pub(crate) messages: Receiver<Result<Value, String>>,
     pub(crate) reader: Option<JoinHandle<()>>,
+    pub(crate) stderr: Receiver<String>,
+    pub(crate) stderr_reader: Option<JoinHandle<()>>,
     pub(crate) next_id: u64,
     pub(crate) token_usage_by_turn: BTreeMap<String, TokenUsage>,
     pub(crate) token_usage_updates_by_turn: BTreeMap<String, Vec<TokenUsageUpdate>>,
@@ -26,7 +28,7 @@ pub(crate) struct AppServerRunner {
 }
 
 pub(crate) struct LazyAppServerRunner {
-    pub(crate) root: PathBuf,
+    pub(crate) app_server_root: PathBuf,
     pub(crate) load_plugins: bool,
     pub(crate) agent: AgentConfig,
     pub(crate) inner: Option<AppServerRunner>,
@@ -36,12 +38,12 @@ pub(crate) struct LazyAppServerRunner {
 
 impl LazyAppServerRunner {
     pub(crate) fn new(
-        root: &std::path::Path,
+        app_server_root: &std::path::Path,
         load_plugins: bool,
         agent: &AgentConfig,
     ) -> LazyAppServerRunner {
         LazyAppServerRunner {
-            root: root.to_path_buf(),
+            app_server_root: app_server_root.to_path_buf(),
             load_plugins,
             agent: agent.clone(),
             inner: None,
@@ -53,7 +55,7 @@ impl LazyAppServerRunner {
     pub(crate) fn inner(&mut self) -> Result<&mut AppServerRunner, EvaluatorError> {
         if self.inner.is_none() {
             self.inner = Some(AppServerRunner::new(
-                &self.root,
+                &self.app_server_root,
                 self.load_plugins,
                 &self.agent,
             )?);

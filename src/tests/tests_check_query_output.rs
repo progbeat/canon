@@ -122,7 +122,7 @@ fn check_agent_message_uses_required_all_pass_and_fallback_text() {
 }
 
 #[test]
-fn check_agent_message_does_not_count_human_review_as_failed() {
+fn check_agent_message_counts_human_review_as_non_ok() {
     let root = git_project("check-agent-message-human-review");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let mut error_record = sample_record(1, "fail");
@@ -146,7 +146,7 @@ fn check_agent_message_does_not_count_human_review_as_failed() {
             &mut ScopeHashCache::new(),
         )
         .unwrap(),
-        "✓ All checks passed. Commit is allowed."
+        "▷ Fix the issues and run `canon check` again!"
     );
     let _ = fs::remove_dir_all(root);
 }

@@ -58,16 +58,16 @@ impl LazyAppServerRunner {
 impl EvaluatorRunner for LazyAppServerRunner {
     fn start_session(
         &mut self,
-        root: &Path,
+        session_cwd: &Path,
         instructions: &str,
         agent: &AgentConfig,
         model: Option<&str>,
         thinking: &str,
         scope: &[String],
     ) -> Result<String, EvaluatorError> {
-        let result = self
-            .inner()?
-            .start_session(root, instructions, agent, model, thinking, scope);
+        let result =
+            self.inner()?
+                .start_session(session_cwd, instructions, agent, model, thinking, scope);
         match result {
             Ok(session_id) => {
                 self.sessions.insert(session_id.clone());
@@ -122,15 +122,19 @@ impl EvaluatorRunner for LazyAppServerRunner {
 impl EvaluatorRunner for AppServerRunner {
     fn start_session(
         &mut self,
-        root: &Path,
+        session_cwd: &Path,
         instructions: &str,
         agent: &AgentConfig,
         model: Option<&str>,
         thinking: &str,
         scope: &[String],
     ) -> Result<String, EvaluatorError> {
+        // `session_cwd` is the staged Git snapshot root supplied by
+        // `check_interrogation`; it is distinct from `LazyAppServerRunner`'s
+        // app-server startup root, which is the real project root used for
+        // Canon runtime state and app-server configuration.
         let params = ThreadStartParams {
-            cwd: root.display().to_string(),
+            cwd: session_cwd.display().to_string(),
             base_instructions: EVALUATOR_BASE_INSTRUCTIONS,
             developer_instructions: instructions,
             approval_policy: "never",

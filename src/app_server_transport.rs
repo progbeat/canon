@@ -326,10 +326,29 @@ impl AppServerRunner {
                 if check_interrupted() {
                     Err("interrupted".into())
                 } else {
-                    Err("app-server closed stdout".into())
+                    Err(self.app_server_closed_stdout_error())
                 }
             }
         }
+    }
+
+    fn app_server_closed_stdout_error(&mut self) -> EvaluatorError {
+        let mut message = String::from("app-server closed stdout");
+        if let Ok(Some(status)) = self.child.try_wait() {
+            message.push_str(&format!(" with status {}", status));
+        }
+        let stderr = self
+            .stderr
+            .try_iter()
+            .collect::<Vec<_>>()
+            .join("")
+            .trim()
+            .to_string();
+        if !stderr.is_empty() {
+            message.push_str(": ");
+            message.push_str(&stderr);
+        }
+        EvaluatorError::message(message)
     }
 
     fn record_app_server_events(&mut self, message: &Value) {

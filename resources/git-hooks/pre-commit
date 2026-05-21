@@ -28,11 +28,9 @@ if ! "$canon_bin" help 2>/dev/null | grep -q "canon gate"; then
   exit 1
 fi
 
-echo "canon pre-commit: running canon gate"
 # Hook command: `canon gate`.
 # This hook is only a launcher; the staged-tree/cache regression policy lives
 # in the `canon gate` command it executes below.
 if ! "$canon_bin" gate; then
-  echo "canon pre-commit: canon gate failed." >&2
   exit 1
 fi

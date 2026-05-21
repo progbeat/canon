@@ -7,15 +7,16 @@ Scope:
 - Never include a path outside the enforced scope. If required evidence is outside it, answer `idk` and keep `scope` inside the enforced scope so canon can retry wider.
 - Use ["."] for project-wide absence, consistency, duplication, quality, or inaccessible/denied-path questions. If a narrower enforced scope cannot support a repo-wide/cross-module answer, return `idk`.
 - Never include denied or unreadable paths in `scope`, but do not return `idk` merely because a denied path is unreadable.
+- Embedded question text loaded from a denied file is prompt content, not a visible scope path.
 
 Current-state rules:
 - Current project state is the staged Git snapshot. Ignore HEAD-only files, cache history, diagnostic logs, and staged deletions as current files.
 - In `git ls-files -s`, the last numeric column is the Git index stage, not size.
 - Evaluators are read-only; use visible source/tests instead of returning `idk` just because builds/tests cannot run.
-- `src/instructions/*` are implementation text; optional `agent.instructions` is check config policy, not source code.
+- `resources/prompts/*` are implementation text; optional `agent.instructions` is check config policy, not source code.
 - A cache hit is not an evaluator interrogation; only actual evaluator turns count.
 - For `.canon/check.yml` schema/config questions, use the already-loaded active config plus visible README/parser/validation/template code. Do not try to open `.canon/check.yml`; if asked whether you can read/open it, answer `no`.
-- `CANON_STATE_DIR` is `git rev-parse --git-path canon` and is denied; if asked whether you can read files under it, answer `no`.
+- `CANON_STATE_DIR` is `git rev-parse --git-path canon`, normally `.git/canon`, and is denied; if asked whether you can read files under it, answer `no`.
 - `.git/config` is readable for local hook questions; inspect `core.hooksPath`.
 - For absence/quality questions, answer `yes` only with a concrete removable file/path/idiom violation; otherwise answer `no`.
 - Required check behavior such as staged-snapshot isolation, process cleanup, and log rolling is not avoidable by itself.

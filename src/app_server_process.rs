@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
@@ -63,6 +63,19 @@ pub(crate) fn spawn_app_server_reader(
     (receiver, reader)
 }
 
+pub(crate) fn spawn_app_server_stderr_reader(
+    mut stderr: std::process::ChildStderr,
+) -> (Receiver<String>, JoinHandle<()>) {
+    let (sender, receiver) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        let mut text = String::new();
+        if stderr.read_to_string(&mut text).is_ok() && !text.trim().is_empty() {
+            let _ = sender.send(text);
+        }
+    });
+    (receiver, reader)
+}
+
 impl AppServerRunner {
     pub(crate) fn new(
         root: &Path,
@@ -84,7 +97,7 @@ impl AppServerRunner {
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|err| format!("failed to start codex app-server: {}", err))?;
         let stdin = take_child_pipe(
@@ -97,12 +110,20 @@ impl AppServerRunner {
             |child| child.stdout.take(),
             "failed to open app-server stdout",
         )?;
+        let stderr = take_child_pipe(
+            &mut child,
+            |child| child.stderr.take(),
+            "failed to open app-server stderr",
+        )?;
         let (messages, reader) = spawn_app_server_reader(stdout);
+        let (stderr, stderr_reader) = spawn_app_server_stderr_reader(stderr);
         let mut runner = AppServerRunner {
             child,
             stdin,
             messages,
             reader: Some(reader),
+            stderr,
+            stderr_reader: Some(stderr_reader),
             next_id: 1,
             token_usage_by_turn: BTreeMap::new(),
             token_usage_updates_by_turn: BTreeMap::new(),
@@ -127,7 +148,7 @@ impl AppServerRunner {
 }
 
 pub(crate) fn prepare_evaluator_codex_home(_root: &Path) -> Result<PathBuf, String> {
-    let codex_home = evaluator_codex_home_path();
+    let codex_home = evaluator_codex_home_path()?;
     ensure_evaluator_codex_home_dir(&codex_home)?;
     for file in EVALUATOR_CODEX_HOME_RESET_FILES {
         remove_existing_codex_home_entry(&codex_home.join(file))?;
@@ -152,8 +173,11 @@ pub(crate) fn prepare_evaluator_codex_home(_root: &Path) -> Result<PathBuf, Stri
     Ok(codex_home)
 }
 
-fn evaluator_codex_home_path() -> PathBuf {
-    env::temp_dir().join("canon").join(".codex")
+fn evaluator_codex_home_path() -> Result<PathBuf, String> {
+    let temp_root = env::temp_dir()
+        .canonicalize()
+        .map_err(|err| format!("failed to canonicalize temp dir: {}", err))?;
+    Ok(temp_root.join("canon").join(".codex"))
 }
 
 fn ensure_evaluator_codex_home_dir(path: &Path) -> Result<(), String> {
@@ -248,6 +272,9 @@ impl Drop for AppServerRunner {
     fn drop(&mut self) {
         let _ = terminate_app_server_child(&mut self.child);
         if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
+        if let Some(reader) = self.stderr_reader.take() {
             let _ = reader.join();
         }
     }

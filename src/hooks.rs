@@ -11,8 +11,11 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::process::Command;
 
-const DEFAULT_GIT_PRE_COMMIT_HOOK_PATH: &str = ".git/hooks/pre-commit";
+// User-facing output names the repository's pre-commit hook role. The managed
+// script is stored at `PRE_COMMIT_HOOK_PATH` under `.git/canon`, and
+// `core.hooksPath` points Git at that directory.
 const PRE_COMMIT_HOOK_DISPLAY_PATH: &str = ".git/hooks/pre-commit";
+const DEFAULT_GIT_PRE_COMMIT_HOOK_PATH: &str = ".git/hooks/pre-commit";
 const PRE_COMMIT_HOOK_MANUAL_ADVICE: &str =
     "Can't safely install pre-commit hook.\n▷ Add `canon gate` manually to the existing hook setup or ask a human to handle it.";
 
@@ -102,41 +105,44 @@ pub(crate) fn run_hook_command(root: &Path, args: &[OsString]) -> Result<(), Str
 }
 
 pub(crate) fn run_hook_install(root: &Path) -> Result<(), String> {
-    preflight_default_git_pre_commit_hook(root)?;
-    let state = HookInstallState::load(root)?;
-    preflight_pre_commit_hook_content(state.pre_commit_hook.as_deref())?;
-    preflight_git_hooks_path_state(&state)?;
-    install_pre_commit_hook_with_state(root, &state)
+    let preflight = HookInstallPreflight::load(root)?;
+    preflight_default_git_pre_commit_hook(root, &preflight)?;
+    preflight_pre_commit_hook_content(preflight.pre_commit_hook.as_deref())?;
+    preflight_git_hooks_path(&preflight)?;
+    install_pre_commit_hook(root, &preflight)
 }
 
 pub(crate) fn run_hook_uninstall(root: &Path) -> Result<(), String> {
-    let state = HookInstallState::load(root)?;
+    let preflight = HookInstallPreflight::load(root)?;
     let hook_path = root.join(PRE_COMMIT_HOOK_PATH);
-    if let Some(existing) = state.pre_commit_hook.as_deref() {
+    if let Some(existing) = preflight.pre_commit_hook.as_deref() {
         if !pre_commit_hook_is_reusable(existing) {
             return Err(pre_commit_hook_manual_advice());
         }
         fs::remove_file(&hook_path)
             .map_err(|err| format!("failed to remove {}: {}", hook_path.display(), err))?;
     }
-    if state.current_git_hooks_path.as_deref() == Some(GIT_HOOKS_PATH) {
+    if preflight.current_git_hooks_path.as_deref() == Some(GIT_HOOKS_PATH) {
         unset_git_hooks_path(root)?;
     }
     write_stdout_line(&format!("Uninstalled {}", PRE_COMMIT_HOOK_DISPLAY_PATH))
 }
 
-fn preflight_default_git_pre_commit_hook(root: &Path) -> Result<(), String> {
-    if DEFAULT_GIT_PRE_COMMIT_HOOK_PATH == PRE_COMMIT_HOOK_PATH {
+fn pre_commit_hook_manual_advice() -> String {
+    PRE_COMMIT_HOOK_MANUAL_ADVICE.to_string()
+}
+
+fn preflight_default_git_pre_commit_hook(
+    root: &Path,
+    preflight: &HookInstallPreflight,
+) -> Result<(), String> {
+    if preflight.current_git_hooks_path.as_deref() == Some(GIT_HOOKS_PATH) {
         return Ok(());
     }
     if path_exists_no_follow(&root.join(DEFAULT_GIT_PRE_COMMIT_HOOK_PATH))? {
         return Err(pre_commit_hook_manual_advice());
     }
     Ok(())
-}
-
-fn pre_commit_hook_manual_advice() -> String {
-    PRE_COMMIT_HOOK_MANUAL_ADVICE.to_string()
 }
 
 pub(crate) fn preflight_pre_commit_hook_content(content: Option<&str>) -> Result<(), String> {
@@ -149,12 +155,11 @@ pub(crate) fn preflight_pre_commit_hook_content(content: Option<&str>) -> Result
     Ok(())
 }
 
-pub(crate) fn preflight_git_hooks_path_state(state: &HookInstallState) -> Result<(), String> {
-    // The documented install target is Git's default hook file,
-    // `.git/hooks/pre-commit`. When `core.hooksPath` is unset, Git reads that
-    // path without any extra configuration. A non-default hook manager would
-    // bypass it, so refuse that case and ask for manual integration instead.
-    if let Some(existing) = state.current_git_hooks_path.as_deref() {
+pub(crate) fn preflight_git_hooks_path(preflight: &HookInstallPreflight) -> Result<(), String> {
+    // Canon owns the hook directory only when Git has no custom hook manager or
+    // already points at Canon's hook directory. Any other `core.hooksPath`
+    // belongs to existing project Git integration and needs manual handling.
+    if let Some(existing) = preflight.current_git_hooks_path.as_deref() {
         if existing == GIT_HOOKS_PATH {
             return Ok(());
         }
@@ -167,21 +172,23 @@ pub(crate) fn pre_commit_hook_is_reusable(content: &str) -> bool {
     content == DEFAULT_PRE_COMMIT_HOOK
 }
 
-pub(crate) fn install_pre_commit_hook_with_state(
+pub(crate) fn install_pre_commit_hook(
     root: &Path,
-    state: &HookInstallState,
+    preflight: &HookInstallPreflight,
 ) -> Result<(), String> {
-    // Git discovers this file by default when `core.hooksPath` is unset, so the
-    // installer only writes `.git/hooks/pre-commit` and marks it executable.
+    // The hook script is canon-owned persistent state, so it lives under the
+    // repository's `.git/canon` state area. The local `core.hooksPath` value is
+    // Git configuration: it points Git at that hook directory.
     let hook_path = root.join(PRE_COMMIT_HOOK_PATH);
     if let Some(parent) = hook_path.parent() {
         ensure_dir_without_symlinks(root, parent)?;
     }
-    if state.pre_commit_hook.as_deref() != Some(DEFAULT_PRE_COMMIT_HOOK) {
+    if preflight.pre_commit_hook.as_deref() != Some(DEFAULT_PRE_COMMIT_HOOK) {
         write_new_file(&hook_path, DEFAULT_PRE_COMMIT_HOOK)?;
         write_stdout_line(&format!("Installed {}", PRE_COMMIT_HOOK_DISPLAY_PATH))?;
     }
     make_executable(&hook_path)?;
+    configure_git_hooks_path(root, preflight)?;
     Ok(())
 }
 
@@ -229,6 +236,49 @@ pub(crate) fn current_git_hooks_path_for_worktree(root: &Path) -> Result<Option<
     ))
 }
 
+pub(crate) fn configure_git_hooks_path(
+    root: &Path,
+    preflight: &HookInstallPreflight,
+) -> Result<(), String> {
+    if !preflight.is_git_worktree {
+        write_stdout_line(&format!(
+            "Git worktree not detected; {} was created but core.hooksPath was not set.",
+            PRE_COMMIT_HOOK_PATH
+        ))?;
+        return Ok(());
+    }
+
+    if preflight.current_git_hooks_path.as_deref() == Some(GIT_HOOKS_PATH) {
+        write_stdout_line(&format!("Git core.hooksPath already = {}", GIT_HOOKS_PATH))?;
+        return Ok(());
+    }
+
+    set_git_hooks_path(root)?;
+    write_stdout_line(&format!(
+        "Configured git core.hooksPath = {}",
+        GIT_HOOKS_PATH
+    ))
+}
+
+pub(crate) fn set_git_hooks_path(root: &Path) -> Result<(), String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("config")
+        .arg("--local")
+        .arg("core.hooksPath")
+        .arg(GIT_HOOKS_PATH)
+        .output()
+        .map_err(|err| format!("failed to run git config: {}", err))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "failed to set git core.hooksPath: {}",
+        command_output_trimmed(&output.stderr, "git config stderr")?
+    ))
+}
+
 pub(crate) fn unset_git_hooks_path(root: &Path) -> Result<(), String> {
     let output = Command::new("git")
         .arg("-C")
@@ -264,21 +314,23 @@ pub(crate) fn is_git_worktree(root: &Path) -> Result<bool, String> {
         && command_output_trimmed(&output.stdout, "git rev-parse stdout")? == "true")
 }
 
-pub(crate) struct HookInstallState {
+pub(crate) struct HookInstallPreflight {
     pre_commit_hook: Option<String>,
     current_git_hooks_path: Option<String>,
+    is_git_worktree: bool,
 }
 
-impl HookInstallState {
-    pub(crate) fn load(root: &Path) -> Result<HookInstallState, String> {
+impl HookInstallPreflight {
+    pub(crate) fn load(root: &Path) -> Result<HookInstallPreflight, String> {
         let is_git_worktree = is_git_worktree(root)?;
-        Ok(HookInstallState {
+        Ok(HookInstallPreflight {
             pre_commit_hook: read_optional_file(&root.join(PRE_COMMIT_HOOK_PATH))?,
             current_git_hooks_path: if is_git_worktree {
                 current_git_hooks_path_for_worktree(root)?
             } else {
                 None
             },
+            is_git_worktree,
         })
     }
 }

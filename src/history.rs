@@ -77,6 +77,7 @@ pub(crate) struct ReusableHistoryLookupKey {
 }
 
 impl ReusableHistoryLookupKey {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn new(root: &Path, expectation: &SelectedExpectation) -> ReusableHistoryLookupKey {
         ReusableHistoryLookupKey {
             root: root.to_path_buf(),
