@@ -29,4 +29,6 @@ If `canon check` gives a wrong answer or evidence while the project satisfies th
 
 Never commit `.canon/` changes. Before committing, run `git diff --cached --quiet -- .canon/`; if it exits `1`, stop and ask a human to handle them.
 
+Never commit with `-n` or `--no-verify`.
+
 Before creating a commit, run `canon check` without escalation and no expectation filters.
