@@ -96,21 +96,25 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     // ephemeral evaluator thread; InterrogationState stores thread IDs by scope,
     // so different enforced scopes still start separate threads within the run.
     let mut interrogation_state = InterrogationState::new();
-    macro_rules! run_try {
-        ($expr:expr) => {
-            $expr.map_err(|err| {
-                let error = err.to_string();
-                check_run_error(
-                    &records,
-                    &non_selected,
+    macro_rules! current_error {
+        ($error:expr) => {
+            check_run_error(
+                $error,
+                check_run_report(
+                    records.clone(),
+                    non_selected.clone(),
                     evaluated,
                     selected,
                     skipped,
                     silent,
                     narrowing,
-                    error,
-                )
-            })?
+                ),
+            )
+        };
+    }
+    macro_rules! run_try {
+        ($expr:expr) => {
+            $expr.map_err(|err| current_error!(err.to_string()))?
         };
     }
     let final_selection = if options.ignore_cooldown {
@@ -135,16 +139,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                     &mut skipped,
                     &mut silent,
                 );
-                return Err(check_run_error(
-                    &records,
-                    &non_selected,
-                    evaluated,
-                    selected,
-                    skipped,
-                    silent,
-                    narrowing,
-                    err.error,
-                ));
+                return Err(current_error!(err.error));
             }
         }
     };
@@ -200,16 +195,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         // that record before moving to the next expectation. Silent passing
         // cache hits have already been removed from `final_selected`.
         if check_interrupted() {
-            return Err(check_run_error(
-                &records,
-                &non_selected,
-                evaluated,
-                selected,
-                skipped,
-                silent,
-                narrowing,
-                "interrupted".to_string(),
-            ));
+            return Err(current_error!("interrupted".to_string()));
         }
         if !options.ignore_cache {
             if let Some(hit) = run_try!(cached_failure_for_expectation(

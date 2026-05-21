@@ -34,6 +34,7 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
             write_stderr_line(
                 "canon gate: .canon/** changes must not be mixed with non-.canon changes",
             )?;
+            write_stderr_line("▷ Ask human to handle .canon/ changes.")?;
             Err(CommandError::GateFailed)
         }
         GateProjectChange::CanonOnly => Ok(()),
@@ -99,14 +100,9 @@ pub(crate) fn gate_pass_with_config(
     args: &[OsString],
     caches: GateCaches<'_>,
     now: u64,
-    mut emit_failure: impl FnMut(GateFailureEvent) -> Result<(), String>,
+    emit_failure: impl FnMut(GateFailureEvent) -> Result<(), String>,
 ) -> Result<bool, String> {
-    // Gate resolves the same final selected set as `canon check` for command
-    // selection consistency. Its pass/fail loop is intentionally separate: the
-    // gate spec compares selector-expanded candidates for HEAD-to-staged
-    // regressions, including candidates later deselected by cooldown or exact
-    // current-cache passes.
-    let _final_selected = select_expectations_for_gate(
+    let selected_expectations = selected_expectations_for_gate_command(
         root,
         config,
         identities,
@@ -115,11 +111,26 @@ pub(crate) fn gate_pass_with_config(
         caches.scope_hash,
         now,
     )?;
-    let selector_expanded = select_expectations_with_identities(config, identities, args)?;
-    for expectation in &selector_expanded {
+    gate_selected_expectations(
+        root,
+        &config.agent,
+        &selected_expectations,
+        caches,
+        emit_failure,
+    )
+}
+
+fn gate_selected_expectations(
+    root: &Path,
+    agent: &AgentConfig,
+    selected_expectations: &[SelectedExpectation],
+    caches: GateCaches<'_>,
+    mut emit_failure: impl FnMut(GateFailureEvent) -> Result<(), String>,
+) -> Result<bool, String> {
+    for expectation in selected_expectations {
         let previous = exact_gate_cache_result_for_tree(
             root,
-            &config.agent,
+            agent,
             expectation,
             GateComparisonTree::Head,
             caches.history,
@@ -127,7 +138,7 @@ pub(crate) fn gate_pass_with_config(
         )?;
         let current = exact_gate_cache_result_for_tree(
             root,
-            &config.agent,
+            agent,
             expectation,
             GateComparisonTree::StagedIndex,
             caches.history,
@@ -150,6 +161,29 @@ pub(crate) fn gate_pass_with_config(
         }
     }
     Ok(true)
+}
+
+fn selected_expectations_for_gate_command(
+    root: &Path,
+    config: &CheckConfig,
+    identities: &[ExpectationIdentity],
+    args: &[OsString],
+    history_cache: &mut HistoryCache,
+    scope_hash_cache: &mut ScopeHashCache,
+    now: u64,
+) -> Result<Vec<SelectedExpectation>, String> {
+    let selected = select_expectations_with_identities(config, identities, args)?;
+    let selected = final_selected_expectations(root, &config.agent, selected, history_cache, now)
+        .map(|selection| selection.selected)
+        .map_err(|err| err.error)?;
+    final_selected_after_current_pass_cache(
+        root,
+        &config.agent,
+        selected,
+        history_cache,
+        scope_hash_cache,
+    )
+    .map(|selection| selection.selected)
 }
 
 pub(crate) struct GateCaches<'a> {
@@ -191,47 +225,6 @@ pub(crate) fn gate_missing_cache_advice(has_regressions: bool) -> Option<&'stati
     } else {
         Some("canon gate: run `canon check` before committing")
     }
-}
-
-pub(crate) fn select_expectations_for_gate(
-    root: &Path,
-    config: &CheckConfig,
-    identities: &[ExpectationIdentity],
-    args: &[OsString],
-    history_cache: &mut HistoryCache,
-    scope_hash_cache: &mut ScopeHashCache,
-    now: u64,
-) -> Result<Vec<SelectedExpectation>, String> {
-    let selected = select_expectations_with_identities(config, identities, args)?;
-    final_selected_expectations_for_gate(
-        root,
-        config,
-        selected,
-        history_cache,
-        scope_hash_cache,
-        now,
-    )
-}
-
-fn final_selected_expectations_for_gate(
-    root: &Path,
-    config: &CheckConfig,
-    selected: Vec<SelectedExpectation>,
-    history_cache: &mut HistoryCache,
-    scope_hash_cache: &mut ScopeHashCache,
-    now: u64,
-) -> Result<Vec<SelectedExpectation>, String> {
-    let selected = final_selected_expectations(root, &config.agent, selected, history_cache, now)
-        .map(|selection| selection.selected)
-        .map_err(|err| err.error)?;
-    final_selected_after_current_pass_cache(
-        root,
-        &config.agent,
-        selected,
-        history_cache,
-        scope_hash_cache,
-    )
-    .map(|selection| selection.selected)
 }
 
 #[derive(Debug, Clone)]

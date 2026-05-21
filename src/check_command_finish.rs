@@ -13,6 +13,7 @@ use std::path::Path;
 
 const ALL_CHECKS_PASSED_MESSAGE: &str = "✓ All checks passed. Commit is allowed.";
 const FIX_ISSUES_MESSAGE: &str = "▷ Fix the issues and run `canon check` again!";
+const PASS_IMPROVEMENT_COMMIT_SUFFIX: &str = "Commit the staged changes!";
 
 // Success and error reports share cleanup, finish logging, and the post-summary
 // message to the agent when allowed by the command form. The optional error
@@ -58,10 +59,13 @@ pub(crate) fn finish_check_report(
 pub(crate) fn pass_improvement_notice(count: usize) -> Option<String> {
     match count {
         0 => None,
-        1 => Some("▷ +1 pass compared to HEAD. Commit the staged changes!".to_string()),
+        1 => Some(format!(
+            "▷ +1 pass compared to HEAD. {}",
+            PASS_IMPROVEMENT_COMMIT_SUFFIX
+        )),
         count => Some(format!(
-            "▷ +{} passes compared to HEAD. Commit the staged changes!",
-            count
+            "▷ +{} passes compared to HEAD. {}",
+            count, PASS_IMPROVEMENT_COMMIT_SUFFIX
         )),
     }
 }

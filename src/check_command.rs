@@ -156,7 +156,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             error: None,
         },
         Err(err) => CompletedCheckRun {
-            report: err.report,
+            report: *err.report,
             error: Some(err.error),
         },
     };

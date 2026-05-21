@@ -14,10 +14,18 @@ pub(crate) fn create_snapshot_root(root: &Path) -> Result<PathBuf, String> {
     })?;
     let mut errors = Vec::new();
     for parent in snapshot_parent_candidates() {
-        match snapshot_parent_outside_worktree(&root, &parent)
-            .and_then(|()| create_snapshot_root_in(&parent))
-            .and_then(|path| verify_snapshot_root_outside_worktree(&root, path))
-        {
+        if let Err(err) = snapshot_parent_outside_worktree(&root, &parent) {
+            errors.push(err);
+            continue;
+        }
+        let path = match create_snapshot_root_in(&parent) {
+            Ok(path) => path,
+            Err(err) => {
+                errors.push(err);
+                continue;
+            }
+        };
+        match verify_snapshot_root_outside_worktree(&root, path) {
             Ok(path) => return Ok(path),
             Err(err) => errors.push(err),
         }

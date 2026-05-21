@@ -7,7 +7,7 @@ description: Use when working in a project that contains `.canon/`.
 
 ## Role
 
-You're the canon warden. To check the canon, run `canon check` with escalation.
+You're the canon warden. To check the canon, run `canon check` without escalation.
 
 ## Change Constraints
 
@@ -29,4 +29,4 @@ If `canon check` gives a wrong answer or evidence while the project satisfies th
 
 Never commit `.canon/` changes. Before committing, run `git diff --cached --quiet -- .canon/`; if it exits `1`, stop and ask a human to handle them.
 
-Before creating a commit, run `canon check` with escalation and no expectation filters.
+Before creating a commit, run `canon check` without escalation and no expectation filters.

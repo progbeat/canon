@@ -2,7 +2,7 @@ use crate::config_types::AgentConfig;
 use crate::git::git_head_tree_exists;
 use crate::hash::full_scope;
 use crate::project::command_output_trimmed;
-use crate::scope::{sanitize_scope_for_hash, scope_contains};
+use crate::scope::sanitize_scope_for_hash;
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
 use std::collections::BTreeMap;
@@ -56,7 +56,7 @@ impl ScopeHashCache {
             .filter(|base| {
                 !entries
                     .iter()
-                    .any(|entry| scope_contains(base, scope_entry_from_normalized_entry(entry)))
+                    .any(|entry| scope_entry_is_within_base(base, entry))
             })
             .collect())
     }
@@ -613,11 +613,23 @@ fn filter_scope_entries(entries: &[String], scope: &[String]) -> Vec<String> {
     entries
         .iter()
         .filter(|entry| {
-            let path = scope_entry_from_normalized_entry(entry);
-            scope.iter().any(|base| scope_contains(base, path))
+            scope
+                .iter()
+                .any(|base| scope_entry_is_within_base(base, entry))
         })
         .cloned()
         .collect()
+}
+
+fn scope_entry_is_within_base(base: &str, entry: &str) -> bool {
+    let path = scope_entry_from_normalized_entry(entry);
+    let Ok(base_components) = scope_tree_path_components(base) else {
+        return false;
+    };
+    let Ok(path_components) = scope_tree_path_components(path) else {
+        return false;
+    };
+    path_components.starts_with(&base_components)
 }
 
 fn scope_entry_from_normalized_entry(entry: &str) -> &str {
@@ -743,5 +755,26 @@ fn scope_entry_path(path: &[u8]) -> String {
             }
             output
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parent_scope_matches_raw_hex_child_entry() {
+        let entry = normalize_git_scope_metadata(
+            "100644 0123456789012345678901234567890123456789 0",
+            b"dir/nonutf8-\xff.txt",
+            GitScopeListing::Index,
+        )
+        .unwrap();
+
+        assert!(entry.contains(RAW_PATH_HEX_PREFIX));
+        assert_eq!(
+            filter_scope_entries(std::slice::from_ref(&entry), &["dir".to_string()]),
+            vec![entry]
+        );
     }
 }

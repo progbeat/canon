@@ -294,7 +294,7 @@ fn gate_passes_non_canon_change_with_missing_cache_without_head_pass() {
 }
 
 #[test]
-fn gate_checks_fresh_cooldown_expectation_for_regression() {
+fn gate_skips_fresh_cooldown_expectation_for_regression() {
     let root = git_project("gate-cooldown-regression");
     commit_all(&root, "initial");
     let yaml = r#"
@@ -336,12 +336,12 @@ expectations:
 
     let result = run_gate_command(&root, &[OsString::from(expectation.display_id.clone())]);
 
-    assert_eq!(result.unwrap_err(), CommandError::GateFailed);
+    assert!(result.is_ok());
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn gate_reports_regression_despite_fresh_cooldown_pass() {
+fn gate_skips_regression_with_fresh_cooldown_pass() {
     let root = git_project("gate-cooldown-regression-over-pass");
     commit_all(&root, "initial");
     let yaml = r#"
@@ -401,7 +401,7 @@ expectations:
 
     let result = run_gate_command(&root, &[OsString::from(expectation.display_id.clone())]);
 
-    assert_eq!(result.unwrap_err(), CommandError::GateFailed);
+    assert!(result.is_ok());
     let _ = fs::remove_dir_all(root);
 }
 

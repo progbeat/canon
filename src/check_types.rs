@@ -325,29 +325,12 @@ pub(crate) struct CheckRunReport {
 #[derive(Debug, Clone)]
 pub(crate) struct CheckRunError {
     pub(crate) error: String,
-    pub(crate) report: CheckRunReport,
+    pub(crate) report: Box<CheckRunReport>,
 }
 
-pub(crate) fn check_run_error(
-    records: &[CheckRecord],
-    non_selected: &[SelectedExpectation],
-    evaluated: usize,
-    selected: usize,
-    skipped: usize,
-    silent: usize,
-    narrowing: NarrowingStats,
-    error: String,
-) -> CheckRunError {
+pub(crate) fn check_run_error(error: String, report: CheckRunReport) -> CheckRunError {
     CheckRunError {
         error,
-        report: CheckRunReport {
-            records: records.to_vec(),
-            non_selected: non_selected.to_vec(),
-            evaluated,
-            selected,
-            skipped,
-            silent,
-            narrowing,
-        },
+        report: Box::new(report),
     }
 }
