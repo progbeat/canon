@@ -23,8 +23,8 @@ pub(crate) trait EvaluatorRunner {
     ) -> Result<String, EvaluatorError>;
 
     // Returns usage for the last app-server turn when a turn id was created.
-    // `None` means the runner failed before an evaluator turn existed, so there
-    // is no per-turn token usage to match in runtime logs.
+    // Runtime-logged successful turns must provide this. `None` is only valid
+    // for failures before an evaluator turn existed.
     fn take_last_turn_usage(&mut self) -> Option<EvaluatorTurnUsage>;
 
     fn take_retired_sessions(&mut self) -> Vec<String> {

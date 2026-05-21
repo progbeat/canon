@@ -62,7 +62,7 @@ fn check_runner_replaces_restricted_idk_with_full_scope_answer() {
 }
 
 #[test]
-fn check_runner_retries_full_scope_for_restricted_idk_with_empty_evidence() {
+fn check_runner_reviews_restricted_idk_with_empty_evidence() {
     let root = git_project("check-restricted-idk-empty-evidence");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, false);
@@ -86,20 +86,15 @@ fn check_runner_retries_full_scope_for_restricted_idk_with_empty_evidence() {
         },
     )
     .unwrap();
-    let mut runner = FakeRunner::new(&[
-        &answer("idk", "", &["src/main.rs"]),
-        &answer("yes", "full project answers it", &["."]),
-    ]);
+    let mut runner = FakeRunner::new(&[&answer("idk", "", &["src/main.rs"])]);
 
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(records.records[0].passed());
-    assert_eq!(records.records[0].observed, "yes");
-    assert_eq!(
-        runner.start_scopes,
-        vec![vec!["src/main.rs".to_string()], vec![".".to_string()]]
-    );
+    assert!(!records.records[0].passed());
+    assert!(record_requires_human_review(&records.records[0]));
+    assert_eq!(records.records[0].observed, EMPTY_EVIDENCE_OBSERVED);
+    assert_eq!(runner.start_scopes, vec![vec!["src/main.rs".to_string()]]);
     let _ = fs::remove_dir_all(root);
 }
 

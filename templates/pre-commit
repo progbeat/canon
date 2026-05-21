@@ -30,11 +30,8 @@ fi
 
 echo "canon pre-commit: running canon gate"
 # Hook command: `canon gate`.
-# This pre-commit hook runs `canon gate`, not `canon check`.
-# `canon gate` is intentionally cache-only: missing cached answers and cached
-# failing answers make the hook exit here without invoking `canon check`.
-# Do not add a separate `.canon/**` preflight here; `canon gate` owns the
-# `.canon/**`-only unchanged-visible-content exception.
+# This hook is only a launcher; the staged-tree/cache regression policy lives
+# in the `canon gate` command it executes below.
 if ! "$canon_bin" gate; then
   echo "canon pre-commit: canon gate failed." >&2
   exit 1

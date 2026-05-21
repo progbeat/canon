@@ -1,4 +1,4 @@
-use crate::output::write_stdout;
+use crate::output::write_stdout_line;
 use serde_json::{json, Value};
 
 pub(crate) fn evaluator_response_output_schema() -> Value {
@@ -48,8 +48,18 @@ pub(crate) fn render_evaluator_turn_input(input: &Value) -> Result<String, Strin
 }
 
 pub(crate) fn print_help() -> Result<(), String> {
-    write_stdout(
-        "canon - AI linter for project expectations\n\n\
-Usage:\n  canon init\n  canon hook install\n  canon hook uninstall\n  canon check [-c|--config <path>] [--all] [--ignore-cache] [--ignore-cooldown] [expectation selectors...]\n  canon check -q <question> [-s|--scope <path>...]\n  canon gate [expectation selectors...]\n"
-    )
+    for line in [
+        "canon - AI linter for project expectations",
+        "",
+        "Usage:",
+        "  canon init",
+        "  canon hook install",
+        "  canon hook uninstall",
+        "  canon check [-c|--config <path>] [--all] [--ignore-cache] [--ignore-cooldown] [expectation selectors...]",
+        "  canon check -q <question> [-s|--scope <path>...]",
+        "  canon gate [expectation selectors...]",
+    ] {
+        write_stdout_line(line)?;
+    }
+    Ok(())
 }

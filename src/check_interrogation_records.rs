@@ -1,17 +1,11 @@
 use crate::check_interrogation_state::{CheckRuntime, InterrogationState};
-use crate::check_types::{
-    CheckRecord, InterrogationResult, ObservedAnswerState, ParsedAnswer, QueryInterrogationResult,
-    SelectedExpectation,
-};
+use crate::check_types::{InterrogationResult, ParsedAnswer, QueryResult, SelectedExpectation};
 use crate::evaluator_turn::{record_from_response, ParsedTurnResponse};
 use crate::evaluator_types::EvaluatorError;
 use crate::hash::full_scope;
 use crate::logging::DiagnosticLogWriter;
 use crate::scope::{sanitize_scope, scope_is_within};
-use crate::{
-    EMPTY_EVIDENCE_OBSERVED, MALFORMED_REVIEW_WARNING, OBSERVED_IDK, OBSERVED_MALFORMED,
-    UNPARSEABLE_OBSERVED,
-};
+use crate::{EMPTY_EVIDENCE_OBSERVED, OBSERVED_IDK, OBSERVED_MALFORMED, UNPARSEABLE_OBSERVED};
 use serde_json::json;
 
 pub(crate) fn finalize_interrogation_response(
@@ -31,12 +25,6 @@ pub(crate) fn finalize_interrogation_response(
         record_scope,
         finalized.scope_hash,
     )?;
-    write_review_events(
-        diagnostic_log,
-        Some(&expectation.id),
-        enforced_scope,
-        &record,
-    )?;
     if let Some(writer) = diagnostic_log.as_deref_mut() {
         writer.write_interrogation_record(&record)?;
     }
@@ -48,38 +36,36 @@ pub(crate) fn finalize_interrogation_response(
     })
 }
 
-pub(crate) fn finalize_query_response(
+pub(crate) fn finalize_query_answer(
     runtime: &CheckRuntime<'_>,
-    question: &str,
-    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     state: &mut InterrogationState,
     enforced_scope: &[String],
     response: ParsedAnswer,
-) -> Result<QueryInterrogationResult, EvaluatorError> {
+) -> Result<QueryResult, EvaluatorError> {
     let finalized = finalize_parsed_answer(runtime, state, enforced_scope, response)?;
-    write_parsed_answer_review_events(
-        diagnostic_log,
-        None,
-        enforced_scope,
-        None,
-        &finalized.response.answer,
-        &finalized.response.evidence,
-    )?;
+    Ok(QueryResult {
+        answer: finalized.response,
+    })
+}
+
+pub(crate) fn write_query_result_event(
+    question: &str,
+    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    answer: &ParsedAnswer,
+) -> Result<(), EvaluatorError> {
     if let Some(writer) = diagnostic_log.as_deref_mut() {
         writer.write_event(
             "info",
             "query.result",
             &[
                 ("prompt", json!(question)),
-                ("observed", json!(finalized.response.answer.clone())),
-                ("evidence", json!(finalized.response.evidence.clone())),
-                ("scope", json!(finalized.response.scope.clone())),
+                ("observed", json!(answer.answer.clone())),
+                ("evidence", json!(answer.evidence.clone())),
+                ("scope", json!(answer.scope.clone())),
             ],
         )?;
     }
-    Ok(QueryInterrogationResult {
-        answer: finalized.response,
-    })
+    Ok(())
 }
 
 struct FinalizedParsedAnswer {
@@ -93,7 +79,7 @@ fn finalize_parsed_answer(
     enforced_scope: &[String],
     response: ParsedAnswer,
 ) -> Result<FinalizedParsedAnswer, EvaluatorError> {
-    let mut response = normalize_empty_evidence_response(response, enforced_scope);
+    let mut response = normalize_empty_evidence_response(response);
     response = enforce_response_scope(response, enforced_scope);
     response = reject_absent_response_scope(runtime, state, enforced_scope, response)?;
     if response.answer == UNPARSEABLE_OBSERVED {
@@ -198,14 +184,10 @@ fn response_evidence_with_message(evidence: &str, message: &str) -> String {
     }
 }
 
-fn normalize_empty_evidence_response(
-    response: ParsedAnswer,
-    enforced_scope: &[String],
-) -> ParsedAnswer {
+fn normalize_empty_evidence_response(response: ParsedAnswer) -> ParsedAnswer {
     if response.evidence.trim().is_empty()
         && response.answer != OBSERVED_MALFORMED
         && response.answer != UNPARSEABLE_OBSERVED
-        && !is_restricted_scope_idk_retry_candidate(&response, enforced_scope)
     {
         return ParsedAnswer {
             answer: EMPTY_EVIDENCE_OBSERVED.to_string(),
@@ -214,91 +196,4 @@ fn normalize_empty_evidence_response(
         };
     }
     response
-}
-
-fn is_restricted_scope_idk_retry_candidate(
-    response: &ParsedAnswer,
-    enforced_scope: &[String],
-) -> bool {
-    // A restricted-scope `idk` is an intermediate non-answer. It must survive
-    // empty-evidence normalization so `interrogate_with_full_scope_retry` can
-    // perform the policy-mandated full-scope retry; only the final response is
-    // subject to the human-review empty-evidence record.
-    response.answer == OBSERVED_IDK && enforced_scope != full_scope()
-}
-
-fn write_review_events(
-    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    expectation_id: Option<&str>,
-    enforced_scope: &[String],
-    record: &CheckRecord,
-) -> Result<(), EvaluatorError> {
-    write_parsed_answer_review_events(
-        diagnostic_log,
-        expectation_id,
-        enforced_scope,
-        record.expected_text(),
-        &record.observed,
-        &record.evidence,
-    )
-}
-
-pub(crate) fn write_parsed_answer_review_events(
-    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    expectation_id: Option<&str>,
-    enforced_scope: &[String],
-    expected: Option<&str>,
-    observed: &str,
-    evidence: &str,
-) -> Result<(), EvaluatorError> {
-    let state = expected
-        .map(|expected| ObservedAnswerState::from_expected_and_observed(expected, observed))
-        .unwrap_or_else(|| ObservedAnswerState::from_observed(observed));
-    match state {
-        ObservedAnswerState::Malformed => {
-            write_review_required(diagnostic_log, expectation_id, MALFORMED_REVIEW_WARNING)?;
-        }
-        ObservedAnswerState::Unparseable => {
-            write_review_required(
-                diagnostic_log,
-                expectation_id,
-                "unparseable evaluator response",
-            )?;
-        }
-        ObservedAnswerState::EmptyEvidence => {
-            write_review_required(diagnostic_log, expectation_id, "empty evaluator evidence")?;
-        }
-        ObservedAnswerState::Idk if enforced_scope == full_scope() => {
-            write_review_required(diagnostic_log, expectation_id, "full-scope idk")?;
-        }
-        ObservedAnswerState::Unknown => {
-            write_review_required(
-                diagnostic_log,
-                expectation_id,
-                "unknown observed answer state",
-            )?;
-        }
-        ObservedAnswerState::Idk | ObservedAnswerState::Answer => {}
-    }
-    if evidence.trim().is_empty() {
-        if let Some(writer) = diagnostic_log.as_deref_mut() {
-            writer.write_event("warn", "evidence.empty", &[("id", json!(expectation_id))])?;
-        }
-    }
-    Ok(())
-}
-
-fn write_review_required(
-    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    expectation_id: Option<&str>,
-    reason: &str,
-) -> Result<(), EvaluatorError> {
-    if let Some(writer) = diagnostic_log.as_deref_mut() {
-        writer.write_event(
-            "warn",
-            "review.required",
-            &[("id", json!(expectation_id)), ("reason", json!(reason))],
-        )?;
-    }
-    Ok(())
 }

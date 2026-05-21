@@ -45,6 +45,7 @@ expectations:
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
     assert_eq!(records.records.len(), 1);
+    assert_eq!(records.evaluated, 0);
     assert!(!records.records[0].passed());
     assert_eq!(records.records[0].evidence, "exact cached failure");
     assert_eq!(runner.starts, 0);
@@ -270,6 +271,7 @@ expectations:
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
     assert_eq!(report.records.len(), 1);
+    assert_eq!(report.evaluated, 1);
     assert_eq!(report.selected, 1);
     assert_eq!(report.skipped, 0);
     assert_eq!(report.silent, 0);

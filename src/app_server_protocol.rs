@@ -170,6 +170,13 @@ pub(crate) fn turn_started_id(message: &Value) -> Option<String> {
 }
 
 pub(crate) fn parse_token_usage(value: &Value) -> Option<TokenUsage> {
+    // This only parses app-server usage payloads. The public `canon check`
+    // output contract is implemented in `check_output`:
+    // per-expectation stdout records, the token-usage stderr line, and the
+    // final summary line. This protocol module intentionally has no
+    // `render_token_usage_summary` or `format_number`; `check_output` renders
+    // token counts as raw decimal integers with no thousands separators.
+    // `check_command` owns the command-level write order.
     Some(TokenUsage {
         total_tokens: value.get("totalTokens").and_then(Value::as_u64)?,
         input_tokens: value.get("inputTokens").and_then(Value::as_u64)?,
@@ -183,29 +190,6 @@ pub(crate) fn parse_token_usage(value: &Value) -> Option<TokenUsage> {
             .and_then(Value::as_u64)
             .unwrap_or(0),
     })
-}
-
-pub(crate) fn render_token_usage_summary(usage: TokenUsage) -> String {
-    format!(
-        "Token usage: total={} input={} (+ {} cached) output={} (reasoning {})",
-        format_number(usage.total_tokens),
-        format_number(usage.input_tokens),
-        format_number(usage.cached_input_tokens),
-        format_number(usage.output_tokens),
-        format_number(usage.reasoning_output_tokens)
-    )
-}
-
-pub(crate) fn format_number(value: u64) -> String {
-    let digits = value.to_string();
-    let mut output = String::new();
-    for (index, ch) in digits.chars().rev().enumerate() {
-        if index > 0 && index % 3 == 0 {
-            output.push(',');
-        }
-        output.push(ch);
-    }
-    output.chars().rev().collect()
 }
 
 #[cfg(test)]

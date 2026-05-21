@@ -1,20 +1,5 @@
 use std::io::{self, Write};
 
-pub(crate) fn flush_public_output() -> Result<(), String> {
-    flush_stdout()?;
-    flush_stderr()
-}
-
-fn flush_stdout() -> Result<(), String> {
-    let stdout = io::stdout();
-    flush_stream(stdout.lock(), "stdout")
-}
-
-fn flush_stderr() -> Result<(), String> {
-    let stderr = io::stderr();
-    flush_stream(stderr.lock(), "stderr")
-}
-
 pub(crate) fn write_stdout(text: &str) -> Result<(), String> {
     write_stdout_bytes(text.as_bytes())
 }
@@ -61,12 +46,6 @@ fn write_segments_and_flush(
             .write_all(bytes)
             .map_err(|err| format!("failed to write to {}: {}", stream, err))?;
     }
-    writer
-        .flush()
-        .map_err(|err| format!("failed to flush {}: {}", stream, err))
-}
-
-fn flush_stream(mut writer: impl Write, stream: &str) -> Result<(), String> {
     writer
         .flush()
         .map_err(|err| format!("failed to flush {}: {}", stream, err))

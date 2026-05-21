@@ -121,49 +121,45 @@ impl<'de> Deserialize<'de> for RawExpectationItem {
 
 impl RawExpectationItem {
     fn from_fields(fields: RawExpectationFields) -> Result<RawExpectationItem, &'static str> {
-        match (
-            fields.q,
-            fields.q_template,
-            fields.path,
-            fields.include,
-            fields.a,
-        ) {
-            (Some(q), None, None, None, Some(a)) => {
-                Ok(RawExpectationItem::Explicit(RawExplicitExpectation {
-                    q,
-                    a,
-                    cooldown: fields.cooldown,
-                    thinking: fields.thinking,
-                }))
-            }
-            (None, Some(q_template), Some(path), None, Some(a)) => {
-                Ok(RawExpectationItem::Generator(RawGeneratorExpectation {
-                    q_template,
-                    path,
-                    a,
-                    cooldown: fields.cooldown,
-                    thinking: fields.thinking,
-                }))
-            }
-            (None, None, None, Some(include), None) => {
-                Ok(RawExpectationItem::Include(RawIncludeExpectation {
-                    include,
-                }))
-            }
-            (_, _, _, Some(_), Some(_)) => Err("include item must not contain a"),
-            (Some(_), _, _, Some(_), _) => Err("include item must not contain q"),
-            (_, Some(_), _, Some(_), _) => Err("include item must not contain q_template"),
-            (_, _, Some(_), Some(_), _) => Err("include item must not contain path"),
-            (Some(_), Some(_), _, _, _) => Err("must not contain both q and q_template"),
-            (Some(_), None, Some(_), _, _) => {
-                Err("must not contain path on an explicit expectation")
-            }
-            (Some(_), None, None, None, None) => Err("must contain a"),
-            (None, Some(_), None, _, _) => Err("generator must contain path"),
-            (None, Some(_), Some(_), None, None) => Err("must contain a"),
-            (None, None, Some(_), _, _) => Err("generator must contain q_template"),
-            (None, None, None, None, Some(_)) => Err("must contain q or q_template"),
-            (None, None, None, None, None) => Err("must contain q, q_template, or include"),
+        let RawExpectationFields {
+            q,
+            q_template,
+            a,
+            path,
+            include,
+            cooldown,
+            thinking,
+        } = fields;
+        if q.is_some() && a.is_some() {
+            return Ok(RawExpectationItem::Explicit(RawExplicitExpectation {
+                q: q.unwrap(),
+                a: a.unwrap(),
+                cooldown,
+                thinking,
+            }));
+        }
+        if q_template.is_some() && path.is_some() && a.is_some() {
+            return Ok(RawExpectationItem::Generator(RawGeneratorExpectation {
+                q_template: q_template.unwrap(),
+                path: path.unwrap(),
+                a: a.unwrap(),
+                cooldown,
+                thinking,
+            }));
+        }
+        if let Some(include) = include {
+            return Ok(RawExpectationItem::Include(RawIncludeExpectation {
+                include,
+            }));
+        }
+        match (q, q_template, path, a) {
+            (Some(_), _, _, None) => Err("must contain a"),
+            (None, Some(_), None, _) => Err("generator must contain path"),
+            (None, Some(_), Some(_), None) => Err("must contain a"),
+            (None, None, Some(_), _) => Err("generator must contain q_template"),
+            (None, None, None, Some(_)) => Err("must contain q or q_template"),
+            (None, None, None, None) => Err("must contain q, q_template, or include"),
+            _ => Err("invalid expectation item"),
         }
     }
 }

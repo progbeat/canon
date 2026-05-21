@@ -66,37 +66,10 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
     }
 }
 
-pub(crate) fn gate_would_pass_with_config(
-    root: &Path,
-    config: &CheckConfig,
-    identities: &[ExpectationIdentity],
-    args: &[OsString],
-    history_cache: &mut HistoryCache,
-    scope_hash_cache: &mut ScopeHashCache,
-) -> Result<bool, String> {
-    match gate_project_change(root)? {
-        GateProjectChange::MixedCanonAndNonCanon => return Ok(false),
-        GateProjectChange::CanonOnly => return Ok(true),
-        GateProjectChange::Other => {}
-    }
-    gate_pass_with_config(
-        root,
-        config,
-        identities,
-        args,
-        GateCaches {
-            history: history_cache,
-            scope_hash: scope_hash_cache,
-        },
-        unix_timestamp()?,
-        |_| Ok(()),
-    )
-}
-
-enum GateFailureEvent {
+pub(crate) enum GateFailureEvent {
     Regressed(Box<CheckRecord>),
     Missing(SelectedExpectation),
-    MissingComplete,
+    MissingComplete { has_regressions: bool },
 }
 
 enum GateProjectChange {
@@ -119,7 +92,7 @@ fn gate_project_change(root: &Path) -> Result<GateProjectChange, String> {
     Ok(GateProjectChange::Other)
 }
 
-fn gate_pass_with_config(
+pub(crate) fn gate_pass_with_config(
     root: &Path,
     config: &CheckConfig,
     identities: &[ExpectationIdentity],
@@ -128,12 +101,12 @@ fn gate_pass_with_config(
     now: u64,
     mut emit_failure: impl FnMut(GateFailureEvent) -> Result<(), String>,
 ) -> Result<bool, String> {
-    // The gate spec's `selected_expectations` parameter is not raw CLI selector
-    // expansion. The CLI first builds the same command-final selected set as
-    // `canon check`: selector expansion, cooldown removal, and current
-    // passing-cache deselection. The loop below is only gate's HEAD-vs-index
-    // decision over that already-final set.
-    let selected_expectations = select_expectations_for_gate(
+    // Gate resolves the same final selected set as `canon check` for command
+    // selection consistency. Its pass/fail loop is intentionally separate: the
+    // gate spec compares selector-expanded candidates for HEAD-to-staged
+    // regressions, including candidates later deselected by cooldown or exact
+    // current-cache passes.
+    let _final_selected = select_expectations_for_gate(
         root,
         config,
         identities,
@@ -142,7 +115,8 @@ fn gate_pass_with_config(
         caches.scope_hash,
         now,
     )?;
-    for expectation in &selected_expectations {
+    let selector_expanded = select_expectations_with_identities(config, identities, args)?;
+    for expectation in &selector_expanded {
         let previous = exact_gate_cache_result_for_tree(
             root,
             &config.agent,
@@ -159,32 +133,28 @@ fn gate_pass_with_config(
             caches.history,
             caches.scope_hash,
         )?;
-        match current {
-            GateCacheResult::Fail(_) if previous.is_fail() => {}
-            GateCacheResult::Fail(record) => {
-                // This failure is complete as soon as the first new cached
-                // regression is found, so the CLI emitter writes it immediately.
+        match (previous, current) {
+            (GateCacheResult::Pass, GateCacheResult::Pass) => {}
+            (GateCacheResult::Pass, GateCacheResult::Fail(record)) => {
                 emit_failure(GateFailureEvent::Regressed(record))?;
                 return Ok(false);
             }
-            GateCacheResult::Missing => {
-                // A missing staged cache record is already a terminal gate
-                // result. Stop here so the pre-commit hook remains a
-                // cache-only fast-fail path; `canon check` is responsible for
-                // filling any other missing records in one evaluator run.
+            (GateCacheResult::Pass, GateCacheResult::Missing) => {
                 emit_failure(GateFailureEvent::Missing(expectation.clone()))?;
-                emit_failure(GateFailureEvent::MissingComplete)?;
+                emit_failure(GateFailureEvent::MissingComplete {
+                    has_regressions: false,
+                })?;
                 return Ok(false);
             }
-            GateCacheResult::Pass => {}
+            _ => {}
         }
     }
     Ok(true)
 }
 
-struct GateCaches<'a> {
-    history: &'a mut HistoryCache,
-    scope_hash: &'a mut ScopeHashCache,
+pub(crate) struct GateCaches<'a> {
+    pub(crate) history: &'a mut HistoryCache,
+    pub(crate) scope_hash: &'a mut ScopeHashCache,
 }
 
 fn write_gate_failure_event(
@@ -204,8 +174,8 @@ fn write_gate_failure_event(
             }
             write_stderr_line(&format!("canon gate: - {}", expectation.display_id))
         }
-        GateFailureEvent::MissingComplete => {
-            if let Some(advice) = gate_missing_cache_advice(false) {
+        GateFailureEvent::MissingComplete { has_regressions } => {
+            if let Some(advice) = gate_missing_cache_advice(has_regressions) {
                 write_stderr_line(advice)?;
             }
             Ok(())
@@ -233,6 +203,24 @@ pub(crate) fn select_expectations_for_gate(
     now: u64,
 ) -> Result<Vec<SelectedExpectation>, String> {
     let selected = select_expectations_with_identities(config, identities, args)?;
+    final_selected_expectations_for_gate(
+        root,
+        config,
+        selected,
+        history_cache,
+        scope_hash_cache,
+        now,
+    )
+}
+
+fn final_selected_expectations_for_gate(
+    root: &Path,
+    config: &CheckConfig,
+    selected: Vec<SelectedExpectation>,
+    history_cache: &mut HistoryCache,
+    scope_hash_cache: &mut ScopeHashCache,
+    now: u64,
+) -> Result<Vec<SelectedExpectation>, String> {
     let selected = final_selected_expectations(root, &config.agent, selected, history_cache, now)
         .map(|selection| selection.selected)
         .map_err(|err| err.error)?;
@@ -251,12 +239,6 @@ pub(crate) enum GateCacheResult {
     Pass,
     Fail(Box<CheckRecord>),
     Missing,
-}
-
-impl GateCacheResult {
-    pub(crate) fn is_fail(&self) -> bool {
-        matches!(self, GateCacheResult::Fail(_))
-    }
 }
 
 pub(crate) fn exact_gate_cache_result_for_tree(

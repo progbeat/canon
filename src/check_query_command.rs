@@ -21,9 +21,10 @@ pub(crate) fn run_check_query_command(
     query_scope: &[String],
     mut diagnostic_log: DiagnosticLogWriter,
 ) -> Result<(), String> {
-    // `canon check -q` is an ad-hoc interrogation mode. It loads the active
-    // evaluator config, but it does not select or run expectations and is not a
-    // per-expectation check run governed by the normal check-output summary.
+    // `canon check -q` runs one temporary query expectation. It has no
+    // persisted expected answer or history scope seed, but `run_query_with_runner`
+    // still applies the interrogation-policy retry and narrowing steps that do
+    // not require a configured expected answer.
     diagnostic_log
         .write_event(
             "info",
@@ -50,6 +51,9 @@ pub(crate) fn run_check_query_command(
         1,
         &mut scope_hash_cache,
     )?;
+    execution
+        .staged_view
+        .remove_evaluator_denied_paths(&config.agent)?;
     let runtime = CheckRuntime {
         root,
         snapshot_root: execution.staged_view.snapshot_root(),
@@ -73,10 +77,6 @@ pub(crate) fn run_check_query_command(
             return Err(err);
         }
     };
-    // `run_query_with_runner` returns only when the query answer is known. This
-    // is the first public stdout piece query mode can compute, so write and
-    // flush it before token-usage collection or finish logging can do later
-    // work.
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
     if let Err(err) = write_query_output(&mut stdout, &result.answer) {
@@ -90,9 +90,9 @@ pub(crate) fn run_check_query_command(
             return Err(err);
         }
     };
-    // Query token usage is not known until pending app-server usage updates are
-    // drained above. Once known, `print_token_usage_summary` writes and flushes
-    // the stderr line before the internal finish log event is recorded.
+    // Query token usage is the next public stderr piece. It is not computable
+    // until pending app-server usage updates are drained above; once known,
+    // `print_token_usage_summary` writes and flushes it immediately.
     print_token_usage_summary(Some(usage))?;
     // Query mode is ad-hoc and has no selected/non-selected expectation set.
     // Do not run lazy full-scope reset here; that reset invalidates expectation

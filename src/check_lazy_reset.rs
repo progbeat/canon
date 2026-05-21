@@ -1,33 +1,32 @@
+use crate::check_selection::{parse_cooldown, ExpectationIdentity};
 use crate::check_types::{CheckRecord, ObservedAnswerState, SelectedExpectation};
 use crate::config_types::{AgentConfig, CheckConfig};
-use crate::fs_util::write_temp_file_then_replace;
-use crate::git::{read_git_blobs, staged_tracked_files};
+use crate::fs_util::{for_each_nonempty_line, write_temp_file_then_replace};
+use crate::git::resolve_git_path;
 use crate::hash::full_scope;
 use crate::history::{read_history_records_from_path, HistoryCache};
 use crate::history_compaction::compact_history_temp_path;
 use crate::history_reuse::latest_history_scope_with_cache;
 use crate::logging::render_check_log_record;
 use crate::logging::DiagnosticLogWriter;
-use crate::scope::{
-    normalized_ignore_pattern, path_matches_pattern_bytes, sanitize_scope_for_hash,
-    MANDATORY_EVALUATOR_DENY_PATTERNS,
-};
-use crate::token_usage_types::TokenUsage;
+use crate::scope::sanitize_scope_for_hash;
 use serde_json::json;
+use std::fs;
+use std::io;
 use std::io::Write;
 use std::path::Path;
 
 pub(crate) fn apply_lazy_full_scope_reset(
     root: &Path,
     config: &CheckConfig,
-    usage: TokenUsage,
+    evaluated_expectations: usize,
     non_selected: &[SelectedExpectation],
     diagnostic_log: &mut DiagnosticLogWriter,
 ) -> Result<(), String> {
     let reset = plan_lazy_full_scope_reset(
         root,
         &config.agent,
-        usage.total_tokens,
+        evaluated_expectations,
         non_selected,
         random_reset_seed(),
     )?;
@@ -36,7 +35,7 @@ pub(crate) fn apply_lazy_full_scope_reset(
             "info",
             "lazy_full_scope_reset",
             &[
-                ("projectSizeTokens", json!(reset.project_size_tokens)),
+                ("evaluated", json!(reset.evaluated_expectations)),
                 ("candidates", json!(reset.candidate_count)),
                 ("reset", json!(reset.expectations.len())),
                 (
@@ -50,7 +49,7 @@ pub(crate) fn apply_lazy_full_scope_reset(
             ],
         )
         .map_err(|err| err.to_string())?;
-    if let Err(error) = set_non_selected_expectation_scopes_to_full(root, &reset.expectations) {
+    if let Err(error) = schedule_lazy_full_scope_resets(root, &reset.expectations) {
         diagnostic_log
             .write_event(
                 "error",
@@ -63,8 +62,23 @@ pub(crate) fn apply_lazy_full_scope_reset(
     Ok(())
 }
 
+pub(crate) fn apply_scheduled_lazy_full_scope_resets(
+    root: &Path,
+    config: &CheckConfig,
+    identities: &[ExpectationIdentity],
+) -> Result<usize, String> {
+    let ids = read_scheduled_lazy_full_scope_resets(root)?;
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let expectations = scheduled_reset_expectations(config, identities, &ids)?;
+    set_non_selected_expectation_scopes_to_full(root, &expectations)?;
+    remove_scheduled_lazy_full_scope_resets(root)?;
+    Ok(expectations.len())
+}
+
 pub(crate) struct LazyFullScopeResetPlan {
-    pub(crate) project_size_tokens: u64,
+    pub(crate) evaluated_expectations: usize,
     pub(crate) candidate_count: usize,
     pub(crate) expectations: Vec<SelectedExpectation>,
 }
@@ -78,18 +92,18 @@ struct ScopedNonSelectedExpectation {
 pub(crate) fn plan_lazy_full_scope_reset(
     root: &Path,
     agent: &AgentConfig,
-    total_tokens: u64,
+    evaluated_expectations: usize,
     non_selected: &[SelectedExpectation],
     seed: u64,
 ) -> Result<LazyFullScopeResetPlan, String> {
-    let project_size_tokens = estimate_staged_project_size_tokens(root, agent)?;
     let scoped_non_selected =
         non_selected_expectations_with_current_scope(root, agent, non_selected)?;
+    // Spec candidates are only non-selected expectations whose current reusable
+    // scope seed is narrower than full scope.
     let candidates = lazy_full_scope_reset_candidates(&scoped_non_selected);
-    let reset_count =
-        lazy_full_scope_reset_count(total_tokens, project_size_tokens, seed, candidates.len());
+    let reset_count = lazy_full_scope_reset_count(evaluated_expectations, seed, candidates.len());
     Ok(LazyFullScopeResetPlan {
-        project_size_tokens,
+        evaluated_expectations,
         candidate_count: candidates.len(),
         expectations: sample_reset_expectations(&candidates, reset_count, seed),
     })
@@ -126,88 +140,12 @@ fn lazy_full_scope_reset_candidates(
         .collect()
 }
 
-pub(crate) fn estimate_staged_project_size_tokens(
-    root: &Path,
-    agent: &AgentConfig,
-) -> Result<u64, String> {
-    let staged_files = staged_tracked_files(root)?
-        .into_iter()
-        .filter(|file| is_counted_project_size_path(agent, &file.path))
-        .collect::<Vec<_>>();
-    let object_ids = staged_files
-        .iter()
-        .map(|file| file.object_id.clone())
-        .collect::<Vec<_>>();
-    // Batch all staged blob reads through one subprocess. The project-size
-    // estimate may scan many staged files, but `canon check` must not spawn a
-    // direct `git` subprocess per file.
-    let contents = read_git_blobs(root, &object_ids)?;
-    let mut tokens = 0u64;
-    for content in contents {
-        // `project_size_tokens` covers staged text content; binary blobs do
-        // not contribute to the text-token estimate.
-        let Ok(text) = std::str::from_utf8(&content) else {
-            continue;
-        };
-        tokens = tokens.saturating_add(estimate_text_tokens(text));
-    }
-    Ok(tokens)
-}
-
-fn is_counted_project_size_path(agent: &AgentConfig, path: &[u8]) -> bool {
-    !matches_project_size_ignore(agent, path)
-}
-
-fn matches_project_size_ignore(agent: &AgentConfig, path: &[u8]) -> bool {
-    MANDATORY_EVALUATOR_DENY_PATTERNS
-        .iter()
-        .any(|pattern| path_matches_pattern_bytes(path, pattern.as_bytes()))
-        || agent.ignore.iter().any(|pattern| {
-            let pattern = normalized_ignore_pattern(pattern);
-            path_matches_pattern_bytes(path, pattern.as_bytes())
-        })
-}
-
-fn estimate_text_tokens(text: &str) -> u64 {
-    // The lazy-reset policy only needs a stable project-size estimate, not an
-    // evaluator-model-specific tokenizer. Count BPE-like word chunks by UTF-8
-    // length and punctuation as standalone token-like units.
-    let mut tokens = 0u64;
-    let mut word_bytes = 0u64;
-    for ch in text.chars() {
-        if ch.is_alphanumeric() || ch == '_' {
-            word_bytes = word_bytes.saturating_add(ch.len_utf8() as u64);
-            continue;
-        }
-        tokens = tokens.saturating_add(estimate_word_tokens(word_bytes));
-        word_bytes = 0;
-        if !ch.is_whitespace() {
-            tokens = tokens.saturating_add(1);
-        }
-    }
-    tokens.saturating_add(estimate_word_tokens(word_bytes))
-}
-
-fn estimate_word_tokens(bytes: u64) -> u64 {
-    if bytes == 0 {
-        0
-    } else {
-        bytes.div_ceil(4)
-    }
-}
-
 pub(crate) fn lazy_full_scope_reset_count(
-    total_tokens: u64,
-    project_size_tokens: u64,
+    evaluated_expectations: usize,
     seed: u64,
     candidate_count: usize,
 ) -> usize {
-    const RATIO_NUMERATOR: u128 = 5;
-    const RATIO_DENOMINATOR: u128 = 100;
-
-    let ratio = (RATIO_NUMERATOR as f64 * total_tokens as f64)
-        / (RATIO_DENOMINATOR as f64 * project_size_tokens as f64);
-    let count = stochastic_round(ratio, seed);
+    let count = stochastic_round(evaluated_expectations as f64 / 128.0, seed);
     std::cmp::min(count, candidate_count)
 }
 
@@ -232,14 +170,14 @@ fn stochastic_round(value: f64, seed: u64) -> usize {
 }
 
 pub(crate) fn sample_reset_expectations(
-    non_selected: &[SelectedExpectation],
+    candidates: &[SelectedExpectation],
     count: usize,
     seed: u64,
 ) -> Vec<SelectedExpectation> {
     if count == 0 {
         return Vec::new();
     }
-    let mut sampled = non_selected.to_vec();
+    let mut sampled = candidates.to_vec();
     let mut rng = ResetRng::new(seed ^ 0x9e37_79b9_7f4a_7c15);
     for index in 0..sampled.len() {
         let remaining = sampled.len() - index;
@@ -259,6 +197,82 @@ pub(crate) fn set_non_selected_expectation_scopes_to_full(
         set_expectation_scope_to_full_for_next_check(root, expectation, &mut history_cache)?;
     }
     Ok(())
+}
+
+pub(crate) fn schedule_lazy_full_scope_resets(
+    root: &Path,
+    expectations: &[SelectedExpectation],
+) -> Result<(), String> {
+    let path = lazy_full_scope_reset_schedule_path(root)?;
+    if expectations.is_empty() {
+        return remove_scheduled_lazy_full_scope_resets_at_path(&path);
+    }
+    let temp_path = compact_history_temp_path(&path)?;
+    write_temp_file_then_replace(&temp_path, &path, |file| {
+        for expectation in expectations {
+            file.write_all(expectation.id.as_bytes())
+                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
+            file.write_all(b"\n")
+                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
+        }
+        Ok(())
+    })
+}
+
+fn read_scheduled_lazy_full_scope_resets(root: &Path) -> Result<Vec<String>, String> {
+    let path = lazy_full_scope_reset_schedule_path(root)?;
+    let mut ids = Vec::new();
+    for_each_nonempty_line(&path, |_, line| {
+        ids.push(line);
+        Ok(())
+    })?;
+    Ok(ids)
+}
+
+fn remove_scheduled_lazy_full_scope_resets(root: &Path) -> Result<(), String> {
+    let path = lazy_full_scope_reset_schedule_path(root)?;
+    remove_scheduled_lazy_full_scope_resets_at_path(&path)
+}
+
+fn remove_scheduled_lazy_full_scope_resets_at_path(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(format!("failed to delete {}: {}", path.display(), err)),
+    }
+}
+
+fn lazy_full_scope_reset_schedule_path(root: &Path) -> Result<std::path::PathBuf, String> {
+    resolve_git_path(root, "canon/lazy-full-scope-reset")
+}
+
+fn scheduled_reset_expectations(
+    config: &CheckConfig,
+    identities: &[ExpectationIdentity],
+    ids: &[String],
+) -> Result<Vec<SelectedExpectation>, String> {
+    let mut expectations = Vec::new();
+    for id in ids {
+        let Some(index) = identities.iter().position(|identity| &identity.id == id) else {
+            continue;
+        };
+        let identity = &identities[index];
+        let expectation = &config.expectations[index];
+        expectations.push(SelectedExpectation {
+            number: index + 1,
+            id: identity.id.clone(),
+            display_id: identity.display_id.clone(),
+            q: expectation.q.clone(),
+            a: expectation.a.clone(),
+            cooldown: expectation
+                .cooldown
+                .as_deref()
+                .map(parse_cooldown)
+                .transpose()?,
+            thinking: expectation.thinking.clone(),
+        });
+    }
+    Ok(expectations)
 }
 
 fn set_expectation_scope_to_full_for_next_check(

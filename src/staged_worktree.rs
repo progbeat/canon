@@ -1,18 +1,17 @@
-use crate::logging::append_runtime_log_event;
+use crate::config_types::AgentConfig;
 use crate::project::command_output_trimmed;
+use crate::scope::effective_ignore_patterns;
 use crate::scope_hash::ScopeHashCache;
 use crate::staged_worktree_git::run_git_command;
 use crate::staged_worktree_paths::create_snapshot_root;
 #[cfg(test)]
 pub(crate) use crate::staged_worktree_paths::snapshot_parent_outside_worktree;
 use crate::staged_worktree_validate::validate_snapshot_contains_no_symlinks;
-use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub(crate) struct StagedWorktreeView {
-    root: PathBuf,
     snapshot_root: PathBuf,
 }
 
@@ -32,30 +31,32 @@ impl StagedWorktreeView {
             let _ = fs::remove_dir_all(&snapshot_root);
             return Err(err);
         }
-        Ok(StagedWorktreeView {
-            root: root.to_path_buf(),
-            snapshot_root,
-        })
+        Ok(StagedWorktreeView { snapshot_root })
     }
 
     pub(crate) fn snapshot_root(&self) -> &Path {
         &self.snapshot_root
     }
+
+    pub(crate) fn remove_evaluator_denied_paths(&self, agent: &AgentConfig) -> Result<(), String> {
+        let mut roots = Vec::new();
+        for pattern in effective_ignore_patterns(agent) {
+            if let Some(root) = physical_deny_root(&pattern) {
+                if !roots.iter().any(|existing| existing == &root) {
+                    roots.push(root);
+                }
+            }
+        }
+        for root in roots {
+            remove_snapshot_path(&self.snapshot_root.join(root))?;
+        }
+        Ok(())
+    }
 }
 
 impl Drop for StagedWorktreeView {
     fn drop(&mut self) {
-        if let Err(err) = fs::remove_dir_all(&self.snapshot_root) {
-            let _ = append_runtime_log_event(
-                &self.root,
-                "warn",
-                "snapshot.cleanup.failed",
-                &[
-                    ("path", json!(self.snapshot_root.display().to_string())),
-                    ("error", json!(err.to_string())),
-                ],
-            );
-        }
+        let _ = fs::remove_dir_all(&self.snapshot_root);
     }
 }
 
@@ -68,6 +69,39 @@ fn materialize_staged_snapshot(
     checkout_staged_index(root, snapshot_root)?;
     stage_snapshot_index(snapshot_root)?;
     validate_snapshot_contains_no_symlinks(snapshot_root)
+}
+
+fn physical_deny_root(pattern: &str) -> Option<String> {
+    if let Some(prefix) = pattern.strip_suffix("/**") {
+        return Some(prefix.to_string());
+    }
+    if pattern.contains('*') || pattern.contains('?') {
+        None
+    } else {
+        Some(pattern.to_string())
+    }
+}
+
+fn remove_snapshot_path(path: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(path),
+        Ok(_) => fs::remove_file(path),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            return Err(format!(
+                "failed to inspect evaluator-denied snapshot path {}: {}",
+                path.display(),
+                err
+            ));
+        }
+    }
+    .map_err(|err| {
+        format!(
+            "failed to remove evaluator-denied snapshot path {}: {}",
+            path.display(),
+            err
+        )
+    })
 }
 
 fn checkout_staged_index(root: &Path, snapshot_root: &Path) -> Result<(), String> {

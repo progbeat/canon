@@ -114,6 +114,59 @@ expectations:
 }
 
 #[test]
+fn expectation_items_accept_extra_fields_without_changing_form() {
+    let root = temp_home("expectation-extra-fields");
+    fs::create_dir_all(root.join("specs")).unwrap();
+    fs::create_dir_all(root.join("expects")).unwrap();
+    fs::write(root.join("specs/a.md"), "A").unwrap();
+    fs::write(
+        root.join("expects/included.yml"),
+        r#"
+- q: "Included?"
+  a: "no"
+"#,
+    )
+    .unwrap();
+    let mut cache = RepoInspectionCache::new();
+
+    let config = parse_check_config_content_with_root(
+        &root,
+        Path::new("check.yml"),
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: "Explicit?"
+    a: "yes"
+    path: "specs/*.md"
+    q_template: "Generated {content}"
+    include: "expects/*.yml"
+    owner: "ignored"
+  - path: "specs/*.md"
+    q_template: "Generated {content}"
+    a: "yes"
+    include: "expects/*.yml"
+    owner: "ignored"
+  - include: "expects/*.yml"
+    a: "yes"
+    path: "missing/*.md"
+    owner: "ignored"
+"#,
+        &mut cache,
+    )
+    .unwrap();
+
+    assert_eq!(config.expectations.len(), 3);
+    assert_eq!(config.expectations[0].q, "Explicit?");
+    assert_eq!(config.expectations[1].q, "Generated A");
+    assert_eq!(config.expectations[2].q, "Included?");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn expectation_include_expands_yaml_list_relative_to_config_file() {
     let root = temp_home("expectation-include");
     fs::create_dir_all(root.join("checks/expects")).unwrap();

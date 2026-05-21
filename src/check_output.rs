@@ -2,6 +2,7 @@ use crate::check_types::{
     is_line_break_char, CheckRecord, CheckRunReport, ObservedAnswerState, ParsedAnswer,
 };
 use crate::logging::push_json_control_escape;
+use crate::token_usage_types::TokenUsage;
 use std::io::Write;
 use std::time::Duration;
 
@@ -119,6 +120,17 @@ pub(crate) fn render_check_output_record(record: &CheckRecord) -> String {
         output.push('\n');
     }
     output
+}
+
+pub(crate) fn render_token_usage_summary(usage: TokenUsage) -> String {
+    format!(
+        "Token usage: total={} input={} (+ {} cached) output={} (reasoning {})",
+        usage.total_tokens,
+        usage.input_tokens,
+        usage.cached_input_tokens,
+        usage.output_tokens,
+        usage.reasoning_output_tokens
+    )
 }
 
 pub(crate) fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -> String {

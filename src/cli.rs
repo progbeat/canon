@@ -11,7 +11,7 @@ use crate::hooks::{run_hook_command, run_init};
 use crate::logging::DiagnosticLogError;
 use crate::notes::{append_note, delete_note, ensure_note, read_note, write_note};
 use crate::notes_cli::{arg_to_string, collect_text_or_stdin, require_key, run_rg};
-use crate::output::{flush_public_output, write_stderr_line, write_stdout_line};
+use crate::output::{write_stderr_line, write_stdout_line};
 use crate::project::{git_project_root, print_root, project_root_or_current};
 use crate::project_types::Config;
 
@@ -177,18 +177,15 @@ fn run_command(args: Vec<OsString>) -> Result<(), CommandError> {
             let key = require_key(&args, 1)?;
             let text = collect_text_or_stdin(&args, 2)?;
             write_note(&config, key, &text)?;
-            flush_public_output()?;
         }
         NoteCommand::Append => {
             let key = require_key(&args, 1)?;
             let text = collect_text_or_stdin(&args, 2)?;
             append_note(&config, key, &text)?;
-            flush_public_output()?;
         }
         NoteCommand::Delete => {
             let key = require_key(&args, 1)?;
             delete_note(&config, key)?;
-            flush_public_output()?;
         }
         NoteCommand::Search => {
             run_rg(&config, &args[1..])?;

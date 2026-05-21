@@ -1,5 +1,5 @@
 use crate::app_server::LazyAppServerRunner;
-use crate::app_server_protocol::render_token_usage_summary;
+use crate::check_output::render_token_usage_summary;
 use crate::logging::DiagnosticLogWriter;
 use crate::output::write_stderr_line;
 use crate::token_usage_types::TokenUsage;

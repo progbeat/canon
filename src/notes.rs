@@ -14,7 +14,7 @@ use crate::project_types::{Config, Note};
 use crate::time::unix_timestamp;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 
 const NOTE_LOG_MARKER: &str = "<!-- canon log v1 -->";
 pub(crate) const NOTE_LOG_COMPACT_MIN_BYTES: u64 = 64 * 1024;
@@ -64,9 +64,8 @@ pub(crate) fn read_note(config: &Config, key: &str) -> Result<(), String> {
     if !note.path.exists() {
         return Err(format!("canon not found for key: {}", key));
     }
-    let content = read_note_data(&note, |path| fs::read_to_string(path))?;
-    verify_note_key_from_first_line(&note.path, content.lines().next().unwrap_or(""), key)?;
-    write_stdout(&materialize_note_content(&note, &content)?)
+    let reader = open_note_reader(&note)?;
+    stream_note_content(&note, reader, write_stdout)
 }
 
 pub(crate) fn write_note(config: &Config, key: &str, text: &str) -> Result<(), String> {
@@ -236,6 +235,131 @@ fn append_note_section(output: &mut String, timestamp: u64, text: &str) {
         output.push('\n');
     }
     output.push_str(&format!("\n## {}\n\n{}\n", timestamp, normalize_body(text)));
+}
+
+fn open_note_reader(note: &Note) -> Result<BufReader<fs::File>, String> {
+    reject_symlink(&note.path)?;
+    let file = fs::File::open(&note.path)
+        .map_err(|err| format!("failed to read {}: {}", note.path.display(), err))?;
+    Ok(BufReader::new(file))
+}
+
+fn stream_note_content(
+    note: &Note,
+    mut reader: impl BufRead,
+    mut write: impl FnMut(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut first_line = String::new();
+    if reader
+        .read_line(&mut first_line)
+        .map_err(|err| format!("failed to read {}: {}", note.path.display(), err))?
+        == 0
+    {
+        return verify_note_key_from_first_line(&note.path, "", &note.key);
+    }
+    verify_note_key_from_first_line(
+        &note.path,
+        first_line.trim_end_matches(&['\r', '\n'][..]),
+        &note.key,
+    )?;
+    write(&first_line)?;
+
+    loop {
+        let mut line = String::new();
+        let read = reader
+            .read_line(&mut line)
+            .map_err(|err| format!("failed to read {}: {}", note.path.display(), err))?;
+        if read == 0 {
+            return Ok(());
+        }
+        let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
+        if trimmed == NOTE_LOG_MARKER {
+            match stream_note_log(note, &mut reader, &mut write)? {
+                NoteLogStream::Applied => return Ok(()),
+                NoteLogStream::FalseMarker { first_line } => {
+                    write(&line)?;
+                    if let Some(first_line) = first_line {
+                        write(&first_line)?;
+                    }
+                }
+            }
+            continue;
+        }
+        write(&line)?;
+    }
+}
+
+enum NoteLogStream {
+    Applied,
+    FalseMarker { first_line: Option<String> },
+}
+
+fn stream_note_log(
+    note: &Note,
+    reader: &mut impl BufRead,
+    write: &mut impl FnMut(&str) -> Result<(), String>,
+) -> Result<NoteLogStream, String> {
+    let mut first_line = String::new();
+    let read = reader
+        .read_line(&mut first_line)
+        .map_err(|err| format!("failed to read {}: {}", note.path.display(), err))?;
+    if read == 0 {
+        return Ok(NoteLogStream::FalseMarker { first_line: None });
+    }
+    match serde_json::from_str::<NoteRecord>(&first_line) {
+        Ok(record) => stream_note_record(note, record, write, true)?,
+        Err(_) => {
+            return Ok(NoteLogStream::FalseMarker {
+                first_line: Some(first_line),
+            })
+        }
+    }
+
+    loop {
+        let mut line = String::new();
+        let read = reader
+            .read_line(&mut line)
+            .map_err(|err| format!("failed to read {}: {}", note.path.display(), err))?;
+        if read == 0 {
+            return Ok(NoteLogStream::Applied);
+        }
+        let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
+        if trimmed == NOTE_LOG_MARKER || trimmed.trim().is_empty() {
+            continue;
+        }
+        let record = serde_json::from_str::<NoteRecord>(&line).map_err(|err| {
+            format!(
+                "malformed note log record in {}: {}",
+                note.path.display(),
+                err
+            )
+        })?;
+        stream_note_record(note, record, write, false)?;
+    }
+}
+
+fn stream_note_record(
+    note: &Note,
+    record: NoteRecord,
+    write: &mut impl FnMut(&str) -> Result<(), String>,
+    follows_log_separator: bool,
+) -> Result<(), String> {
+    match record {
+        NoteRecord::Append { timestamp, text } => {
+            let section = if follows_log_separator {
+                format!("## {}\n\n{}\n", timestamp, normalize_body(&text))
+            } else {
+                let mut section = String::new();
+                append_note_section(&mut section, timestamp, &text);
+                section
+            };
+            write(&section)
+        }
+        NoteRecord::Write { .. } => Err(format!(
+            "malformed note log record in {}: write record cannot be streamed",
+            note.path.display()
+        )),
+    }
 }
 
 fn find_note_log(note: &Note, content: &str) -> Result<Option<(usize, Vec<NoteRecord>)>, String> {

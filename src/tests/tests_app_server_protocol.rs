@@ -180,7 +180,7 @@ fn token_usage_update_keeps_raw_app_server_usage() {
     assert_eq!(update.token_usage, message["params"]["tokenUsage"]);
     assert_eq!(
         render_token_usage_summary(update.last_usage),
-        "Token usage: total=69,748 input=63,574 (+ 361,216 cached) output=6,174 (reasoning 2,911)"
+        "Token usage: total=69748 input=63574 (+ 361216 cached) output=6174 (reasoning 2911)"
     );
     assert_eq!(
         render_token_usage_summary(TokenUsage::default()),

@@ -3,6 +3,7 @@ use crate::check::{run_check_with_runner_and_caches, CheckRunCaches};
 use crate::check_command_args::parse_check_command_args;
 use crate::check_command_finish::{finish_check_report, CheckReportFinishContext};
 use crate::check_interrogation_state::CheckRuntime;
+use crate::check_lazy_reset::apply_scheduled_lazy_full_scope_resets;
 use crate::check_output::write_summary_line;
 use crate::check_preflight::install_sigint_handler;
 use crate::check_query_command::run_check_query_command;
@@ -19,7 +20,6 @@ use crate::logging::DiagnosticLogWriter;
 use crate::repo_inspection::RepoInspectionCache;
 use crate::scope_hash::ScopeHashCache;
 use crate::staged_worktree::StagedWorktreeView;
-use crate::token_usage_types::TokenUsage;
 use crate::{CHECK_INTERRUPTED, GIT_CANON_CACHE_DIR};
 use serde_json::json;
 use std::ffi::OsString;
@@ -32,6 +32,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     let started = Instant::now();
     install_sigint_handler().map_err(CommandError::from)?;
     CHECK_INTERRUPTED.store(false, Ordering::SeqCst);
+    let write_agent_message = check_command_writes_agent_message(args);
     let command = parse_check_command_args(args)?;
     let mut repo_cache = RepoInspectionCache::new();
     // Runtime logs are canon-owned state under `.git/canon/logs`, not project
@@ -76,6 +77,9 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
                 return fail_check_before_selection(&mut diagnostic_log, None, false, 0, err)
             }
         };
+    if let Err(err) = apply_scheduled_lazy_full_scope_resets(root, &config, &identities) {
+        return fail_check_before_selection(&mut diagnostic_log, None, false, 0, err);
+    }
     write_check_start_event(
         &mut diagnostic_log,
         None,
@@ -95,6 +99,12 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         &mut check_caches.scope_hash,
     )
     .map_err(CommandError::from)?;
+    if let Err(err) = execution
+        .staged_view
+        .remove_evaluator_denied_paths(&config.agent)
+    {
+        return fail_check_after_start(&mut diagnostic_log, false, 1, err);
+    }
     let cache_dir = repo_cache
         .git_path(root, GIT_CANON_CACHE_DIR)
         .map_err(CommandError::from)?;
@@ -125,6 +135,9 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         snapshot_root: execution.staged_view.snapshot_root(),
         config: &config,
     };
+    // This expectation loop computes the final `CheckRunReport`. It writes and
+    // flushes each per-expectation stdout record inside the loop; the public
+    // trailer does not exist until the report and final token usage exist.
     let records_result = run_check_with_runner_and_caches(
         runtime,
         &options,
@@ -147,26 +160,23 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             error: Some(err.error),
         },
     };
-    let usage = match collect_and_print_token_usage(&mut execution.runner) {
-        Ok(usage) => usage,
-        Err(err) => return fail_check_after_start(&mut diagnostic_log, false, 1, err),
-    };
-    // Do not render the summary before token usage. In the public check-output
-    // order, token usage is the next piece after the final expectation record;
-    // the summary becomes the next stdout piece only after that stderr line is
-    // written and flushed. `write_summary_line` renders, writes, and flushes
-    // the summary before any later finish work runs.
-    write_summary_line(&mut *result_output, &completed.report, started.elapsed())?;
+    if let Err(err) = write_check_trailer(
+        &mut execution.runner,
+        &mut *result_output,
+        &completed.report,
+        started,
+    ) {
+        return fail_check_after_start(&mut diagnostic_log, false, 1, err);
+    }
     finish_check_report(
         CheckReportFinishContext {
             root,
             config: &config,
-            identities: &identities,
             diagnostic_log: &mut diagnostic_log,
             result_output: &mut *result_output,
             check_caches: &mut check_caches,
+            write_agent_message,
         },
-        usage,
         &completed.report,
         completed.error.as_deref(),
     )?;
@@ -175,6 +185,10 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     } else {
         Err(CommandError::CheckFailed)
     }
+}
+
+pub(crate) fn check_command_writes_agent_message(args: &[OsString]) -> bool {
+    args.is_empty()
 }
 
 struct CompletedCheckRun {
@@ -235,14 +249,19 @@ pub(crate) struct PreparedCheckExecution {
     pub(crate) runner: LazyAppServerRunner,
 }
 
-fn collect_and_print_token_usage(runner: &mut LazyAppServerRunner) -> Result<TokenUsage, String> {
+fn write_check_trailer(
+    runner: &mut LazyAppServerRunner,
+    result_output: &mut dyn Write,
+    report: &CheckRunReport,
+    started: Instant,
+) -> Result<(), String> {
     let usage = collect_check_token_usage(runner)?;
-    // Token usage is the next public stderr piece after per-expectation output.
-    // `print_token_usage_summary` writes and flushes it immediately; the caller
-    // intentionally waits to compute the following stdout summary until this
-    // required earlier piece has been emitted.
+    // The check-output spec orders trailer pieces as token usage, then summary.
+    // Token usage is not known until pending app-server usage updates are
+    // drained here; once known, each trailer line is rendered, written, and
+    // flushed immediately in that order.
     print_token_usage_summary(Some(usage))?;
-    Ok(usage)
+    write_summary_line(result_output, report, started.elapsed())
 }
 
 pub(crate) fn prepare_check_execution(

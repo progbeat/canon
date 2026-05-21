@@ -126,7 +126,10 @@ impl EvaluatorRunner for FakeRunner {
         self.prompts.push(prompt.to_string());
         self.ask_models.push(model.map(str::to_string));
         self.ask_thinking.push(thinking.to_string());
-        self.last_turn_usage = self.turn_usages.pop_front().unwrap_or(None);
+        self.last_turn_usage = self
+            .turn_usages
+            .pop_front()
+            .unwrap_or_else(|| Some(fake_turn_usage(session_id, self.prompts.len())));
         if let Some(turn_usage) = &self.last_turn_usage {
             if thread_reuse_policy_should_retire(carryover_tokens(turn_usage.usage)) {
                 self.retired_sessions
@@ -144,6 +147,22 @@ impl EvaluatorRunner for FakeRunner {
 
     fn take_retired_sessions(&mut self) -> Vec<String> {
         self.retired_sessions.pop_front().unwrap_or_default()
+    }
+}
+
+fn fake_turn_usage(session_id: &str, turn_number: usize) -> EvaluatorTurnUsage {
+    EvaluatorTurnUsage {
+        thread_id: session_id.to_string(),
+        turn_id: format!("turn-{}", turn_number),
+        usage: TokenUsage {
+            total_tokens: 1,
+            input_tokens: 1,
+            cached_input_tokens: 0,
+            output_tokens: 0,
+            reasoning_output_tokens: 0,
+        },
+        token_usage_updates: Vec::new(),
+        context_compaction_events: Vec::new(),
     }
 }
 

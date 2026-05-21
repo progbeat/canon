@@ -29,7 +29,7 @@ fn gate_passes_with_current_cached_pass() {
 }
 
 #[test]
-fn gate_fails_when_cache_is_missing() {
+fn gate_passes_when_cache_is_missing_without_head_pass() {
     let root = git_project("gate-missing");
     commit_all(&root, "initial");
     write_check_config(&root);
@@ -43,6 +43,43 @@ fn gate_fails_when_cache_is_missing() {
 
     let config = parse_check_config(check_config_yaml()).unwrap();
     let result = run_gate_command(&root, &[OsString::from(test_selector(&config, "1"))]);
+
+    assert!(result.is_ok());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn gate_fails_when_head_pass_has_no_current_cache() {
+    let root = git_project("gate-head-pass-current-missing");
+    commit_all(&root, "initial");
+    write_check_config(&root);
+    Command::new("git")
+        .arg("add")
+        .arg(CHECK_PATH)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    commit_all(&root, "add check config");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
+    let head_hash = gate_head_tree_fingerprint(&root, &full_scope())
+        .unwrap()
+        .unwrap();
+    append_history_record(
+        &root,
+        &expectation,
+        &expectation_record(&config.agent, &expectation, "pass", "yes", head_hash),
+    )
+    .unwrap();
+    fs::write(root.join("README.md"), "changed\n").unwrap();
+    Command::new("git")
+        .arg("add")
+        .arg("README.md")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+
+    let result = run_gate_command(&root, &[OsString::from(expectation.display_id.clone())]);
 
     assert_eq!(result.unwrap_err(), CommandError::GateFailed);
     let _ = fs::remove_dir_all(root);
@@ -69,6 +106,83 @@ fn gate_missing_cache_advice_prioritizes_regressions() {
         gate_missing_cache_advice(true),
         Some("canon gate: fix staged regressions before filling missing cache")
     );
+}
+
+#[test]
+fn gate_ignores_missing_cache_before_regression() {
+    let root = git_project("gate-missing-before-regression");
+    commit_all(&root, "initial");
+    write_check_config(&root);
+    Command::new("git")
+        .arg("add")
+        .arg(CHECK_PATH)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    commit_all(&root, "add check config");
+    fs::write(root.join("README.md"), "changed\n").unwrap();
+    Command::new("git")
+        .arg("add")
+        .arg("README.md")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let identities = expectation_identities(&config).unwrap();
+    let expectations = check_options(&config, &[], false, true).selected;
+    let head_hash = gate_head_tree_fingerprint(&root, &full_scope())
+        .unwrap()
+        .unwrap();
+    append_history_record(
+        &root,
+        &expectations[1],
+        &expectation_record(&config.agent, &expectations[1], "pass", "no", head_hash),
+    )
+    .unwrap();
+    let current_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    append_history_record(
+        &root,
+        &expectations[1],
+        &expectation_record(&config.agent, &expectations[1], "fail", "yes", current_hash),
+    )
+    .unwrap();
+    let mut history_cache = HistoryCache::new();
+    let mut scope_hash_cache = ScopeHashCache::new();
+    let mut events = Vec::new();
+
+    let passed = gate_pass_with_config(
+        &root,
+        &config,
+        &identities,
+        &[],
+        GateCaches {
+            history: &mut history_cache,
+            scope_hash: &mut scope_hash_cache,
+        },
+        unix_timestamp().unwrap(),
+        |event| {
+            match event {
+                GateFailureEvent::Regressed(record) => {
+                    events.push(format!("regressed:{}", record.display_id));
+                }
+                GateFailureEvent::Missing(expectation) => {
+                    events.push(format!("missing:{}", expectation.display_id));
+                }
+                GateFailureEvent::MissingComplete { has_regressions } => {
+                    events.push(format!("complete:{has_regressions}"));
+                }
+            }
+            Ok(())
+        },
+    )
+    .unwrap();
+
+    assert!(!passed);
+    assert_eq!(
+        events,
+        vec![format!("regressed:{}", expectations[1].display_id)]
+    );
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -153,7 +267,7 @@ fn gate_fails_mixed_canon_and_non_canon_change() {
 }
 
 #[test]
-fn gate_does_not_skip_non_canon_change_with_missing_cache() {
+fn gate_passes_non_canon_change_with_missing_cache_without_head_pass() {
     let root = git_project("gate-non-canon-missing");
     commit_all(&root, "initial");
     write_check_config(&root);
@@ -175,13 +289,13 @@ fn gate_does_not_skip_non_canon_change_with_missing_cache() {
     let config = parse_check_config(check_config_yaml()).unwrap();
     let result = run_gate_command(&root, &[OsString::from(test_selector(&config, "1"))]);
 
-    assert_eq!(result.unwrap_err(), CommandError::GateFailed);
+    assert!(result.is_ok());
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn gate_uses_shared_final_selection_for_fresh_cooldown_pass() {
-    let root = git_project("gate-cooldown-pass");
+fn gate_checks_fresh_cooldown_expectation_for_regression() {
+    let root = git_project("gate-cooldown-regression");
     commit_all(&root, "initial");
     let yaml = r#"
 version: 1
@@ -222,13 +336,13 @@ expectations:
 
     let result = run_gate_command(&root, &[OsString::from(expectation.display_id.clone())]);
 
-    assert!(result.is_ok());
+    assert_eq!(result.unwrap_err(), CommandError::GateFailed);
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn gate_shared_final_selection_prefers_fresh_cooldown_pass_over_exact_fail() {
-    let root = git_project("gate-cooldown-over-exact-fail");
+fn gate_reports_regression_despite_fresh_cooldown_pass() {
+    let root = git_project("gate-cooldown-regression-over-pass");
     commit_all(&root, "initial");
     let yaml = r#"
 version: 1
@@ -259,6 +373,15 @@ expectations:
         .unwrap();
     let config = parse_check_config(yaml).unwrap();
     let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
+    let head_hash = gate_head_tree_fingerprint(&root, &full_scope())
+        .unwrap()
+        .unwrap();
+    append_history_record(
+        &root,
+        &expectation,
+        &expectation_record(&config.agent, &expectation, "pass", "yes", head_hash),
+    )
+    .unwrap();
     let current_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
     append_history_record(
         &root,
@@ -278,12 +401,12 @@ expectations:
 
     let result = run_gate_command(&root, &[OsString::from(expectation.display_id.clone())]);
 
-    assert!(result.is_ok());
+    assert_eq!(result.unwrap_err(), CommandError::GateFailed);
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn gate_fails_for_new_current_failure_without_head_failure() {
+fn gate_passes_for_new_current_failure_without_head_pass() {
     let root = git_project("gate-new-fail");
     commit_all(&root, "initial");
     write_check_config(&root);
@@ -313,7 +436,7 @@ fn gate_fails_for_new_current_failure_without_head_failure() {
 
     let result = run_gate_command(&root, &[OsString::from(expectation.display_id.clone())]);
 
-    assert!(result.is_err());
+    assert!(result.is_ok());
     let _ = fs::remove_dir_all(root);
 }
 

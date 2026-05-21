@@ -217,19 +217,28 @@ pub(crate) fn ask_and_log<R: EvaluatorRunner>(
     };
     let turn_usage = runner.take_last_turn_usage();
     let response_usage = turn_usage.as_ref().map(|turn_usage| turn_usage.usage);
+    let missing_turn_usage = diagnostic_log.is_some() && turn_usage.is_none();
     if let Some(writer) = diagnostic_log.as_deref_mut() {
         let raw_response = json!({
             "sessionId": turn.session_id,
             "text": response.clone(),
         });
-        let mut fields = vec![
+        let mut fields: Vec<(&'static str, Value)> = vec![
             ("id", json!(expectation_id)),
             ("attempt", json!(attempt)),
             ("reason", json!(reason)),
             ("response", raw_response),
         ];
-        append_turn_usage_fields(&mut fields, turn_usage.as_ref());
-        writer.write_event("info", "agent.response", &fields)?;
+        if missing_turn_usage {
+            fields.push(("error", json!("missing evaluator turn usage")));
+            writer.write_event("error", "agent.response", &fields)?;
+        } else {
+            append_turn_usage_fields(&mut fields, turn_usage.as_ref());
+            writer.write_event("info", "agent.response", &fields)?;
+        }
+    }
+    if missing_turn_usage {
+        return Err(EvaluatorError::message("missing evaluator turn usage"));
     }
     let context_compacted = turn_usage
         .as_ref()
@@ -245,7 +254,7 @@ fn append_turn_usage_fields(
     fields: &mut Vec<(&'static str, Value)>,
     turn_usage: Option<&EvaluatorTurnUsage>,
 ) {
-    if let Some(EvaluatorTurnUsage {
+    let Some(EvaluatorTurnUsage {
         thread_id,
         turn_id,
         usage,
@@ -253,17 +262,18 @@ fn append_turn_usage_fields(
         context_compaction_events,
         ..
     }) = turn_usage
-    {
-        fields.push(("threadId", json!(thread_id)));
-        fields.push(("turnId", json!(turn_id)));
-        if token_usage_updates.is_empty() {
-            fields.push(("tokenUsage", token_usage_log_value(*usage)));
-        } else {
-            fields.push(("tokenUsageUpdates", json!(token_usage_updates)));
-        }
-        if !context_compaction_events.is_empty() {
-            fields.push(("contextCompactionEvents", json!(context_compaction_events)));
-        }
+    else {
+        return;
+    };
+    fields.push(("threadId", json!(thread_id)));
+    fields.push(("turnId", json!(turn_id)));
+    if token_usage_updates.is_empty() {
+        fields.push(("tokenUsage", token_usage_log_value(*usage)));
+    } else {
+        fields.push(("tokenUsageUpdates", json!(token_usage_updates)));
+    }
+    if !context_compaction_events.is_empty() {
+        fields.push(("contextCompactionEvents", json!(context_compaction_events)));
     }
 }
 

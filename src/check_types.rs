@@ -287,7 +287,8 @@ pub(crate) struct InterrogationResult {
     pub(crate) stop_after_current_expectation: bool,
 }
 
-pub(crate) struct QueryInterrogationResult {
+#[derive(Debug)]
+pub(crate) struct QueryResult {
     pub(crate) answer: ParsedAnswer,
 }
 
@@ -302,6 +303,9 @@ pub(crate) struct NarrowingStats {
 pub(crate) struct CheckRunReport {
     pub(crate) records: Vec<CheckRecord>,
     pub(crate) non_selected: Vec<SelectedExpectation>,
+    // Freshly evaluated expectations in this run. Reused cache records do not
+    // count, even when they are emitted as FAILED output.
+    pub(crate) evaluated: usize,
     // Final selected count after every selection rule has run. This excludes
     // command-selector misses, cooldown matches, and silent exact-cache passes.
     // Failed exact-cache hits stay selected because they produce FAILED output.
@@ -327,6 +331,7 @@ pub(crate) struct CheckRunError {
 pub(crate) fn check_run_error(
     records: &[CheckRecord],
     non_selected: &[SelectedExpectation],
+    evaluated: usize,
     selected: usize,
     skipped: usize,
     silent: usize,
@@ -338,6 +343,7 @@ pub(crate) fn check_run_error(
         report: CheckRunReport {
             records: records.to_vec(),
             non_selected: non_selected.to_vec(),
+            evaluated,
             selected,
             skipped,
             silent,

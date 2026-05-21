@@ -63,6 +63,49 @@ fn staged_worktree_view_materializes_staged_snapshot_without_touching_worktree()
 }
 
 #[test]
+fn staged_worktree_view_removes_evaluator_denied_paths_from_snapshot() {
+    let root = git_project("staged-snapshot-evaluator-deny");
+    write_check_config(&root);
+    fs::create_dir_all(root.join(".canon/draft")).unwrap();
+    fs::write(root.join(".canon/draft/private.md"), "draft\n").unwrap();
+    fs::create_dir_all(root.join("target")).unwrap();
+    fs::write(root.join("target/cache.txt"), "cache\n").unwrap();
+    Command::new("git")
+        .args([
+            "add",
+            ".canon/check.yml",
+            ".canon/draft/private.md",
+            "target/cache.txt",
+        ])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let config = parse_check_config(check_config_yaml()).unwrap();
+
+    {
+        let staged_view = StagedWorktreeView::apply(&root).unwrap();
+        assert!(staged_view
+            .snapshot_root()
+            .join(".canon/draft/private.md")
+            .exists());
+        assert!(staged_view
+            .snapshot_root()
+            .join("target/cache.txt")
+            .exists());
+        staged_view
+            .remove_evaluator_denied_paths(&config.agent)
+            .unwrap();
+
+        assert!(!staged_view.snapshot_root().join(".canon").exists());
+        assert!(!staged_view.snapshot_root().join("target").exists());
+        assert!(staged_view.snapshot_root().join("README.md").exists());
+    }
+    assert!(root.join(".canon/draft/private.md").exists());
+    assert!(root.join("target/cache.txt").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn staged_worktree_view_exposes_staged_index_without_git_history() {
     let root = git_project("staged-snapshot-git-commands");
     fs::write(root.join("old-name.txt"), "renamed\n").unwrap();

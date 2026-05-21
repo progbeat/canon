@@ -5,8 +5,8 @@ use crate::app_server_process::prepare_evaluator_codex_home;
 use crate::app_server_protocol::{app_server_error_message, app_server_failure_from_message};
 use crate::app_server_protocol::{
     app_server_error_value, app_server_failure_from_value, app_server_message,
-    append_completed_agent_text, context_compaction_event, render_token_usage_summary,
-    token_usage_update, turn_idle_timed_out, turn_started_id, turn_text,
+    append_completed_agent_text, context_compaction_event, token_usage_update, turn_idle_timed_out,
+    turn_started_id, turn_text,
 };
 use crate::app_server_transport::{
     carryover_tokens, record_context_compaction_event, record_token_usage_update,
@@ -16,12 +16,12 @@ use crate::check::run_check_with_runner;
 use crate::check_cache::{
     cached_failure_for_expectation, final_selected_after_current_pass_cache, write_cache_hit,
 };
-use crate::check_command::prepare_check_execution;
 use crate::check_command::run_check_command;
+use crate::check_command::{check_command_writes_agent_message, prepare_check_execution};
 use crate::check_command_args::parse_check_command_args;
 use crate::check_command_finish::{
-    check_agent_message, pass_improvement_notice, staged_pass_notice_count_if_gate_passes,
-    staged_passes_not_pass_at_head_count,
+    check_agent_message, pass_improvement_notice, staged_pass_notice_count,
+    staged_passes_failed_at_head_count,
 };
 use crate::check_config::{
     parse_check_config_content, parse_check_config_content_with_root,
@@ -33,15 +33,14 @@ use crate::check_generator_paths::expand_generator_paths;
 use crate::check_interrogation::{
     ask_with_reused_thread, interrogate_expectation_with_model, ThreadTurnRequest,
 };
-use crate::check_interrogation_records::{
-    finalize_interrogation_response, finalize_query_response,
-};
+use crate::check_interrogation_records::finalize_interrogation_response;
 use crate::check_interrogation_state::{
     evaluator_session_key, should_retry_full_scope_after_restricted_idk, CheckRuntime,
     InterrogationState,
 };
 use crate::check_lazy_reset::{
-    estimate_staged_project_size_tokens, lazy_full_scope_reset_count, plan_lazy_full_scope_reset,
+    apply_scheduled_lazy_full_scope_resets, lazy_full_scope_reset_count,
+    plan_lazy_full_scope_reset, schedule_lazy_full_scope_resets,
     set_non_selected_expectation_scopes_to_full,
 };
 use crate::check_model_fallback::{
@@ -52,6 +51,7 @@ use crate::check_narrowing::scope_narrowing_log_fields;
 use crate::check_order_state::{latest_recorded_non_pass_timestamp, write_latest_non_pass_record};
 use crate::check_output::{
     escape_check_output_text, pad_summary_line, render_check_output_record, render_query_output,
+    render_token_usage_summary,
 };
 use crate::check_output::{
     record_requires_human_review, report_output_skipped_count, write_and_flush_result_output,
@@ -75,7 +75,7 @@ use crate::check_selection::{
 use crate::check_types::{
     check_run_error, CheckCommandArgs, CheckOptions, CheckRecord, CheckResult, CheckRunError,
     CheckRunReport, Cooldown, EvaluatorResponseJson, InterrogationResult, NarrowingStats,
-    ObservedAnswerState, ParsedAnswer, QueryInterrogationResult, SelectedExpectation,
+    ObservedAnswerState, ParsedAnswer, QueryResult, SelectedExpectation,
 };
 use crate::check_validation::{
     check_config_loads_plugins, codex_reasoning_effort, normalize_agent_ignore_pattern_for_config,
@@ -188,9 +188,8 @@ use crate::token_usage_types::{
 use crate::{
     APP_SERVER_TURN_TIMEOUT_SECS, CHECK_PATH, DEFAULT_CHECK_TEMPLATE, DEFAULT_PRE_COMMIT_HOOK,
     EMPTY_EVIDENCE_OBSERVED, GIT_CANON_CACHE_DIR, GIT_CANON_LOG_DIR, GIT_HOOKS_PATH,
-    HISTORY_COMPACT_CHANCE_DENOMINATOR, HISTORY_COMPACT_KEEP_RECORDS, MALFORMED_REVIEW_WARNING,
-    OBSERVED_IDK, OBSERVED_MALFORMED, PRE_COMMIT_HOOK_PATH, RESULT_FAIL, RESULT_PASS,
-    UNPARSEABLE_OBSERVED,
+    HISTORY_COMPACT_CHANCE_DENOMINATOR, HISTORY_COMPACT_KEEP_RECORDS, OBSERVED_IDK,
+    OBSERVED_MALFORMED, PRE_COMMIT_HOOK_PATH, RESULT_FAIL, RESULT_PASS, UNPARSEABLE_OBSERVED,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

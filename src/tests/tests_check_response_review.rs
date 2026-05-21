@@ -122,6 +122,55 @@ fn evaluator_turn_log_writes_aggregate_usage_when_raw_updates_are_absent() {
 }
 
 #[test]
+fn evaluator_turn_log_errors_when_successful_response_lacks_usage() {
+    let root = git_project("turn-response-log-missing-usage");
+    let mut runner = FakeRunner::new(&[&answer("yes", "evidence", &["."])]);
+    runner.turn_usages.push_back(None);
+    let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
+    let turn = EvaluatorTurnContext {
+        session_id: "session-1",
+        model: None,
+        thinking: "low",
+    };
+    let mut diagnostic_log_ref = Some(&mut diagnostic_log);
+
+    let err = match ask_and_log(
+        &mut runner,
+        &turn,
+        "Question?",
+        &mut diagnostic_log_ref,
+        Some("id-1"),
+        1,
+        "initial",
+    ) {
+        Ok(_) => panic!("expected missing usage error"),
+        Err(err) => err,
+    };
+
+    assert_eq!(err.message_str(), "missing evaluator turn usage");
+    let log = fs::read_to_string(diagnostic_log.path()).unwrap();
+    let response = log
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find(|event| event["event"] == "agent.response")
+        .unwrap();
+    assert_eq!(response["level"].as_str(), Some("error"));
+    assert_eq!(
+        response["error"].as_str(),
+        Some("missing evaluator turn usage")
+    );
+    assert_eq!(
+        response["response"]["sessionId"].as_str(),
+        Some("session-1")
+    );
+    assert!(response.get("threadId").is_none());
+    assert!(response.get("turnId").is_none());
+    assert!(response.get("tokenUsage").is_none());
+    assert!(response.get("tokenUsageUpdates").is_none());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn check_runner_requires_human_review_for_unparseable_response() {
     let root = git_project("check-unparseable-first-response");
     let config = parse_check_config(check_config_yaml()).unwrap();
@@ -159,9 +208,6 @@ fn check_runner_marks_unparseable_after_response_parse_fails() {
     assert_eq!(records.records[0].observed, UNPARSEABLE_OBSERVED);
     assert!(records.records[0].evidence.contains("response: <empty>"));
     assert_eq!(runner.prompts.len(), 1);
-    let log = fs::read_to_string(diagnostic_log.path()).unwrap();
-    assert!(log.contains(r#""event":"review.required""#));
-    assert!(log.contains(r#""reason":"unparseable evaluator response""#));
     assert!(read_history_records(&root, &options.selected[0])
         .unwrap()
         .is_empty());
@@ -250,9 +296,6 @@ fn check_runner_requires_human_review_when_evidence_stays_empty() {
     assert_eq!(records.records[0].observed, EMPTY_EVIDENCE_OBSERVED);
     assert!(records.records[0].evidence.contains("evidence was empty"));
     assert_eq!(runner.prompts.len(), 1);
-    let log = fs::read_to_string(diagnostic_log.path()).unwrap();
-    assert!(log.contains(r#""event":"review.required""#));
-    assert!(log.contains(r#""reason":"empty evaluator evidence""#));
     assert!(read_history_records(&root, &options.selected[0])
         .unwrap()
         .is_empty());

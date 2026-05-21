@@ -1,6 +1,12 @@
 use super::*;
 
 #[test]
+fn check_agent_message_requires_no_check_arguments() {
+    assert!(check_command_writes_agent_message(&[]));
+    assert!(!check_command_writes_agent_message(&["anything".into()]));
+}
+
+#[test]
 fn check_command_accepts_custom_config_option() {
     let parsed = parse_check_command_args(&[
         "--config".into(),

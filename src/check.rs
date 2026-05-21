@@ -87,6 +87,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     let mut selected = options.selected.len();
     let mut skipped = options.skipped;
     let mut silent = 0usize;
+    let mut evaluated = 0usize;
     let mut narrowing = NarrowingStats::default();
     let mut non_selected = options.non_selected.clone();
     let root = runtime.root;
@@ -102,6 +103,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 check_run_error(
                     &records,
                     &non_selected,
+                    evaluated,
                     selected,
                     skipped,
                     silent,
@@ -136,6 +138,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 return Err(check_run_error(
                     &records,
                     &non_selected,
+                    evaluated,
                     selected,
                     skipped,
                     silent,
@@ -200,6 +203,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             return Err(check_run_error(
                 &records,
                 &non_selected,
+                evaluated,
                 selected,
                 skipped,
                 silent,
@@ -228,6 +232,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                     return Ok(check_run_report(
                         records,
                         non_selected,
+                        evaluated,
                         selected,
                         skipped,
                         silent,
@@ -266,6 +271,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             &mut caches.scope_hash,
             options.break_after_tokens,
         ));
+        evaluated += 1;
         let mut break_after_tokens_hit =
             turn_exceeds_break_after_tokens(&interrogation, options.break_after_tokens);
         let mut context_compaction_hit = turn_has_context_compaction(&interrogation);
@@ -378,6 +384,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             return Ok(check_run_report(
                 records,
                 non_selected,
+                evaluated,
                 selected,
                 skipped,
                 silent,
@@ -388,6 +395,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     Ok(check_run_report(
         records,
         non_selected,
+        evaluated,
         selected,
         skipped,
         silent,
@@ -398,6 +406,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
 fn check_run_report(
     records: Vec<CheckRecord>,
     non_selected: Vec<SelectedExpectation>,
+    evaluated: usize,
     selected: usize,
     skipped: usize,
     silent: usize,
@@ -406,6 +415,7 @@ fn check_run_report(
     CheckRunReport {
         records,
         non_selected,
+        evaluated,
         selected,
         skipped,
         silent,

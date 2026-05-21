@@ -48,7 +48,7 @@ impl DiagnosticLogWriter {
     // the behavior boundary: check_interrogation.rs logs thread start/reuse and
     // effective instructions, evaluator_turn.rs logs agent request/response and
     // per-turn token usage, check_model_fallback.rs logs fallback decisions,
-    // check_interrogation_records.rs logs review-required diagnostics, and
+    // check_interrogation_records.rs logs finalized records, and
     // check_reporting.rs logs check.finish.
     #[cfg(test)]
     pub(crate) fn create(root: &Path) -> DiagnosticLogResult<DiagnosticLogWriter> {
@@ -119,6 +119,7 @@ impl DiagnosticLogWriter {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn append_runtime_log_event(
     root: &Path,
     level: &str,
