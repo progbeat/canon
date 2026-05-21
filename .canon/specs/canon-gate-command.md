@@ -11,18 +11,12 @@ def gate(selected_expectations):
             return Pass
         else:
             return Fail
-    has_missing = False
     for each expectation in selected_expectations:
         prev_res = cached result for expectation at HEAD
         curr_res = cached result for expectation in the staged Git tree
-        if prev_res is not Fail and curr_res is Fail:  # if regression:
+        if prev_res is Pass and curr_res is not Pass:  # if regression:
             return Fail
-        if curr_res is Missing:
-            has_missing = True
-    if has_missing:
-        return Fail
-    else:
-        return Pass
+    return Pass
 ```
 
 Every `canon gate` failure prints an actionable message.

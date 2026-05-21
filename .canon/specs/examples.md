@@ -20,6 +20,7 @@ Keep canon changes separate from implementation changes:
 $ git add .canon/check.yml src/main.py
 $ git commit -m "Add a new feature"
 canon gate: .canon/** changes must not be mixed with non-.canon changes
+▷ Ask human to handle .canon/ changes.
 ```
 
 Uninstall the pre-commit hook:
