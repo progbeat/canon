@@ -249,15 +249,10 @@ pub(crate) fn configure_git_hooks_path(
     }
 
     if preflight.current_git_hooks_path.as_deref() == Some(GIT_HOOKS_PATH) {
-        write_stdout_line(&format!("Git core.hooksPath already = {}", GIT_HOOKS_PATH))?;
         return Ok(());
     }
 
-    set_git_hooks_path(root)?;
-    write_stdout_line(&format!(
-        "Configured git core.hooksPath = {}",
-        GIT_HOOKS_PATH
-    ))
+    set_git_hooks_path(root)
 }
 
 pub(crate) fn set_git_hooks_path(root: &Path) -> Result<(), String> {

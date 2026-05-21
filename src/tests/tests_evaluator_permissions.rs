@@ -184,7 +184,8 @@ fn app_server_starts_with_plugins_disabled_by_default() {
         })
         .unwrap();
     assert!(model_catalog_arg.starts_with("model_catalog_json=\""));
-    let model_catalog_path = resolve_git_path(&root, "canon/evaluator-model-catalogs")
+    let canonical_root = root.canonicalize().unwrap();
+    let model_catalog_path = resolve_git_path(&canonical_root, "canon/evaluator-model-catalogs")
         .unwrap()
         .join(format!("{}.json", process::id()));
     assert_eq!(
