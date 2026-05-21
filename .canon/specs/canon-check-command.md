@@ -92,16 +92,18 @@ arguments, the check run may emit instructions for the agent that ran it like
 this:
 
 ```
-def print_agent_messages(num_failed, num_fixes, num_regressions):
+def print_agent_messages(num_failed, num_errors, num_fixes, num_regressions):
     """
     num_failed: The number of expectations that failed in this run.
+    num_errors: The number of expectations that encountered errors in this run.
     num_fixes: The number of expectations that changed from non-OK to OK compared to HEAD.
     num_regressions: The number of expectations that changed from OK to non-OK compared to HEAD.
     """
-    if num_regressions > 0 or num_failed > 0 and num_fixes == 0:
+    num_non_ok = num_failed + num_errors
+    if num_regressions > 0 or num_non_ok > 0 and num_fixes == 0:
         print(f"▷ Fix the issues and run `canon check` again!")
         return
-    if num_failed == 0 and num_fixes == 0:
+    if num_non_ok == 0 and num_fixes == 0:
         print("✓ All checks passed. Commit is allowed.")
         return
     assert num_fixes > 0
