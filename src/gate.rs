@@ -3,8 +3,8 @@ use crate::check_preflight::{
     is_canon_only_staged_change_bytes, is_canon_project_path_bytes, staged_changed_path_bytes,
 };
 use crate::check_selection::{
-    expectation_identities, final_selected_expectations, select_expectations_with_identities,
-    ExpectationIdentity,
+    expectation_identities, final_selected_expectations, order_expectations_by_latest_non_pass,
+    select_expectations_with_identities, ExpectationIdentity,
 };
 use crate::check_types::{CheckRecord, SelectedExpectation};
 use crate::cli::CommandError;
@@ -98,24 +98,17 @@ pub(crate) fn gate_pass_with_config(
     config: &CheckConfig,
     identities: &[ExpectationIdentity],
     args: &[OsString],
-    caches: GateCaches<'_>,
+    mut caches: GateCaches<'_>,
     now: u64,
     emit_failure: impl FnMut(GateFailureEvent) -> Result<(), String>,
 ) -> Result<bool, String> {
-    let selected_expectations = selected_expectations_for_gate_command(
-        root,
-        config,
-        identities,
-        args,
-        caches.history,
-        caches.scope_hash,
-        now,
-    )?;
+    let selected_expectations =
+        selected_expectations_for_gate_command(root, config, identities, args, &mut caches, now)?;
     gate_selected_expectations(
         root,
         &config.agent,
         &selected_expectations,
-        caches,
+        &mut caches,
         emit_failure,
     )
 }
@@ -124,7 +117,7 @@ fn gate_selected_expectations(
     root: &Path,
     agent: &AgentConfig,
     selected_expectations: &[SelectedExpectation],
-    caches: GateCaches<'_>,
+    caches: &mut GateCaches<'_>,
     mut emit_failure: impl FnMut(GateFailureEvent) -> Result<(), String>,
 ) -> Result<bool, String> {
     for expectation in selected_expectations {
@@ -168,22 +161,29 @@ fn selected_expectations_for_gate_command(
     config: &CheckConfig,
     identities: &[ExpectationIdentity],
     args: &[OsString],
-    history_cache: &mut HistoryCache,
-    scope_hash_cache: &mut ScopeHashCache,
+    caches: &mut GateCaches<'_>,
     now: u64,
 ) -> Result<Vec<SelectedExpectation>, String> {
     let selected = select_expectations_with_identities(config, identities, args)?;
-    let selected = final_selected_expectations(root, &config.agent, selected, history_cache, now)
+    if !args.is_empty() {
+        return Ok(selected);
+    }
+
+    // The default no-selector gate set stays aligned with `canon check`.
+    // Explicit gate selectors still compare the requested expectations
+    // directly, so cooldown cannot hide an explicit regression check.
+    let selected = final_selected_expectations(root, &config.agent, selected, caches.history, now)
         .map(|selection| selection.selected)
         .map_err(|err| err.error)?;
-    final_selected_after_current_pass_cache(
+    let selected = final_selected_after_current_pass_cache(
         root,
         &config.agent,
         selected,
-        history_cache,
-        scope_hash_cache,
+        caches.history,
+        caches.scope_hash,
     )
-    .map(|selection| selection.selected)
+    .map(|selection| selection.selected)?;
+    order_expectations_by_latest_non_pass(root, selected, caches.history)
 }
 
 pub(crate) struct GateCaches<'a> {

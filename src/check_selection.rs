@@ -309,9 +309,10 @@ pub(crate) fn final_selected_expectations(
     // Cooldown is a selection filter, not an answer-cache hit: a fresh latest
     // pass removes a matching expectation before exact-cache lookup and before
     // any evaluator result can be reused as the observed answer. `canon check`
-    // uses this set for evaluator work; `canon gate` also resolves it for the
-    // command-selection invariant, while its regression loop uses separate
-    // selector-expanded candidates.
+    // uses this set for evaluator work. `canon gate` shares it for default
+    // no-selector runs, while explicit gate selectors compare requested
+    // expectations directly so cooldown cannot hide a targeted regression
+    // check.
     let mut remaining = Vec::new();
     let mut skipped = Vec::new();
     for expectation in selected {

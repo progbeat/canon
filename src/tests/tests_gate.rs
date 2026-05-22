@@ -294,7 +294,7 @@ fn gate_passes_non_canon_change_with_missing_cache_without_head_pass() {
 }
 
 #[test]
-fn gate_skips_fresh_cooldown_expectation_for_regression() {
+fn gate_fails_cooldown_expectation_when_current_cache_missing() {
     let root = git_project("gate-cooldown-regression");
     commit_all(&root, "initial");
     let yaml = r#"
@@ -336,12 +336,56 @@ expectations:
 
     let result = run_gate_command(&root, &[OsString::from(expectation.display_id.clone())]);
 
+    assert_eq!(result.unwrap_err(), CommandError::GateFailed);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn gate_default_selection_skips_fresh_cooldown_expectation() {
+    let root = git_project("gate-default-cooldown");
+    commit_all(&root, "initial");
+    let yaml = r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: "Question?"
+    a: "yes"
+    cooldown: 1d
+"#;
+    fs::create_dir_all(root.join(".canon")).unwrap();
+    fs::write(root.join(CHECK_PATH), yaml).unwrap();
+    Command::new("git")
+        .arg("add")
+        .arg(CHECK_PATH)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    commit_all(&root, "add check config");
+    let config = parse_check_config(yaml).unwrap();
+    let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
+    let old_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let mut record = expectation_record(&config.agent, &expectation, "pass", "yes", old_hash);
+    record.timestamp = format_record_timestamp(unix_timestamp().unwrap());
+    append_history_record(&root, &expectation, &record).unwrap();
+    fs::write(root.join("README.md"), "changed\n").unwrap();
+    Command::new("git")
+        .arg("add")
+        .arg("README.md")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+
+    let result = run_gate_command(&root, &[]);
+
     assert!(result.is_ok());
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn gate_skips_regression_with_fresh_cooldown_pass() {
+fn gate_fails_regression_despite_fresh_cooldown_pass() {
     let root = git_project("gate-cooldown-regression-over-pass");
     commit_all(&root, "initial");
     let yaml = r#"
@@ -401,7 +445,7 @@ expectations:
 
     let result = run_gate_command(&root, &[OsString::from(expectation.display_id.clone())]);
 
-    assert!(result.is_ok());
+    assert_eq!(result.unwrap_err(), CommandError::GateFailed);
     let _ = fs::remove_dir_all(root);
 }
 
