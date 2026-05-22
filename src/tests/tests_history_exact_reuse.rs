@@ -548,3 +548,45 @@ fn scope_hash_reuses_fully_covered_directory_oid() {
         sha1_scope_tree_oid_from_entries(&[child_entry, dir_entry]).unwrap()
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn staged_scope_entries_reuse_git_tree_oid_for_fully_covered_directory() {
+    let root = git_project("scope-hash-staged-tree-oid");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let root_tree = Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .arg("write-tree")
+        .output()
+        .unwrap();
+    assert!(
+        root_tree.status.success(),
+        "{}",
+        String::from_utf8_lossy(&root_tree.stderr)
+    );
+    let root_tree_oid = command_output_trimmed(&root_tree.stdout, "git write-tree stdout").unwrap();
+    let src_tree = Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .arg("rev-parse")
+        .arg(format!("{}:src", root_tree_oid))
+        .output()
+        .unwrap();
+    assert!(
+        src_tree.status.success(),
+        "{}",
+        String::from_utf8_lossy(&src_tree.stderr)
+    );
+    let src_tree_oid = command_output_trimmed(&src_tree.stdout, "git rev-parse stdout").unwrap();
+    let scope = vec!["src".to_string()];
+    let entries = staged_scope_entries(&root, &scope).unwrap();
+    let src_tree_entry = format!("40000 {}\tsrc", src_tree_oid);
+
+    assert!(entries.iter().any(|entry| entry == &src_tree_entry));
+    assert_eq!(
+        staged_scope_hash(&root, &config.agent, &scope).unwrap(),
+        sha1_scope_tree_oid_from_entries(&[src_tree_entry]).unwrap()
+    );
+    let _ = fs::remove_dir_all(root);
+}

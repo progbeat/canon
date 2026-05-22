@@ -17,7 +17,7 @@ use crate::check_command::run_check_command;
 use crate::check_command::{check_command_writes_agent_message, prepare_check_execution};
 use crate::check_command_args::parse_check_command_args;
 use crate::check_command_finish::{
-    check_agent_message, pass_improvement_notice, staged_pass_notice_count,
+    check_agent_message, check_agent_messages, pass_improvement_notice, staged_pass_notice_count,
     staged_passes_failed_at_head_count,
 };
 use crate::check_config::{

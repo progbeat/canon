@@ -313,6 +313,20 @@ fn staged_pass_notice_counts_passes_even_with_existing_failure() {
         .unwrap(),
         1
     );
+    assert_eq!(
+        check_agent_messages(
+            &root,
+            &config.agent,
+            &report,
+            &mut HistoryCache::new(),
+            &mut ScopeHashCache::new(),
+        )
+        .unwrap(),
+        vec![
+            "▷ +1 pass compared to HEAD. Commit the staged changes!".to_string(),
+            "▷ Then fix the remaining issues and run `canon check` again!".to_string(),
+        ]
+    );
     let _ = fs::remove_dir_all(root);
 }
 

@@ -19,6 +19,7 @@ pub(crate) struct ScopeHashCache {
     values: BTreeMap<ScopeCacheKey, Option<String>>,
     entries: BTreeMap<ScopeCacheKey, Option<Vec<String>>>,
     staged_all_entries: BTreeMap<PathBuf, Vec<String>>,
+    staged_root_tree_oids: BTreeMap<PathBuf, String>,
     gate_head_values: BTreeMap<ScopeCacheKey, Option<String>>,
     gate_head_entries: BTreeMap<ScopeCacheKey, Option<Vec<String>>>,
     gate_head_all_entries: BTreeMap<PathBuf, Option<Vec<String>>>,
@@ -72,11 +73,14 @@ impl ScopeHashCache {
         if let Some(hash) = self.values.get(&key) {
             return Ok(hash.clone());
         }
-        let object_hash_algorithm = self.object_hash_algorithm(root)?;
-        let hash = self
-            .staged_scope_entries_for_key(root, &scope, &key)?
-            .map(|entries| scope_tree_oid_from_entries(&entries, object_hash_algorithm))
-            .transpose()?;
+        let hash = if scope == full_scope() {
+            Some(self.staged_root_tree_oid(root)?)
+        } else {
+            let object_hash_algorithm = self.object_hash_algorithm(root)?;
+            self.staged_scope_entries_for_key(root, &scope, &key)?
+                .map(|entries| scope_tree_oid_from_entries(&entries, object_hash_algorithm))
+                .transpose()?
+        };
         self.values.insert(key, hash.clone());
         Ok(hash)
     }
@@ -110,12 +114,23 @@ impl ScopeHashCache {
 
     fn staged_all_scope_entries(&mut self, root: &Path) -> Result<&Vec<String>, String> {
         if !self.staged_all_entries.contains_key(root) {
-            let entries = git_scope_entries(root, GitScopeListing::Index)?;
+            let root_tree_oid = self.staged_root_tree_oid(root)?;
+            let entries = staged_tree_scope_entries(root, &root_tree_oid)?;
             self.staged_all_entries.insert(root.to_path_buf(), entries);
         }
         self.staged_all_entries
             .get(root)
             .ok_or_else(|| "failed to cache staged scope entries".to_string())
+    }
+
+    fn staged_root_tree_oid(&mut self, root: &Path) -> Result<String, String> {
+        if let Some(oid) = self.staged_root_tree_oids.get(root) {
+            return Ok(oid.clone());
+        }
+        let oid = git_write_index_tree_oid(root)?;
+        self.staged_root_tree_oids
+            .insert(root.to_path_buf(), oid.clone());
+        Ok(oid)
     }
 
     #[cfg(all(test, unix))]
@@ -515,39 +530,44 @@ pub(crate) fn head_scope_entries_for_existing_head(root: &Path) -> Result<Vec<St
 
 #[cfg(all(test, unix))]
 fn staged_scope_entries_for_scope(root: &Path, scope: &[String]) -> Result<Vec<String>, String> {
-    git_scope_entries(root, GitScopeListing::Index)
+    let root_tree_oid = git_write_index_tree_oid(root)?;
+    staged_tree_scope_entries(root, &root_tree_oid)
         .map(|entries| filter_scope_entries(&entries, scope))
 }
 
 #[derive(Clone, Copy)]
 enum GitScopeListing {
+    #[cfg(test)]
     Index,
     Head,
+    StagedTree,
 }
 
 fn git_scope_entries(root: &Path, listing: GitScopeListing) -> Result<Vec<String>, String> {
-    if let GitScopeListing::Index = listing {
-        return git_index_scope_entries(root);
-    }
     git_tree_scope_entries(root, "HEAD", listing)
 }
 
-fn git_index_scope_entries(root: &Path) -> Result<Vec<String>, String> {
+fn staged_tree_scope_entries(root: &Path, root_tree_oid: &str) -> Result<Vec<String>, String> {
+    git_tree_scope_entries(root, root_tree_oid, GitScopeListing::StagedTree)
+}
+
+fn git_write_index_tree_oid(root: &Path) -> Result<String, String> {
     let mut command = Command::new("git");
-    command
-        .arg("-C")
-        .arg(root)
-        .args(["ls-files", "-z", "--stage"]);
+    command.arg("-C").arg(root).arg("write-tree");
     let output = command
         .output()
-        .map_err(|err| format!("failed to run git ls-files: {}", err))?;
+        .map_err(|err| format!("failed to run git write-tree: {}", err))?;
     if !output.status.success() {
         return Err(format!(
-            "failed to inspect staged scope: {}",
-            command_output_trimmed(&output.stderr, "git ls-files stderr")?
+            "failed to write staged tree: {}",
+            command_output_trimmed(&output.stderr, "git write-tree stderr")?
         ));
     }
-    normalized_git_scope_entries(&output.stdout, GitScopeListing::Index)
+    let oid = command_output_trimmed(&output.stdout, "git write-tree stdout")?;
+    if oid.is_empty() {
+        return Err("git write-tree returned an empty tree object id".to_string());
+    }
+    Ok(oid.to_string())
 }
 
 fn git_tree_scope_entries(
@@ -648,29 +668,37 @@ fn scope_entry_from_normalized_entry(entry: &str) -> &str {
 impl GitScopeListing {
     fn command_name(self) -> &'static str {
         match self {
+            #[cfg(test)]
             GitScopeListing::Index => "git ls-files",
             GitScopeListing::Head => "git ls-tree",
+            GitScopeListing::StagedTree => "git ls-tree",
         }
     }
 
     fn stderr_label(self) -> &'static str {
         match self {
+            #[cfg(test)]
             GitScopeListing::Index => "git ls-files stderr",
             GitScopeListing::Head => "git ls-tree stderr",
+            GitScopeListing::StagedTree => "git ls-tree stderr",
         }
     }
 
     fn inspect_error(self) -> &'static str {
         match self {
+            #[cfg(test)]
             GitScopeListing::Index => "failed to inspect staged scope",
             GitScopeListing::Head => "failed to inspect HEAD scope",
+            GitScopeListing::StagedTree => "failed to inspect staged scope",
         }
     }
 
     fn malformed_entry(self) -> &'static str {
         match self {
+            #[cfg(test)]
             GitScopeListing::Index => "git index entry",
             GitScopeListing::Head => "git tree entry",
+            GitScopeListing::StagedTree => "git tree entry",
         }
     }
 }
@@ -706,6 +734,7 @@ fn normalize_git_scope_metadata(
     let mut fields = metadata.split_whitespace();
     let mode = next_scope_metadata_field(&mut fields, listing, &path)?;
     match listing {
+        #[cfg(test)]
         GitScopeListing::Index => {
             let object = next_scope_metadata_field(&mut fields, listing, &path)?;
             let stage = next_scope_metadata_field(&mut fields, listing, &path)?;
@@ -715,7 +744,7 @@ fn normalize_git_scope_metadata(
                 Ok(format!("{} {} {}\t{}", mode, object, stage, path))
             }
         }
-        GitScopeListing::Head => {
+        GitScopeListing::Head | GitScopeListing::StagedTree => {
             let kind = next_scope_metadata_field(&mut fields, listing, &path)?;
             let object = next_scope_metadata_field(&mut fields, listing, &path)?;
             Ok(format!(

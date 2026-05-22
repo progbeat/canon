@@ -18,6 +18,8 @@ use std::path::Path;
 // owns only the post-summary agent message plus cleanup and finish logging.
 const ALL_CHECKS_PASSED_MESSAGE: &str = "✓ All checks passed. Commit is allowed.";
 const FIX_ISSUES_MESSAGE: &str = "▷ Fix the issues and run `canon check` again!";
+const THEN_FIX_REMAINING_MESSAGE: &str =
+    "▷ Then fix the remaining issues and run `canon check` again!";
 const PASS_IMPROVEMENT_COMMIT_SUFFIX: &str = "Commit the staged changes!";
 
 // Success and error reports share cleanup, finish logging, and the post-summary
@@ -126,17 +128,20 @@ fn write_check_agent_message(
     output: &mut dyn Write,
     caches: &mut CheckRunCaches,
 ) -> Result<(), CommandError> {
-    let message = check_agent_message(
+    let messages = check_agent_messages(
         root,
         &config.agent,
         report,
         &mut caches.history,
         &mut caches.scope_hash,
     )?;
-    write_stdout_line_record(output, &message, "check agent message")?;
+    for message in messages {
+        write_stdout_line_record(output, &message, "check agent message")?;
+    }
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn check_agent_message(
     root: &Path,
     agent: &AgentConfig,
@@ -144,6 +149,16 @@ pub(crate) fn check_agent_message(
     history_cache: &mut HistoryCache,
     scope_hash_cache: &mut ScopeHashCache,
 ) -> Result<String, String> {
+    Ok(check_agent_messages(root, agent, report, history_cache, scope_hash_cache)?.join("\n"))
+}
+
+pub(crate) fn check_agent_messages(
+    root: &Path,
+    agent: &AgentConfig,
+    report: &CheckRunReport,
+    history_cache: &mut HistoryCache,
+    scope_hash_cache: &mut ScopeHashCache,
+) -> Result<Vec<String>, String> {
     let num_fixes = staged_pass_notice_count(root, agent, report, history_cache, scope_hash_cache)?;
     let num_regressions =
         staged_regressions_count(root, agent, report, history_cache, scope_hash_cache)?;
@@ -159,12 +174,16 @@ pub(crate) fn check_agent_message(
         .count();
     let num_non_ok = num_failed + num_errors;
     if num_regressions > 0 || (num_non_ok > 0 && num_fixes == 0) {
-        return Ok(FIX_ISSUES_MESSAGE.to_string());
+        return Ok(vec![FIX_ISSUES_MESSAGE.to_string()]);
     }
     if num_non_ok == 0 && num_fixes == 0 {
-        return Ok(ALL_CHECKS_PASSED_MESSAGE.to_string());
+        return Ok(vec![ALL_CHECKS_PASSED_MESSAGE.to_string()]);
     }
-    Ok(pass_improvement_notice(num_fixes).expect("positive fix count"))
+    let mut messages = vec![pass_improvement_notice(num_fixes).expect("positive fix count")];
+    if num_non_ok > 0 {
+        messages.push(THEN_FIX_REMAINING_MESSAGE.to_string());
+    }
+    Ok(messages)
 }
 
 fn staged_regressions_count(

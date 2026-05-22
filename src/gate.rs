@@ -104,6 +104,9 @@ pub(crate) fn gate_pass_with_config(
 ) -> Result<bool, String> {
     let selected_expectations =
         selected_expectations_for_gate_command(root, config, identities, args, &mut caches, now)?;
+    // This is the `selected_expectations` input in the canon-gate spec. Shared
+    // selection filters, including Cooldown's fresh-pass removal, have already
+    // been applied before the unconditional regression loop below.
     gate_selected_expectations(
         root,
         &config.agent,
@@ -164,17 +167,22 @@ fn selected_expectations_for_gate_command(
     caches: &mut GateCaches<'_>,
     now: u64,
 ) -> Result<Vec<SelectedExpectation>, String> {
-    let selected = select_expectations_with_identities(config, identities, args)?;
+    let candidate_expectations = select_expectations_with_identities(config, identities, args)?;
+    let selected = cooldown_filtered_gate_expectations(
+        root,
+        &config.agent,
+        candidate_expectations,
+        caches.history,
+        now,
+    )?;
     if !args.is_empty() {
         return Ok(selected);
     }
 
-    // The default no-selector gate set stays aligned with `canon check`.
-    // Explicit gate selectors still compare the requested expectations
-    // directly, so cooldown cannot hide an explicit regression check.
-    let selected = final_selected_expectations(root, &config.agent, selected, caches.history, now)
-        .map(|selection| selection.selected)
-        .map_err(|err| err.error)?;
+    // The default no-selector gate set stays aligned with `canon check` by
+    // also dropping expectations that already have a current staged pass. That
+    // pruning is pass-preserving for the gate spec because an expectation whose
+    // staged result is already Pass cannot satisfy `curr_res is not Pass`.
     let selected = final_selected_after_current_pass_cache(
         root,
         &config.agent,
@@ -184,6 +192,21 @@ fn selected_expectations_for_gate_command(
     )
     .map(|selection| selection.selected)?;
     order_expectations_by_latest_non_pass(root, selected, caches.history)
+}
+
+fn cooldown_filtered_gate_expectations(
+    root: &Path,
+    agent: &AgentConfig,
+    selected: Vec<SelectedExpectation>,
+    history_cache: &mut HistoryCache,
+    now: u64,
+) -> Result<Vec<SelectedExpectation>, String> {
+    // `final_selected_expectations` is the shared selected-set filter that
+    // implements Cooldown: it removes expectations whose latest valid history
+    // record is a fresh pass before gate compares HEAD and staged cache state.
+    final_selected_expectations(root, agent, selected, history_cache, now)
+        .map(|selection| selection.selected)
+        .map_err(|err| err.error)
 }
 
 pub(crate) struct GateCaches<'a> {
