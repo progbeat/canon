@@ -8,9 +8,17 @@ use crate::logging::DiagnosticLogWriter;
 use crate::scope::is_strict_scope_subset;
 use crate::OBSERVED_IDK;
 
+#[derive(Clone, Copy)]
+pub(crate) struct QueryRequest<'a> {
+    pub(crate) question: &'a str,
+    pub(crate) expected_answer: Option<&'a str>,
+    pub(crate) enforced_scope: &'a [String],
+}
+
 pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
     runtime: &CheckRuntime<'_>,
     question: &str,
+    expected_answer: Option<&str>,
     enforced_scope: &[String],
     runner: &mut R,
     diagnostic_log: Option<&mut DiagnosticLogWriter>,
@@ -25,8 +33,11 @@ pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
         |state, diagnostic_log, model| {
             ask_query_with_model(
                 runtime,
-                question,
-                enforced_scope,
+                QueryRequest {
+                    question,
+                    expected_answer,
+                    enforced_scope,
+                },
                 runner,
                 diagnostic_log,
                 state,
@@ -38,22 +49,22 @@ pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
 
 pub(crate) fn ask_query_with_model<R: EvaluatorRunner>(
     runtime: &CheckRuntime<'_>,
-    question: &str,
-    enforced_scope: &[String],
+    query: QueryRequest<'_>,
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     state: &mut InterrogationState,
     model: Option<&str>,
 ) -> Result<QueryResult, EvaluatorError> {
-    // Query mode has no expected answer, so "incorrect" has no meaning here.
-    // It still follows the expectation-interrogation control flow that does not
-    // need one: restricted `idk` retries at full scope, and strict narrowed
-    // scopes are accepted only after an independent query returns the same
-    // reusable answer.
-    let mut current_scope = enforced_scope.to_vec();
+    // `canon check -q` uses the same evaluator input shape as normal checks.
+    // When the query text maps to one configured expectation, the caller can
+    // provide its hidden expected answer so post-response narrowing follows the
+    // same "unchanged or still incorrect" rule without adding expected text to
+    // the evaluator task input. Pure ad-hoc queries have no expected answer, so
+    // changed narrowed answers are not trusted as reusable narrower results.
+    let mut current_scope = query.enforced_scope.to_vec();
     let mut result = ask_query_once(
         runtime,
-        question,
+        query.question,
         &current_scope,
         runner,
         diagnostic_log,
@@ -64,7 +75,7 @@ pub(crate) fn ask_query_with_model<R: EvaluatorRunner>(
         current_scope = crate::hash::full_scope();
         result = ask_query_once(
             runtime,
-            question,
+            query.question,
             &current_scope,
             runner,
             diagnostic_log,
@@ -76,19 +87,21 @@ pub(crate) fn ask_query_with_model<R: EvaluatorRunner>(
         let narrowed_scope = result.answer.scope.clone();
         let narrowed = ask_query_once(
             runtime,
-            question,
+            query.question,
             &narrowed_scope,
             runner,
             diagnostic_log,
             state,
             model,
         )?;
-        if narrowed_query_answer_is_accepted(&result, &narrowed) {
+        if narrowed_query_answer_is_accepted(&result, &narrowed, query.expected_answer) {
             result = narrowed;
+        } else {
+            result.answer.scope = current_scope.clone();
         }
     }
     reject_query_human_review(&result, &current_scope)?;
-    write_query_result_event(question, diagnostic_log, &result.answer)?;
+    write_query_result_event(query.question, diagnostic_log, &result.answer)?;
     Ok(result)
 }
 
@@ -127,9 +140,22 @@ fn should_verify_query_narrowing(result: &QueryResult, enforced_scope: &[String]
         && is_strict_scope_subset(&result.answer.scope, enforced_scope)
 }
 
-fn narrowed_query_answer_is_accepted(wide: &QueryResult, narrowed: &QueryResult) -> bool {
-    ObservedAnswerState::from_observed(&narrowed.answer.answer).is_reusable_history()
-        && narrowed.answer.answer == wide.answer.answer
+fn narrowed_query_answer_is_accepted(
+    wide: &QueryResult,
+    narrowed: &QueryResult,
+    expected_answer: Option<&str>,
+) -> bool {
+    if !ObservedAnswerState::from_observed(&narrowed.answer.answer).is_reusable_history() {
+        return false;
+    }
+    if narrowed.answer.answer == wide.answer.answer {
+        return true;
+    }
+    expected_answer.is_some_and(|expected| {
+        ObservedAnswerState::from_expected_and_observed(expected, &narrowed.answer.answer)
+            .is_reusable_history()
+            && narrowed.answer.answer != expected
+    })
 }
 
 fn reject_query_human_review(

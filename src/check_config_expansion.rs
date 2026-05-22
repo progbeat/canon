@@ -5,7 +5,6 @@ use crate::config_types::{
     RawGeneratorExpectation, RawIncludeExpectation,
 };
 use crate::repo_inspection::RepoInspectionCache;
-use std::collections::BTreeSet;
 use std::path::Path;
 
 #[cfg(test)]
@@ -23,7 +22,6 @@ pub(crate) fn expand_raw_check_config(
         cache,
         source,
         include_stack: Vec::new(),
-        expanded_paths: BTreeSet::new(),
         expectations: Vec::new(),
     };
     expansion.expand_items(config_path, raw.expectations)?;
@@ -63,7 +61,6 @@ struct RawExpectationExpansion<'a> {
     cache: Option<&'a mut RepoInspectionCache>,
     source: CheckConfigSource,
     include_stack: Vec<String>,
-    expanded_paths: BTreeSet<String>,
     expectations: Vec<Expectation>,
 }
 
@@ -101,12 +98,6 @@ impl RawExpectationExpansion<'_> {
         let item_number = index + 1;
         let files = self.expand_paths(config_path, &item.path, item_number, "path")?;
         for file in files {
-            if !self.expanded_paths.insert(file.clone()) {
-                return Err(format!(
-                    "expectation {} expands duplicate spec path: {}",
-                    item_number, file
-                ));
-            }
             let content = self.read_expanded_file(&file)?;
             self.expectations.push(Expectation {
                 q: render_generator_question(&item.q_template, &content),

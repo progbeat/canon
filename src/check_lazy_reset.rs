@@ -1,4 +1,4 @@
-use crate::check_selection::{parse_cooldown, ExpectationIdentity};
+use crate::check_selection::{selected_expectation_at, ExpectationIdentity};
 use crate::check_types::{CheckRecord, ObservedAnswerState, SelectedExpectation};
 use crate::config_types::{AgentConfig, CheckConfig};
 use crate::fs_util::{for_each_nonempty_line, write_temp_file_then_replace};
@@ -256,21 +256,7 @@ fn scheduled_reset_expectations(
         let Some(index) = identities.iter().position(|identity| &identity.id == id) else {
             continue;
         };
-        let identity = &identities[index];
-        let expectation = &config.expectations[index];
-        expectations.push(SelectedExpectation {
-            number: index + 1,
-            id: identity.id.clone(),
-            display_id: identity.display_id.clone(),
-            q: expectation.q.clone(),
-            a: expectation.a.clone(),
-            cooldown: expectation
-                .cooldown
-                .as_deref()
-                .map(parse_cooldown)
-                .transpose()?,
-            thinking: expectation.thinking.clone(),
-        });
+        expectations.push(selected_expectation_at(config, identities, index, true)?);
     }
     Ok(expectations)
 }

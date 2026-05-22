@@ -3,7 +3,7 @@ Return exactly one JSON object, no prose or fences: {"answer":"<single-line answ
 `answer` is only the exact yes/no token, option letter, exact requested single-line string, `idk`, or `malformed`; put explanation only in `evidence`. Evidence citations must be project-relative refs enclosed in backticks, never absolute paths.
 
 Scope:
-- `scope` is the smallest visible staged Git-tracked path set whose unchanged contents fix the answer; it is not the citation list.
+- `scope` is the smallest visible staged Git-tracked implementation path set whose unchanged contents fix the answer; it is not the citation list or prompt-source list.
 - Never include a path outside the enforced scope. If required evidence is outside it, answer `idk` and keep `scope` inside the enforced scope so canon can retry wider.
 - Use ["."] for project-wide absence, consistency, duplication, quality, or inaccessible/denied-path questions. If a narrower enforced scope cannot support a repo-wide/cross-module answer, return `idk`.
 - Never include denied or unreadable paths in `scope`, but do not return `idk` merely because a denied path is unreadable.

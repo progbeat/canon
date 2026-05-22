@@ -446,6 +446,7 @@ fn query_mode_uses_agent_and_does_not_write_history() {
     let result = run_query_with_runner(
         &runtime,
         "Ad-hoc question?",
+        None,
         &full_scope(),
         &mut runner,
         Some(&mut diagnostic_log),
@@ -529,6 +530,70 @@ fn query_mode_uses_agent_and_does_not_write_history() {
 }
 
 #[test]
+fn query_mode_accepts_narrowed_incorrect_answer_when_expected_is_known() {
+    let root = git_project("query-mode-known-expected-narrowing");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let mut runner = FakeRunner::new(&[
+        &answer("yes", "full scope passes", &["src"]),
+        &answer("no", "src/main.rs still fails it", &["src"]),
+    ]);
+    let runtime = CheckRuntime {
+        root: &root,
+        snapshot_root: &root,
+        config: &config,
+    };
+    let mut interrogation_state = InterrogationState::new();
+
+    let result = run_query_with_runner(
+        &runtime,
+        "Ad-hoc question?",
+        Some("yes"),
+        &full_scope(),
+        &mut runner,
+        None,
+        &mut interrogation_state,
+    )
+    .unwrap();
+
+    assert_eq!(result.answer.answer, "no");
+    assert_eq!(result.answer.evidence, "src/main.rs still fails it");
+    assert_eq!(result.answer.scope, vec!["src"]);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn query_mode_rejects_changed_narrowing_when_expected_is_unknown() {
+    let root = git_project("query-mode-unknown-expected-narrowing");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let mut runner = FakeRunner::new(&[
+        &answer("yes", "full scope answer", &["src"]),
+        &answer("no", "changed narrow answer", &["src"]),
+    ]);
+    let runtime = CheckRuntime {
+        root: &root,
+        snapshot_root: &root,
+        config: &config,
+    };
+    let mut interrogation_state = InterrogationState::new();
+
+    let result = run_query_with_runner(
+        &runtime,
+        "Ad-hoc question?",
+        None,
+        &full_scope(),
+        &mut runner,
+        None,
+        &mut interrogation_state,
+    )
+    .unwrap();
+
+    assert_eq!(result.answer.answer, "yes");
+    assert_eq!(result.answer.evidence, "full scope answer");
+    assert_eq!(result.answer.scope, full_scope());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn query_mode_can_use_explicit_restricted_scope() {
     let root = git_project("query-mode-restricted-scope");
     let config = parse_check_config(check_config_yaml()).unwrap();
@@ -548,6 +613,7 @@ fn query_mode_can_use_explicit_restricted_scope() {
     let result = run_query_with_runner(
         &runtime,
         "Ad-hoc scoped question?",
+        None,
         &scope,
         &mut runner,
         Some(&mut diagnostic_log),
@@ -589,6 +655,7 @@ fn query_mode_errors_when_full_scope_idk_needs_review() {
     let err = run_query_with_runner(
         &runtime,
         "Ad-hoc unanswerable question?",
+        None,
         &full_scope(),
         &mut runner,
         Some(&mut diagnostic_log),
@@ -619,6 +686,7 @@ fn query_and_full_scope_expectation_use_identical_first_turn_input() {
     run_query_with_runner(
         &runtime,
         &expectation.q,
+        Some(&expectation.a),
         &full_scope(),
         &mut query_runner,
         None,

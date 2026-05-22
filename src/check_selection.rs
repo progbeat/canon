@@ -170,25 +170,7 @@ pub(crate) fn select_expectations_with_identities(
 
     selected_indexes
         .into_iter()
-        .map(|index| -> Result<SelectedExpectation, String> {
-            let identity = identities
-                .get(index)
-                .ok_or_else(|| "expectation identity count mismatch".to_string())?;
-            let expectation = &config.expectations[index];
-            Ok(SelectedExpectation {
-                number: index + 1,
-                id: identity.id.clone(),
-                display_id: identity.display_id.clone(),
-                q: expectation.q.clone(),
-                a: expectation.a.clone(),
-                cooldown: expectation
-                    .cooldown
-                    .as_deref()
-                    .map(parse_cooldown)
-                    .transpose()?,
-                thinking: expectation.thinking.clone(),
-            })
-        })
+        .map(|index| selected_expectation_at(config, identities, index, true))
         .collect::<Result<Vec<_>, _>>()
 }
 
@@ -210,30 +192,55 @@ pub(crate) fn initial_non_selected_expectations_with_identities(
         .iter()
         .map(|expectation| expectation.id.clone())
         .collect::<BTreeSet<_>>();
-    Ok(config
-        .expectations
-        .iter()
-        .enumerate()
-        .filter_map(|(index, expectation)| {
-            let identity = identities.get(index)?;
-            let number = index + 1;
-            (!selected_ids.contains(&identity.id)).then(|| SelectedExpectation {
-                number,
-                id: identity.id.clone(),
-                display_id: identity.display_id.clone(),
-                q: expectation.q.clone(),
-                a: expectation.a.clone(),
-                cooldown: None,
-                thinking: expectation.thinking.clone(),
-            })
-        })
-        .collect())
+    let mut non_selected = Vec::new();
+    for index in 0..config.expectations.len() {
+        let identity = identities
+            .get(index)
+            .ok_or_else(|| "expectation identity count mismatch".to_string())?;
+        if !selected_ids.contains(&identity.id) {
+            non_selected.push(selected_expectation_at(config, identities, index, false)?);
+        }
+    }
+    Ok(non_selected)
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct ExpectationIdentity {
     pub(crate) id: String,
     pub(crate) display_id: String,
+}
+
+pub(crate) fn selected_expectation_at(
+    config: &CheckConfig,
+    identities: &[ExpectationIdentity],
+    index: usize,
+    include_cooldown: bool,
+) -> Result<SelectedExpectation, String> {
+    let identity = identities
+        .get(index)
+        .ok_or_else(|| "expectation identity count mismatch".to_string())?;
+    let expectation = config
+        .expectations
+        .get(index)
+        .ok_or_else(|| "expectation identity count mismatch".to_string())?;
+    let cooldown = if include_cooldown {
+        expectation
+            .cooldown
+            .as_deref()
+            .map(parse_cooldown)
+            .transpose()?
+    } else {
+        None
+    };
+    Ok(SelectedExpectation {
+        number: index + 1,
+        id: identity.id.clone(),
+        display_id: identity.display_id.clone(),
+        q: expectation.q.clone(),
+        a: expectation.a.clone(),
+        cooldown,
+        thinking: expectation.thinking.clone(),
+    })
 }
 
 pub(crate) fn expectation_identities(

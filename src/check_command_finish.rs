@@ -11,6 +11,11 @@ use crate::scope_hash::ScopeHashCache;
 use std::io::Write;
 use std::path::Path;
 
+// This module is deliberately not the public check-output renderer. The
+// per-expectation stdout records and summary line live in `check_output`, token
+// usage stderr output lives in `check_reporting`, and `check_command`
+// orchestrates their order before calling `finish_check_report`. This module
+// owns only the post-summary agent message plus cleanup and finish logging.
 const ALL_CHECKS_PASSED_MESSAGE: &str = "✓ All checks passed. Commit is allowed.";
 const FIX_ISSUES_MESSAGE: &str = "▷ Fix the issues and run `canon check` again!";
 const PASS_IMPROVEMENT_COMMIT_SUFFIX: &str = "Commit the staged changes!";

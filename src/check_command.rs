@@ -51,6 +51,32 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             )
         }
     };
+    let query_mode = command.query.is_some();
+    let query_start_field = if query_mode { Some(true) } else { None };
+    // Scheduled lazy resets take effect at the beginning of the next
+    // `canon check` invocation, including query-mode invocations that return
+    // before normal expectation selection and evaluation.
+    let identities = match expectation_identities(&config) {
+        Ok(identities) => identities,
+        Err(err) => {
+            return fail_check_before_selection(
+                &mut diagnostic_log,
+                query_start_field,
+                query_mode,
+                0,
+                err,
+            )
+        }
+    };
+    if let Err(err) = apply_scheduled_lazy_full_scope_resets(root, &config, &identities) {
+        return fail_check_before_selection(
+            &mut diagnostic_log,
+            query_start_field,
+            query_mode,
+            0,
+            err,
+        );
+    }
     if let Some(question) = command.query.as_deref() {
         return run_check_query_command(
             root,
@@ -61,13 +87,6 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         )
         .map_err(CommandError::from);
     }
-    // Compute expectation identities once for this command. Selector parsing,
-    // initial skipped-set construction, and stale-cache cleanup all use this
-    // same derived data instead of re-hashing the config in separate phases.
-    let identities = match expectation_identities(&config) {
-        Ok(identities) => identities,
-        Err(err) => return fail_check_before_selection(&mut diagnostic_log, None, false, 0, err),
-    };
     // Check-specific options are parsed with the active config so selectors can
     // be resolved against expectation IDs.
     let options =
@@ -77,9 +96,6 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
                 return fail_check_before_selection(&mut diagnostic_log, None, false, 0, err)
             }
         };
-    if let Err(err) = apply_scheduled_lazy_full_scope_resets(root, &config, &identities) {
-        return fail_check_before_selection(&mut diagnostic_log, None, false, 0, err);
-    }
     write_check_start_event(
         &mut diagnostic_log,
         None,

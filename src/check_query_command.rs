@@ -63,6 +63,7 @@ pub(crate) fn run_check_query_command(
     let result = run_query_with_runner(
         &runtime,
         question,
+        query_expected_answer(config, question),
         &enforced_scope,
         &mut execution.runner,
         Some(&mut diagnostic_log),
@@ -115,5 +116,18 @@ fn query_enforced_scope(
         Ok(full_scope())
     } else {
         sanitize_scope(query_scope, &config.agent).map_err(|err| format!("--scope: {}", err))
+    }
+}
+
+fn query_expected_answer<'a>(config: &'a CheckConfig, question: &str) -> Option<&'a str> {
+    let mut matches = config
+        .expectations
+        .iter()
+        .filter(|expectation| expectation.q == question);
+    let first = matches.next()?;
+    if matches.next().is_some() {
+        None
+    } else {
+        Some(first.a.as_str())
     }
 }

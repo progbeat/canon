@@ -114,6 +114,40 @@ expectations:
 }
 
 #[test]
+fn expectation_generators_allow_overlapping_spec_paths() {
+    let root = temp_home("expectation-generator-overlap");
+    fs::create_dir_all(root.join("specs")).unwrap();
+    fs::write(root.join("specs/a.md"), "A").unwrap();
+    let mut cache = RepoInspectionCache::new();
+
+    let config = parse_check_config_content_with_root(
+        &root,
+        Path::new("check.yml"),
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - path: "specs/*.md"
+    q_template: "First {content}"
+    a: "yes"
+  - path: "specs/a.md"
+    q_template: "Second {content}"
+    a: "yes"
+"#,
+        &mut cache,
+    )
+    .unwrap();
+
+    assert_eq!(config.expectations.len(), 2);
+    assert_eq!(config.expectations[0].q, "First A");
+    assert_eq!(config.expectations[1].q, "Second A");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn expectation_items_accept_extra_fields_without_changing_form() {
     let root = temp_home("expectation-extra-fields");
     fs::create_dir_all(root.join("specs")).unwrap();
