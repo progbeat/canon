@@ -188,8 +188,9 @@ impl RawExpectationExpansion<'_> {
 }
 
 fn render_generator_question(template: &str, content: &str) -> String {
-    // The expectations spec defines generator rendering as plain `{content}`
-    // substitution: no placeholder leaves the template unchanged, and repeated
-    // placeholders all receive the matched file contents.
-    template.replace("{content}", content)
+    // The expectations spec defines generator rendering as plain
+    // `{{content}}` substitution: no placeholder leaves the template
+    // unchanged, and repeated placeholders all receive the matched file
+    // contents.
+    template.replace("{{content}}", content)
 }

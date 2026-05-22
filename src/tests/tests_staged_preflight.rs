@@ -247,7 +247,7 @@ agent:
   plugins: []
 expectations:
   - path: "specs/*.md"
-    q_template: "{content}"
+    q_template: "{{content}}"
     a: "yes"
 "#,
     )

@@ -51,7 +51,7 @@ agent:
   plugins: []
 expectations:
   - path: "specs/*.md"
-    q_template: "{content}"
+    q_template: "{{content}}"
     a: "yes"
   - q: "Local?"
     a: "no"
@@ -103,7 +103,7 @@ agent:
   plugins: []
 expectations:
   - path: "specs/*.md"
-    q_template: "{content} then {content}"
+    q_template: "{{content}} then {{content}}"
     a: "yes"
 "#,
         &mut cache,
@@ -131,10 +131,10 @@ agent:
   plugins: []
 expectations:
   - path: "specs/*.md"
-    q_template: "First {content}"
+    q_template: "First {{content}}"
     a: "yes"
   - path: "specs/a.md"
-    q_template: "Second {content}"
+    q_template: "Second {{content}}"
     a: "yes"
 "#,
         &mut cache,
@@ -176,11 +176,11 @@ expectations:
   - q: "Explicit?"
     a: "yes"
     path: "specs/*.md"
-    q_template: "Generated {content}"
+    q_template: "Generated {{content}}"
     include: "expects/*.yml"
     owner: "ignored"
   - path: "specs/*.md"
-    q_template: "Generated {content}"
+    q_template: "Generated {{content}}"
     a: "yes"
     include: "expects/*.yml"
     owner: "ignored"
