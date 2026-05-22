@@ -1,0 +1,36 @@
+#!/usr/bin/env sh
+set -eu
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+canon_bin="${CANON_BIN:-}"
+if [ -z "$canon_bin" ]; then
+  if command -v canon >/dev/null 2>&1; then
+    canon_bin="$(command -v canon)"
+  fi
+fi
+
+if [ -z "$canon_bin" ]; then
+  echo "canon pre-commit: canon is not on PATH" >&2
+  echo "Install canon first: https://github.com/progbeat/canon#quick-start" >&2
+  exit 1
+fi
+
+if [ ! -x "$canon_bin" ]; then
+  echo "canon pre-commit: canon binary is not executable: $canon_bin" >&2
+  exit 1
+fi
+
+if ! "$canon_bin" help 2>/dev/null | grep -q "canon gate"; then
+  echo "canon pre-commit: $canon_bin does not support 'canon gate'" >&2
+  echo "Update canon first: https://github.com/progbeat/canon#quick-start" >&2
+  exit 1
+fi
+
+# Hook command: `canon gate`.
+# This hook is only a launcher; the staged-tree/cache regression policy lives
+# in the `canon gate` command it executes below.
+if ! "$canon_bin" gate; then
+  exit 1
+fi

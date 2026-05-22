@@ -1,0 +1,99 @@
+version: 1
+
+agent:
+  model:
+    primary: gpt-5.4-mini
+    fallbacks: [gpt-5.3-codex-spark]
+  thinking: medium  # off | minimal | low | medium | high | xhigh | adaptive | max
+  plugins: []
+  ignore:
+    - ".canon/**"  # prevents evaluator agents from reading expected answers and avoids reevaluating full-scope expectations when canon changes
+    - "target/**"
+    - "skills/**"
+    - "research/**"
+    - "AGENTS.md"
+
+expectations:
+  - include: expects/*.yml
+
+  # Expectations from specs
+  - path: "specs/*.md"
+    q_template: |
+      {{content}}
+      ---
+      Does the implementation fully satisfy this specification?
+    a: "yes"
+
+  # Documentation
+  - q: Is README.md consistent with the current state of the repository?
+    a: "yes"
+    cooldown: 1d
+
+  # Access control
+  - q: Can you read .canon/check.yml?
+    a: "no"
+    cooldown: 3d
+
+  - q: Can you read any files under CANON_STATE_DIR?
+    a: "no"  # because these files aren't required to answer these questions
+    cooldown: 3d
+
+  - q: "Can you write to any paths right now?"
+    a: "no"
+    cooldown: 3d
+
+  - q: "Does every evaluator Codex thread enforce configured `agent.ignore` patterns and the current enforced scope through Codex filesystem permissions at thread creation?"
+    a: "yes"
+    cooldown: 3d
+
+  - q: "Does `canon` read runtime logs?'"
+    a: "no"  # because it's hack
+    cooldown: 3d
+
+  # Persistent state management
+  - q: "Let CANON_STATE_DIR=$(git rev-parse --git-path canon). Does every canon command store all canon-owned non-temporary persistent state under CANON_STATE_DIR?"
+    a: "yes"
+    cooldown: 7d
+    thinking: low
+
+  # Check configuration
+  - q: "Can `canon check` use `--config <path>` or `-c <path>` to read checks from a custom YAML config file?"
+    a: "yes"
+
+  - q: "Does `canon check` use `agent.model.primary` as the primary evaluator model and retry with configured `agent.model.fallbacks` in order only after a technical app-server/model failure such as `usageLimitExceeded`, without falling back for `idk`, `malformed`, incorrect answers, or evidence quality?"
+    a: "yes"
+
+  # Init and hooks
+  - q: "Does `canon init` create `.canon/check.yml` from an embedded default template and fail without overwriting when `.canon/check.yml` already exists?"
+    a: "yes"
+
+  - q: "Is the local Git configuration for this repository set to run the repository pre-commit hook?"
+    a: "yes"
+    cooldown: 7d
+
+  # Process cleanup
+  - q: "Do canon commands that spawn child processes ensure those processes are terminated and reaped on both success and failure?"
+    a: "yes"
+    cooldown: 7d
+
+  # Output and selection
+  - q: "Can `canon check <PREFIX>...` select one or more expectations by unique ID prefix, including full IDs?"
+    a: "yes"
+
+  - q: "For an expectation that defines only `q` and `a`, when `canon check -q <q>` and `canon check <ID> --ignore-cache` select the same expectation using the same check config and enforced scope, is the complete first-turn evaluator-model input identical before the evaluator answers?"
+    a: "yes"
+
+  - q: "When no expectation selectors are provided, do `canon` commands end up with the same final selected expectation set?"
+    a: "yes"
+
+  - q: "|selected| + |skipped| == |all expectations|?"
+    a: "yes"
+
+  - q: "When no expectation selectors are provided, are expectations with cached passing results still selected?"
+    a: "no"
+
+  - q: "Are expectation ID prefixes limited to human-readable output and CLI selection, with all non-temporary persistent state under CANON_STATE_DIR storing expectation references by full ID rather than minimal or user-provided prefixes?"
+    a: "yes"
+
+  - q: "Does every `canon` command flush stdout and stderr incrementally once output becomes eligible to be emitted, without holding it until unrelated later work or command completion?"
+    a: "yes"

@@ -1,573 +1,142 @@
-use std::env;
-use std::ffi::OsString;
-use std::fs;
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
-use std::process::{self, Command};
+use std::sync::atomic::AtomicBool;
+#[cfg(unix)]
+use std::sync::atomic::Ordering;
 
 const FNV_OFFSET: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
 const B64_URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const CHECK_PATH: &str = ".canon/check.yml";
+const GIT_CANON_CACHE_DIR: &str = "canon/cache";
+const GIT_CANON_LOG_DIR: &str = "canon/logs";
+const DEFAULT_DIAGNOSTIC_LOG_FILES: [&str; 8] = [
+    "0.jsonl", "1.jsonl", "2.jsonl", "3.jsonl", "4.jsonl", "5.jsonl", "6.jsonl", "7.jsonl",
+];
+const DEFAULT_DIAGNOSTIC_LOG_CONFIG: DiagnosticLogConfig = DiagnosticLogConfig {
+    max_bytes: 0,
+    files: &DEFAULT_DIAGNOSTIC_LOG_FILES,
+};
+const HISTORY_COMPACT_KEEP_RECORDS: usize = 5;
+const HISTORY_COMPACT_CHANCE_DENOMINATOR: u64 = 15;
+const APP_SERVER_TURN_TIMEOUT_SECS: u64 = 300;
+const DEFAULT_CHECK_TEMPLATE: &str = include_str!("../.canon/templates/default/check.yml");
+const GIT_HOOKS_PATH: &str = ".git/canon/hooks";
+const PRE_COMMIT_HOOK_PATH: &str = ".git/canon/hooks/pre-commit";
+const DEFAULT_PRE_COMMIT_HOOK: &str = include_str!("../resources/git-hooks/pre-commit");
+const RESULT_PASS: &str = "pass";
+const RESULT_FAIL: &str = "fail";
+const OBSERVED_IDK: &str = "idk";
+const OBSERVED_MALFORMED: &str = "malformed";
+const UNPARSEABLE_OBSERVED: &str = "unparseable";
+const EMPTY_EVIDENCE_OBSERVED: &str = "empty-evidence";
+static CHECK_INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
-#[derive(Debug)]
-struct Config {
-    root: PathBuf,
+pub(crate) struct DiagnosticLogConfig {
+    pub(crate) max_bytes: u64,
+    pub(crate) files: &'static [&'static str],
 }
 
-#[derive(Debug)]
-struct Note {
-    key: String,
-    hash: String,
-    path: PathBuf,
+#[cfg(unix)]
+// Unix signal and process-group APIs are not exposed by Rust's standard
+// library. The safe wrappers in `check_preflight` and `app_server_process`
+// keep all FFI calls behind return-value checks and narrow safety comments.
+unsafe extern "C" {
+    fn signal(signum: i32, handler: extern "C" fn(i32)) -> usize;
+    fn kill(pid: i32, sig: i32) -> i32;
 }
+
+#[cfg(unix)]
+extern "C" fn handle_sigint(_: i32) {
+    // This handler only stores to an atomic flag; it does not allocate, lock,
+    // or touch non-async-signal-safe state.
+    CHECK_INTERRUPTED.store(true, Ordering::SeqCst);
+}
+
+mod app_server;
+mod app_server_process;
+mod app_server_protocol;
+mod app_server_runner;
+mod app_server_transport;
+mod check;
+mod check_cache;
+mod check_command;
+mod check_command_args;
+mod check_command_finish;
+mod check_config;
+// Module declarations are concrete ownership boundaries: shared check/config,
+// evaluator, project, and token-usage types live in their subsystem modules,
+// while generator template rendering belongs to check_config_expansion.
+mod check_config_expansion;
+mod check_errors;
+mod check_generator_paths;
+mod check_interrogation;
+mod check_interrogation_policy;
+mod check_interrogation_records;
+mod check_interrogation_state;
+mod check_lazy_reset;
+mod check_model_fallback;
+mod check_narrowing;
+mod check_order_state;
+mod check_output;
+mod check_preflight;
+mod check_query;
+mod check_query_command;
+mod check_reporting;
+mod check_selection;
+mod check_types;
+mod check_validation;
+mod cli;
+mod config_types;
+mod evaluator;
+mod evaluator_config;
+mod evaluator_json;
+mod evaluator_prompt;
+mod evaluator_response;
+mod evaluator_response_cache;
+mod evaluator_scope;
+mod evaluator_turn;
+mod evaluator_types;
+mod fs_util;
+mod gate;
+mod git;
+mod git_config;
+mod hash;
+mod history;
+mod history_append;
+mod history_cache_key;
+mod history_cleanup;
+mod history_compaction;
+mod history_reuse;
+mod hooks;
+mod logging;
+mod logging_config;
+mod logging_error;
+mod logging_fs;
+mod logging_lock;
+mod logging_render;
+mod logging_rotation;
+mod notes;
+mod notes_cli;
+mod notes_header;
+mod notes_index;
+mod notes_restore;
+mod output;
+mod path_io_error;
+mod project;
+mod project_types;
+mod repo_inspection;
+mod scope;
+mod scope_hash;
+mod staged_worktree;
+mod staged_worktree_git;
+mod staged_worktree_paths;
+mod staged_worktree_validate;
+mod thread_reuse_config;
+mod time;
+mod token_usage_types;
 
 fn main() {
-    if let Err(err) = run(env::args_os().skip(1).collect()) {
-        eprintln!("canon: {}", err);
-        process::exit(1);
-    }
-}
-
-fn run(args: Vec<OsString>) -> Result<(), String> {
-    let config = Config::from_env()?;
-
-    if args.is_empty() {
-        print_root(&config)?;
-        return Ok(());
-    }
-
-    let first = arg_to_string(&args[0])?;
-    match first.as_str() {
-        "pwd" => {
-            if args.len() != 1 {
-                return Err("pwd does not accept arguments".to_string());
-            }
-            print_root(&config)?;
-        }
-        "p" | "path" => {
-            let key = require_key(&args, 1)?;
-            let note = ensure_note(&config, key)?;
-            println!("{}", note.path.display());
-        }
-        "r" | "read" => {
-            let key = require_key(&args, 1)?;
-            read_note(&config, key)?;
-        }
-        "w" | "write" => {
-            let key = require_key(&args, 1)?;
-            let text = collect_text_or_stdin(&args, 2)?;
-            write_note(&config, key, &text)?;
-        }
-        "a" | "append" => {
-            let key = require_key(&args, 1)?;
-            let text = collect_text_or_stdin(&args, 2)?;
-            append_note(&config, key, &text)?;
-        }
-        "d" | "del" | "delete" | "rm" => {
-            let key = require_key(&args, 1)?;
-            delete_note(&config, key)?;
-        }
-        "rg" | "g" => {
-            run_rg(&config, &args[1..])?;
-        }
-        "-h" | "--help" | "help" => {
-            print_help();
-        }
-        _ => {
-            if first.starts_with('-') {
-                return Err(format!("unknown option: {}", first));
-            }
-            return Err(format!(
-                "unknown command: {} (use `canon p <key>` to print a note path)",
-                first
-            ));
-        }
-    }
-
-    Ok(())
-}
-
-fn print_root(config: &Config) -> Result<(), String> {
-    ensure_dir(&config.root)?;
-    println!("{}", config.root.display());
-    Ok(())
-}
-
-impl Config {
-    fn from_env() -> Result<Config, String> {
-        let thread_id = env::var("CODEX_THREAD_ID")
-            .map_err(|_| "CODEX_THREAD_ID is required in v1".to_string())?;
-        if thread_id.trim().is_empty() {
-            return Err("CODEX_THREAD_ID is empty".to_string());
-        }
-        if thread_id.contains('/') || thread_id.contains('\\') {
-            return Err("CODEX_THREAD_ID must be a single path segment".to_string());
-        }
-
-        if let Some(value) = env::var_os("CANON_HOME") {
-            if !value.is_empty() {
-                return Ok(Config {
-                    root: PathBuf::from(value).join("codex").join(thread_id),
-                });
-            }
-        }
-
-        let temp_root = env::var_os("TMPDIR")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/tmp"));
-
-        Ok(Config {
-            root: temp_root.join("canon").join("codex").join(thread_id),
-        })
-    }
-}
-
-fn require_key<'a>(args: &'a [OsString], index: usize) -> Result<&'a str, String> {
-    args.get(index)
-        .ok_or("missing key".to_string())
-        .and_then(|arg| arg.to_str().ok_or("key must be valid UTF-8".to_string()))
-}
-
-fn arg_to_string(arg: &OsString) -> Result<String, String> {
-    arg.to_str()
-        .map(|value| value.to_string())
-        .ok_or("argument must be valid UTF-8".to_string())
-}
-
-fn collect_text(args: &[OsString], start: usize) -> Result<String, String> {
-    let mut parts = Vec::new();
-    for arg in &args[start..] {
-        parts.push(arg.to_str().ok_or("text must be valid UTF-8".to_string())?);
-    }
-    Ok(parts.join(" "))
-}
-
-fn collect_text_or_stdin(args: &[OsString], start: usize) -> Result<String, String> {
-    if args.len() > start {
-        return collect_text(args, start);
-    }
-    let mut text = String::new();
-    std::io::stdin()
-        .read_to_string(&mut text)
-        .map_err(|err| format!("failed to read stdin: {}", err))?;
-    Ok(text)
-}
-
-fn ensure_dir(path: &Path) -> Result<(), String> {
-    fs::create_dir_all(path).map_err(|err| format!("failed to create {}: {}", path.display(), err))
-}
-
-fn ensure_note(config: &Config, key: &str) -> Result<Note, String> {
-    ensure_dir(&config.root)?;
-    let note = note_for_key(config, key);
-    if note.path.exists() {
-        verify_note_key(&note.path, key)?;
-    } else {
-        let content = initial_content(key, &note.hash);
-        fs::write(&note.path, content)
-            .map_err(|err| format!("failed to write {}: {}", note.path.display(), err))?;
-    }
-    upsert_index(config, &note.hash, key)?;
-    Ok(note)
-}
-
-fn note_for_key(config: &Config, key: &str) -> Note {
-    let hash = hash_key(key);
-    let path = config.root.join(format!("{}.md", hash));
-    Note {
-        key: key.to_string(),
-        hash,
-        path,
-    }
-}
-
-fn read_note(config: &Config, key: &str) -> Result<(), String> {
-    let note = note_for_key(config, key);
-    if !note.path.exists() {
-        return Err(format!("canon not found for key: {}", key));
-    }
-    verify_note_key(&note.path, key)?;
-    let mut file = fs::File::open(&note.path)
-        .map_err(|err| format!("failed to open {}: {}", note.path.display(), err))?;
-    let mut content = String::new();
-    file.read_to_string(&mut content)
-        .map_err(|err| format!("failed to read {}: {}", note.path.display(), err))?;
-    print!("{}", content);
-    Ok(())
-}
-
-fn write_note(config: &Config, key: &str, text: &str) -> Result<(), String> {
-    let note = ensure_note(config, key)?;
-    let content = format!(
-        "{}{}\n",
-        header(&note.key, &note.hash),
-        normalize_body(text)
-    );
-    fs::write(&note.path, content)
-        .map_err(|err| format!("failed to write {}: {}", note.path.display(), err))
-}
-
-fn append_note(config: &Config, key: &str, text: &str) -> Result<(), String> {
-    let note = ensure_note(config, key)?;
-    let timestamp = unix_timestamp()?;
-    let section = format!("\n## {}\n\n{}\n", timestamp, normalize_body(text));
-    let mut file = fs::OpenOptions::new()
-        .append(true)
-        .open(&note.path)
-        .map_err(|err| format!("failed to open {}: {}", note.path.display(), err))?;
-    file.write_all(section.as_bytes())
-        .map_err(|err| format!("failed to append {}: {}", note.path.display(), err))
-}
-
-fn delete_note(config: &Config, key: &str) -> Result<(), String> {
-    let note = note_for_key(config, key);
-    if note.path.exists() {
-        verify_note_key(&note.path, key)?;
-        fs::remove_file(&note.path)
-            .map_err(|err| format!("failed to delete {}: {}", note.path.display(), err))?;
-    }
-    remove_index(config, &note.hash, key)
-}
-
-fn run_rg(config: &Config, rg_args: &[OsString]) -> Result<(), String> {
-    if rg_args.is_empty() {
-        return Err("missing rg pattern".to_string());
-    }
-    ensure_dir(&config.root)?;
-    let mut command = Command::new("rg");
-    command.args(rg_args);
-    command.arg(&config.root);
-    let status = command
-        .status()
-        .map_err(|err| format!("failed to run rg: {}", err))?;
-    match status.code() {
-        Some(0) | Some(1) => Ok(()),
-        Some(code) => Err(format!("rg exited with status {}", code)),
-        None => Err("rg terminated by signal".to_string()),
-    }
-}
-
-fn initial_content(key: &str, hash: &str) -> String {
-    header(key, hash)
-}
-
-fn header(key: &str, hash: &str) -> String {
-    format!(
-        "<!-- canon key=\"{}\" hash=\"{}\" -->\n# {}\n",
-        escape_attr(key),
-        hash,
-        key
-    )
-}
-
-fn normalize_body(text: &str) -> String {
-    let mut value = text.to_string();
-    while value.ends_with('\n') {
-        value.pop();
-    }
-    value
-}
-
-fn verify_note_key(path: &Path, expected_key: &str) -> Result<(), String> {
-    let first = first_line(path)?;
-    let actual_key = parse_key_from_header(&first)
-        .ok_or_else(|| format!("missing canon metadata in {}", path.display()))?;
-    if actual_key != expected_key {
-        return Err(format!(
-            "hash collision or stale file: {} belongs to key {:?}, not {:?}",
-            path.display(),
-            actual_key,
-            expected_key
-        ));
-    }
-    Ok(())
-}
-
-fn first_line(path: &Path) -> Result<String, String> {
-    let content = fs::read_to_string(path)
-        .map_err(|err| format!("failed to read {}: {}", path.display(), err))?;
-    Ok(content.lines().next().unwrap_or("").to_string())
-}
-
-fn parse_key_from_header(line: &str) -> Option<String> {
-    let prefix = "<!-- canon key=\"";
-    let rest = line.strip_prefix(prefix)?;
-    let mut out = String::new();
-    let mut chars = rest.chars();
-    while let Some(ch) = chars.next() {
-        match ch {
-            '"' => return Some(out),
-            '\\' => {
-                let escaped = chars.next()?;
-                match escaped {
-                    '\\' => out.push('\\'),
-                    '"' => out.push('"'),
-                    'n' => out.push('\n'),
-                    'r' => out.push('\r'),
-                    't' => out.push('\t'),
-                    other => out.push(other),
-                }
-            }
-            other => out.push(other),
-        }
-    }
-    None
-}
-
-fn escape_attr(value: &str) -> String {
-    let mut out = String::new();
-    for ch in value.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            other => out.push(other),
-        }
-    }
-    out
-}
-
-fn upsert_index(config: &Config, hash: &str, key: &str) -> Result<(), String> {
-    let path = config.root.join("index.tsv");
-    let mut entries = read_index(&path)?;
-    entries.retain(|(existing_hash, existing_key)| existing_hash != hash && existing_key != key);
-    entries.push((hash.to_string(), key.to_string()));
-    write_index(&path, &entries)
-}
-
-fn remove_index(config: &Config, hash: &str, key: &str) -> Result<(), String> {
-    ensure_dir(&config.root)?;
-    let path = config.root.join("index.tsv");
-    let mut entries = read_index(&path)?;
-    entries.retain(|(existing_hash, existing_key)| existing_hash != hash && existing_key != key);
-    write_index(&path, &entries)
-}
-
-fn read_index(path: &Path) -> Result<Vec<(String, String)>, String> {
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let content = fs::read_to_string(path)
-        .map_err(|err| format!("failed to read {}: {}", path.display(), err))?;
-    let mut entries = Vec::new();
-    for line in content.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let mut parts = line.splitn(2, '\t');
-        let hash = parts.next().unwrap_or("").to_string();
-        let key = parts.next().unwrap_or("").to_string();
-        if !hash.is_empty() && !key.is_empty() {
-            entries.push((hash, key));
-        }
-    }
-    Ok(entries)
-}
-
-fn write_index(path: &Path, entries: &[(String, String)]) -> Result<(), String> {
-    let mut content = String::new();
-    for (hash, key) in entries {
-        content.push_str(hash);
-        content.push('\t');
-        content.push_str(key);
-        content.push('\n');
-    }
-    fs::write(path, content).map_err(|err| format!("failed to write {}: {}", path.display(), err))
-}
-
-fn unix_timestamp() -> Result<u64, String> {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .map_err(|err| format!("system time is before UNIX_EPOCH: {}", err))
-}
-
-fn hash_key(key: &str) -> String {
-    let mut hash = FNV_OFFSET;
-    for byte in key.as_bytes() {
-        hash ^= *byte as u64;
-        hash = hash.wrapping_mul(FNV_PRIME);
-    }
-    encode_60_bits(hash & ((1u64 << 60) - 1))
-}
-
-fn encode_60_bits(value: u64) -> String {
-    let mut out = String::with_capacity(10);
-    for shift in (0..60).step_by(6).rev() {
-        let index = ((value >> shift) & 0x3f) as usize;
-        out.push(B64_URL[index] as char);
-    }
-    out
-}
-
-fn print_help() {
-    println!(
-        "canon - thread-scoped decisions and invariants\n\n\
-Usage:\n  canon | canon pwd\n  canon p|path <key>\n  canon r|read <key>\n  canon w|write <key> [text]\n  canon a|append <key> [text]\n  canon d|del|delete|rm <key>\n  canon rg|g <pattern> [rg args...]\n"
-    );
+    cli::main();
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    fn temp_home(name: &str) -> PathBuf {
-        let mut path = env::temp_dir();
-        path.push(format!("canon-test-{}-{}", name, process::id()));
-        let _ = fs::remove_dir_all(&path);
-        fs::create_dir_all(&path).unwrap();
-        path
-    }
-
-    fn with_env<F>(name: &str, f: F)
-    where
-        F: FnOnce(PathBuf),
-    {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let home = temp_home(name);
-        env::set_var("CANON_HOME", &home);
-        env::set_var("CODEX_THREAD_ID", "thread-test");
-        f(home.clone());
-        env::remove_var("CANON_HOME");
-        env::remove_var("CODEX_THREAD_ID");
-        let _ = fs::remove_dir_all(home);
-    }
-
-    fn with_tmpdir<F>(name: &str, f: F)
-    where
-        F: FnOnce(PathBuf),
-    {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let temp = temp_home(name);
-        env::remove_var("CANON_HOME");
-        env::set_var("TMPDIR", &temp);
-        env::set_var("CODEX_THREAD_ID", "thread-test");
-        f(temp.clone());
-        env::remove_var("TMPDIR");
-        env::remove_var("CODEX_THREAD_ID");
-        let _ = fs::remove_dir_all(temp);
-    }
-
-    #[test]
-    fn hash_is_ten_base64url_chars() {
-        let hash = hash_key("src/lib.rs");
-        assert_eq!(hash.len(), 10);
-        assert!(hash
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_'));
-    }
-
-    #[test]
-    fn missing_thread_id_fails() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        env::remove_var("CODEX_THREAD_ID");
-        env::set_var("CANON_HOME", temp_home("missing-thread"));
-        let result = Config::from_env();
-        assert!(result.is_err());
-        env::remove_var("CANON_HOME");
-    }
-
-    #[test]
-    fn canon_home_overrides_default_root() {
-        with_env("home-override", |home| {
-            let config = Config::from_env().unwrap();
-            assert_eq!(config.root, home.join("codex").join("thread-test"));
-        });
-    }
-
-    #[test]
-    fn default_root_uses_tmpdir() {
-        with_tmpdir("tmpdir-root", |temp| {
-            let config = Config::from_env().unwrap();
-            assert_eq!(
-                config.root,
-                temp.join("canon").join("codex").join("thread-test")
-            );
-        });
-    }
-
-    #[test]
-    fn default_root_uses_slash_tmp_without_tmpdir() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        env::remove_var("CANON_HOME");
-        env::remove_var("TMPDIR");
-        env::set_var("CODEX_THREAD_ID", "thread-test");
-        let config = Config::from_env().unwrap();
-        assert_eq!(config.root, PathBuf::from("/tmp/canon/codex/thread-test"));
-        env::remove_var("CODEX_THREAD_ID");
-    }
-
-    #[test]
-    fn path_creation_is_deterministic() {
-        with_env("deterministic", |_| {
-            let config = Config::from_env().unwrap();
-            let first = ensure_note(&config, "a/b.rs").unwrap();
-            let second = ensure_note(&config, "a/b.rs").unwrap();
-            assert_eq!(first.path, second.path);
-            assert!(first.path.exists());
-        });
-    }
-
-    #[test]
-    fn write_and_append_preserve_metadata() {
-        with_env("write-append", |_| {
-            let config = Config::from_env().unwrap();
-            write_note(&config, "src/main.rs", "body").unwrap();
-            append_note(&config, "src/main.rs", "decision").unwrap();
-            let note = note_for_key(&config, "src/main.rs");
-            let content = fs::read_to_string(note.path).unwrap();
-            assert!(content.starts_with("<!-- canon key=\"src/main.rs\" hash=\""));
-            assert!(content.contains("\nbody\n"));
-            assert!(content.contains("decision"));
-        });
-    }
-
-    #[test]
-    fn delete_removes_only_target() {
-        with_env("delete", |_| {
-            let config = Config::from_env().unwrap();
-            let first = ensure_note(&config, "one").unwrap();
-            let second = ensure_note(&config, "two").unwrap();
-            delete_note(&config, "one").unwrap();
-            assert!(!first.path.exists());
-            assert!(second.path.exists());
-            let index = fs::read_to_string(config.root.join("index.tsv")).unwrap();
-            assert!(!index.contains("\tone\n"));
-            assert!(index.contains("\ttwo\n"));
-        });
-    }
-
-    #[test]
-    fn collision_metadata_mismatch_fails() {
-        with_env("collision", |_| {
-            let config = Config::from_env().unwrap();
-            let note = note_for_key(&config, "expected");
-            ensure_dir(&config.root).unwrap();
-            fs::write(&note.path, header("actual", &note.hash)).unwrap();
-            let result = ensure_note(&config, "expected");
-            assert!(result.is_err());
-        });
-    }
-
-    #[test]
-    fn aliases_work() {
-        with_env("aliases", |_| {
-            run(vec![]).unwrap();
-            run(vec!["pwd".into()]).unwrap();
-            run(vec!["p".into(), "file.rs".into()]).unwrap();
-            run(vec!["path".into(), "file.rs".into()]).unwrap();
-            run(vec!["w".into(), "file.rs".into(), "body".into()]).unwrap();
-            run(vec!["a".into(), "file.rs".into(), "more".into()]).unwrap();
-            run(vec!["read".into(), "file.rs".into()]).unwrap();
-            run(vec!["d".into(), "file.rs".into()]).unwrap();
-            assert!(run(vec!["-r".into()]).is_err());
-            assert!(run(vec!["file.rs".into()]).is_err());
-        });
-    }
-}
+mod tests;

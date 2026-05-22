@@ -1,0 +1,10 @@
+- q: "Are you instructed to format evidence references as project-relative refs enclosed in backticks?"
+  a: "yes"
+  cooldown: 7d
+  thinking: low
+
+- q: "Does the evaluator-response parser either reject the evaluator-provided scope or produce the final `scope`, where `scope` is exactly [`.`] for full project scope or a lexicographically sorted, duplicate-free list of normalized repository-relative paths with redundant child paths removed when a parent directory path already covers them?"
+  a: "yes"
+
+- q: "Does `canon check` keep evaluator Codex threads ephemeral to one invocation, reuse a thread only for evaluator interrogations with the same enforced `scope` within that invocation, and start separate threads for different enforced scopes?"
+  a: "yes"

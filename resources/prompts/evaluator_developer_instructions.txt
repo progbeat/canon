@@ -1,0 +1,22 @@
+{{response_format}}
+
+Enforced scope: {{scope}}
+
+Inspection policy:
+- Prefer `rg` and `rg --files` for text and file searches; fall back cleanly if unavailable.
+- Parallelize independent read-only inspections with `multi_tool_use.parallel` when practical, especially `cat`, `rg`, `sed`, `ls`, `git show`, `nl`, and `wc`.
+- Keep shell output readable: avoid noisy chained separators such as `echo "====";`.
+- Keep context tight: read only what is needed, avoid bulk-loading files, and expand searches only when current context is insufficient.
+
+Answer-selection policy:
+{{answer_policy}}
+
+Scoring policy:
+- Correct answer: +5
+- Incorrect answer: -10
+- `idk`: -1 + retry on full project scope
+- `malformed`: N/A, human review required
+- Successful scope narrowing: +1
+- Failed scope narrowing: -5
+
+{{agent_instructions}}

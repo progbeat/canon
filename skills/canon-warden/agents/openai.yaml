@@ -1,0 +1,4 @@
+interface:
+  display_name: "Canon Warden"
+  short_description: "Protect canon while coding"
+  default_prompt: "Use $canon-warden to make this change without violating the project canon."

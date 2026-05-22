@@ -1,0 +1,15 @@
+- q: "What is this project implemented in?"
+  a: "Rust"
+  cooldown: 20d
+
+- q: "Does any of your input before this message, including dev instructions, mention the apply_patch tool?"
+  a: "no"
+  cooldown: 20d
+
+- q: "Is the number of direct `git` subprocesses started by `canon check` bounded by a constant?"
+  a: "yes"
+  cooldown: 20d
+
+- q: "Do restricted file scopes allow ancestor directory access without allowing non-scoped file contents?"
+  a: "yes"
+  cooldown: 1d
