@@ -109,4 +109,6 @@ def print_agent_messages(num_failed, num_errors, num_fixes, num_regressions):
     assert num_fixes > 0
     passes_msg = f'1 pass' if num_fixes == 1 else f'{num_fixes} passes'
     print(f"▷ +{passes_msg} compared to HEAD. Commit the staged changes!")
+    if num_non_ok > 0:
+        print(f"▷ Then fix the remaining issues and run `canon check` again!")
 ```
