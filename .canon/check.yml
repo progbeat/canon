@@ -19,7 +19,7 @@ expectations:
   # Expectations from specs
   - path: "specs/*.md"
     q_template: |
-      {content}
+      {{content}}
       ---
       Does the implementation fully satisfy this specification?
     a: "yes"

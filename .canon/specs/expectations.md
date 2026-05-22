@@ -20,7 +20,7 @@ A generator item contains `path`, `q_template`, and `a`:
 ```yaml
 - path: "specs/*.md"
   q_template: |
-    {content}
+    {{content}}
     ---
     Is this specification implemented?
   a: "yes"
@@ -28,5 +28,5 @@ A generator item contains `path`, `q_template`, and `a`:
 
 Expectation items may include other fields not described here.
 
-For every matched spec file, `q_template` is rendered by substituting `{content}`
+For every matched spec file, `q_template` is rendered by substituting `{{content}}`
 with the UTF-8 file contents to produce the generated expectation question.

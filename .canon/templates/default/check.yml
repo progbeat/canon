@@ -1,3 +1,28 @@
+version: 1
+
+agent:
+  model:
+    primary: gpt-5.4-mini
+    fallbacks:
+      - gpt-5.3-codex-spark
+  thinking: medium  # off | minimal | low | medium | high | xhigh | adaptive | max
+  ignore:
+    - .canon/**  # prevents evaluator agents from reading expected answers and avoids reevaluating full-scope expectations when canon changes
+    - AGENTS.md
+  plugins: []
+
+expectations:
+  # - include: expects/*.yml
+
+  # Expectations from specs:
+  # - path: "specs/*.md"
+  #   q_template: |
+  #     {content}
+  #     ---
+  #     Does the implementation fully satisfy this specification?
+  #   a: "yes"
+
+  # Project quality
 - q: "Can you find any unnecessary copy-pasted code outside tests?"
   a: "no"
   cooldown: 7d
@@ -33,18 +58,8 @@
   cooldown: 7d
   thinking: xhigh
 
-- q: "Does the project avoid unnecessary unsafe code?"
-  a: "yes"
-  cooldown: 7d
-  thinking: xhigh
-
-- q: "Are there any avoidable, violations of commonly accepted idiomatic Rust practices that materially reduce this project's maintainability, correctness, readability, type safety, or future extensibility, excluding purely stylistic alternatives unless they create a concrete demonstrated risk?"
+- q: "Are there any avoidable, violations of commonly accepted idiomatic practices that materially reduce this project's maintainability, correctness, readability, type safety, or future extensibility, excluding purely stylistic alternatives unless they create a concrete demonstrated risk?"
   a: "no"
-  cooldown: 7d
-  thinking: xhigh
-
-- q: "Are writes under CANON_STATE_DIR amortized O(N) over N newly persisted bytes?"
-  a: "yes"
   cooldown: 7d
   thinking: xhigh
 
