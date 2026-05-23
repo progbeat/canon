@@ -167,12 +167,14 @@ fn prepare_diagnostic_log(
     root: &Path,
     cache: &mut RepoInspectionCache,
 ) -> DiagnosticLogResult<PreparedDiagnosticLog> {
+    let config = diagnostic_log_config(root)?;
     let log_dir = cache
         .git_path(root, GIT_CANON_LOG_DIR)
         .map_err(|message| external_log_error("resolve diagnostic log directory", message))?;
-    ensure_dir_without_symlinks(&log_dir)
-        .map_err(|message| external_log_error("create diagnostic log directory", message))?;
-    let config = diagnostic_log_config(root)?;
+    if !diagnostic_logs_explicitly_disabled(&config) {
+        ensure_dir_without_symlinks(&log_dir)
+            .map_err(|message| external_log_error("create diagnostic log directory", message))?;
+    }
     let path = log_dir.join(active_log_file_name(&config)?);
     Ok(PreparedDiagnosticLog {
         log_dir,

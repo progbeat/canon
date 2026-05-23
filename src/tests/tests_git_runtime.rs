@@ -83,6 +83,16 @@ fn staged_worktree_view_removes_evaluator_denied_paths_from_snapshot() {
         .current_dir(&root)
         .output()
         .unwrap();
+    let secret_oid_output = Command::new("git")
+        .args(["hash-object", "secrets/passwords.txt"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(secret_oid_output.status.success());
+    let secret_oid = String::from_utf8(secret_oid_output.stdout)
+        .unwrap()
+        .trim()
+        .to_string();
     let mut config = parse_check_config(check_config_yaml()).unwrap();
     config.agent.ignore.push("secrets/*".to_string());
 
@@ -107,10 +117,138 @@ fn staged_worktree_view_removes_evaluator_denied_paths_from_snapshot() {
             .exists());
         assert!(!staged_view.snapshot_root().join("target").exists());
         assert!(staged_view.snapshot_root().join("README.md").exists());
+        assert!(staged_view.snapshot_root().join(".git").exists());
+
+        let ls_files = Command::new("git")
+            .args(["ls-files"])
+            .current_dir(staged_view.snapshot_root())
+            .output()
+            .unwrap();
+        assert!(
+            ls_files.status.success(),
+            "{}",
+            String::from_utf8_lossy(&ls_files.stderr)
+        );
+        let files = String::from_utf8_lossy(&ls_files.stdout);
+        assert!(!files.contains(".canon/"));
+        assert!(!files.contains("secrets/passwords.txt"));
+        assert!(!files.contains("target/cache.txt"));
+
+        let secret_object = Command::new("git")
+            .args(["cat-file", "-e", &secret_oid])
+            .current_dir(staged_view.snapshot_root())
+            .output()
+            .unwrap();
+        assert!(!secret_object.status.success());
     }
     assert!(root.join(".canon/draft/private.md").exists());
     assert!(root.join("secrets/passwords.txt").exists());
     assert!(root.join("target/cache.txt").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn staged_worktree_view_removes_git_metadata_when_git_is_denied() {
+    let root = git_project("staged-snapshot-deny-git");
+    fs::write(root.join("README.md"), "staged\n").unwrap();
+    Command::new("git")
+        .args(["add", "README.md"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let mut config = parse_check_config(check_config_yaml()).unwrap();
+    config.agent.ignore.push(".git".to_string());
+
+    {
+        let staged_view = StagedWorktreeView::apply(&root).unwrap();
+        staged_view
+            .remove_evaluator_denied_paths(&config.agent)
+            .unwrap();
+
+        assert!(!staged_view.snapshot_root().join(".git").exists());
+        assert_eq!(
+            fs::read_to_string(staged_view.snapshot_root().join("README.md")).unwrap(),
+            "staged\n"
+        );
+        let ls_files = Command::new("git")
+            .args(["ls-files"])
+            .current_dir(staged_view.snapshot_root())
+            .output()
+            .unwrap();
+        assert!(!ls_files.status.success());
+    }
+
+    assert!(root.join(".git").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn staged_worktree_view_removes_git_metadata_when_git_tree_is_denied() {
+    let root = git_project("staged-snapshot-deny-git-tree");
+    fs::write(root.join("README.md"), "staged\n").unwrap();
+    Command::new("git")
+        .args(["add", "README.md"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let mut config = parse_check_config(check_config_yaml()).unwrap();
+    config.agent.ignore.push(".git/**".to_string());
+
+    {
+        let staged_view = StagedWorktreeView::apply(&root).unwrap();
+        staged_view
+            .remove_evaluator_denied_paths(&config.agent)
+            .unwrap();
+
+        assert!(!staged_view.snapshot_root().join(".git").exists());
+        let ls_files = Command::new("git")
+            .args(["ls-files"])
+            .current_dir(staged_view.snapshot_root())
+            .output()
+            .unwrap();
+        assert!(!ls_files.status.success());
+    }
+
+    assert!(root.join(".git").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn staged_worktree_view_removes_denied_rebuilt_git_metadata_paths() {
+    let root = git_project("staged-snapshot-deny-git-config");
+    fs::write(root.join("README.md"), "staged\n").unwrap();
+    Command::new("git")
+        .args(["add", "README.md"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let mut config = parse_check_config(check_config_yaml()).unwrap();
+    config.agent.ignore.push(".git/config".to_string());
+
+    {
+        let staged_view = StagedWorktreeView::apply(&root).unwrap();
+        staged_view
+            .remove_evaluator_denied_paths(&config.agent)
+            .unwrap();
+
+        assert!(staged_view.snapshot_root().join(".git").exists());
+        assert!(!staged_view.snapshot_root().join(".git/config").exists());
+        let ls_files = Command::new("git")
+            .args(["ls-files"])
+            .current_dir(staged_view.snapshot_root())
+            .output()
+            .unwrap();
+        assert!(
+            ls_files.status.success(),
+            "{}",
+            String::from_utf8_lossy(&ls_files.stderr)
+        );
+        let files = String::from_utf8_lossy(&ls_files.stdout);
+        assert!(files.lines().any(|path| path == "README.md"));
+        assert!(!files.lines().any(|path| path == ".git/config"));
+    }
+
+    assert!(root.join(".git/config").exists());
     let _ = fs::remove_dir_all(root);
 }
 
@@ -399,4 +537,30 @@ fn checkout_index_prefix_preserves_non_utf8_snapshot_path() {
     let arg = crate::platform::checkout_index_prefix_arg(&path).unwrap();
 
     assert_eq!(arg.as_os_str().as_bytes(), b"--prefix=/tmp/canon-\xff/");
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn initialize_snapshot_git_repo_accepts_non_utf8_snapshot_path() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let parent = TestDir::new("staged-snapshot-non-utf8-init");
+    let snapshot_root = parent
+        .path()
+        .join(OsString::from_vec(b"snapshot-\xff".to_vec()));
+    fs::create_dir(&snapshot_root).unwrap();
+
+    initialize_snapshot_git_repo_for_test(&snapshot_root).unwrap();
+
+    let ls_files = Command::new("git")
+        .args(["ls-files"])
+        .current_dir(&snapshot_root)
+        .output()
+        .unwrap();
+    assert!(
+        ls_files.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ls_files.stderr)
+    );
 }

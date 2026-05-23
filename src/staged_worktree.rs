@@ -42,7 +42,17 @@ impl StagedWorktreeView {
 
     pub(crate) fn remove_evaluator_denied_paths(&self, agent: &AgentConfig) -> Result<(), String> {
         let patterns = effective_ignore_patterns(agent);
-        remove_evaluator_denied_snapshot_paths(&self.snapshot_root, &self.snapshot_root, &patterns)
+        remove_evaluator_denied_snapshot_paths(
+            &self.snapshot_root,
+            &self.snapshot_root,
+            &patterns,
+        )?;
+        if git_metadata_root_is_denied(&patterns) {
+            return Ok(());
+        }
+        rebuild_snapshot_git_metadata(&self.snapshot_root)?;
+        remove_denied_rebuilt_git_metadata_paths(&self.snapshot_root, &patterns)?;
+        Ok(())
     }
 }
 
@@ -88,6 +98,9 @@ fn remove_evaluator_denied_snapshot_paths(
             remove_snapshot_path(&path)?;
             continue;
         }
+        if snapshot_path_is_git_metadata_root(snapshot_root, &path)? {
+            continue;
+        }
         let file_type = entry.file_type().map_err(|err| {
             format!(
                 "failed to inspect staged snapshot path {}: {}",
@@ -100,6 +113,23 @@ fn remove_evaluator_denied_snapshot_paths(
         }
     }
     Ok(())
+}
+
+fn snapshot_path_is_git_metadata_root(snapshot_root: &Path, path: &Path) -> Result<bool, String> {
+    let relative = path.strip_prefix(snapshot_root).map_err(|_| {
+        format!(
+            "staged snapshot path {} is outside {}",
+            path.display(),
+            snapshot_root.display()
+        )
+    })?;
+    Ok(relative == Path::new(".git"))
+}
+
+fn git_metadata_root_is_denied(patterns: &[String]) -> bool {
+    patterns
+        .iter()
+        .any(|pattern| path_matches_pattern_bytes(b".git", pattern.as_bytes()))
 }
 
 fn snapshot_path_is_evaluator_denied(
@@ -154,6 +184,54 @@ fn remove_snapshot_path(path: &Path) -> Result<(), String> {
     })
 }
 
+fn rebuild_snapshot_git_metadata(snapshot_root: &Path) -> Result<(), String> {
+    let git_dir = snapshot_root.join(".git");
+    remove_snapshot_path(&git_dir)?;
+    initialize_snapshot_git_repo(snapshot_root)?;
+    stage_snapshot_index(snapshot_root)
+}
+
+fn remove_denied_rebuilt_git_metadata_paths(
+    snapshot_root: &Path,
+    patterns: &[String],
+) -> Result<(), String> {
+    let mut recursive_patterns = Vec::new();
+    for pattern in patterns {
+        if remove_known_rebuilt_git_metadata_path_if_denied(snapshot_root, pattern)? {
+            continue;
+        }
+        if deny_pattern_may_match_rebuilt_git_metadata(pattern) {
+            recursive_patterns.push(pattern.clone());
+        }
+    }
+    if recursive_patterns.is_empty() {
+        return Ok(());
+    }
+    remove_evaluator_denied_snapshot_paths(
+        snapshot_root,
+        &snapshot_root.join(".git"),
+        &recursive_patterns,
+    )
+}
+
+fn remove_known_rebuilt_git_metadata_path_if_denied(
+    snapshot_root: &Path,
+    pattern: &str,
+) -> Result<bool, String> {
+    for relative in [".git/canon", ".git/canon/logs"] {
+        if path_matches_pattern_bytes(relative.as_bytes(), pattern.as_bytes()) {
+            remove_snapshot_path(&snapshot_root.join(relative))?;
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn deny_pattern_may_match_rebuilt_git_metadata(pattern: &str) -> bool {
+    let first_component = pattern.split('/').next().unwrap_or(pattern);
+    path_matches_pattern_bytes(b".git", first_component.as_bytes())
+}
+
 fn checkout_staged_index(root: &Path, snapshot_root: &Path) -> Result<(), String> {
     // Keep staged symlinks as regular files containing the link target. That
     // prevents evaluator reads from following a tracked symlink out of the
@@ -181,7 +259,8 @@ fn initialize_snapshot_git_repo(snapshot_root: &Path) -> Result<(), String> {
             .arg(snapshot_root)
             .arg("init")
             .arg("--quiet")
-            .arg(format!("--template={}", template.display())),
+            .arg("--template")
+            .arg(&template),
         "git init",
         "failed to initialize staged snapshot Git metadata",
     )?;
@@ -194,6 +273,11 @@ fn initialize_snapshot_git_repo(snapshot_root: &Path) -> Result<(), String> {
         set_snapshot_git_config(snapshot_root, key, value)?;
     }
     Ok(())
+}
+
+#[cfg(all(test, unix, not(target_os = "macos")))]
+pub(crate) fn initialize_snapshot_git_repo_for_test(snapshot_root: &Path) -> Result<(), String> {
+    initialize_snapshot_git_repo(snapshot_root)
 }
 
 fn set_snapshot_git_config(snapshot_root: &Path, key: &str, value: &str) -> Result<(), String> {

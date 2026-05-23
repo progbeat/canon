@@ -293,6 +293,7 @@ fn diagnostic_log_config_uses_documented_disabled_default() {
     assert!(config.explicitly_disabled);
     assert_eq!(config.files.len(), 8);
     append_runtime_log_event(&root, "info", "default.disabled", &[]).unwrap();
+    assert!(!root.join(".git/canon/logs").exists());
     assert!(!root.join(".git/canon/logs/0.jsonl").exists());
     let _ = fs::remove_dir_all(root);
 }
@@ -318,6 +319,7 @@ fn diagnostic_log_config_disables_writes_for_explicit_zero_max_size() {
         &[("payload", json!("x".repeat(2048)))],
     )
     .unwrap();
+    assert!(!root.join(".git/canon/logs").exists());
     assert!(!root.join(".git/canon/logs/0.jsonl").exists());
     let _ = fs::remove_dir_all(root);
 }
