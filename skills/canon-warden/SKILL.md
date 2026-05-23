@@ -21,7 +21,7 @@ Before making any changes, understand the relevant canon expectations and, for e
 
 When `canon` writes an instruction prefixed with `▷ `, execute it.
 
-Whenever the canon is violated, whether detected by `canon check` or after a human updates the canon, proactively fix the implementation to match the canon without waiting for a separate human command. Continue until there are no remaining issues that you are allowed and able to fix. When a fix causes a regression, improve readability around the fragile logic, using comments where helpful, before retrying.
+When you are already making project changes and the canon is violated, whether detected by `canon check` or after a human updates the canon, proactively fix the implementation to match the canon without waiting for a separate human command. Continue until there are no remaining issues that you are allowed and able to fix. When a fix causes a regression, improve readability around the fragile logic, using comments where helpful, before retrying.
 
 If `canon check` gives a wrong answer or evidence while the project satisfies the `canon check` expectations, treat that as a readability issue: improve readability before retrying, using comments where they help.
 
