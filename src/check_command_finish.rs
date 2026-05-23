@@ -20,7 +20,7 @@ const ALL_CHECKS_PASSED_MESSAGE: &str = "✓ All checks passed. Commit is allowe
 const FIX_ISSUES_MESSAGE: &str = "▷ Fix the issues and run `canon check` again!";
 const THEN_FIX_REMAINING_MESSAGE: &str =
     "▷ Then fix the remaining issues and run `canon check` again!";
-const PASS_IMPROVEMENT_COMMIT_SUFFIX: &str = "Commit the staged changes!";
+const PASS_IMPROVEMENT_COMMIT_SUFFIX: &str = "Commit the staged changes NOW!";
 
 // Success and error reports share cleanup, finish logging, and the post-summary
 // message to the agent when allowed by the command form. The optional error

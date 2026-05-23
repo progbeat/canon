@@ -65,11 +65,11 @@ fn pass_improvement_notice_uses_specified_pluralization() {
     assert_eq!(pass_improvement_notice(0), None);
     assert_eq!(
         pass_improvement_notice(1).as_deref(),
-        Some("▷ +1 pass compared to HEAD. Commit the staged changes!")
+        Some("▷ +1 pass compared to HEAD. Commit the staged changes NOW!")
     );
     assert_eq!(
         pass_improvement_notice(2).as_deref(),
-        Some("▷ +2 passes compared to HEAD. Commit the staged changes!")
+        Some("▷ +2 passes compared to HEAD. Commit the staged changes NOW!")
     );
 }
 
@@ -323,7 +323,7 @@ fn staged_pass_notice_counts_passes_even_with_existing_failure() {
         )
         .unwrap(),
         vec![
-            "▷ +1 pass compared to HEAD. Commit the staged changes!".to_string(),
+            "▷ +1 pass compared to HEAD. Commit the staged changes NOW!".to_string(),
             "▷ Then fix the remaining issues and run `canon check` again!".to_string(),
         ]
     );
@@ -402,6 +402,7 @@ fn check_agent_message_prioritizes_regressions_over_fixes() {
 #[test]
 fn query_mode_uses_agent_and_does_not_write_history() {
     let root = git_project("query-mode");
+    enable_diagnostic_logs(&root);
     let config = parse_check_config(check_config_yaml()).unwrap();
     let mut runner = FakeRunner::new(&[
         &answer("no", "src/main.rs says no", &["src"]),
@@ -528,7 +529,11 @@ fn query_mode_uses_agent_and_does_not_write_history() {
     assert!(response.get("rawResponse").is_none());
     assert_eq!(response["threadId"].as_str(), Some("thread-1"));
     assert_eq!(response["turnId"].as_str(), Some("turn-1"));
-    assert!(response.get("tokenUsage").is_none());
+    assert_eq!(response["tokenUsage"]["totalTokens"], json!(10));
+    assert_eq!(response["tokenUsage"]["inputTokens"], json!(7));
+    assert_eq!(response["tokenUsage"]["cachedInputTokens"], json!(3));
+    assert_eq!(response["tokenUsage"]["outputTokens"], json!(3));
+    assert_eq!(response["tokenUsage"]["reasoningOutputTokens"], json!(1));
     assert_eq!(response["tokenUsageUpdates"][0]["sequence"], json!(1));
     assert_eq!(
         response["tokenUsageUpdates"][0]["threadId"].as_str(),
@@ -610,6 +615,7 @@ fn query_mode_rejects_changed_narrowing_when_expected_is_unknown() {
 #[test]
 fn query_mode_can_use_explicit_restricted_scope() {
     let root = git_project("query-mode-restricted-scope");
+    enable_diagnostic_logs(&root);
     let config = parse_check_config(check_config_yaml()).unwrap();
     let scope = vec!["src".to_string()];
     let mut runner = FakeRunner::new(&[
@@ -656,6 +662,7 @@ fn query_mode_can_use_explicit_restricted_scope() {
 #[test]
 fn query_mode_errors_when_full_scope_idk_needs_review() {
     let root = git_project("query-mode-full-scope-idk");
+    enable_diagnostic_logs(&root);
     let config = parse_check_config(check_config_yaml()).unwrap();
     let mut runner = FakeRunner::new(&[&answer("idk", "full scope still cannot answer", &["."])]);
     let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
@@ -680,6 +687,8 @@ fn query_mode_errors_when_full_scope_idk_needs_review() {
     assert!(err.contains("query requires human review: full-scope idk"));
     let log = fs::read_to_string(diagnostic_log.path()).unwrap();
     assert!(!log.contains(r#""event":"query.result""#));
+    assert!(log.contains(r#""event":"query.review_required""#));
+    assert!(log.contains(r#""reason":"full-scope idk""#));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -733,6 +742,7 @@ fn query_and_full_scope_expectation_use_identical_first_turn_input() {
 #[test]
 fn successful_narrowing_logs_stats_and_one_final_result() {
     let root = git_project("narrowing-success");
+    enable_diagnostic_logs(&root);
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
     let mut runner = FakeRunner::new(&[
@@ -767,6 +777,7 @@ fn successful_narrowing_logs_stats_and_one_final_result() {
 #[test]
 fn failed_narrowing_logs_stats_and_keeps_wider_final_result() {
     let root = git_project("narrowing-fail");
+    enable_diagnostic_logs(&root);
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
     let expectation = options.selected[0].clone();

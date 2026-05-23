@@ -1,4 +1,3 @@
-use std::env;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -13,7 +12,7 @@ pub(crate) fn create_snapshot_root(root: &Path) -> Result<PathBuf, String> {
         )
     })?;
     let mut errors = Vec::new();
-    for parent in snapshot_parent_candidates() {
+    for parent in crate::platform::staged_snapshot_parent_candidates() {
         if let Err(err) = snapshot_parent_outside_worktree(&root, &parent) {
             errors.push(err);
             continue;
@@ -34,18 +33,6 @@ pub(crate) fn create_snapshot_root(root: &Path) -> Result<PathBuf, String> {
         "failed to create staged snapshot directory: {}",
         errors.join("; ")
     ))
-}
-
-fn snapshot_parent_candidates() -> Vec<PathBuf> {
-    let mut parents = Vec::new();
-    if cfg!(target_os = "linux") {
-        parents.push(PathBuf::from("/dev/shm"));
-    }
-    let temp_dir = env::temp_dir();
-    if !parents.iter().any(|parent| parent == &temp_dir) {
-        parents.push(temp_dir);
-    }
-    parents
 }
 
 pub(crate) fn snapshot_parent_outside_worktree(root: &Path, parent: &Path) -> Result<(), String> {

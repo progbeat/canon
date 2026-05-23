@@ -2,6 +2,7 @@ use crate::app_server::AppServerRunner;
 use crate::config_types::AgentConfig;
 use crate::evaluator_config::app_server_args;
 use crate::evaluator_types::EvaluatorError;
+use crate::platform;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::env;
@@ -11,17 +12,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
-
-#[cfg(unix)]
-use std::io;
-#[cfg(unix)]
-use std::os::unix::fs::symlink;
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
-#[cfg(unix)]
-use std::process::ExitStatus;
-#[cfg(unix)]
-use std::time::{Duration, Instant};
 
 const EVALUATOR_CODEX_HOME_AUTH_FILES: &[&str] = &["auth.json", "installation_id", "version.json"];
 const SYSTEM_SKILLS_MARKER: &str = ".codex-system-skills.marker";
@@ -92,8 +82,7 @@ impl AppServerRunner {
         // app-server must create independent invocation-local threads, not
         // attach to the parent conversation through inherited thread identity.
         command.env_remove("CODEX_THREAD_ID");
-        #[cfg(unix)]
-        command.process_group(0);
+        platform::prepare_app_server_command(&mut command);
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -231,29 +220,7 @@ fn mirror_codex_home_file(
     }
     let target = target_home.join(file_name);
     remove_existing_codex_home_entry(&target)?;
-    #[cfg(unix)]
-    {
-        symlink(&source, &target).map_err(|err| {
-            format!(
-                "failed to symlink evaluator CODEX_HOME file {} to {}: {}",
-                target.display(),
-                source.display(),
-                err
-            )
-        })?;
-    }
-    #[cfg(not(unix))]
-    {
-        fs::copy(&source, &target).map_err(|err| {
-            format!(
-                "failed to copy evaluator CODEX_HOME file {} from {}: {}",
-                target.display(),
-                source.display(),
-                err
-            )
-        })?;
-    }
-    Ok(())
+    platform::mirror_evaluator_codex_home_file(&source, &target)
 }
 
 fn remove_existing_codex_home_entry(path: &Path) -> Result<(), String> {
@@ -295,97 +262,6 @@ fn take_child_pipe<T>(
     take(child).ok_or_else(|| cleanup_error_after_missing_pipe(child, message))
 }
 
-#[cfg(unix)]
 pub(crate) fn terminate_app_server_child(child: &mut Child) -> Result<(), String> {
-    if poll_app_server_child(child)?.is_some() {
-        return Ok(());
-    }
-    let process_group = child.id() as i32;
-    let mut errors = Vec::new();
-    signal_process_group_or_kill_child(child, process_group, 15, &mut errors);
-    if wait_for_child_exit(child, Duration::from_secs(2))? {
-        return finish_app_server_cleanup(errors);
-    }
-    signal_process_group_or_kill_child(child, process_group, 9, &mut errors);
-    wait_for_app_server_child(child)?;
-    finish_app_server_cleanup(errors)
-}
-
-#[cfg(unix)]
-pub(crate) fn signal_process_group(process_group: i32, signal_number: i32) -> Result<(), String> {
-    // SAFETY: POSIX `kill` uses a negative pid to address a process group.
-    // The caller passes the child pid as the process-group id after spawning
-    // the app-server child in its own group; the return value is checked.
-    let result = unsafe { crate::kill(-process_group, signal_number) };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(format!(
-            "failed to send signal {} to app-server process group {}: {}",
-            signal_number,
-            process_group,
-            io::Error::last_os_error()
-        ))
-    }
-}
-
-#[cfg(unix)]
-fn signal_process_group_or_kill_child(
-    child: &mut Child,
-    process_group: i32,
-    signal_number: i32,
-    errors: &mut Vec<String>,
-) {
-    if let Err(err) = signal_process_group(process_group, signal_number) {
-        errors.push(err);
-        if let Err(err) = child.kill() {
-            errors.push(format!("failed to kill app-server child: {}", err));
-        }
-    }
-}
-
-#[cfg(unix)]
-pub(crate) fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> Result<bool, String> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if poll_app_server_child(child)?.is_some() {
-            return Ok(true);
-        }
-        if Instant::now() >= deadline {
-            return Ok(false);
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-}
-
-#[cfg(unix)]
-fn poll_app_server_child(child: &mut Child) -> Result<Option<ExitStatus>, String> {
-    child
-        .try_wait()
-        .map_err(|err| format!("failed to poll app-server child: {}", err))
-}
-
-#[cfg(unix)]
-fn finish_app_server_cleanup(errors: Vec<String>) -> Result<(), String> {
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors.join("; "))
-    }
-}
-
-#[cfg(not(unix))]
-pub(crate) fn terminate_app_server_child(child: &mut Child) -> Result<(), String> {
-    child
-        .kill()
-        .map_err(|err| format!("failed to kill app-server child: {}", err))?;
-    wait_for_app_server_child(child)?;
-    Ok(())
-}
-
-fn wait_for_app_server_child(child: &mut Child) -> Result<(), String> {
-    child
-        .wait()
-        .map(|_| ())
-        .map_err(|err| format!("failed to wait for app-server child: {}", err))
+    platform::terminate_app_server_child(child)
 }

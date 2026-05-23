@@ -1,26 +1,28 @@
-use crate::git_config::{git_config_get_or_default, GitConfigGetError};
+use crate::git_config::{git_config_get, git_config_get_or_default, GitConfigGetError};
 use crate::logging_error::{external_log_error, DiagnosticLogError, DiagnosticLogResult};
 use crate::{DiagnosticLogConfig, DEFAULT_DIAGNOSTIC_LOG_CONFIG};
+use std::path::Path;
 
 const LOG_MAX_SIZE_CONFIG_KEY: &str = "canon.logs.maxSize";
+const DEFAULT_LOG_MAX_SIZE_CONFIG_VALUE: &str = "0M";
+const THREAD_REUSE_CARRYOVER_TOKEN_TARGET_CONFIG_KEY: &str =
+    "canon.threadReuse.carryoverTokenTarget";
 
-pub(crate) fn diagnostic_log_config(
-    root: &std::path::Path,
-) -> DiagnosticLogResult<DiagnosticLogConfig> {
+pub(crate) fn diagnostic_log_config(root: &Path) -> DiagnosticLogResult<DiagnosticLogConfig> {
+    let (max_bytes, explicitly_disabled) = configured_log_max_size(root)?;
     Ok(DiagnosticLogConfig {
-        max_bytes: configured_log_max_size(root)?,
+        max_bytes,
+        explicitly_disabled,
         files: DEFAULT_DIAGNOSTIC_LOG_CONFIG.files,
     })
 }
 
-fn configured_log_max_size(root: &std::path::Path) -> DiagnosticLogResult<u64> {
-    git_config_get_or_default(
-        root,
-        LOG_MAX_SIZE_CONFIG_KEY,
-        DEFAULT_DIAGNOSTIC_LOG_CONFIG.max_bytes,
-        parse_log_max_size,
-        log_config_get_error,
-    )
+fn configured_log_max_size(root: &Path) -> DiagnosticLogResult<(u64, bool)> {
+    let value = git_config_get(root, LOG_MAX_SIZE_CONFIG_KEY)
+        .map_err(log_config_get_error)?
+        .unwrap_or_else(|| DEFAULT_LOG_MAX_SIZE_CONFIG_VALUE.to_string());
+    let max_bytes = parse_log_max_size(&value)?;
+    Ok((max_bytes, max_bytes == 0))
 }
 
 fn log_config_get_error(err: GitConfigGetError) -> DiagnosticLogError {
@@ -90,4 +92,95 @@ pub(crate) fn active_log_max_bytes(config: &DiagnosticLogConfig, file_count: usi
         return u64::MAX;
     }
     (config.max_bytes / file_count as u64).max(1)
+}
+
+pub(crate) fn diagnostic_logs_unlimited(config: &DiagnosticLogConfig) -> bool {
+    !config.explicitly_disabled && config.max_bytes == 0
+}
+
+pub(crate) fn diagnostic_logs_explicitly_disabled(config: &DiagnosticLogConfig) -> bool {
+    config.explicitly_disabled
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CarryoverTokenTarget {
+    pub(crate) min: u64,
+    pub(crate) max: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ThreadReuseConfig {
+    pub(crate) carryover_token_target: CarryoverTokenTarget,
+}
+
+pub(crate) const DEFAULT_THREAD_REUSE_CONFIG: ThreadReuseConfig = ThreadReuseConfig {
+    carryover_token_target: CarryoverTokenTarget {
+        min: 10_000,
+        max: 30_000,
+    },
+};
+
+pub(crate) fn thread_reuse_config(root: &Path) -> Result<ThreadReuseConfig, String> {
+    Ok(ThreadReuseConfig {
+        carryover_token_target: configured_carryover_token_target(root)?,
+    })
+}
+
+fn configured_carryover_token_target(root: &Path) -> Result<CarryoverTokenTarget, String> {
+    git_config_get_or_default(
+        root,
+        THREAD_REUSE_CARRYOVER_TOKEN_TARGET_CONFIG_KEY,
+        DEFAULT_THREAD_REUSE_CONFIG.carryover_token_target,
+        parse_carryover_token_target,
+        thread_reuse_git_config_error,
+    )
+}
+
+fn thread_reuse_git_config_error(err: GitConfigGetError) -> String {
+    match err {
+        GitConfigGetError::Command(err) => format!("failed to run git config: {}", err),
+        GitConfigGetError::InvalidOutput { message, .. } => message,
+        GitConfigGetError::ReadFailed { key, stderr } => {
+            format!("{} could not be read: {}", key, stderr)
+        }
+    }
+}
+
+pub(crate) fn parse_carryover_token_target(value: &str) -> Result<CarryoverTokenTarget, String> {
+    let (min, max) = value
+        .split_once(',')
+        .filter(|(min, max)| !min.is_empty() && !max.is_empty())
+        .ok_or_else(|| invalid_carryover_token_target("must be a MIN,MAX token range"))?;
+    let min = parse_positive_token_count(min)?;
+    let max = parse_positive_token_count(max)?;
+    if min > max {
+        return Err(invalid_carryover_token_target(
+            "MIN must be less than or equal to MAX",
+        ));
+    }
+    Ok(CarryoverTokenTarget { min, max })
+}
+
+fn parse_positive_token_count(value: &str) -> Result<u64, String> {
+    if !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(invalid_carryover_token_target(
+            "MIN and MAX must be positive integers",
+        ));
+    }
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| invalid_carryover_token_target("value is too large"))?;
+    if parsed == 0 {
+        return Err(invalid_carryover_token_target(
+            "MIN and MAX must be greater than zero",
+        ));
+    }
+    Ok(parsed)
+}
+
+fn invalid_carryover_token_target(reason: &str) -> String {
+    format!(
+        "{} {}",
+        THREAD_REUSE_CARRYOVER_TOKEN_TARGET_CONFIG_KEY, reason
+    )
 }

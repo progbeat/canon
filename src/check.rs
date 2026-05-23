@@ -2,9 +2,9 @@ use crate::check_cache::{
     cached_failure_for_expectation, final_selected_after_current_pass_cache, write_cache_hit,
 };
 use crate::check_interrogation_policy::{
-    interrogate_or_error_record, interrogate_with_full_scope_retry, narrowed_scope_is_accepted,
+    interrogate_with_full_scope_retry, narrowed_scope_is_accepted,
     restore_record_to_enforced_scope, turn_exceeds_break_after_tokens, turn_has_context_compaction,
-    write_scope_narrowing_event, InterrogationCall, ScopedInterrogation,
+    write_scope_narrowing_event, ScopedInterrogation,
 };
 use crate::check_interrogation_state::{CheckRuntime, InterrogationState};
 use crate::check_order_state::write_latest_non_pass_record_with_cache;
@@ -284,23 +284,26 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             // only when an independent interrogation with that same canonical
             // scope returns either the same answer or an incorrect answer.
             let initial_record = interrogation.record.clone();
-            let narrowed = run_try!(interrogate_or_error_record(
-                InterrogationCall {
+            let mut verification_scope = record_scope.clone();
+            let narrowed = run_try!(interrogate_with_full_scope_retry(
+                ScopedInterrogation {
                     root,
                     runtime: &runtime,
                     expectation,
-                    scope: &record_scope,
+                    enforced_scope: &mut verification_scope,
                 },
                 runner,
                 &mut diagnostic_log,
                 &mut interrogation_state,
                 &mut caches.scope_hash,
+                options.break_after_tokens,
             ));
             break_after_tokens_hit |=
                 turn_exceeds_break_after_tokens(&narrowed, options.break_after_tokens);
             context_compaction_hit |= turn_has_context_compaction(&narrowed);
             stop_after_current_expectation |= narrowed.stop_after_current_expectation;
-            let accepted = narrowed_scope_is_accepted(&interrogation.record, &narrowed.record);
+            let accepted = verification_scope == record_scope
+                && narrowed_scope_is_accepted(&interrogation.record, &narrowed.record);
             if accepted {
                 narrowing.accepted += 1;
             } else {

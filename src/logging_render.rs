@@ -12,6 +12,7 @@ pub(crate) fn render_runtime_log_event(
     fields: &[(&str, Value)],
 ) -> DiagnosticLogResult<String> {
     validate_runtime_log_extra_fields(fields)?;
+    validate_runtime_log_event_schema(event, fields)?;
     let event = RuntimeLogEvent {
         timestamp: format_record_timestamp(
             unix_timestamp().map_err(|message| external_log_error("read system time", message))?,
@@ -40,6 +41,118 @@ pub(crate) fn render_check_log_record(record: &CheckRecord) -> DiagnosticLogResu
         cache_key: record.cache_key.as_deref(),
     };
     json_line(&history, "history log record")
+}
+
+fn validate_runtime_log_event_schema(
+    event: &str,
+    fields: &[(&str, Value)],
+) -> DiagnosticLogResult<()> {
+    let Some(required) = required_runtime_log_fields(event) else {
+        return Ok(());
+    };
+    for key in required {
+        if runtime_log_field_value(fields, key).is_some() {
+            continue;
+        }
+        return Err(DiagnosticLogError::InvalidRuntimeField {
+            key: (*key).to_string(),
+            reason: "missing for event schema",
+        });
+    }
+    validate_runtime_log_nested_schema(event, fields)?;
+    Ok(())
+}
+
+fn required_runtime_log_fields(event: &str) -> Option<&'static [&'static str]> {
+    match event {
+        "agent.request" => Some(&["id", "attempt", "reason", "request"]),
+        "agent.response" => Some(&["id", "attempt", "reason", "response", "tokenUsage"]),
+        "agent.turn_error" => Some(&["id", "attempt", "reason", "error", "response"]),
+        "cache.cleanup" => Some(&["removed", "kept"]),
+        "cache.exact_hit" => Some(&["id", "result", "scope"]),
+        "check.start" => Some(&["selected"]),
+        "expectation.result"
+        | "expectation.review_required"
+        | "interrogation.result"
+        | "interrogation.review_required" => Some(&[
+            "id", "result", "observed", "evidence", "scope", "prompt", "expected",
+        ]),
+        "lazy_full_scope_reset" => Some(&["evaluated", "candidates", "reset", "ids"]),
+        "lazy_full_scope_reset.error" => Some(&["message"]),
+        "model.failure" => Some(&["id", "model", "error"]),
+        "model.fallback" => Some(&["id", "from", "to", "reason"]),
+        "query.result" => Some(&["prompt", "observed", "evidence", "scope"]),
+        "query.review_required" => Some(&["prompt", "observed", "evidence", "scope", "reason"]),
+        "scope.narrowing" => Some(&[
+            "id",
+            "originalScope",
+            "proposedScope",
+            "accepted",
+            "initialObserved",
+            "initialEvidence",
+            "verificationObserved",
+            "verificationEvidence",
+        ]),
+        "thread.restart" => Some(&[
+            "threadId",
+            "id",
+            "scope",
+            "model",
+            "baseInstructions",
+            "developerInstructions",
+            "reason",
+        ]),
+        "thread.start" | "thread.reuse" => Some(&[
+            "threadId",
+            "scope",
+            "model",
+            "thinking",
+            "baseInstructions",
+            "developerInstructions",
+        ]),
+        "check.finish" => Some(&["query", "status"]),
+        _ => None,
+    }
+}
+
+fn validate_runtime_log_nested_schema(
+    event: &str,
+    fields: &[(&str, Value)],
+) -> DiagnosticLogResult<()> {
+    if event != "agent.response" {
+        return Ok(());
+    }
+    let Some(token_usage) = runtime_log_field_value(fields, "tokenUsage") else {
+        return Ok(());
+    };
+    let Some(object) = token_usage.as_object() else {
+        return Err(DiagnosticLogError::InvalidRuntimeField {
+            key: "tokenUsage".to_string(),
+            reason: "not an object",
+        });
+    };
+    for key in [
+        "totalTokens",
+        "inputTokens",
+        "cachedInputTokens",
+        "outputTokens",
+        "reasoningOutputTokens",
+    ] {
+        if object.contains_key(key) {
+            continue;
+        }
+        return Err(DiagnosticLogError::InvalidRuntimeField {
+            key: format!("tokenUsage.{}", key),
+            reason: "missing for event schema",
+        });
+    }
+    Ok(())
+}
+
+fn runtime_log_field_value<'a>(fields: &'a [(&str, Value)], key: &str) -> Option<&'a Value> {
+    fields
+        .iter()
+        .find_map(|(field, value)| (*field == key).then_some(value))
 }
 
 fn validate_runtime_log_extra_fields(fields: &[(&str, Value)]) -> DiagnosticLogResult<()> {

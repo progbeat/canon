@@ -120,6 +120,10 @@ fn selected_expectations_ignore_runtime_log_errors_for_order() {
             ("id", json!(second.id.clone())),
             ("result", json!(RESULT_FAIL)),
             ("observed", json!(UNPARSEABLE_OBSERVED)),
+            ("evidence", json!("unparseable")),
+            ("scope", json!(full_scope())),
+            ("prompt", json!(second.q.clone())),
+            ("expected", json!(second.a.clone())),
         ],
     )
     .unwrap();

@@ -3,16 +3,16 @@ use crate::check_interrogation_state::{evaluator_session_key, CheckRuntime, Inte
 use crate::check_model_fallback::write_model_fallback_events;
 use crate::check_types::{InterrogationResult, SelectedExpectation};
 use crate::config_types::AgentConfig;
-use crate::evaluator_prompt::{developer_instructions, EVALUATOR_BASE_INSTRUCTIONS};
+use crate::evaluator_prompt::developer_instructions;
 use crate::evaluator_response_cache::EvaluatorResponseParseCache;
 use crate::evaluator_turn::{
-    ask_once, effective_thinking, is_context_window_failure, model_label,
-    session_failure_invalidates_thread, EvaluatorTurnContext, ParsedTurnResponse,
+    ask_once, effective_thinking, is_context_window_failure, session_failure_invalidates_thread,
+    write_thread_lifecycle_event, write_thread_restart_event, EvaluatorTurnContext,
+    ParsedTurnResponse, ThreadLifecycleLog,
 };
 use crate::evaluator_types::{EvaluatorError, EvaluatorRunner};
 use crate::logging::DiagnosticLogWriter;
 use crate::scope::sanitize_scope;
-use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
 #[derive(Clone, Copy)]
@@ -22,12 +22,6 @@ pub(crate) struct ThreadTurnRequest<'a> {
     pub(crate) thinking: &'a str,
     pub(crate) expectation_id: Option<&'a str>,
     pub(crate) prompt: &'a str,
-}
-
-struct ThreadLifecycleLog {
-    event: &'static str,
-    session_id: String,
-    developer_instructions: String,
 }
 
 pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
@@ -49,7 +43,13 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         None => start_thread_session(runtime, runner, state, &session_key, request)?,
     };
     let mut session_id = lifecycle_log.session_id.clone();
-    write_thread_lifecycle_event(diagnostic_log, &lifecycle_log, request)?;
+    write_thread_lifecycle_event(
+        diagnostic_log,
+        &lifecycle_log,
+        request.enforced_scope,
+        request.model,
+        request.thinking,
+    )?;
     let response = match ask_current_session(
         runner,
         &session_id,
@@ -68,11 +68,25 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
                 None,
                 err.message_str(),
             )?;
-            write_thread_restart_event(diagnostic_log, &session_id, request, err.message_str())?;
+            write_thread_restart_event(
+                diagnostic_log,
+                &session_id,
+                request.expectation_id,
+                request.enforced_scope,
+                request.model,
+                &lifecycle_log.developer_instructions,
+                err.message_str(),
+            )?;
             let lifecycle_log =
                 start_thread_session(runtime, runner, state, &session_key, request)?;
             session_id = lifecycle_log.session_id.clone();
-            write_thread_lifecycle_event(diagnostic_log, &lifecycle_log, request)?;
+            write_thread_lifecycle_event(
+                diagnostic_log,
+                &lifecycle_log,
+                request.enforced_scope,
+                request.model,
+                request.thinking,
+            )?;
             match ask_current_session(
                 runner,
                 &session_id,
@@ -184,63 +198,6 @@ fn thread_reuse_log(
         session_id,
         developer_instructions,
     }
-}
-
-fn write_thread_lifecycle_event(
-    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    lifecycle_log: &ThreadLifecycleLog,
-    request: ThreadTurnRequest<'_>,
-) -> Result<(), String> {
-    write_thread_event(
-        diagnostic_log,
-        "info",
-        lifecycle_log.event,
-        &[
-            ("threadId", json!(&lifecycle_log.session_id)),
-            ("scope", json!(request.enforced_scope)),
-            ("model", json!(model_label(request.model))),
-            ("thinking", json!(request.thinking)),
-            ("baseInstructions", json!(EVALUATOR_BASE_INSTRUCTIONS)),
-            (
-                "developerInstructions",
-                json!(&lifecycle_log.developer_instructions),
-            ),
-        ],
-    )
-}
-
-fn write_thread_restart_event(
-    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    session_id: &str,
-    request: ThreadTurnRequest<'_>,
-    reason: &str,
-) -> Result<(), String> {
-    write_thread_event(
-        diagnostic_log,
-        "warn",
-        "thread.restart",
-        &[
-            ("threadId", json!(session_id)),
-            ("id", json!(request.expectation_id)),
-            ("scope", json!(request.enforced_scope)),
-            ("model", json!(model_label(request.model))),
-            ("reason", json!(reason)),
-        ],
-    )
-}
-
-fn write_thread_event(
-    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    level: &str,
-    event: &str,
-    fields: &[(&str, Value)],
-) -> Result<(), String> {
-    let Some(writer) = diagnostic_log.as_deref_mut() else {
-        return Ok(());
-    };
-    writer
-        .write_event(level, event, fields)
-        .map_err(|err| err.to_string())
 }
 
 fn clear_thread_sessions_after_failure(state: &mut InterrogationState) {

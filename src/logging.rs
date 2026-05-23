@@ -1,6 +1,8 @@
-use crate::check_types::CheckRecord;
+use crate::check_types::{CheckRecord, ObservedAnswerState};
 use crate::fs_util::ensure_dir_without_symlinks;
-use crate::logging_config::{active_log_file_name, diagnostic_log_files};
+use crate::logging_config::{
+    active_log_file_name, diagnostic_log_files, diagnostic_logs_explicitly_disabled,
+};
 use crate::logging_error::{external_log_error, DiagnosticLogResult};
 use crate::logging_lock::acquire_diagnostic_log_lock;
 use crate::logging_rotation::{
@@ -43,13 +45,8 @@ pub(crate) struct DiagnosticLogWriter {
 }
 
 impl DiagnosticLogWriter {
-    // This module owns JSONL storage, rotation, and the common
-    // timestamp/level/event prefix. Event-specific runtime-log coverage is at
-    // the behavior boundary: check_interrogation.rs logs thread start/reuse and
-    // effective instructions, evaluator_turn.rs logs agent request/response and
-    // per-turn token usage, check_model_fallback.rs logs fallback decisions,
-    // check_interrogation_records.rs logs finalized records, and
-    // check_reporting.rs logs check.finish.
+    // This module owns JSONL storage and rotation. `logging_render` validates
+    // the required fields for known runtime-log event schemas.
     #[cfg(test)]
     pub(crate) fn create(root: &Path) -> DiagnosticLogResult<DiagnosticLogWriter> {
         let mut cache = RepoInspectionCache::new();
@@ -61,8 +58,10 @@ impl DiagnosticLogWriter {
         cache: &mut RepoInspectionCache,
     ) -> DiagnosticLogResult<DiagnosticLogWriter> {
         let prepared = prepare_diagnostic_log(root, cache)?;
-        let _lock = acquire_diagnostic_log_lock(&prepared.log_dir)?;
-        rotate_diagnostic_logs_with_config(&prepared.log_dir, &prepared.config)?;
+        if !diagnostic_logs_explicitly_disabled(&prepared.config) {
+            let _lock = acquire_diagnostic_log_lock(&prepared.log_dir)?;
+            rotate_diagnostic_logs_with_config(&prepared.log_dir, &prepared.config)?;
+        }
         Ok(DiagnosticLogWriter {
             path: prepared.path,
             log_dir: prepared.log_dir,
@@ -87,19 +86,17 @@ impl DiagnosticLogWriter {
     }
 
     fn write_record_event(&mut self, event: &str, record: &CheckRecord) -> DiagnosticLogResult<()> {
-        self.write_event(
-            "info",
-            event,
-            &[
-                ("id", json!(record.id)),
-                ("result", json!(record.result)),
-                ("observed", json!(record.observed)),
-                ("evidence", json!(record.evidence)),
-                ("scope", json!(record.scope)),
-                ("prompt", json!(record.prompt_text())),
-                ("expected", json!(record.expected_text())),
-            ],
-        )
+        let fields = record_log_fields(record);
+        self.write_event("info", event, &fields)?;
+        if record_requires_human_review(record) {
+            let review_event = match event {
+                "expectation.result" => "expectation.review_required",
+                "interrogation.result" => "interrogation.review_required",
+                _ => return Ok(()),
+            };
+            self.write_event("warn", review_event, &fields)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn write_event(
@@ -117,6 +114,28 @@ impl DiagnosticLogWriter {
             fields,
         )
     }
+}
+
+fn record_log_fields(record: &CheckRecord) -> Vec<(&'static str, Value)> {
+    vec![
+        ("id", json!(record.id)),
+        ("result", json!(record.result)),
+        ("observed", json!(record.observed)),
+        ("evidence", json!(record.evidence)),
+        ("scope", json!(record.scope)),
+        ("prompt", json!(record.prompt_text())),
+        ("expected", json!(record.expected_text())),
+    ]
+}
+
+fn record_requires_human_review(record: &CheckRecord) -> bool {
+    record
+        .expected_text()
+        .map(|expected| {
+            ObservedAnswerState::from_expected_and_observed(expected, &record.observed)
+                .requires_human_review()
+        })
+        .unwrap_or(true)
 }
 
 #[cfg(test)]
@@ -170,6 +189,9 @@ fn write_runtime_log_event_with_rotation(
     event: &str,
     fields: &[(&str, Value)],
 ) -> DiagnosticLogResult<()> {
+    if diagnostic_logs_explicitly_disabled(config) {
+        return Ok(());
+    }
     let line = render_runtime_log_event(level, event, fields)?;
     let line_size = line.len() as u64;
     let log_size_limited = config.max_bytes > 0;

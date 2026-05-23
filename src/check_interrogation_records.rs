@@ -68,6 +68,28 @@ pub(crate) fn write_query_result_event(
     Ok(())
 }
 
+pub(crate) fn write_query_review_required_event(
+    question: &str,
+    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    answer: &ParsedAnswer,
+    reason: &str,
+) -> Result<(), EvaluatorError> {
+    if let Some(writer) = diagnostic_log.as_deref_mut() {
+        writer.write_event(
+            "warn",
+            "query.review_required",
+            &[
+                ("prompt", json!(question)),
+                ("observed", json!(answer.answer.clone())),
+                ("evidence", json!(answer.evidence.clone())),
+                ("scope", json!(answer.scope.clone())),
+                ("reason", json!(reason)),
+            ],
+        )?;
+    }
+    Ok(())
+}
+
 struct FinalizedParsedAnswer {
     response: ParsedAnswer,
     scope_hash: String,

@@ -1,6 +1,4 @@
 use crate::project::{command_output_trimmed, path_from_git_stdout};
-#[cfg(all(test, unix))]
-use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -181,25 +179,11 @@ fn parse_git_blob_batch(output: &[u8], object_ids: &[String]) -> Result<Vec<Vec<
     Ok(blobs)
 }
 
-#[cfg(unix)]
 pub(crate) fn git_path_bytes(path: &Path) -> Result<Vec<u8>, String> {
-    use std::os::unix::ffi::OsStrExt;
-
-    Ok(path.as_os_str().as_bytes().to_vec())
-}
-
-#[cfg(not(unix))]
-pub(crate) fn git_path_bytes(path: &Path) -> Result<Vec<u8>, String> {
-    Ok(path
-        .to_str()
-        .ok_or_else(|| format!("git path must be valid UTF-8: {}", path.display()))?
-        .as_bytes()
-        .to_vec())
+    crate::platform::git_path_bytes(path)
 }
 
 #[cfg(all(test, unix))]
-pub(crate) fn git_path_from_raw_bytes(path: &[u8]) -> Result<OsString, String> {
-    use std::os::unix::ffi::OsStrExt;
-
-    Ok(std::ffi::OsStr::from_bytes(path).to_os_string())
+pub(crate) fn git_path_from_raw_bytes(path: &[u8]) -> Result<std::ffi::OsString, String> {
+    crate::platform::git_path_from_raw_bytes(path)
 }

@@ -1,7 +1,3 @@
-use std::sync::atomic::AtomicBool;
-#[cfg(unix)]
-use std::sync::atomic::Ordering;
-
 const FNV_OFFSET: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
 const B64_URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -13,6 +9,7 @@ const DEFAULT_DIAGNOSTIC_LOG_FILES: [&str; 8] = [
 ];
 const DEFAULT_DIAGNOSTIC_LOG_CONFIG: DiagnosticLogConfig = DiagnosticLogConfig {
     max_bytes: 0,
+    explicitly_disabled: true,
     files: &DEFAULT_DIAGNOSTIC_LOG_FILES,
 };
 const HISTORY_COMPACT_KEEP_RECORDS: usize = 5;
@@ -28,27 +25,11 @@ const OBSERVED_IDK: &str = "idk";
 const OBSERVED_MALFORMED: &str = "malformed";
 const UNPARSEABLE_OBSERVED: &str = "unparseable";
 const EMPTY_EVIDENCE_OBSERVED: &str = "empty-evidence";
-static CHECK_INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
 pub(crate) struct DiagnosticLogConfig {
     pub(crate) max_bytes: u64,
+    pub(crate) explicitly_disabled: bool,
     pub(crate) files: &'static [&'static str],
-}
-
-#[cfg(unix)]
-// Unix signal and process-group APIs are not exposed by Rust's standard
-// library. The safe wrappers in `check_preflight` and `app_server_process`
-// keep all FFI calls behind return-value checks and narrow safety comments.
-unsafe extern "C" {
-    fn signal(signum: i32, handler: extern "C" fn(i32)) -> usize;
-    fn kill(pid: i32, sig: i32) -> i32;
-}
-
-#[cfg(unix)]
-extern "C" fn handle_sigint(_: i32) {
-    // This handler only stores to an atomic flag; it does not allocate, lock,
-    // or touch non-async-signal-safe state.
-    CHECK_INTERRUPTED.store(true, Ordering::SeqCst);
 }
 
 mod app_server;
@@ -121,6 +102,7 @@ mod notes_index;
 mod notes_restore;
 mod output;
 mod path_io_error;
+mod platform;
 mod project;
 mod project_types;
 mod repo_inspection;
@@ -130,7 +112,6 @@ mod staged_worktree;
 mod staged_worktree_git;
 mod staged_worktree_paths;
 mod staged_worktree_validate;
-mod thread_reuse_config;
 mod time;
 mod token_usage_types;
 

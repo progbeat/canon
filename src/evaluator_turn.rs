@@ -3,6 +3,7 @@ use crate::check_types::{
     SelectedExpectation,
 };
 use crate::config_types::AgentConfig;
+use crate::evaluator_prompt::EVALUATOR_BASE_INSTRUCTIONS;
 use crate::evaluator_response_cache::{response_excerpt, EvaluatorResponseParseCache};
 use crate::evaluator_types::{EvaluatorError, EvaluatorRunner};
 use crate::hash::full_scope;
@@ -99,19 +100,18 @@ pub(crate) fn record_from_response(
     )
 }
 
-// This module owns one evaluator turn: model labels, response parsing, and
-// record finalization. It is intentionally not sufficient by itself to judge
-// the full interrogation policy; with only this file visible, full-policy
-// questions require `idk` rather than a pass/fail conclusion. Cross-turn policy
-// such as restricted `idk` full-scope retries, narrowing verification, and
-// history writes is in `check.rs` and `check_interrogation_records.rs`.
-// Evaluator thread lifecycle observability is also outside this per-turn
-// module: `check_interrogation.rs` writes `thread.start` and `thread.reuse`,
-// including the base and developer instructions sent to the evaluator.
+// This module owns one evaluator turn: model labels, response parsing, request
+// and response logging, per-turn token usage, and record finalization.
 pub(crate) struct EvaluatorTurnContext<'a> {
     pub(crate) session_id: &'a str,
     pub(crate) model: Option<&'a str>,
     pub(crate) thinking: &'a str,
+}
+
+pub(crate) struct ThreadLifecycleLog {
+    pub(crate) event: &'static str,
+    pub(crate) session_id: String,
+    pub(crate) developer_instructions: String,
 }
 
 pub(crate) struct ParsedTurnResponse {
@@ -209,7 +209,12 @@ pub(crate) fn ask_and_log<R: EvaluatorRunner>(
                     ("response", raw_response),
                 ];
                 append_turn_usage_fields(&mut fields, turn_usage.as_ref());
-                writer.write_event("error", "agent.response", &fields)?;
+                let event = if turn_usage.is_some() {
+                    "agent.response"
+                } else {
+                    "agent.turn_error"
+                };
+                writer.write_event("error", event, &fields)?;
             }
             return Err(err);
         }
@@ -228,16 +233,21 @@ pub(crate) fn ask_and_log<R: EvaluatorRunner>(
             ("reason", json!(reason)),
             ("response", raw_response),
         ];
+        append_turn_usage_fields(&mut fields, turn_usage.as_ref());
         if missing_turn_usage {
+            // A response without usage violates the app-server turn contract,
+            // so it is not logged as a completed `agent.response`.
             fields.push(("error", json!("missing evaluator turn usage")));
-            writer.write_event("error", "agent.response", &fields)?;
+            writer.write_event("error", "agent.turn_error", &fields)?;
         } else {
-            append_turn_usage_fields(&mut fields, turn_usage.as_ref());
             writer.write_event("info", "agent.response", &fields)?;
         }
     }
     if missing_turn_usage {
-        return Err(EvaluatorError::message("missing evaluator turn usage"));
+        return Err(EvaluatorError::failure(
+            EvaluatorFailureKind::UnknownAppServer,
+            "missing evaluator turn usage",
+        ));
     }
     let context_compacted = turn_usage
         .as_ref()
@@ -247,6 +257,70 @@ pub(crate) fn ask_and_log<R: EvaluatorRunner>(
         usage: response_usage,
         context_compacted,
     })
+}
+
+pub(crate) fn write_thread_lifecycle_event(
+    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    lifecycle_log: &ThreadLifecycleLog,
+    enforced_scope: &[String],
+    model: Option<&str>,
+    thinking: &str,
+) -> Result<(), String> {
+    write_thread_event(
+        diagnostic_log,
+        "info",
+        lifecycle_log.event,
+        &[
+            ("threadId", json!(&lifecycle_log.session_id)),
+            ("scope", json!(enforced_scope)),
+            ("model", json!(model_label(model))),
+            ("thinking", json!(thinking)),
+            ("baseInstructions", json!(EVALUATOR_BASE_INSTRUCTIONS)),
+            (
+                "developerInstructions",
+                json!(&lifecycle_log.developer_instructions),
+            ),
+        ],
+    )
+}
+
+pub(crate) fn write_thread_restart_event(
+    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    session_id: &str,
+    expectation_id: Option<&str>,
+    enforced_scope: &[String],
+    model: Option<&str>,
+    developer_instructions: &str,
+    reason: &str,
+) -> Result<(), String> {
+    write_thread_event(
+        diagnostic_log,
+        "warn",
+        "thread.restart",
+        &[
+            ("threadId", json!(session_id)),
+            ("id", json!(expectation_id)),
+            ("scope", json!(enforced_scope)),
+            ("model", json!(model_label(model))),
+            ("baseInstructions", json!(EVALUATOR_BASE_INSTRUCTIONS)),
+            ("developerInstructions", json!(developer_instructions)),
+            ("reason", json!(reason)),
+        ],
+    )
+}
+
+fn write_thread_event(
+    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    level: &str,
+    event: &str,
+    fields: &[(&str, Value)],
+) -> Result<(), String> {
+    let Some(writer) = diagnostic_log.as_deref_mut() else {
+        return Ok(());
+    };
+    writer
+        .write_event(level, event, fields)
+        .map_err(|err| err.to_string())
 }
 
 fn append_turn_usage_fields(
@@ -266,9 +340,8 @@ fn append_turn_usage_fields(
     };
     fields.push(("threadId", json!(thread_id)));
     fields.push(("turnId", json!(turn_id)));
-    if token_usage_updates.is_empty() {
-        fields.push(("tokenUsage", token_usage_log_value(*usage)));
-    } else {
+    fields.push(("tokenUsage", token_usage_log_value(*usage)));
+    if !token_usage_updates.is_empty() {
         fields.push(("tokenUsageUpdates", json!(token_usage_updates)));
     }
     if !context_compaction_events.is_empty() {

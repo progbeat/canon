@@ -8,6 +8,7 @@ fn log_timestamp_uses_utc_rfc3339_format() {
 #[test]
 fn diagnostic_log_is_written_to_numeric_active_file_and_flushed() {
     let root = git_project("check-log");
+    enable_diagnostic_logs(&root);
     let records = vec![sample_record(1, "pass")];
     let path = write_diagnostic_log(&root, &records).unwrap();
     assert_eq!(path, root.join(".git/canon/logs/0.jsonl"));
@@ -42,6 +43,34 @@ fn diagnostic_log_is_written_to_numeric_active_file_and_flushed() {
         assert!(index >= previous);
         previous = index;
     }
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn runtime_log_result_keeps_raw_review_diagnostics() {
+    let root = git_project("runtime-log-human-review");
+    enable_diagnostic_logs(&root);
+    let mut wrong_record = sample_record(1, "fail");
+    wrong_record.observed = "no".to_string();
+    let mut review_record = sample_record(2, "fail");
+    review_record.observed = UNPARSEABLE_OBSERVED.to_string();
+    let path = write_diagnostic_log(&root, &[wrong_record, review_record]).unwrap();
+
+    let events = fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+
+    assert_eq!(events[0]["result"], "fail");
+    assert_eq!(events[0]["expected"], "yes");
+    assert_eq!(events[0]["observed"], "no");
+    assert_eq!(events[1]["result"], "fail");
+    assert_eq!(events[1]["expected"], "yes");
+    assert_eq!(events[1]["observed"], UNPARSEABLE_OBSERVED);
+    assert_eq!(events[1]["evidence"], "README.md has evidence");
+    assert_eq!(events[2]["event"], "expectation.review_required");
+    assert_eq!(events[2]["observed"], UNPARSEABLE_OBSERVED);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -162,6 +191,50 @@ fn runtime_log_event_rejects_duplicate_extra_fields() {
 }
 
 #[test]
+fn runtime_log_event_requires_known_schema_fields() {
+    let err = render_runtime_log_event("info", "thread.start", &[("threadId", json!("thread-1"))])
+        .unwrap_err();
+
+    assert!(err.to_string().contains("scope"));
+}
+
+#[test]
+fn runtime_log_event_validates_agent_response_token_usage_shape() {
+    let err = render_runtime_log_event(
+        "info",
+        "agent.response",
+        &[
+            ("id", json!("id-1")),
+            ("attempt", json!(1)),
+            ("reason", json!("initial")),
+            ("response", json!({"text": "ok"})),
+            ("tokenUsage", json!({"totalTokens": 1})),
+        ],
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("inputTokens"));
+}
+
+#[test]
+fn runtime_log_event_rejects_null_agent_response_token_usage() {
+    let err = render_runtime_log_event(
+        "info",
+        "agent.response",
+        &[
+            ("id", json!("id-1")),
+            ("attempt", json!(1)),
+            ("reason", json!("initial")),
+            ("response", json!({"text": "ok"})),
+            ("tokenUsage", Value::Null),
+        ],
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("not an object"));
+}
+
+#[test]
 fn diagnostic_log_lock_stale_age_has_explicit_threshold() {
     assert!(!stale_diagnostic_log_lock_age(Duration::from_secs(299)));
     assert!(stale_diagnostic_log_lock_age(Duration::from_secs(300)));
@@ -211,18 +284,21 @@ fn diagnostic_log_config_reads_git_max_size() {
 }
 
 #[test]
-fn diagnostic_log_config_uses_zero_default() {
-    let root = git_project("runtime-log-config-default-zero");
+fn diagnostic_log_config_uses_documented_disabled_default() {
+    let root = git_project("runtime-log-config-default");
 
     let config = diagnostic_log_config(&root).unwrap();
 
     assert_eq!(config.max_bytes, 0);
+    assert!(config.explicitly_disabled);
     assert_eq!(config.files.len(), 8);
+    append_runtime_log_event(&root, "info", "default.disabled", &[]).unwrap();
+    assert!(!root.join(".git/canon/logs/0.jsonl").exists());
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn diagnostic_log_config_accepts_zero_max_size_as_unlimited() {
+fn diagnostic_log_config_disables_writes_for_explicit_zero_max_size() {
     let root = git_project("runtime-log-config-zero");
     let output = Command::new("git")
         .args(["config", "canon.logs.maxSize", "0"])
@@ -234,16 +310,15 @@ fn diagnostic_log_config_accepts_zero_max_size_as_unlimited() {
     let config = diagnostic_log_config(&root).unwrap();
 
     assert_eq!(config.max_bytes, 0);
+    assert!(config.explicitly_disabled);
     append_runtime_log_event(
         &root,
         "info",
-        "unlimited.write",
+        "disabled.write",
         &[("payload", json!("x".repeat(2048)))],
     )
     .unwrap();
-    assert!(fs::read_to_string(root.join(".git/canon/logs/0.jsonl"))
-        .unwrap()
-        .contains(r#""event":"unlimited.write""#));
+    assert!(!root.join(".git/canon/logs/0.jsonl").exists());
     let _ = fs::remove_dir_all(root);
 }
 

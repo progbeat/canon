@@ -3,7 +3,8 @@ use crate::check_types::CheckRecord;
 use crate::evaluator_prompt::response_format_block;
 use crate::logging::DiagnosticLogWriter;
 use crate::tests::{
-    answer, check_config_yaml, check_options, git_project, parse_check_config, FakeRunner, TestDir,
+    answer, check_config_yaml, check_options, enable_diagnostic_logs, git_project,
+    parse_check_config, FakeRunner, TestDir,
 };
 use crate::token_usage_types::{EvaluatorTurnUsage, TokenUsage};
 use std::fs;
@@ -11,6 +12,7 @@ use std::fs;
 #[test]
 fn check_runner_hides_expected_answers_and_reuses_session() {
     let root = git_project("check-runner");
+    enable_diagnostic_logs(&root);
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1", "2"], false, true);
     let mut runner = FakeRunner::new(&[

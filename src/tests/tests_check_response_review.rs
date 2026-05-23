@@ -3,6 +3,7 @@ use super::*;
 #[test]
 fn failed_evaluator_turn_writes_response_log_with_usage() {
     let root = git_project("failed-turn-response-log");
+    enable_diagnostic_logs(&root);
     let mut runner = FakeRunner::new_results(vec![Err(EvaluatorError::failure(
         EvaluatorFailureKind::ContextWindow,
         "context window exceeded",
@@ -64,6 +65,7 @@ fn failed_evaluator_turn_writes_response_log_with_usage() {
     assert_eq!(response["error"].as_str(), Some("context window exceeded"));
     assert_eq!(response["threadId"].as_str(), Some("thread-1"));
     assert_eq!(response["turnId"].as_str(), Some("turn-1"));
+    assert_eq!(response["tokenUsage"]["totalTokens"], json!(10));
     assert_eq!(response["tokenUsageUpdates"][0]["sequence"], json!(1));
     let _ = fs::remove_dir_all(root);
 }
@@ -71,6 +73,7 @@ fn failed_evaluator_turn_writes_response_log_with_usage() {
 #[test]
 fn evaluator_turn_log_writes_aggregate_usage_when_raw_updates_are_absent() {
     let root = git_project("turn-response-log-aggregate-usage");
+    enable_diagnostic_logs(&root);
     let mut runner = FakeRunner::new(&[&answer("yes", "evidence", &["."])]);
     runner.turn_usages.push_back(Some(EvaluatorTurnUsage {
         thread_id: "thread-1".to_string(),
@@ -124,6 +127,7 @@ fn evaluator_turn_log_writes_aggregate_usage_when_raw_updates_are_absent() {
 #[test]
 fn evaluator_turn_log_errors_when_successful_response_lacks_usage() {
     let root = git_project("turn-response-log-missing-usage");
+    enable_diagnostic_logs(&root);
     let mut runner = FakeRunner::new(&[&answer("yes", "evidence", &["."])]);
     runner.turn_usages.push_back(None);
     let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
@@ -152,7 +156,7 @@ fn evaluator_turn_log_errors_when_successful_response_lacks_usage() {
     let response = log
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
-        .find(|event| event["event"] == "agent.response")
+        .find(|event| event["event"] == "agent.turn_error")
         .unwrap();
     assert_eq!(response["level"].as_str(), Some("error"));
     assert_eq!(

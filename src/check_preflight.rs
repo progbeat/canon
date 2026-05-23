@@ -1,42 +1,17 @@
-use crate::CHECK_INTERRUPTED;
-#[cfg(unix)]
-use crate::{handle_sigint, signal};
+use crate::platform;
 use std::path::Path;
 use std::process::Command;
-use std::sync::atomic::Ordering;
 
 pub(crate) fn install_sigint_handler() -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        const SIGHUP: i32 = 1;
-        const SIGINT: i32 = 2;
-        const SIGTERM: i32 = 15;
-        install_signal_handler(SIGHUP)?;
-        install_signal_handler(SIGINT)?;
-        install_signal_handler(SIGTERM)?;
-    }
-    Ok(())
+    platform::install_check_signal_handlers()
 }
 
-#[cfg(unix)]
-fn install_signal_handler(signal_number: i32) -> Result<(), String> {
-    const SIG_ERR: usize = usize::MAX;
-    // SAFETY: `handle_sigint` has C ABI and only sets an atomic flag, so it is
-    // valid to register as a simple process signal handler. We check for the
-    // platform SIG_ERR sentinel immediately after the FFI call.
-    let previous = unsafe { signal(signal_number, handle_sigint) };
-    if previous == SIG_ERR {
-        Err(format!(
-            "failed to install signal handler for signal {}",
-            signal_number
-        ))
-    } else {
-        Ok(())
-    }
+pub(crate) fn reset_check_interrupted() {
+    platform::reset_check_interrupted();
 }
 
 pub(crate) fn check_interrupted() -> bool {
-    CHECK_INTERRUPTED.load(Ordering::SeqCst)
+    platform::check_interrupted()
 }
 
 #[cfg(test)]

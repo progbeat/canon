@@ -70,17 +70,21 @@ fn staged_worktree_view_removes_evaluator_denied_paths_from_snapshot() {
     fs::write(root.join(".canon/draft/private.md"), "draft\n").unwrap();
     fs::create_dir_all(root.join("target")).unwrap();
     fs::write(root.join("target/cache.txt"), "cache\n").unwrap();
+    fs::create_dir_all(root.join("secrets")).unwrap();
+    fs::write(root.join("secrets/passwords.txt"), "secret\n").unwrap();
     Command::new("git")
         .args([
             "add",
             ".canon/check.yml",
             ".canon/draft/private.md",
+            "secrets/passwords.txt",
             "target/cache.txt",
         ])
         .current_dir(&root)
         .output()
         .unwrap();
-    let config = parse_check_config(check_config_yaml()).unwrap();
+    let mut config = parse_check_config(check_config_yaml()).unwrap();
+    config.agent.ignore.push("secrets/*".to_string());
 
     {
         let staged_view = StagedWorktreeView::apply(&root).unwrap();
@@ -97,10 +101,15 @@ fn staged_worktree_view_removes_evaluator_denied_paths_from_snapshot() {
             .unwrap();
 
         assert!(!staged_view.snapshot_root().join(".canon").exists());
+        assert!(!staged_view
+            .snapshot_root()
+            .join("secrets/passwords.txt")
+            .exists());
         assert!(!staged_view.snapshot_root().join("target").exists());
         assert!(staged_view.snapshot_root().join("README.md").exists());
     }
     assert!(root.join(".canon/draft/private.md").exists());
+    assert!(root.join("secrets/passwords.txt").exists());
     assert!(root.join("target/cache.txt").exists());
     let _ = fs::remove_dir_all(root);
 }
@@ -378,4 +387,16 @@ fn git_stdout_path_preserves_non_utf8_bytes() {
     let path = path_from_git_stdout(vec![b'/', b't', 0xff, b'\n']);
 
     assert_eq!(path.as_os_str().as_bytes(), &[b'/', b't', 0xff]);
+}
+
+#[cfg(unix)]
+#[test]
+fn checkout_index_prefix_preserves_non_utf8_snapshot_path() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+    let path = PathBuf::from(OsString::from_vec(b"/tmp/canon-\xff".to_vec()));
+    let arg = crate::platform::checkout_index_prefix_arg(&path).unwrap();
+
+    assert_eq!(arg.as_os_str().as_bytes(), b"--prefix=/tmp/canon-\xff/");
 }

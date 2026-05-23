@@ -1,6 +1,8 @@
 use crate::config_types::AgentConfig;
+use crate::git::git_path_bytes;
+use crate::platform::checkout_index_prefix_arg;
 use crate::project::command_output_trimmed;
-use crate::scope::effective_ignore_patterns;
+use crate::scope::{effective_ignore_patterns, path_matches_pattern_bytes};
 use crate::scope_hash::ScopeHashCache;
 use crate::staged_worktree_git::run_git_command;
 use crate::staged_worktree_paths::create_snapshot_root;
@@ -39,18 +41,8 @@ impl StagedWorktreeView {
     }
 
     pub(crate) fn remove_evaluator_denied_paths(&self, agent: &AgentConfig) -> Result<(), String> {
-        let mut roots = Vec::new();
-        for pattern in effective_ignore_patterns(agent) {
-            if let Some(root) = physical_deny_root(&pattern) {
-                if !roots.iter().any(|existing| existing == &root) {
-                    roots.push(root);
-                }
-            }
-        }
-        for root in roots {
-            remove_snapshot_path(&self.snapshot_root.join(root))?;
-        }
-        Ok(())
+        let patterns = effective_ignore_patterns(agent);
+        remove_evaluator_denied_snapshot_paths(&self.snapshot_root, &self.snapshot_root, &patterns)
     }
 }
 
@@ -71,14 +63,72 @@ fn materialize_staged_snapshot(
     validate_snapshot_contains_no_symlinks(snapshot_root)
 }
 
-fn physical_deny_root(pattern: &str) -> Option<String> {
-    if let Some(prefix) = pattern.strip_suffix("/**") {
-        return Some(prefix.to_string());
+fn remove_evaluator_denied_snapshot_paths(
+    snapshot_root: &Path,
+    current: &Path,
+    patterns: &[String],
+) -> Result<(), String> {
+    let entries = fs::read_dir(current).map_err(|err| {
+        format!(
+            "failed to inspect staged snapshot {}: {}",
+            current.display(),
+            err
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|err| {
+            format!(
+                "failed to inspect staged snapshot entry under {}: {}",
+                current.display(),
+                err
+            )
+        })?;
+        let path = entry.path();
+        if snapshot_path_is_evaluator_denied(snapshot_root, &path, patterns)? {
+            remove_snapshot_path(&path)?;
+            continue;
+        }
+        let file_type = entry.file_type().map_err(|err| {
+            format!(
+                "failed to inspect staged snapshot path {}: {}",
+                path.display(),
+                err
+            )
+        })?;
+        if file_type.is_dir() {
+            remove_evaluator_denied_snapshot_paths(snapshot_root, &path, patterns)?;
+        }
     }
-    if pattern.contains('*') || pattern.contains('?') {
-        None
-    } else {
-        Some(pattern.to_string())
+    Ok(())
+}
+
+fn snapshot_path_is_evaluator_denied(
+    snapshot_root: &Path,
+    path: &Path,
+    patterns: &[String],
+) -> Result<bool, String> {
+    let relative = path.strip_prefix(snapshot_root).map_err(|_| {
+        format!(
+            "staged snapshot path {} is outside {}",
+            path.display(),
+            snapshot_root.display()
+        )
+    })?;
+    let mut relative_path = git_path_bytes(relative)?;
+    normalize_path_separators(&mut relative_path);
+    Ok(patterns
+        .iter()
+        .any(|pattern| path_matches_pattern_bytes(&relative_path, pattern.as_bytes())))
+}
+
+fn normalize_path_separators(path: &mut [u8]) {
+    let separator = std::path::MAIN_SEPARATOR as u8;
+    if separator != b'/' {
+        for byte in path {
+            if *byte == separator {
+                *byte = b'/';
+            }
+        }
     }
 }
 
@@ -173,7 +223,7 @@ fn checkout_index_into_snapshot(
         .arg("checkout-index")
         .arg("--all")
         .arg("--force")
-        .arg(format!("--prefix={}", prefix));
+        .arg(prefix);
     if let Some(index_file) = index_file {
         command.env("GIT_INDEX_FILE", index_file);
     }
@@ -201,18 +251,6 @@ fn stage_snapshot_index(snapshot_root: &Path) -> Result<(), String> {
     )
 }
 
-fn checkout_index_prefix(snapshot_root: &Path) -> Result<String, String> {
-    let mut prefix = snapshot_root
-        .to_str()
-        .ok_or_else(|| {
-            format!(
-                "staged snapshot path must be valid UTF-8: {}",
-                snapshot_root.display()
-            )
-        })?
-        .to_string();
-    if !prefix.ends_with(std::path::MAIN_SEPARATOR) {
-        prefix.push(std::path::MAIN_SEPARATOR);
-    }
-    Ok(prefix)
+fn checkout_index_prefix(snapshot_root: &Path) -> Result<std::ffi::OsString, String> {
+    checkout_index_prefix_arg(snapshot_root)
 }

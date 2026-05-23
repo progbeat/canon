@@ -180,6 +180,7 @@ fn check_runner_retries_full_scope_for_restricted_idk_after_context_compaction()
 #[test]
 fn check_runner_rejects_widened_idk_scope_then_retries_full_scope() {
     let root = git_project("check-restricted-idk-widened-scope");
+    enable_diagnostic_logs(&root);
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, false);
     let expectation = options.selected[0].clone();
