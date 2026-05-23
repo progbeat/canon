@@ -58,7 +58,7 @@
   cooldown: 7d
   thinking: xhigh
 
-- q: "Are platform differences isolated in a dedicated `sys`/`platform` layer behind small domain-specific interfaces?"
+- q: "Does each nontrivial platform-specific implementation live in its own platform-named source file?"
   a: "yes"
   cooldown: 7d
 
