@@ -269,26 +269,44 @@ fn compact_history_drops_malformed_lines_and_keeps_latest_valid_records() {
 }
 
 #[test]
-fn compact_history_drops_non_record_json_objects() {
-    let root = git_project("history-compact-non-record");
+fn compact_history_keeps_latest_valid_json_objects() {
+    let root = git_project("history-compact-valid-json-object");
     let path = root.join(".git/canon/cache/example/history.jsonl");
     ensure_dir(path.parent().unwrap()).unwrap();
-    fs::write(
-        &path,
-        format!(
-            "{{\"n\":1}}\n{}\n",
-            render_check_log_record(&sample_record(1, "pass"))
+    let mut lines = (1..=5)
+        .map(|number| {
+            let mut record = sample_record(number, "pass");
+            record.evidence = format!("record {number}");
+            render_check_log_record(&record)
                 .unwrap()
                 .trim_end()
-        ),
-    )
-    .unwrap();
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    lines.push("{\"n\":1}".to_string());
+    fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
 
     compact_history(&path).unwrap();
 
+    let lines = fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(lines.len(), 5);
+    assert_eq!(
+        serde_json::from_str::<Value>(&lines[4]).unwrap()["n"],
+        json!(1)
+    );
     let compacted = read_history_records_from_path(&path).unwrap();
-    assert_eq!(compacted.len(), 1);
-    assert_eq!(compacted[0].id, expectation_id("Question?", "yes"));
+    assert_eq!(compacted.len(), 4);
+    assert_eq!(
+        compacted
+            .iter()
+            .map(|record| record.evidence.clone())
+            .collect::<Vec<_>>(),
+        vec!["record 2", "record 3", "record 4", "record 5"]
+    );
     let _ = fs::remove_dir_all(root);
 }
 

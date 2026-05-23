@@ -340,9 +340,10 @@ fn append_turn_usage_fields(
     };
     fields.push(("threadId", json!(thread_id)));
     fields.push(("turnId", json!(turn_id)));
-    fields.push(("tokenUsage", token_usage_log_value(*usage)));
     if !token_usage_updates.is_empty() {
         fields.push(("tokenUsageUpdates", json!(token_usage_updates)));
+    } else {
+        fields.push(("tokenUsage", token_usage_log_value(*usage)));
     }
     if !context_compaction_events.is_empty() {
         fields.push(("contextCompactionEvents", json!(context_compaction_events)));

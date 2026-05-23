@@ -22,7 +22,15 @@ fn failed_evaluator_turn_writes_response_log_with_usage() {
             sequence: 1,
             thread_id: "thread-1".to_string(),
             turn_id: "turn-1".to_string(),
-            token_usage: json!({"last": {"totalTokens": 10}}),
+            token_usage: json!({
+                "last": {
+                    "totalTokens": 10,
+                    "inputTokens": 7,
+                    "cachedInputTokens": 2,
+                    "outputTokens": 3,
+                    "reasoningOutputTokens": 1
+                }
+            }),
             last_usage: TokenUsage {
                 total_tokens: 10,
                 input_tokens: 7,
@@ -65,7 +73,7 @@ fn failed_evaluator_turn_writes_response_log_with_usage() {
     assert_eq!(response["error"].as_str(), Some("context window exceeded"));
     assert_eq!(response["threadId"].as_str(), Some("thread-1"));
     assert_eq!(response["turnId"].as_str(), Some("turn-1"));
-    assert_eq!(response["tokenUsage"]["totalTokens"], json!(10));
+    assert!(response.get("tokenUsage").is_none());
     assert_eq!(response["tokenUsageUpdates"][0]["sequence"], json!(1));
     let _ = fs::remove_dir_all(root);
 }

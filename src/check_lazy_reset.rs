@@ -302,7 +302,6 @@ fn set_expectation_scope_to_full_for_next_check(
         Ok(())
     })?;
     history_cache.records.remove(&path);
-    history_cache.reusable_records.clear();
     Ok(())
 }
 

@@ -57,7 +57,7 @@ pub(crate) fn print_help() -> Result<(), String> {
         "  canon hook uninstall",
         "  canon check [-c|--config <path>] [--all] [--ignore-cache] [--ignore-cooldown] [expectation selectors...]",
         "  canon check -q <question> [-s|--scope <path>...]",
-        "  canon gate [expectation selectors...]",
+        "  canon gate",
     ] {
         write_stdout_line(line)?;
     }

@@ -158,8 +158,7 @@ use crate::notes_restore::{
     restore_note_after_index_failure,
 };
 use crate::output::{
-    write_stderr, write_stderr_bytes, write_stderr_line, write_stdout, write_stdout_bytes,
-    write_stdout_line,
+    write_stderr_bytes, write_stderr_line, write_stdout, write_stdout_bytes, write_stdout_line,
 };
 use crate::project::command_output_trimmed;
 use crate::project::{git_project_root, path_from_git_stdout};

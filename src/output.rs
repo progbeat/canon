@@ -14,10 +14,6 @@ pub(crate) fn write_stdout_line(text: &str) -> Result<(), String> {
     write_line_and_flush(stdout.lock(), "stdout", text)
 }
 
-pub(crate) fn write_stderr(text: &str) -> Result<(), String> {
-    write_stderr_bytes(text.as_bytes())
-}
-
 pub(crate) fn write_stderr_bytes(bytes: &[u8]) -> Result<(), String> {
     let stderr = io::stderr();
     write_and_flush(stderr.lock(), "stderr", bytes)

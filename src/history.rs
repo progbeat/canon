@@ -65,26 +65,7 @@ pub(crate) struct HistoryCache {
     pub(crate) cache_dirs: BTreeMap<PathBuf, PathBuf>,
     pub(crate) paths: BTreeMap<(PathBuf, String), PathBuf>,
     pub(crate) records: BTreeMap<PathBuf, Vec<CheckRecord>>,
-    pub(crate) reusable_records: BTreeMap<ReusableHistoryLookupKey, Option<CheckRecord>>,
     pub(crate) latest_non_pass: BTreeMap<PathBuf, Option<u64>>,
-}
-
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct ReusableHistoryLookupKey {
-    root: PathBuf,
-    expectation_id: String,
-    expected: String,
-}
-
-impl ReusableHistoryLookupKey {
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn new(root: &Path, expectation: &SelectedExpectation) -> ReusableHistoryLookupKey {
-        ReusableHistoryLookupKey {
-            root: root.to_path_buf(),
-            expectation_id: expectation.id.clone(),
-            expected: expectation.a.clone(),
-        }
-    }
 }
 
 impl HistoryCache {

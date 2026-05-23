@@ -66,7 +66,7 @@ fn validate_runtime_log_event_schema(
 fn required_runtime_log_fields(event: &str) -> Option<&'static [&'static str]> {
     match event {
         "agent.request" => Some(&["id", "attempt", "reason", "request"]),
-        "agent.response" => Some(&["id", "attempt", "reason", "response", "tokenUsage"]),
+        "agent.response" => Some(&["id", "attempt", "reason", "response"]),
         "agent.turn_error" => Some(&["id", "attempt", "reason", "error", "response"]),
         "cache.cleanup" => Some(&["removed", "kept"]),
         "cache.exact_hit" => Some(&["id", "result", "scope"]),
@@ -121,6 +121,21 @@ fn validate_runtime_log_nested_schema(
 ) -> DiagnosticLogResult<()> {
     if event != "agent.response" {
         return Ok(());
+    }
+    let has_token_usage_updates = runtime_log_field_value(fields, "tokenUsageUpdates")
+        .is_some_and(|value| value.as_array().is_some_and(|updates| !updates.is_empty()));
+    let has_token_usage = runtime_log_field_value(fields, "tokenUsage").is_some();
+    if !has_token_usage && !has_token_usage_updates {
+        return Err(DiagnosticLogError::InvalidRuntimeField {
+            key: "tokenUsage".to_string(),
+            reason: "missing usage source for event schema",
+        });
+    }
+    if has_token_usage && has_token_usage_updates {
+        return Err(DiagnosticLogError::InvalidRuntimeField {
+            key: "tokenUsage".to_string(),
+            reason: "duplicates raw token usage updates",
+        });
     }
     let Some(token_usage) = runtime_log_field_value(fields, "tokenUsage") else {
         return Ok(());

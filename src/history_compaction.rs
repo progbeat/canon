@@ -1,6 +1,6 @@
 use crate::fs_util::{for_each_nonempty_line, write_temp_file_then_replace};
-use crate::history::parse_history_record_line;
 use crate::{HISTORY_COMPACT_CHANCE_DENOMINATOR, HISTORY_COMPACT_KEEP_RECORDS};
+use serde_json::Value;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -31,8 +31,8 @@ pub(crate) fn compact_history(path: &Path) -> Result<(), String> {
     let mut valid_lines = 0usize;
     let mut invalid_lines = 0usize;
     let mut lines = std::collections::VecDeque::new();
-    for_each_nonempty_line(path, |line_number, line| {
-        if parse_history_record_line(path, line_number, &line).is_ok() {
+    for_each_nonempty_line(path, |_line_number, line| {
+        if valid_json_object_line(&line) {
             valid_lines += 1;
             lines.push_back(line);
             if lines.len() > HISTORY_COMPACT_KEEP_RECORDS {
@@ -56,6 +56,10 @@ pub(crate) fn compact_history(path: &Path) -> Result<(), String> {
         }
         Ok(())
     })
+}
+
+fn valid_json_object_line(line: &str) -> bool {
+    serde_json::from_str::<Value>(line).is_ok_and(|value| value.is_object())
 }
 
 pub(crate) fn compact_history_temp_path(path: &Path) -> Result<PathBuf, String> {
