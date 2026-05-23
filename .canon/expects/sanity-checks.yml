@@ -13,3 +13,6 @@
 - q: "Do restricted file scopes allow ancestor directory access without allowing non-scoped file contents?"
   a: "yes"
   cooldown: 1d
+
+- q: "Are logs disabled if canon.logs.maxSize==0?"
+  a: "yes"
