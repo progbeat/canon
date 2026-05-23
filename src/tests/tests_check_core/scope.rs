@@ -146,6 +146,34 @@ expectations:
 }
 
 #[test]
+fn check_runner_retries_full_scope_when_narrowing_verification_returns_idk() {
+    let root = git_project("check-narrowing-verification-idk-retry");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let mut runner = FakeRunner::new(&[
+        &answer("yes", "full scope supports it", &["src/main.rs"]),
+        &answer("idk", "src/main.rs alone is insufficient", &["src/main.rs"]),
+        &answer("yes", "full scope still supports it", &["."]),
+    ]);
+
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert!(records.records[0].passed());
+    assert_eq!(records.records[0].evidence, "full scope supports it");
+    assert_eq!(records.records[0].scope, vec![".".to_string()]);
+    assert_eq!(records.narrowing.attempted, 1);
+    assert_eq!(records.narrowing.accepted, 0);
+    assert_eq!(records.narrowing.rejected, 1);
+    assert_eq!(
+        runner.start_scopes,
+        vec![vec![".".to_string()], vec!["src/main.rs".to_string()]]
+    );
+    assert_eq!(runner.prompts.len(), 3);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn check_runner_verifies_narrowed_scope_before_token_break_stop() {
     let root = git_project("check-narrowing-before-token-break");
     let config = parse_check_config(check_config_yaml()).unwrap();

@@ -138,6 +138,9 @@ use crate::logging::{
     diagnostic_log_config, render_runtime_log_event, stale_diagnostic_log_lock_age,
     write_diagnostic_log,
 };
+use crate::logging_config::{
+    parse_carryover_token_target, thread_reuse_config, DEFAULT_THREAD_REUSE_CONFIG,
+};
 use crate::notes::*;
 use crate::notes_cli::collect_text;
 use crate::notes_cli::{arg_to_string, INDEX_LOCK_STALE_AFTER_SECS};
@@ -173,11 +176,10 @@ use crate::scope_hash::{
     gate_head_tree_fingerprint, normalize_index_metadata, sha1_scope_tree_oid_from_entries,
     staged_scope_hash,
 };
+#[cfg(all(unix, not(target_os = "macos")))]
+use crate::staged_worktree::initialize_snapshot_git_repo_for_test;
 use crate::staged_worktree::snapshot_parent_outside_worktree;
 use crate::staged_worktree::StagedWorktreeView;
-use crate::thread_reuse_config::{
-    parse_carryover_token_target, thread_reuse_config, DEFAULT_THREAD_REUSE_CONFIG,
-};
 use crate::time::{format_record_timestamp, parse_record_timestamp, unix_timestamp};
 use crate::token_usage_types::{
     reference_token_cost, ContextCompactionEvent, EvaluatorTurnUsage, TokenUsage, TokenUsageUpdate,
@@ -214,6 +216,19 @@ pub(crate) use test_check_support::{
 };
 pub(crate) use test_env::{temp_home, test_path, with_env, EnvSnapshot, TestDir, ENV_LOCK};
 pub(crate) use test_git_support::{commit_all, git_project, write_check_config};
+
+pub(crate) fn enable_diagnostic_logs(root: &Path) {
+    let output = Command::new("git")
+        .args(["config", "canon.logs.maxSize", "1M"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
 
 mod tests_app_server_protocol;
 mod tests_check_command_args;

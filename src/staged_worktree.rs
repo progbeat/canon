@@ -1,6 +1,8 @@
 use crate::config_types::AgentConfig;
+use crate::git::git_path_bytes;
+use crate::platform::checkout_index_prefix_arg;
 use crate::project::command_output_trimmed;
-use crate::scope::effective_ignore_patterns;
+use crate::scope::{effective_ignore_patterns, path_matches_pattern_bytes};
 use crate::scope_hash::ScopeHashCache;
 use crate::staged_worktree_git::run_git_command;
 use crate::staged_worktree_paths::create_snapshot_root;
@@ -39,17 +41,17 @@ impl StagedWorktreeView {
     }
 
     pub(crate) fn remove_evaluator_denied_paths(&self, agent: &AgentConfig) -> Result<(), String> {
-        let mut roots = Vec::new();
-        for pattern in effective_ignore_patterns(agent) {
-            if let Some(root) = physical_deny_root(&pattern) {
-                if !roots.iter().any(|existing| existing == &root) {
-                    roots.push(root);
-                }
-            }
+        let patterns = effective_ignore_patterns(agent);
+        remove_evaluator_denied_snapshot_paths(
+            &self.snapshot_root,
+            &self.snapshot_root,
+            &patterns,
+        )?;
+        if git_metadata_root_is_denied(&patterns) {
+            return Ok(());
         }
-        for root in roots {
-            remove_snapshot_path(&self.snapshot_root.join(root))?;
-        }
+        rebuild_snapshot_git_metadata(&self.snapshot_root)?;
+        remove_denied_rebuilt_git_metadata_paths(&self.snapshot_root, &patterns)?;
         Ok(())
     }
 }
@@ -71,14 +73,92 @@ fn materialize_staged_snapshot(
     validate_snapshot_contains_no_symlinks(snapshot_root)
 }
 
-fn physical_deny_root(pattern: &str) -> Option<String> {
-    if let Some(prefix) = pattern.strip_suffix("/**") {
-        return Some(prefix.to_string());
+fn remove_evaluator_denied_snapshot_paths(
+    snapshot_root: &Path,
+    current: &Path,
+    patterns: &[String],
+) -> Result<(), String> {
+    let entries = fs::read_dir(current).map_err(|err| {
+        format!(
+            "failed to inspect staged snapshot {}: {}",
+            current.display(),
+            err
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|err| {
+            format!(
+                "failed to inspect staged snapshot entry under {}: {}",
+                current.display(),
+                err
+            )
+        })?;
+        let path = entry.path();
+        if snapshot_path_is_evaluator_denied(snapshot_root, &path, patterns)? {
+            remove_snapshot_path(&path)?;
+            continue;
+        }
+        if snapshot_path_is_git_metadata_root(snapshot_root, &path)? {
+            continue;
+        }
+        let file_type = entry.file_type().map_err(|err| {
+            format!(
+                "failed to inspect staged snapshot path {}: {}",
+                path.display(),
+                err
+            )
+        })?;
+        if file_type.is_dir() {
+            remove_evaluator_denied_snapshot_paths(snapshot_root, &path, patterns)?;
+        }
     }
-    if pattern.contains('*') || pattern.contains('?') {
-        None
-    } else {
-        Some(pattern.to_string())
+    Ok(())
+}
+
+fn snapshot_path_is_git_metadata_root(snapshot_root: &Path, path: &Path) -> Result<bool, String> {
+    let relative = path.strip_prefix(snapshot_root).map_err(|_| {
+        format!(
+            "staged snapshot path {} is outside {}",
+            path.display(),
+            snapshot_root.display()
+        )
+    })?;
+    Ok(relative == Path::new(".git"))
+}
+
+fn git_metadata_root_is_denied(patterns: &[String]) -> bool {
+    patterns
+        .iter()
+        .any(|pattern| path_matches_pattern_bytes(b".git", pattern.as_bytes()))
+}
+
+fn snapshot_path_is_evaluator_denied(
+    snapshot_root: &Path,
+    path: &Path,
+    patterns: &[String],
+) -> Result<bool, String> {
+    let relative = path.strip_prefix(snapshot_root).map_err(|_| {
+        format!(
+            "staged snapshot path {} is outside {}",
+            path.display(),
+            snapshot_root.display()
+        )
+    })?;
+    let mut relative_path = git_path_bytes(relative)?;
+    normalize_path_separators(&mut relative_path);
+    Ok(patterns
+        .iter()
+        .any(|pattern| path_matches_pattern_bytes(&relative_path, pattern.as_bytes())))
+}
+
+fn normalize_path_separators(path: &mut [u8]) {
+    let separator = std::path::MAIN_SEPARATOR as u8;
+    if separator != b'/' {
+        for byte in path {
+            if *byte == separator {
+                *byte = b'/';
+            }
+        }
     }
 }
 
@@ -102,6 +182,54 @@ fn remove_snapshot_path(path: &Path) -> Result<(), String> {
             err
         )
     })
+}
+
+fn rebuild_snapshot_git_metadata(snapshot_root: &Path) -> Result<(), String> {
+    let git_dir = snapshot_root.join(".git");
+    remove_snapshot_path(&git_dir)?;
+    initialize_snapshot_git_repo(snapshot_root)?;
+    stage_snapshot_index(snapshot_root)
+}
+
+fn remove_denied_rebuilt_git_metadata_paths(
+    snapshot_root: &Path,
+    patterns: &[String],
+) -> Result<(), String> {
+    let mut recursive_patterns = Vec::new();
+    for pattern in patterns {
+        if remove_known_rebuilt_git_metadata_path_if_denied(snapshot_root, pattern)? {
+            continue;
+        }
+        if deny_pattern_may_match_rebuilt_git_metadata(pattern) {
+            recursive_patterns.push(pattern.clone());
+        }
+    }
+    if recursive_patterns.is_empty() {
+        return Ok(());
+    }
+    remove_evaluator_denied_snapshot_paths(
+        snapshot_root,
+        &snapshot_root.join(".git"),
+        &recursive_patterns,
+    )
+}
+
+fn remove_known_rebuilt_git_metadata_path_if_denied(
+    snapshot_root: &Path,
+    pattern: &str,
+) -> Result<bool, String> {
+    for relative in [".git/canon", ".git/canon/logs"] {
+        if path_matches_pattern_bytes(relative.as_bytes(), pattern.as_bytes()) {
+            remove_snapshot_path(&snapshot_root.join(relative))?;
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn deny_pattern_may_match_rebuilt_git_metadata(pattern: &str) -> bool {
+    let first_component = pattern.split('/').next().unwrap_or(pattern);
+    path_matches_pattern_bytes(b".git", first_component.as_bytes())
 }
 
 fn checkout_staged_index(root: &Path, snapshot_root: &Path) -> Result<(), String> {
@@ -131,7 +259,8 @@ fn initialize_snapshot_git_repo(snapshot_root: &Path) -> Result<(), String> {
             .arg(snapshot_root)
             .arg("init")
             .arg("--quiet")
-            .arg(format!("--template={}", template.display())),
+            .arg("--template")
+            .arg(&template),
         "git init",
         "failed to initialize staged snapshot Git metadata",
     )?;
@@ -144,6 +273,11 @@ fn initialize_snapshot_git_repo(snapshot_root: &Path) -> Result<(), String> {
         set_snapshot_git_config(snapshot_root, key, value)?;
     }
     Ok(())
+}
+
+#[cfg(all(test, unix, not(target_os = "macos")))]
+pub(crate) fn initialize_snapshot_git_repo_for_test(snapshot_root: &Path) -> Result<(), String> {
+    initialize_snapshot_git_repo(snapshot_root)
 }
 
 fn set_snapshot_git_config(snapshot_root: &Path, key: &str, value: &str) -> Result<(), String> {
@@ -173,7 +307,7 @@ fn checkout_index_into_snapshot(
         .arg("checkout-index")
         .arg("--all")
         .arg("--force")
-        .arg(format!("--prefix={}", prefix));
+        .arg(prefix);
     if let Some(index_file) = index_file {
         command.env("GIT_INDEX_FILE", index_file);
     }
@@ -201,18 +335,6 @@ fn stage_snapshot_index(snapshot_root: &Path) -> Result<(), String> {
     )
 }
 
-fn checkout_index_prefix(snapshot_root: &Path) -> Result<String, String> {
-    let mut prefix = snapshot_root
-        .to_str()
-        .ok_or_else(|| {
-            format!(
-                "staged snapshot path must be valid UTF-8: {}",
-                snapshot_root.display()
-            )
-        })?
-        .to_string();
-    if !prefix.ends_with(std::path::MAIN_SEPARATOR) {
-        prefix.push(std::path::MAIN_SEPARATOR);
-    }
-    Ok(prefix)
+fn checkout_index_prefix(snapshot_root: &Path) -> Result<std::ffi::OsString, String> {
+    checkout_index_prefix_arg(snapshot_root)
 }

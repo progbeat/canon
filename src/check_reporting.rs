@@ -19,10 +19,13 @@ pub(crate) fn write_check_finish_event(
     query: bool,
     error: Option<&str>,
 ) -> Result<(), String> {
-    let mut fields = Vec::new();
-    if query {
-        fields.push(("query", json!(true)));
-    }
+    let mut fields = vec![
+        ("query", json!(query)),
+        (
+            "status",
+            json!(if error.is_some() { "error" } else { "complete" }),
+        ),
+    ];
     if let Some(error) = error {
         fields.push(("error", json!(error)));
     }

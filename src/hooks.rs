@@ -1,5 +1,6 @@
 use crate::notes_cli::arg_to_string;
 use crate::output::write_stdout_line;
+use crate::platform;
 use crate::project::command_output_trimmed;
 use crate::{
     CHECK_PATH, DEFAULT_CHECK_TEMPLATE, DEFAULT_PRE_COMMIT_HOOK, GIT_HOOKS_PATH,
@@ -192,24 +193,8 @@ pub(crate) fn install_pre_commit_hook(
     Ok(())
 }
 
-#[cfg(unix)]
 pub(crate) fn make_executable(path: &Path) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
-    if metadata.file_type().is_symlink() {
-        return Err(format!("refusing to chmod symlink {}", path.display()));
-    }
-    let mut permissions = metadata.permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(path, permissions)
-        .map_err(|err| format!("failed to chmod {}: {}", path.display(), err))
-}
-
-#[cfg(not(unix))]
-pub(crate) fn make_executable(_path: &Path) -> Result<(), String> {
-    Ok(())
+    platform::make_hook_executable(path)
 }
 
 pub(crate) fn current_git_hooks_path_for_worktree(root: &Path) -> Result<Option<String>, String> {

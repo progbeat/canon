@@ -92,17 +92,6 @@ pub(crate) fn git_project_root(start: &Path) -> Result<PathBuf, String> {
     Ok(path_from_git_stdout(output.stdout))
 }
 
-pub(crate) fn path_from_git_stdout(mut bytes: Vec<u8>) -> PathBuf {
-    while matches!(bytes.last(), Some(b'\n' | b'\r')) {
-        bytes.pop();
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStringExt;
-        PathBuf::from(std::ffi::OsString::from_vec(bytes))
-    }
-    #[cfg(not(unix))]
-    {
-        PathBuf::from(String::from_utf8_lossy(&bytes).to_string())
-    }
+pub(crate) fn path_from_git_stdout(bytes: Vec<u8>) -> PathBuf {
+    crate::platform::path_from_git_stdout(bytes)
 }

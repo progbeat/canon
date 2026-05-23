@@ -5,7 +5,7 @@ use crate::check_command_finish::{finish_check_report, CheckReportFinishContext}
 use crate::check_interrogation_state::CheckRuntime;
 use crate::check_lazy_reset::apply_scheduled_lazy_full_scope_resets;
 use crate::check_output::write_summary_line;
-use crate::check_preflight::install_sigint_handler;
+use crate::check_preflight::{install_sigint_handler, reset_check_interrupted};
 use crate::check_query_command::run_check_query_command;
 use crate::check_reporting::{
     collect_check_token_usage, print_token_usage_summary, write_check_finish_event,
@@ -20,18 +20,17 @@ use crate::logging::DiagnosticLogWriter;
 use crate::repo_inspection::RepoInspectionCache;
 use crate::scope_hash::ScopeHashCache;
 use crate::staged_worktree::StagedWorktreeView;
-use crate::{CHECK_INTERRUPTED, GIT_CANON_CACHE_DIR};
+use crate::GIT_CANON_CACHE_DIR;
 use serde_json::json;
 use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::Path;
-use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), CommandError> {
     let started = Instant::now();
     install_sigint_handler().map_err(CommandError::from)?;
-    CHECK_INTERRUPTED.store(false, Ordering::SeqCst);
+    reset_check_interrupted();
     let write_agent_message = check_command_writes_agent_message(args);
     let command = parse_check_command_args(args)?;
     let mut repo_cache = RepoInspectionCache::new();

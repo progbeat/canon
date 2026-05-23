@@ -1,5 +1,8 @@
 use crate::fs_util::reject_symlink;
-use crate::logging_config::{active_log_max_bytes, diagnostic_log_files};
+use crate::logging_config::{
+    active_log_max_bytes, diagnostic_log_files, diagnostic_logs_explicitly_disabled,
+    diagnostic_logs_unlimited,
+};
 use crate::logging_error::{
     log_io_error, log_rename_error, DiagnosticLogError, DiagnosticLogResult,
 };
@@ -33,7 +36,7 @@ pub(crate) fn rotate_diagnostic_logs_with_config(
     log_dir: &Path,
     config: &DiagnosticLogConfig,
 ) -> DiagnosticLogResult<()> {
-    if config.max_bytes == 0 {
+    if diagnostic_logs_explicitly_disabled(config) || diagnostic_logs_unlimited(config) {
         return Ok(());
     }
     let files = diagnostic_log_files(config)?;
@@ -79,7 +82,7 @@ pub(crate) fn prune_diagnostic_logs_to_limit(
     log_dir: &Path,
     config: &DiagnosticLogConfig,
 ) -> DiagnosticLogResult<()> {
-    if config.max_bytes == 0 {
+    if diagnostic_logs_explicitly_disabled(config) || diagnostic_logs_unlimited(config) {
         return Ok(());
     }
     let files = diagnostic_log_files(config)?;

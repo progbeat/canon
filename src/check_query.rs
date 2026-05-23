@@ -1,5 +1,7 @@
 use crate::check_interrogation::{ask_with_reused_thread, ThreadTurnRequest};
-use crate::check_interrogation_records::{finalize_query_answer, write_query_result_event};
+use crate::check_interrogation_records::{
+    finalize_query_answer, write_query_result_event, write_query_review_required_event,
+};
 use crate::check_interrogation_state::{CheckRuntime, InterrogationState};
 use crate::check_model_fallback::run_with_model_fallbacks;
 use crate::check_types::{ObservedAnswerState, QueryResult};
@@ -100,7 +102,13 @@ pub(crate) fn ask_query_with_model<R: EvaluatorRunner>(
             result.answer.scope = current_scope.clone();
         }
     }
-    reject_query_human_review(&result, &current_scope)?;
+    if let Some(reason) = query_human_review_reason(&result, &current_scope) {
+        write_query_review_required_event(query.question, diagnostic_log, &result.answer, reason)?;
+        return Err(EvaluatorError::message(format!(
+            "query requires human review: {}",
+            reason
+        )));
+    }
     write_query_result_event(query.question, diagnostic_log, &result.answer)?;
     Ok(result)
 }
@@ -158,11 +166,11 @@ fn narrowed_query_answer_is_accepted(
     })
 }
 
-fn reject_query_human_review(
+fn query_human_review_reason(
     result: &QueryResult,
     enforced_scope: &[String],
-) -> Result<(), EvaluatorError> {
-    let reason = match ObservedAnswerState::from_observed(&result.answer.answer) {
+) -> Option<&'static str> {
+    match ObservedAnswerState::from_observed(&result.answer.answer) {
         ObservedAnswerState::Idk if enforced_scope == crate::hash::full_scope() => {
             Some("full-scope idk")
         }
@@ -171,12 +179,5 @@ fn reject_query_human_review(
         ObservedAnswerState::EmptyEvidence => Some("empty evaluator evidence"),
         ObservedAnswerState::Unknown => Some("unknown observed answer state"),
         ObservedAnswerState::Idk | ObservedAnswerState::Answer => None,
-    };
-    if let Some(reason) = reason {
-        return Err(EvaluatorError::message(format!(
-            "query requires human review: {}",
-            reason
-        )));
     }
-    Ok(())
 }

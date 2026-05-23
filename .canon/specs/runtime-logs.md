@@ -2,7 +2,7 @@
 
 `LOGS_DIR` is `${CANON_STATE_DIR}/logs`.
 
-`canon check` records runtime log events under `LOGS_DIR`.
+If logging is enabled, `canon check` records runtime log events under `LOGS_DIR`.
 
 Runtime logs are JSON Lines files. Each non-empty line is one complete JSON object.
 

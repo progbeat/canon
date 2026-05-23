@@ -34,6 +34,7 @@ fn staged_changed_paths_tolerate_non_utf8_paths() {
 #[test]
 fn check_command_logs_start_and_finish_for_config_load_failure() {
     let root = git_project("check-config-load-log");
+    enable_diagnostic_logs(&root);
     fs::create_dir_all(root.join(".canon")).unwrap();
     fs::write(root.join(CHECK_PATH), "version: 1\nagent: []\n").unwrap();
     let output = Command::new("git")
@@ -53,6 +54,8 @@ fn check_command_logs_start_and_finish_for_config_load_failure() {
     let log = fs::read_to_string(root.join(".git/canon/logs/0.jsonl")).unwrap();
     assert!(log.contains(r#""event":"check.start""#));
     assert!(log.contains(r#""event":"check.finish""#));
+    assert!(log.contains(r#""query":false"#));
+    assert!(log.contains(r#""status":"error""#));
     assert!(!log.contains(r#""errors":"#));
     assert!(log.contains("failed to parse .canon/check.yml"));
     let _ = fs::remove_dir_all(root);
@@ -332,6 +335,7 @@ fn check_config_literal_pathspec_name_loads_staged_content() {
 #[test]
 fn check_command_logs_start_and_finish_for_cache_cleanup_failure() {
     let root = git_project("check-cache-cleanup-log");
+    enable_diagnostic_logs(&root);
     commit_all(&root, "initial");
     write_check_config(&root);
     let output = Command::new("git")

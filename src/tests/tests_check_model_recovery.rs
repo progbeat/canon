@@ -169,6 +169,7 @@ fn model_failure_clears_cached_sessions_for_all_scopes() {
 #[test]
 fn check_runner_restarts_reused_thread_after_context_window_error() {
     let root = git_project("check-context-restart");
+    enable_diagnostic_logs(&root);
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1", "2"], false, true);
     let mut runner = FakeRunner::new_results(vec![
@@ -196,6 +197,19 @@ fn check_runner_restarts_reused_thread_after_context_window_error() {
     let log = fs::read_to_string(diagnostic_log.path()).unwrap();
     assert!(log.contains(r#""event":"model.failure""#));
     assert!(log.contains(r#""event":"thread.restart""#));
+    let restart = log
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .find(|event| event["event"] == "thread.restart")
+        .unwrap();
+    assert_eq!(
+        restart["baseInstructions"].as_str(),
+        Some(EVALUATOR_BASE_INSTRUCTIONS)
+    );
+    assert_eq!(
+        restart["developerInstructions"].as_str(),
+        Some(developer_instructions(&config.agent, &full_scope()).as_str())
+    );
     assert_eq!(runner.starts, 2);
     assert_eq!(
         runner.sessions,
