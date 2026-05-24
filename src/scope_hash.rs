@@ -7,7 +7,7 @@ use crate::scope::{
 };
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -108,9 +108,10 @@ impl ScopeHashCache {
         scope: &[String],
     ) -> Result<Vec<String>, String> {
         // Scope hashes may be requested for many selected, cached, and
-        // narrowed scopes during one `canon check`. Cache the full staged
-        // index listing once and filter it in memory so direct `git`
-        // subprocess count stays constant in the number of scopes.
+        // narrowed scopes during one `canon check`, so cache the full listing
+        // once. `scopeTreeOid` hashes the evaluator-visible subset of the
+        // scoped tracked tree: canon/evaluator-denied entries are tracked Git
+        // entries, but absent from the staged snapshot the evaluator sees.
         let entries = self.staged_all_scope_entries(root)?;
         Ok(filter_visible_scope_entries(entries, agent, scope))
     }
@@ -667,16 +668,56 @@ fn filter_visible_scope_entries(
     agent: &AgentConfig,
     scope: &[String],
 ) -> Vec<String> {
+    // The Cache spec intentionally says `scopeTreeOid` is a subset of tracked
+    // Git entries, not the full scoped tree. Entries outside the enforced scope
+    // or denied to the evaluator are tracked, but cannot support an evaluator
+    // answer, so they are outside the cache-reuse fingerprint.
     let deny_patterns = effective_ignore_patterns(agent);
+    let visible_entries = entries
+        .iter()
+        .map(|entry| scope_entry_is_visible(entry, scope, &deny_patterns))
+        .collect::<Vec<_>>();
+    let hidden_ancestor_directories = non_visible_ancestor_directories(entries, &visible_entries);
     entries
         .iter()
-        .filter(|entry| scope_entry_is_visible(entry, scope, &deny_patterns))
-        .filter(|entry| {
-            !scope_entry_is_tree(entry)
-                || scope_tree_entry_is_fully_visible(entry, entries, scope, &deny_patterns)
+        .zip(visible_entries)
+        .filter(|(entry, visible)| {
+            *visible
+                && (!scope_entry_is_tree(entry)
+                    || scope_tree_entry_has_no_hidden_descendants(
+                        entry,
+                        &hidden_ancestor_directories,
+                    ))
         })
+        .map(|(entry, _)| entry)
         .cloned()
         .collect()
+}
+
+fn non_visible_ancestor_directories(
+    entries: &[String],
+    visible_entries: &[bool],
+) -> BTreeSet<Vec<u8>> {
+    let mut directories = BTreeSet::new();
+    for (entry, visible) in entries.iter().zip(visible_entries) {
+        if *visible {
+            continue;
+        }
+        if let Ok(path) = scope_entry_path_bytes(entry) {
+            add_ancestor_directories(&path, &mut directories);
+        }
+    }
+    directories
+}
+
+fn add_ancestor_directories(path: &[u8], directories: &mut BTreeSet<Vec<u8>>) {
+    let mut end = path.len();
+    while let Some(index) = path[..end].iter().rposition(|byte| *byte == b'/') {
+        if index > 0 {
+            directories.insert(path[..index].to_vec());
+        }
+        end = index;
+    }
 }
 
 fn scope_entry_is_visible(entry: &str, scope: &[String], deny_patterns: &[String]) -> bool {
@@ -699,22 +740,14 @@ fn scope_entry_is_denied(entry: &str, deny_patterns: &[String]) -> bool {
         .any(|pattern| path_matches_pattern_bytes(&path, pattern.as_bytes()))
 }
 
-fn scope_tree_entry_is_fully_visible(
+fn scope_tree_entry_has_no_hidden_descendants(
     entry: &str,
-    entries: &[String],
-    scope: &[String],
-    deny_patterns: &[String],
+    non_visible_ancestor_directories: &BTreeSet<Vec<u8>>,
 ) -> bool {
     let Ok(directory) = scope_entry_path_bytes(entry) else {
         return true;
     };
-    entries.iter().all(|candidate| {
-        let Ok(path) = scope_entry_path_bytes(candidate) else {
-            return true;
-        };
-        !scope_path_is_descendant_of(&path, &directory)
-            || scope_entry_is_visible(candidate, scope, deny_patterns)
-    })
+    !non_visible_ancestor_directories.contains(&directory)
 }
 
 fn scope_entry_is_tree(entry: &str) -> bool {
@@ -734,12 +767,6 @@ fn scope_entry_path_bytes(entry: &str) -> Result<Vec<u8>, String> {
         path.extend_from_slice(component);
     }
     Ok(path)
-}
-
-fn scope_path_is_descendant_of(path: &[u8], directory: &[u8]) -> bool {
-    path.len() > directory.len()
-        && path.starts_with(directory)
-        && path.get(directory.len()) == Some(&b'/')
 }
 
 fn scope_entry_is_within_base(base: &str, entry: &str) -> bool {
