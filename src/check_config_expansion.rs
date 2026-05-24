@@ -108,7 +108,7 @@ impl RawExpectationExpansion<'_> {
             self.expectations.push(Expectation {
                 q: render_generator_question(&item.q_template, &content),
                 a: item.a.clone(),
-                prompt_scope: uses_content.then(|| vec![file]).unwrap_or_default(),
+                prompt_scope: if uses_content { vec![file] } else { Vec::new() },
                 cooldown: item.cooldown.clone(),
                 thinking: item.thinking.clone(),
             });
