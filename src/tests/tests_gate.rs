@@ -22,7 +22,7 @@ fn gate_passes_with_current_cached_pass() {
     )
     .unwrap();
 
-    let result = run_gate_command(&root, &[OsString::from(expectation.display_id.clone())]);
+    let result = run_gate_command(&root, &[]);
 
     assert!(result.is_ok());
     let _ = fs::remove_dir_all(root);
@@ -41,8 +41,7 @@ fn gate_passes_when_cache_is_missing_without_head_pass() {
         .unwrap();
     commit_all(&root, "add check config");
 
-    let config = parse_check_config(check_config_yaml()).unwrap();
-    let result = run_gate_command(&root, &[OsString::from(test_selector(&config, "1"))]);
+    let result = run_gate_command(&root, &[]);
 
     assert!(result.is_ok());
     let _ = fs::remove_dir_all(root);
@@ -79,7 +78,7 @@ fn gate_fails_when_head_pass_has_no_current_cache() {
         .output()
         .unwrap();
 
-    let result = run_gate_command(&root, &[OsString::from(expectation.display_id.clone())]);
+    let result = run_gate_command(&root, &[]);
 
     assert_eq!(result.unwrap_err(), CommandError::GateFailed);
     let _ = fs::remove_dir_all(root);
@@ -97,7 +96,21 @@ fn gate_failed_error_display_is_descriptive() {
 }
 
 #[test]
+fn gate_rejects_arguments() {
+    let err = run_gate_command(Path::new("."), &[OsString::from("1")]).unwrap_err();
+
+    assert_eq!(
+        err.to_string(),
+        "canon gate does not accept arguments\n▷ Run `canon gate` without arguments."
+    );
+}
+
+#[test]
 fn gate_missing_cache_advice_prioritizes_regressions() {
+    assert_eq!(
+        gate_regression_advice(),
+        "▷ Fix staged regressions and run `canon check` again!"
+    );
     assert_eq!(
         gate_missing_cache_advice(false),
         Some("canon gate: run `canon check` before committing")
@@ -154,7 +167,6 @@ fn gate_ignores_missing_cache_before_regression() {
         &root,
         &config,
         &identities,
-        &[],
         GateCaches {
             history: &mut history_cache,
             scope_hash: &mut scope_hash_cache,
@@ -162,11 +174,11 @@ fn gate_ignores_missing_cache_before_regression() {
         unix_timestamp().unwrap(),
         |event| {
             match event {
-                GateFailureEvent::Regressed(record) => {
-                    events.push(format!("regressed:{}", record.display_id));
+                GateFailureEvent::Regressed => {
+                    events.push("regressed".to_string());
                 }
-                GateFailureEvent::Missing(expectation) => {
-                    events.push(format!("missing:{}", expectation.display_id));
+                GateFailureEvent::Missing => {
+                    events.push("missing".to_string());
                 }
                 GateFailureEvent::MissingComplete { has_regressions } => {
                     events.push(format!("complete:{has_regressions}"));
@@ -178,10 +190,7 @@ fn gate_ignores_missing_cache_before_regression() {
     .unwrap();
 
     assert!(!passed);
-    assert_eq!(
-        events,
-        vec![format!("regressed:{}", expectations[1].display_id)]
-    );
+    assert_eq!(events, vec!["regressed"]);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -286,15 +295,14 @@ fn gate_passes_non_canon_change_with_missing_cache_without_head_pass() {
         .output()
         .unwrap();
 
-    let config = parse_check_config(check_config_yaml()).unwrap();
-    let result = run_gate_command(&root, &[OsString::from(test_selector(&config, "1"))]);
+    let result = run_gate_command(&root, &[]);
 
     assert!(result.is_ok());
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn gate_explicit_selection_uses_cooldown_filtered_selected_set() {
+fn gate_default_selection_uses_cooldown_filtered_selected_set() {
     let root = git_project("gate-cooldown-regression");
     commit_all(&root, "initial");
     let yaml = r#"
@@ -334,7 +342,7 @@ expectations:
     let current_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
     assert_ne!(current_hash, old_hash);
 
-    let result = run_gate_command(&root, &[OsString::from(expectation.display_id.clone())]);
+    let result = run_gate_command(&root, &[]);
 
     assert!(result.is_ok());
     let _ = fs::remove_dir_all(root);
@@ -385,7 +393,7 @@ expectations:
 }
 
 #[test]
-fn gate_explicit_selection_removes_fresh_cooldown_pass_before_regression_loop() {
+fn gate_default_selection_removes_fresh_cooldown_pass_before_regression_loop() {
     let root = git_project("gate-cooldown-regression-over-pass");
     commit_all(&root, "initial");
     let yaml = r#"
@@ -443,7 +451,7 @@ expectations:
     pass.timestamp = format_record_timestamp(unix_timestamp().unwrap());
     append_history_record(&root, &expectation, &pass).unwrap();
 
-    let result = run_gate_command(&root, &[OsString::from(expectation.display_id.clone())]);
+    let result = run_gate_command(&root, &[]);
 
     assert!(result.is_ok());
     let _ = fs::remove_dir_all(root);
@@ -478,7 +486,7 @@ fn gate_passes_for_new_current_failure_without_head_pass() {
     )
     .unwrap();
 
-    let result = run_gate_command(&root, &[OsString::from(expectation.display_id.clone())]);
+    let result = run_gate_command(&root, &[]);
 
     assert!(result.is_ok());
     let _ = fs::remove_dir_all(root);
@@ -522,7 +530,7 @@ fn gate_accepts_failure_already_present_on_head() {
     )
     .unwrap();
 
-    let result = run_gate_command(&root, &[OsString::from(expectation.display_id.clone())]);
+    let result = run_gate_command(&root, &[]);
 
     assert!(result.is_ok());
     let _ = fs::remove_dir_all(root);

@@ -1,0 +1,8 @@
+- q: "When `canon gate` fails, does its output always include an actionable instruction?"
+  a: "yes"
+
+- q: "Does `canon gate` refer to specific expectations in its output?"
+  a: "no"
+
+- q: "Does `canon gate` accept any arguments?"
+  a: "no"

@@ -217,6 +217,105 @@ fn runtime_log_event_validates_agent_response_token_usage_shape() {
 }
 
 #[test]
+fn runtime_log_event_accepts_agent_response_raw_token_usage_updates() {
+    render_runtime_log_event(
+        "info",
+        "agent.response",
+        &[
+            ("id", json!("id-1")),
+            ("attempt", json!(1)),
+            ("reason", json!("initial")),
+            ("response", json!({"text": "ok"})),
+            (
+                "tokenUsageUpdates",
+                json!([{"tokenUsage": {"last": {"totalTokens": 1}}}]),
+            ),
+        ],
+    )
+    .unwrap();
+}
+
+#[test]
+fn runtime_log_event_rejects_agent_response_without_usage_source() {
+    let err = render_runtime_log_event(
+        "info",
+        "agent.response",
+        &[
+            ("id", json!("id-1")),
+            ("attempt", json!(1)),
+            ("reason", json!("initial")),
+            ("response", json!({"text": "ok"})),
+        ],
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("missing usage source"));
+}
+
+#[test]
+fn runtime_log_event_rejects_agent_response_empty_token_usage_updates() {
+    let err = render_runtime_log_event(
+        "info",
+        "agent.response",
+        &[
+            ("id", json!("id-1")),
+            ("attempt", json!(1)),
+            ("reason", json!("initial")),
+            ("response", json!({"text": "ok"})),
+            ("tokenUsageUpdates", json!([])),
+        ],
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("tokenUsageUpdates"));
+    assert!(err.to_string().contains("empty"));
+}
+
+#[test]
+fn runtime_log_event_rejects_agent_response_non_array_token_usage_updates() {
+    let err = render_runtime_log_event(
+        "info",
+        "agent.response",
+        &[
+            ("id", json!("id-1")),
+            ("attempt", json!(1)),
+            ("reason", json!("initial")),
+            ("response", json!({"text": "ok"})),
+            (
+                "tokenUsageUpdates",
+                json!({"tokenUsage": {"totalTokens": 1}}),
+            ),
+        ],
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("tokenUsageUpdates"));
+    assert!(err.to_string().contains("not an array"));
+}
+
+#[test]
+fn runtime_log_event_rejects_agent_response_duplicate_usage_sources() {
+    let err = render_runtime_log_event(
+        "info",
+        "agent.response",
+        &[
+            ("id", json!("id-1")),
+            ("attempt", json!(1)),
+            ("reason", json!("initial")),
+            ("response", json!({"text": "ok"})),
+            ("tokenUsage", json!({"totalTokens": 1})),
+            (
+                "tokenUsageUpdates",
+                json!([{"tokenUsage": {"last": {"totalTokens": 1}}}]),
+            ),
+        ],
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("duplicates raw"));
+}
+
+#[test]
 fn runtime_log_event_rejects_null_agent_response_token_usage() {
     let err = render_runtime_log_event(
         "info",

@@ -48,7 +48,6 @@ fn append_history_record_with_cache_inner(
     write_history_line(&mut file, &path, &line)?;
     flush_history_file(&mut file, &path)?;
     drop(file);
-    history_cache.reusable_records.clear();
     let had_cached_records = history_cache.records.contains_key(&path);
     let should_compact = should_compact_history();
     // Once the line is flushed, the append has succeeded. Compaction and cache

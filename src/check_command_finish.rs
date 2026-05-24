@@ -114,7 +114,7 @@ fn staged_passes_failed_at_head_count_with_cache(
             history_cache,
             scope_hash_cache,
         )? {
-            GateCacheResult::Fail(_) => count += 1,
+            GateCacheResult::Fail => count += 1,
             GateCacheResult::Pass | GateCacheResult::Missing => {}
         }
     }

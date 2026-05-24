@@ -80,6 +80,55 @@ fn reusable_history_record_cache_is_refreshed_after_append() {
 }
 
 #[test]
+fn reusable_history_record_with_cache_rechecks_current_scope_hash() {
+    let root = git_project("history-reuse-cache-rechecks-scope");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let expectation = check_options(&config, &["1"], false, true)
+        .selected
+        .remove(0);
+    let record = expectation_record(
+        &config.agent,
+        &expectation,
+        "pass",
+        "yes",
+        staged_scope_hash(&root, &config.agent, &full_scope()).unwrap(),
+    );
+    append_history_record(&root, &expectation, &record).unwrap();
+    let mut history_cache = HistoryCache::new();
+    let mut scope_hash_cache = ScopeHashCache::new();
+
+    assert!(reusable_history_record_with_cache(
+        &root,
+        &config.agent,
+        &expectation,
+        &mut history_cache,
+        &mut scope_hash_cache,
+    )
+    .unwrap()
+    .is_some());
+
+    fs::write(root.join("README.md"), "changed\n").unwrap();
+    Command::new("git")
+        .arg("add")
+        .arg("README.md")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let mut fresh_scope_hash_cache = ScopeHashCache::new();
+
+    assert!(reusable_history_record_with_cache(
+        &root,
+        &config.agent,
+        &expectation,
+        &mut history_cache,
+        &mut fresh_scope_hash_cache,
+    )
+    .unwrap()
+    .is_none());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn reusable_history_record_allows_missing_cache_key() {
     let root = git_project("history-cache-key-metadata");
     let config = parse_check_config(check_config_yaml()).unwrap();

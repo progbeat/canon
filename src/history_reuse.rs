@@ -1,6 +1,10 @@
+// Cache responsibilities are intentionally split by operation. This module
+// owns lookup: newest-to-oldest history scanning plus current scopeTreeOid
+// matching. History file layout and writes live in `history`, `logging`, and
+// `history_append`; probabilistic retention lives in `history_compaction`.
 use crate::check_types::{CheckRecord, ObservedAnswerState, SelectedExpectation};
 use crate::config_types::AgentConfig;
-use crate::history::{HistoryCache, ReusableHistoryLookupKey};
+use crate::history::HistoryCache;
 use crate::scope::sanitize_scope_for_hash;
 use crate::scope_hash::ScopeHashCache;
 use crate::time::parse_record_timestamp;
@@ -33,20 +37,11 @@ pub(crate) fn reusable_history_record_with_cache(
     // This is the answer-cache lookup described by the Cache spec: scan answer
     // history newest-to-oldest and accept only the first record whose stored
     // scopeTreeOid still matches the current staged contents for that scope.
-    let key = ReusableHistoryLookupKey::new(root, expectation);
-    if let Some(record) = history_cache.reusable_records.get(&key).cloned() {
-        return Ok(record);
-    }
-    let reusable_record =
-        latest_history_record_matching_hash(root, expectation, history_cache, |scope| {
-            scope_hash_cache
-                .staged_scope_hash(root, agent, scope)
-                .map(Some)
-        })?;
-    history_cache
-        .reusable_records
-        .insert(key, reusable_record.clone());
-    Ok(reusable_record)
+    latest_history_record_matching_hash(root, expectation, history_cache, |scope| {
+        scope_hash_cache
+            .staged_scope_hash(root, agent, scope)
+            .map(Some)
+    })
 }
 
 pub(crate) fn latest_history_record_matching_hash(

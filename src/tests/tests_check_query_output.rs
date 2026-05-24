@@ -529,11 +529,7 @@ fn query_mode_uses_agent_and_does_not_write_history() {
     assert!(response.get("rawResponse").is_none());
     assert_eq!(response["threadId"].as_str(), Some("thread-1"));
     assert_eq!(response["turnId"].as_str(), Some("turn-1"));
-    assert_eq!(response["tokenUsage"]["totalTokens"], json!(10));
-    assert_eq!(response["tokenUsage"]["inputTokens"], json!(7));
-    assert_eq!(response["tokenUsage"]["cachedInputTokens"], json!(3));
-    assert_eq!(response["tokenUsage"]["outputTokens"], json!(3));
-    assert_eq!(response["tokenUsage"]["reasoningOutputTokens"], json!(1));
+    assert!(response.get("tokenUsage").is_none());
     assert_eq!(response["tokenUsageUpdates"][0]["sequence"], json!(1));
     assert_eq!(
         response["tokenUsageUpdates"][0]["threadId"].as_str(),

@@ -309,8 +309,8 @@ pub(crate) fn final_selected_expectations(
     // Cooldown is a selection filter, not an answer-cache hit: a fresh latest
     // pass removes a matching expectation before exact-cache lookup and before
     // any evaluator result can be reused as the observed answer. `canon check`
-    // uses this set for evaluator work. `canon gate` shares the same cooldown
-    // filter for both default and explicit selector runs.
+    // uses this set for evaluator work; `canon gate` uses the same no-selector
+    // final selected set as the input to its raw cache-comparison loop.
     let mut remaining = Vec::new();
     let mut skipped = Vec::new();
     for expectation in selected {
