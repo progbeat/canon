@@ -6,3 +6,6 @@
 
 - q: "Does `canon gate` accept any arguments?"
   a: "no"
+
+- q: "Does `canon gate` pass when same-tree `canon check` says to commit and only expectation-related gate failures remain?"
+  a: "yes"

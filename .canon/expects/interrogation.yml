@@ -11,4 +11,7 @@
 
 - q: "Are you encouraged to refer to tests in evidence?"
   a: "yes"
-  thinking: low
+
+- q: "Does any evaluator input appear to be derived from the contents of out-of-scope files in practice?"
+  a: "no"
+  cooldown: 7d
