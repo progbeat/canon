@@ -175,9 +175,14 @@ fn evaluator_turn_log_errors_when_successful_response_lacks_usage() {
         response["response"]["sessionId"].as_str(),
         Some("session-1")
     );
-    assert!(response.get("threadId").is_none());
-    assert!(response.get("turnId").is_none());
-    assert!(response.get("tokenUsage").is_none());
+    assert_eq!(response["threadId"].as_str(), Some("session-1"));
+    assert_eq!(response["turnId"].as_str(), Some("<missing>"));
+    assert_eq!(response["tokenUsage"]["totalTokens"], json!(0));
+    assert_eq!(response["tokenUsage"]["inputTokens"], json!(0));
+    assert_eq!(response["tokenUsage"]["cachedInputTokens"], json!(0));
+    assert_eq!(response["tokenUsage"]["outputTokens"], json!(0));
+    assert_eq!(response["tokenUsage"]["reasoningOutputTokens"], json!(0));
+    assert_eq!(response["tokenUsageUnavailable"], json!(true));
     assert!(response.get("tokenUsageUpdates").is_none());
     let _ = fs::remove_dir_all(root);
 }
@@ -330,7 +335,7 @@ fn check_runner_requires_human_review_for_malformed_answer() {
 }
 
 #[test]
-fn check_runner_does_not_retry_after_malformed_answer() {
+fn check_runner_does_not_retry_after_malformed_empty_evidence() {
     let root = git_project("check-malformed-empty-evidence");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
@@ -341,7 +346,7 @@ fn check_runner_does_not_retry_after_malformed_answer() {
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
     assert!(!records.records[0].passed());
-    assert_eq!(records.records[0].observed, "malformed");
+    assert_eq!(records.records[0].observed, EMPTY_EVIDENCE_OBSERVED);
     assert_eq!(runner.prompts.len(), 1);
     let _ = fs::remove_dir_all(root);
 }

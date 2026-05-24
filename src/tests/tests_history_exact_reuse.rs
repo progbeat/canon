@@ -129,6 +129,40 @@ fn reusable_history_record_with_cache_rechecks_current_scope_hash() {
 }
 
 #[test]
+fn reusable_history_record_skips_non_answer_history_before_scope_hash_match() {
+    let root = git_project("history-reuse-skip-non-answer-before-hash");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let expectation = check_options(&config, &["1"], false, true)
+        .selected
+        .remove(0);
+    let hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let older = expectation_record(
+        &config.agent,
+        &expectation,
+        RESULT_PASS,
+        "yes",
+        hash.clone(),
+    );
+    append_history_record(&root, &expectation, &older).unwrap();
+    let newer = expectation_record(
+        &config.agent,
+        &expectation,
+        RESULT_FAIL,
+        "Yes: concrete bug",
+        hash,
+    );
+    append_history_record(&root, &expectation, &newer).unwrap();
+
+    let record = reusable_history_record(&root, &config.agent, &expectation)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(record.observed, "yes");
+    assert!(record.passed());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn reusable_history_record_allows_missing_cache_key() {
     let root = git_project("history-cache-key-metadata");
     let config = parse_check_config(check_config_yaml()).unwrap();
@@ -252,8 +286,8 @@ expectations:
 }
 
 #[test]
-fn reusable_history_record_ignores_current_agent_ignore_patterns() {
-    let root = git_project("history-reuse-ignore-independent");
+fn reusable_history_record_respects_current_agent_ignore_patterns() {
+    let root = git_project("history-reuse-ignore-dependent");
     let base_config = parse_check_config(
         r#"
 version: 1
@@ -305,12 +339,10 @@ expectations:
     )
     .unwrap();
 
-    let record = reusable_history_record(&root, &ignored_readme_config.agent, &new_expectation)
-        .unwrap()
-        .unwrap();
+    let record =
+        reusable_history_record(&root, &ignored_readme_config.agent, &new_expectation).unwrap();
 
-    assert!(record.passed());
-    assert_eq!(record.scope, vec!["README.md"]);
+    assert!(record.is_none());
     let _ = fs::remove_dir_all(root);
 }
 
@@ -356,8 +388,8 @@ expectations:
 }
 
 #[test]
-fn scope_hash_does_not_depend_on_agent_ignore_patterns() {
-    let root = git_project("history-scope-hash-ignore-independent");
+fn scope_hash_depends_on_agent_ignore_patterns() {
+    let root = git_project("history-scope-hash-ignore-dependent");
     let base_config = parse_check_config(
         r#"
 version: 1
@@ -386,7 +418,7 @@ expectations:
     )
     .unwrap();
 
-    assert_eq!(
+    assert_ne!(
         staged_scope_hash(&root, &base_config.agent, &full_scope()).unwrap(),
         staged_scope_hash(&root, &ignored_readme_config.agent, &full_scope()).unwrap()
     );
@@ -394,8 +426,8 @@ expectations:
 }
 
 #[test]
-fn scope_hash_includes_tracked_canon_paths() {
-    let root = git_project("history-scope-hash-includes-canon");
+fn scope_hash_excludes_evaluator_denied_canon_paths() {
+    let root = git_project("history-scope-hash-excludes-canon");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let before = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
     write_check_config(&root);
@@ -408,7 +440,62 @@ fn scope_hash_includes_tracked_canon_paths() {
 
     let after = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
 
-    assert_ne!(before, after);
+    assert_eq!(before, after);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn scope_hash_excludes_nested_ignored_descendants_from_parent_tree_oid() {
+    let root = git_project("history-scope-hash-nested-ignore");
+    let config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore:
+    - "src/generated/**"
+  plugins: []
+expectations:
+  - q: "First?"
+    a: "yes"
+"#,
+    )
+    .unwrap();
+    fs::create_dir_all(root.join("src/generated")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn visible() {}\n").unwrap();
+    fs::write(
+        root.join("src/generated/schema.rs"),
+        "pub fn generated() {}\n",
+    )
+    .unwrap();
+    Command::new("git")
+        .args(["add", "src"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+
+    let before = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    fs::write(
+        root.join("src/generated/schema.rs"),
+        "pub fn generated_changed() {}\n",
+    )
+    .unwrap();
+    Command::new("git")
+        .args(["add", "src/generated/schema.rs"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let ignored_change = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn visible_changed() {}\n").unwrap();
+    Command::new("git")
+        .args(["add", "src/lib.rs"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let visible_change = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+
+    assert_eq!(before, ignored_change);
+    assert_ne!(before, visible_change);
     let _ = fs::remove_dir_all(root);
 }
 

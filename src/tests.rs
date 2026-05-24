@@ -47,8 +47,8 @@ use crate::check_model_fallback::{
 use crate::check_narrowing::scope_narrowing_log_fields;
 use crate::check_order_state::{latest_recorded_non_pass_timestamp, write_latest_non_pass_record};
 use crate::check_output::{
-    escape_check_output_text, pad_summary_line, render_check_output_record, render_query_output,
-    render_token_usage_summary,
+    escape_check_output_text, pad_summary_line, render_check_output_record, render_check_summary,
+    render_query_output, render_token_usage_summary,
 };
 use crate::check_output::{
     record_requires_human_review, report_output_skipped_count, write_and_flush_result_output,
@@ -65,7 +65,7 @@ use crate::check_reporting::{
     collect_check_token_usage, print_token_usage_summary, write_check_finish_event,
 };
 use crate::check_selection::{
-    expectation_identities, final_selected_expectations, initial_non_selected_expectations,
+    cooldown_filtered_check_work_queue, expectation_identities, initial_non_selected_expectations,
     order_expectations_by_latest_non_pass, parse_check_options, parse_cooldown,
     select_expectations,
 };
@@ -94,9 +94,7 @@ use crate::evaluator_config::{
     thread_reuse_carryover_token_target_arg, toml_string,
 };
 use crate::evaluator_json::validate_evaluator_response_key_order;
-use crate::evaluator_prompt::{
-    developer_instructions, response_format_block, EVALUATOR_BASE_INSTRUCTIONS,
-};
+use crate::evaluator_prompt::{developer_instructions, EVALUATOR_BASE_INSTRUCTIONS};
 use crate::evaluator_response::parse_evaluator_response;
 use crate::evaluator_response_cache::{response_excerpt, EvaluatorResponseParseCache};
 use crate::evaluator_scope::parse_scope_json;

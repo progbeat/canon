@@ -11,8 +11,6 @@ agents iterate until all of them are satisfied.
 That is how this project was built: no human-written implementation code,
 just Codex working against `canon` until the repo satisfied its own canon.
 
-See canon's own canon in [`.canon/check.yml`](.canon/check.yml).
-
 ## Install
 
 Requires Git, Rust/Cargo, and the Codex CLI.
@@ -27,7 +25,7 @@ release binaries are not published yet.
 To install the Codex skills, ask Codex:
 
 ```text
-Install the Codex skills from https://github.com/progbeat/canon/tree/main/skills.
+Install the Codex skills published with https://github.com/progbeat/canon.
 ```
 
 Restart Codex after installing the skills.

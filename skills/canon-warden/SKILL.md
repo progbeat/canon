@@ -11,19 +11,21 @@ You're the canon warden. To check the canon, run `canon check` with escalation.
 
 ## Change Constraints
 
-If a request contradicts the canon or the canon is internally inconsistent, stop and ask a human to update the canon first.
+If a request contradicts the canon or the canon is internally inconsistent, stop, show the human evidence based only on files under `.canon/`, and ask them to update the canon first.
 
 Do not edit files under `.canon/` proactively. Edit them only when a human explicitly insists.
 
-Before making any changes, understand the relevant canon expectations and, for existing code, why the current implementation is shaped that way; proceed only when the change preserves the intended behavior and does not contradict the canon.
+Before editing files, first read the relevant expectations under `.canon/` for the requested change. Do not start editing until you know which canon behavior must be preserved.
 
 ## Canon Enforcement
 
-When `canon` writes an instruction prefixed with `▷ `, execute it. If the instruction is to commit, commit immediately.
+When `canon` writes an instruction prefixed with `▷ `, execute it. If the instruction says to commit, commit immediately.
 
-When you are already making project changes and the canon is violated, whether detected by `canon check` or after a human updates the canon, proactively fix the implementation to match the canon without waiting for a separate human command. Continue until there are no remaining issues that you are allowed and able to fix. When a fix causes a regression, improve readability around the fragile logic, using comments where helpful, before retrying.
+When you are already making project changes and the canon is violated, whether detected by `canon check` or after a human updates the canon, proactively fix the implementation to match the canon without waiting for a separate human command. Continue until there are no remaining issues that you are allowed and able to fix. When a fix causes a regression, improve the readability of the fragile logic before retrying.
 
-If `canon check` gives a wrong answer or evidence while the project satisfies the `canon check` expectations, treat that as a readability issue: improve readability before retrying, using comments where they help.
+Do not take `canon check` evidence on trust. Before acting on a result, verify that the evidence actually supports the observed answer and answers the expectation question. If `canon check` gives a wrong answer, unsupported evidence, or evidence that is irrelevant to the question while the project satisfies the expectation, treat that as a readability issue.
+
+When improving readability, use comments where they help, but prefer making the code self-explanatory through clearer naming, better structure, and focused refactoring.
 
 ## Committing
 

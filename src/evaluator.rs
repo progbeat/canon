@@ -5,19 +5,20 @@ pub(crate) fn evaluator_response_output_schema() -> Value {
     // This schema is the app-server first pass for the interrogation response
     // contract. The parser still enforces constraints JSON Schema cannot express
     // safely here: exact top-level key order, no surrounding prose, and
-    // canonical scope normalization/parent-path reduction. Semantic scope
-    // sufficiency is not a JSON-shape property: the developer instructions tell
-    // the evaluator to return the smallest sufficient scope, and the check
+    // canonical scope normalization/parent-path reduction. The check
     // interrogation policy independently verifies any strict narrowing before
     // writing that narrower scope to answer history.
     // The answer vocabulary is intentionally not enumerated here: most canon
     // expectations use yes/no/options, but free-form exact single-line answers
-    // such as "Rust" are valid when the expectation asks for one.
+    // such as "Rust" are valid when the expectation asks for one. The
+    // expectation-relative vocabulary check happens after parsing in
+    // ObservedAnswerState::from_expected_and_observed.
     json!({
         "type": "object",
         "properties": {
             "answer": {
                 "type": "string",
+                "minLength": 1,
                 "pattern": "^[^\\r\\n]*$"
             },
             "evidence": { "type": "string" },

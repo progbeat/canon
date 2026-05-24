@@ -101,7 +101,7 @@ fn finalize_parsed_answer(
     enforced_scope: &[String],
     response: ParsedAnswer,
 ) -> Result<FinalizedParsedAnswer, EvaluatorError> {
-    let mut response = normalize_empty_evidence_response(response);
+    let mut response = normalize_empty_evidence_response(response, enforced_scope);
     response = enforce_response_scope(response, enforced_scope);
     response = reject_absent_response_scope(runtime, state, enforced_scope, response)?;
     if response.answer == UNPARSEABLE_OBSERVED {
@@ -206,11 +206,18 @@ fn response_evidence_with_message(evidence: &str, message: &str) -> String {
     }
 }
 
-fn normalize_empty_evidence_response(response: ParsedAnswer) -> ParsedAnswer {
-    if response.evidence.trim().is_empty()
-        && response.answer != OBSERVED_MALFORMED
-        && response.answer != UNPARSEABLE_OBSERVED
-    {
+fn normalize_empty_evidence_response(
+    response: ParsedAnswer,
+    enforced_scope: &[String],
+) -> ParsedAnswer {
+    if response.evidence.trim().is_empty() && response.answer != UNPARSEABLE_OBSERVED {
+        if response.answer == OBSERVED_IDK && enforced_scope != full_scope() {
+            return ParsedAnswer {
+                answer: OBSERVED_IDK.to_string(),
+                evidence: "evaluator response evidence was empty".to_string(),
+                scope: response.scope,
+            };
+        }
         return ParsedAnswer {
             answer: EMPTY_EVIDENCE_OBSERVED.to_string(),
             evidence: "evaluator response evidence was empty".to_string(),

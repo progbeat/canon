@@ -90,6 +90,7 @@ expectations:
     )
     .unwrap();
     assert_eq!(missing.expectations[0].q, "No placeholder");
+    assert!(missing.expectations[0].prompt_scope.is_empty());
 
     let mut cache = RepoInspectionCache::new();
     let duplicate = parse_check_config_content_with_root(
@@ -110,6 +111,10 @@ expectations:
     )
     .unwrap();
     assert_eq!(duplicate.expectations[0].q, "A then A");
+    assert_eq!(
+        duplicate.expectations[0].prompt_scope,
+        vec!["specs/a.md".to_string()]
+    );
     let _ = fs::remove_dir_all(root);
 }
 

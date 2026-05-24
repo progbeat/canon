@@ -39,7 +39,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
     let existing_session = state.sessions_by_scope.get(&session_key).cloned();
     let had_existing_session = existing_session.is_some();
     let lifecycle_log = match existing_session {
-        Some(existing) => thread_reuse_log(state, &config.agent, existing, request),
+        Some(existing) => thread_reuse_log(state, existing, request),
         None => start_thread_session(runtime, runner, state, &session_key, request)?,
     };
     let mut session_id = lifecycle_log.session_id.clone();
@@ -157,7 +157,7 @@ fn start_thread_session<R: EvaluatorRunner>(
     request: ThreadTurnRequest<'_>,
 ) -> Result<ThreadLifecycleLog, EvaluatorError> {
     let config = runtime.config;
-    let developer_instructions = developer_instructions(&config.agent, request.enforced_scope);
+    let developer_instructions = developer_instructions(request.enforced_scope);
     let created = match runner.start_session(
         runtime.snapshot_root,
         &developer_instructions,
@@ -184,7 +184,6 @@ fn start_thread_session<R: EvaluatorRunner>(
 
 fn thread_reuse_log(
     state: &InterrogationState,
-    agent: &AgentConfig,
     session_id: String,
     request: ThreadTurnRequest<'_>,
 ) -> ThreadLifecycleLog {
@@ -192,7 +191,7 @@ fn thread_reuse_log(
         .session_instructions
         .get(&session_id)
         .cloned()
-        .unwrap_or_else(|| developer_instructions(agent, request.enforced_scope));
+        .unwrap_or_else(|| developer_instructions(request.enforced_scope));
     ThreadLifecycleLog {
         event: "thread.reuse",
         session_id,

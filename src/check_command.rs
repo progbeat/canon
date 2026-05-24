@@ -34,9 +34,9 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     let write_agent_message = check_command_writes_agent_message(args);
     let command = parse_check_command_args(args)?;
     let mut repo_cache = RepoInspectionCache::new();
-    // Runtime logs are canon-owned state under `.git/canon/logs`, not project
-    // working-tree content. They are created before snapshot evaluation and are
-    // denied to evaluator sessions by the mandatory ignore policy.
+    // Runtime logs are canon-owned state under `${CANON_STATE_DIR}/logs`, not
+    // project working-tree content. They are created before snapshot evaluation
+    // and are denied to evaluator sessions by the mandatory ignore policy.
     let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
     let config = match repo_cache.load_check_config(root, &command.config_path) {
         Ok(config) => config,

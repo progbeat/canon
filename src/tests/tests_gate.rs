@@ -61,7 +61,7 @@ fn gate_fails_when_head_pass_has_no_current_cache() {
     commit_all(&root, "add check config");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
-    let head_hash = gate_head_tree_fingerprint(&root, &full_scope())
+    let head_hash = gate_head_tree_fingerprint(&root, &config.agent, &full_scope())
         .unwrap()
         .unwrap();
     append_history_record(
@@ -143,7 +143,7 @@ fn gate_ignores_missing_cache_before_regression() {
     let config = parse_check_config(check_config_yaml()).unwrap();
     let identities = expectation_identities(&config).unwrap();
     let expectations = check_options(&config, &[], false, true).selected;
-    let head_hash = gate_head_tree_fingerprint(&root, &full_scope())
+    let head_hash = gate_head_tree_fingerprint(&root, &config.agent, &full_scope())
         .unwrap()
         .unwrap();
     append_history_record(
@@ -210,6 +210,14 @@ fn gate_passes_canon_only_change_without_checking_cache() {
 
     assert!(result.is_ok());
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn gate_canon_path_classification_matches_canon_subtree_only() {
+    assert!(is_canon_project_path_bytes(b".canon/check.yml"));
+    assert!(is_canon_project_path_bytes(b".canon/draft/spec.md"));
+    assert!(!is_canon_project_path_bytes(b".canon"));
+    assert!(!is_canon_project_path_bytes(b".canonical/file.md"));
 }
 
 #[test]
@@ -302,7 +310,7 @@ fn gate_passes_non_canon_change_with_missing_cache_without_head_pass() {
 }
 
 #[test]
-fn gate_default_selection_uses_cooldown_filtered_selected_set() {
+fn gate_checks_fresh_cooldown_expectation_missing_cache() {
     let root = git_project("gate-cooldown-regression");
     commit_all(&root, "initial");
     let yaml = r#"
@@ -344,12 +352,12 @@ expectations:
 
     let result = run_gate_command(&root, &[]);
 
-    assert!(result.is_ok());
+    assert_eq!(result.unwrap_err(), CommandError::GateFailed);
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn gate_default_selection_skips_fresh_cooldown_expectation() {
+fn gate_does_not_skip_fresh_cooldown_expectation() {
     let root = git_project("gate-default-cooldown");
     commit_all(&root, "initial");
     let yaml = r#"
@@ -388,12 +396,12 @@ expectations:
 
     let result = run_gate_command(&root, &[]);
 
-    assert!(result.is_ok());
+    assert_eq!(result.unwrap_err(), CommandError::GateFailed);
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn gate_default_selection_removes_fresh_cooldown_pass_before_regression_loop() {
+fn gate_checks_regression_even_with_fresh_cooldown_pass() {
     let root = git_project("gate-cooldown-regression-over-pass");
     commit_all(&root, "initial");
     let yaml = r#"
@@ -425,7 +433,7 @@ expectations:
         .unwrap();
     let config = parse_check_config(yaml).unwrap();
     let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
-    let head_hash = gate_head_tree_fingerprint(&root, &full_scope())
+    let head_hash = gate_head_tree_fingerprint(&root, &config.agent, &full_scope())
         .unwrap()
         .unwrap();
     append_history_record(
@@ -453,7 +461,7 @@ expectations:
 
     let result = run_gate_command(&root, &[]);
 
-    assert!(result.is_ok());
+    assert_eq!(result.unwrap_err(), CommandError::GateFailed);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -493,6 +501,111 @@ fn gate_passes_for_new_current_failure_without_head_pass() {
 }
 
 #[test]
+fn gate_passes_when_same_tree_check_allows_commit_with_remaining_failure() {
+    let root = git_project("gate-same-tree-check-commit");
+    let yaml = r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: "Fixed?"
+    a: "yes"
+  - q: "Still failing?"
+    a: "no"
+"#;
+    fs::create_dir_all(root.join(".canon")).unwrap();
+    fs::write(root.join(CHECK_PATH), yaml).unwrap();
+    Command::new("git")
+        .arg("add")
+        .arg(CHECK_PATH)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    commit_all(&root, "add check config");
+    let config = parse_check_config(yaml).unwrap();
+    let options = check_options(&config, &["1", "2"], false, true);
+    let head_hash = gate_head_tree_fingerprint(&root, &config.agent, &full_scope())
+        .unwrap()
+        .unwrap();
+    append_history_record(
+        &root,
+        &options.selected[0],
+        &expectation_record(
+            &config.agent,
+            &options.selected[0],
+            "fail",
+            "no",
+            head_hash.clone(),
+        ),
+    )
+    .unwrap();
+    append_history_record(
+        &root,
+        &options.selected[1],
+        &expectation_record(
+            &config.agent,
+            &options.selected[1],
+            "fail",
+            "yes",
+            head_hash,
+        ),
+    )
+    .unwrap();
+    fs::write(root.join("README.md"), "changed\n").unwrap();
+    Command::new("git")
+        .arg("add")
+        .arg("README.md")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let current_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let current_pass = expectation_record(
+        &config.agent,
+        &options.selected[0],
+        "pass",
+        "yes",
+        current_hash.clone(),
+    );
+    let current_fail = expectation_record(
+        &config.agent,
+        &options.selected[1],
+        "fail",
+        "yes",
+        current_hash,
+    );
+    append_history_record(&root, &options.selected[0], &current_pass).unwrap();
+    append_history_record(&root, &options.selected[1], &current_fail).unwrap();
+    let report = CheckRunReport {
+        records: vec![current_pass, current_fail],
+        non_selected: Vec::new(),
+        evaluated: 2,
+        selected: 2,
+        skipped: 0,
+        silent: 0,
+        narrowing: NarrowingStats::default(),
+    };
+
+    assert_eq!(
+        check_agent_messages(
+            &root,
+            &config,
+            &report,
+            &mut HistoryCache::new(),
+            &mut ScopeHashCache::new(),
+        )
+        .unwrap(),
+        vec![
+            "▷ +1 pass compared to HEAD. Commit the staged changes NOW!".to_string(),
+            "▷ Then fix the remaining issues and run `canon check` again!".to_string(),
+        ]
+    );
+    assert!(run_gate_command(&root, &[]).is_ok());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn gate_accepts_failure_already_present_on_head() {
     let root = git_project("gate-head-fail");
     commit_all(&root, "initial");
@@ -506,7 +619,7 @@ fn gate_accepts_failure_already_present_on_head() {
     commit_all(&root, "add check config");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
-    let head_hash = gate_head_tree_fingerprint(&root, &full_scope())
+    let head_hash = gate_head_tree_fingerprint(&root, &config.agent, &full_scope())
         .unwrap()
         .unwrap();
     append_history_record(

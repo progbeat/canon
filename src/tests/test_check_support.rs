@@ -230,12 +230,39 @@ pub(crate) fn test_selector(config: &CheckConfig, selector: &str) -> String {
 }
 
 pub(crate) fn answer(answer: &str, evidence: &str, scope: &[&str]) -> String {
+    let evidence = cited_evidence(evidence, scope);
     serde_json::to_string(&json!({
         "answer": answer,
         "evidence": evidence,
         "scope": scope,
     }))
     .unwrap()
+}
+
+fn cited_evidence(evidence: &str, scope: &[&str]) -> String {
+    if evidence.trim().is_empty() || evidence.contains('`') {
+        return evidence.to_string();
+    }
+    let citation = scope
+        .iter()
+        .copied()
+        .find(|path| *path != ".")
+        .map(evidence_file_ref)
+        .unwrap_or_else(|| "README.md".to_string());
+    format!("`{citation}`: {evidence}")
+}
+
+fn evidence_file_ref(path: &str) -> String {
+    let path = path.trim_end_matches('/');
+    if path
+        .rsplit('/')
+        .next()
+        .is_some_and(|basename| basename.contains('.'))
+    {
+        path.to_string()
+    } else {
+        format!("{path}/main.rs")
+    }
 }
 
 fn check_result_from_label(label: &str) -> CheckResult {

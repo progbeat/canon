@@ -26,8 +26,9 @@ pub(crate) fn parse_scope_strings(
     agent: &AgentConfig,
 ) -> Result<Vec<String>, String> {
     // Scope parsing is deliberately limited to representation and access
-    // checks. Whether a narrowed scope is sufficient for the answer is tested
-    // later by running an independent interrogation under that proposed scope.
+    // checks. check.rs/check_interrogation_records.rs test whether a narrowed
+    // scope is sufficient by running an independent interrogation under that
+    // proposed scope.
     let mut parsed = Vec::new();
     for raw in scope {
         let normalized = normalize_repo_path(raw)?;

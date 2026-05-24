@@ -79,6 +79,9 @@ pub(crate) fn record_from_response(
     enforced_scope: Vec<String>,
     scope_hash: String,
 ) -> Result<CheckRecord, String> {
+    // This is the expectation-specific answer vocabulary gate: yes/no and
+    // option expectations reject prose, while free-form exact-string
+    // expectations remain valid single-line answers.
     let requires_human_review =
         ObservedAnswerState::from_expected_and_observed(&expectation.a, &response.answer)
             .requires_human_review();
@@ -100,8 +103,8 @@ pub(crate) fn record_from_response(
     )
 }
 
-// This module owns one evaluator turn: model labels, response parsing, request
-// and response logging, per-turn token usage, and record finalization.
+// One evaluator turn: model labels, response parsing, request and response
+// logging, per-turn token usage, and record finalization.
 pub(crate) struct EvaluatorTurnContext<'a> {
     pub(crate) session_id: &'a str,
     pub(crate) model: Option<&'a str>,
@@ -146,15 +149,7 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
     )?;
     let parsed = match parser_cache.parse(&response.text, agent) {
         Ok(answer) => answer,
-        Err(err) => ParsedAnswer {
-            answer: UNPARSEABLE_OBSERVED.to_string(),
-            evidence: format!(
-                "evaluator response could not be parsed: {}\nresponse: {}",
-                err,
-                response_excerpt(&response.text)
-            ),
-            scope: full_scope(),
-        },
+        Err(err) => unparseable_response_answer(&err, &response.text),
     };
 
     Ok(ParsedTurnResponse {
@@ -162,6 +157,18 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
         usage: response.usage,
         context_compacted: response.context_compacted,
     })
+}
+
+fn unparseable_response_answer(err: &str, response: &str) -> ParsedAnswer {
+    ParsedAnswer {
+        answer: UNPARSEABLE_OBSERVED.to_string(),
+        evidence: format!(
+            "evaluator response could not be parsed: {}\nresponse: {}",
+            err,
+            response_excerpt(response)
+        ),
+        scope: full_scope(),
+    }
 }
 
 pub(crate) fn ask_and_log<R: EvaluatorRunner>(
@@ -212,6 +219,7 @@ pub(crate) fn ask_and_log<R: EvaluatorRunner>(
                 let event = if turn_usage.is_some() {
                     "agent.response"
                 } else {
+                    append_missing_turn_usage_fields(&mut fields, turn.session_id);
                     "agent.turn_error"
                 };
                 writer.write_event("error", event, &fields)?;
@@ -238,6 +246,7 @@ pub(crate) fn ask_and_log<R: EvaluatorRunner>(
             // A response without usage violates the app-server turn contract,
             // so it is not logged as a completed `agent.response`.
             fields.push(("error", json!("missing evaluator turn usage")));
+            append_missing_turn_usage_fields(&mut fields, turn.session_id);
             writer.write_event("error", "agent.turn_error", &fields)?;
         } else {
             writer.write_event("info", "agent.response", &fields)?;
@@ -348,6 +357,13 @@ fn append_turn_usage_fields(
     if !context_compaction_events.is_empty() {
         fields.push(("contextCompactionEvents", json!(context_compaction_events)));
     }
+}
+
+fn append_missing_turn_usage_fields(fields: &mut Vec<(&'static str, Value)>, session_id: &str) {
+    fields.push(("threadId", json!(session_id)));
+    fields.push(("turnId", json!("<missing>")));
+    fields.push(("tokenUsage", token_usage_log_value(TokenUsage::default())));
+    fields.push(("tokenUsageUnavailable", json!(true)));
 }
 
 fn token_usage_log_value(usage: TokenUsage) -> Value {

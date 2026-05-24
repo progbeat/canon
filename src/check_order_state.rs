@@ -1,7 +1,7 @@
 use crate::check_types::{CheckRecord, SelectedExpectation};
 use crate::fs_util::{ensure_dir_without_symlinks, reject_symlink};
 use crate::history::HistoryCache;
-use crate::time::parse_record_timestamp;
+use crate::time::{format_record_timestamp, parse_record_timestamp, unix_timestamp};
 use serde::Deserialize;
 use serde_json::json;
 use std::fs;
@@ -66,6 +66,40 @@ pub(crate) fn write_latest_non_pass_record_with_cache(
     if record.passed() {
         return Ok(());
     }
+    write_latest_non_pass_marker_with_cache(
+        root,
+        expectation,
+        &record.timestamp,
+        record.result.as_str(),
+        &record.observed,
+        history_cache,
+    )
+}
+
+pub(crate) fn write_latest_non_pass_error_with_cache(
+    root: &Path,
+    expectation: &SelectedExpectation,
+    history_cache: &mut HistoryCache,
+) -> Result<(), String> {
+    let timestamp = format_record_timestamp(unix_timestamp()?);
+    write_latest_non_pass_marker_with_cache(
+        root,
+        expectation,
+        &timestamp,
+        "fail",
+        "error",
+        history_cache,
+    )
+}
+
+fn write_latest_non_pass_marker_with_cache(
+    root: &Path,
+    expectation: &SelectedExpectation,
+    timestamp: &str,
+    result: &str,
+    observed: &str,
+    history_cache: &mut HistoryCache,
+) -> Result<(), String> {
     let path = latest_non_pass_path(root, expectation, history_cache)?;
     if let Some(parent) = path.parent() {
         ensure_dir_without_symlinks(parent)?;
@@ -81,9 +115,9 @@ pub(crate) fn write_latest_non_pass_record_with_cache(
     // logs: answer history excludes human-review records, and runtime logs are
     // diagnostic output rather than input to future command behavior.
     let mut line = json!({
-        "timestamp": record.timestamp,
-        "result": record.result,
-        "observed": record.observed,
+        "timestamp": timestamp,
+        "result": result,
+        "observed": observed,
     })
     .to_string();
     line.push('\n');
@@ -93,7 +127,7 @@ pub(crate) fn write_latest_non_pass_record_with_cache(
         .map_err(|err| format!("failed to flush {}: {}", path.display(), err))?;
     history_cache
         .latest_non_pass
-        .insert(path, parse_record_timestamp(&record.timestamp));
+        .insert(path, parse_record_timestamp(timestamp));
     Ok(())
 }
 

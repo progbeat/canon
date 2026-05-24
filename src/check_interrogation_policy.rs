@@ -122,9 +122,9 @@ pub(crate) fn turn_has_context_compaction(interrogation: &InterrogationResult) -
 }
 
 pub(crate) fn narrowed_scope_is_accepted(wide: &CheckRecord, narrowed: &CheckRecord) -> bool {
-    // The evaluator proposes the smallest sufficient scope in its response, but
-    // canon only trusts a strict narrowing after an independent interrogation
-    // returns a reusable answer that is either unchanged or still incorrect.
+    // Canon trusts a strict narrowing only after an independent interrogation
+    // under that narrower scope returns a reusable answer that is either
+    // unchanged or still incorrect.
     is_reusable_history_record(narrowed)
         && (narrowed.observed == wide.observed || !narrowed.passed())
 }

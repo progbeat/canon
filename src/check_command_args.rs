@@ -1,10 +1,12 @@
-use crate::check_selection::{add_check_option_args, raw_check_options_from_matches};
+use crate::check_selection::{
+    add_check_option_args, matched_os_values, raw_check_options_from_matches,
+};
 use crate::check_types::CheckCommandArgs;
 use crate::notes_cli::arg_to_string;
 use crate::scope::normalize_repo_path;
 use crate::CHECK_PATH;
 use clap::builder::OsStringValueParser;
-use clap::{Arg, ArgAction, ArgMatches, Command};
+use clap::{Arg, ArgAction, Command};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -67,13 +69,6 @@ fn check_command_args_parser() -> Command {
                 .action(ArgAction::Append),
         );
     add_check_option_args(command)
-}
-
-fn matched_os_values(matches: &ArgMatches, id: &str) -> Vec<OsString> {
-    matches
-        .get_many::<OsString>(id)
-        .map(|values| values.cloned().collect())
-        .unwrap_or_default()
 }
 
 fn check_value_arg(name: &'static str) -> Arg {

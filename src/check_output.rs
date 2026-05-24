@@ -62,11 +62,11 @@ fn write_stdout_record(
 }
 
 pub(crate) fn report_output_skipped_count(report: &CheckRunReport) -> usize {
-    debug_assert!(report.records.len() <= report.selected + report.skipped);
-    debug_assert!(report.silent <= report.skipped);
-    // The check-output contract reports final non-selected expectations. That
-    // includes CLI-selector exclusions plus expectations deselected later by
-    // cooldown.
+    debug_assert!(report.records.len() <= report.selected);
+    // The public summary `skipped` count is command non-selection only.
+    // Selected expectations removed by cooldown or passing-cache hits are
+    // tracked as `silent` because they intentionally emit no per-expectation
+    // stdout but are not summary-skipped by the check-output spec.
     report.skipped
 }
 
@@ -136,7 +136,7 @@ pub(crate) fn render_token_usage_summary(usage: TokenUsage) -> String {
 pub(crate) fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -> String {
     // Summary order is fixed to match the spec and pytest-style labels:
     // failed, error/errors, passed, skipped.
-    // `report.skipped` is the final non-selected count.
+    // `report.skipped` is the non-selected count.
     let mut passed = 0usize;
     let mut failed = 0usize;
     let mut errors = 0usize;
@@ -149,6 +149,10 @@ pub(crate) fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -
             failed += 1;
         }
     }
+    // Silent selected expectations are cooldown or passing-cache hits. They
+    // intentionally emit no per-expectation stdout, but they still have final
+    // pass results and are not command-skipped.
+    passed += report.silent;
     let mut outcomes = Vec::new();
     if failed > 0 {
         outcomes.push(format!("{} failed", failed));

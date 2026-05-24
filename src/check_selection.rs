@@ -106,7 +106,7 @@ pub(crate) fn raw_check_options_from_matches(
     })
 }
 
-fn matched_os_values(matches: &ArgMatches, id: &str) -> Vec<OsString> {
+pub(crate) fn matched_os_values(matches: &ArgMatches, id: &str) -> Vec<OsString> {
     matches
         .get_many::<OsString>(id)
         .map(|values| values.cloned().collect())
@@ -140,9 +140,10 @@ pub(crate) fn select_expectations_with_identities(
     identities: &[ExpectationIdentity],
     args: &[OsString],
 ) -> Result<Vec<SelectedExpectation>, String> {
-    // This expands command-line expectation selectors into the candidate set.
-    // The final selected set is resolved later, after cooldown selection
-    // filtering and reusable passing exact-cache deselection.
+    // This expands command-line expectation selectors into the selected set.
+    // Command-specific work-saving can later skip evaluator work or output for
+    // some selected expectations without changing which expectations the
+    // command selected.
     let mut selected_indexes = Vec::new();
     if args.is_empty() {
         selected_indexes.extend(0..config.expectations.len());
@@ -238,6 +239,7 @@ pub(crate) fn selected_expectation_at(
         display_id: identity.display_id.clone(),
         q: expectation.q.clone(),
         a: expectation.a.clone(),
+        prompt_scope: expectation.prompt_scope.clone(),
         cooldown,
         thinking: expectation.thinking.clone(),
     })
@@ -288,39 +290,37 @@ fn minimal_unique_expectation_prefix(id: &str, ids: &[String]) -> Option<String>
     })
 }
 
-pub(crate) struct FinalSelection {
+pub(crate) struct CheckWorkQueue {
     pub(crate) selected: Vec<SelectedExpectation>,
     pub(crate) skipped: Vec<SelectedExpectation>,
 }
 
-pub(crate) struct FinalSelectionError {
+pub(crate) struct CheckWorkQueueError {
     pub(crate) error: String,
     pub(crate) skipped: Vec<SelectedExpectation>,
 }
 
-pub(crate) fn final_selected_expectations(
+pub(crate) fn cooldown_filtered_check_work_queue(
     root: &Path,
     agent: &AgentConfig,
     selected: Vec<SelectedExpectation>,
     history_cache: &mut HistoryCache,
     now: u64,
-) -> Result<FinalSelection, FinalSelectionError> {
-    // CLI selector filtering happens before this shared final-selection step.
-    // Cooldown is a selection filter, not an answer-cache hit: a fresh latest
-    // pass removes a matching expectation before exact-cache lookup and before
-    // any evaluator result can be reused as the observed answer. `canon check`
-    // uses this set for evaluator work; `canon gate` uses the same no-selector
-    // final selected set as the input to its raw cache-comparison loop.
+) -> Result<CheckWorkQueue, CheckWorkQueueError> {
+    // Cooldown is a `canon check` work-saving filter, not command selection
+    // and not an answer-cache hit. A fresh latest pass removes a matching
+    // expectation from the evaluator work queue before exact-cache lookup and
+    // before any evaluator result can be reused as the observed answer.
     let mut remaining = Vec::new();
     let mut skipped = Vec::new();
     for expectation in selected {
         match cooldown_history_record(root, agent, &expectation, history_cache, now) {
             Ok(None) => remaining.push(expectation),
             Ok(Some(_)) => skipped.push(expectation),
-            Err(error) => return Err(FinalSelectionError { error, skipped }),
+            Err(error) => return Err(CheckWorkQueueError { error, skipped }),
         }
     }
-    Ok(FinalSelection {
+    Ok(CheckWorkQueue {
         selected: remaining,
         skipped,
     })

@@ -10,12 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-// This module owns shared check data types and answer-state classification only.
-// It is not the whole interrogation policy: response key order is enforced in
-// evaluator_json.rs, per-turn record finalization is in evaluator_turn.rs,
-// thread reuse is in check_interrogation.rs, and retry/narrowing/history
-// orchestration is in check.rs and check_interrogation_records.rs. A verdict on
-// the full interrogation policy cannot be made from this file in isolation.
+// Shared check data types and answer-state classification.
 
 pub(crate) fn contains_line_break(value: &str) -> bool {
     value.chars().any(is_line_break_char)
@@ -35,6 +30,8 @@ pub(crate) struct SelectedExpectation {
     pub(crate) display_id: String,
     pub(crate) q: String,
     pub(crate) a: String,
+    #[allow(dead_code)]
+    pub(crate) prompt_scope: Vec<String>,
     pub(crate) cooldown: Option<Cooldown>,
     pub(crate) thinking: Option<String>,
 }
@@ -239,11 +236,10 @@ impl CheckRecord {
 }
 
 pub(crate) struct CheckOptions {
-    // CLI-expanded expectation candidates. This is not the final selected set:
-    // cooldown can remove candidates before the check report records its
-    // selected/skipped counts.
+    // CLI-expanded selected expectations before check-only work-saving filters.
     pub(crate) selected: Vec<SelectedExpectation>,
     pub(crate) non_selected: Vec<SelectedExpectation>,
+    // Command-selector misses. This is the public summary `skipped` count.
     pub(crate) skipped: usize,
     // `canon check` stops after the first final non-pass by default. `--all`
     // keeps running the full already-selected set.
@@ -304,13 +300,13 @@ pub(crate) struct CheckRunReport {
     pub(crate) non_selected: Vec<SelectedExpectation>,
     // Freshly evaluated expectations in this run.
     pub(crate) evaluated: usize,
-    // Final selected count after every selection rule has run. This excludes
-    // command-selector misses and cooldown matches.
+    // CLI-expanded selected expectations before check-only work-saving filters.
     pub(crate) selected: usize,
-    // Final non-selected count.
+    // Command-selector misses. This is the public summary `skipped` count.
     pub(crate) skipped: usize,
-    // Non-selected expectations that intentionally produce no per-expectation
-    // stdout, currently cooldown matches.
+    // Skipped expectations that were selected by the command but intentionally
+    // produce no per-expectation stdout.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) silent: usize,
     // Kept for internal assertions around scope-narrowing behavior; public
     // output and runtime logs rely on the per-event narrowing records instead.

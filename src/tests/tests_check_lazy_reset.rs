@@ -104,6 +104,59 @@ fn lazy_full_scope_reset_schedule_applies_on_next_check_start() {
 }
 
 #[test]
+fn finish_check_report_logs_finish_after_lazy_reset_failure() {
+    let root = git_project("check-lazy-reset-finish-log");
+    enable_diagnostic_logs(&root);
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let expectations = check_options(&config, &[], false, true).selected;
+    let narrowed_scope = vec!["README.md".to_string()];
+    let mut narrowed_record = expectation_record(
+        &config.agent,
+        &expectations[1],
+        "pass",
+        "no",
+        staged_scope_hash(&root, &config.agent, &narrowed_scope).unwrap(),
+    );
+    narrowed_record.scope = narrowed_scope;
+    append_history_record(&root, &expectations[1], &narrowed_record).unwrap();
+    let reset_path = resolve_git_path(&root, "canon/lazy-full-scope-reset").unwrap();
+    fs::create_dir_all(&reset_path).unwrap();
+    let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
+    let mut result_output = Vec::new();
+    let mut check_caches = crate::check::CheckRunCaches::new();
+    let report = CheckRunReport {
+        records: Vec::new(),
+        non_selected: vec![expectations[1].clone()],
+        evaluated: 1_000,
+        selected: 0,
+        skipped: 0,
+        silent: 0,
+        narrowing: NarrowingStats::default(),
+    };
+
+    let err = crate::check_command_finish::finish_check_report(
+        crate::check_command_finish::CheckReportFinishContext {
+            root: &root,
+            config: &config,
+            diagnostic_log: &mut diagnostic_log,
+            result_output: &mut result_output,
+            check_caches: &mut check_caches,
+            write_agent_message: false,
+        },
+        &report,
+        None,
+    )
+    .unwrap_err();
+
+    assert!(!err.to_string().is_empty());
+    let log = fs::read_to_string(root.join(".git/canon/logs/0.jsonl")).unwrap();
+    assert!(log.contains(r#""event":"lazy_full_scope_reset.error""#));
+    assert!(log.contains(r#""event":"check.finish""#));
+    assert!(log.contains(r#""status":"error""#));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn lazy_full_scope_reset_count_uses_evaluated_count_and_candidate_cap() {
     assert_eq!(lazy_full_scope_reset_count(0, 1, 5), 0);
     assert_eq!(lazy_full_scope_reset_count(128, 1, 5), 1);

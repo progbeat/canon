@@ -3,10 +3,10 @@ use super::*;
 #[test]
 fn parser_handles_json_answer_and_free_form_evidence() {
     let parsed = parse_evaluator_response(
-            r#"{"answer":"yes","evidence":"line: one\nSCOPE: this is evidence\nANSWER: also evidence","scope":["."]}"#,
-            &parse_check_config(check_config_yaml()).unwrap().agent,
-        )
-        .unwrap();
+        r#"{"answer":"yes","evidence":"line: one\nSCOPE: this is evidence\nANSWER: also evidence","scope":["."]}"#,
+        &parse_check_config(check_config_yaml()).unwrap().agent,
+    )
+    .unwrap();
     assert_eq!(parsed.answer, "yes");
     assert_eq!(
         parsed.evidence,
@@ -52,6 +52,15 @@ fn parser_handles_json_answer_and_free_form_evidence() {
         &parse_check_config(check_config_yaml()).unwrap().agent,
     )
     .is_err());
+    let empty_answer = parse_evaluator_response(
+        r#"{"answer":"","evidence":"blank answer","scope":["."]}"#,
+        &parse_check_config(check_config_yaml()).unwrap().agent,
+    )
+    .unwrap_err();
+    assert_eq!(
+        empty_answer,
+        "answer must be a non-empty single-line string"
+    );
     assert_eq!(
         parse_evaluator_response(
             r#"{"answer":"a","evidence":"option a applies","scope":["."]}"#,
@@ -79,6 +88,21 @@ fn parser_handles_json_answer_and_free_form_evidence() {
         .answer,
         "maybe"
     );
+    let evidence_with_backticks = parse_evaluator_response(
+        r#"{"answer":"yes","evidence":"`src/check.rs` handles restricted-`idk` retry","scope":["src/check.rs"]}"#,
+        &parse_check_config(check_config_yaml()).unwrap().agent,
+    )
+    .unwrap();
+    assert_eq!(
+        evidence_with_backticks.evidence,
+        "`src/check.rs` handles restricted-`idk` retry"
+    );
+    let whitespace_evidence = parse_evaluator_response(
+        r#"{"answer":"yes","evidence":"  \t ","scope":["."]}"#,
+        &parse_check_config(check_config_yaml()).unwrap().agent,
+    )
+    .unwrap();
+    assert_eq!(whitespace_evidence.evidence, "  \t ");
     assert!(parse_evaluator_response(
         r#"{"answer":"yes","evidence":"ok","scope":["."]} trailing prose"#,
         &parse_check_config(check_config_yaml()).unwrap().agent,
