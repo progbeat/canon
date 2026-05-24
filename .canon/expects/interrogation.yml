@@ -8,3 +8,7 @@
 
 - q: "Does `canon check` keep evaluator Codex threads ephemeral to one invocation, reuse a thread only for evaluator interrogations with the same enforced `scope` within that invocation, and start separate threads for different enforced scopes?"
   a: "yes"
+
+- q: "Are you encouraged to refer to tests in evidence?"
+  a: "yes"
+  thinking: low

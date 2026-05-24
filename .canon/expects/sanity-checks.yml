@@ -10,6 +10,9 @@
   a: "yes"
   cooldown: 20d
 
+- q: "Does scopeTreeOid match the evaluator-visible tree?"
+  a: "yes"
+
 - q: "Do restricted file scopes allow ancestor directory access without allowing non-scoped file contents?"
   a: "yes"
   cooldown: 1d
