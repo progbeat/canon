@@ -140,6 +140,10 @@ fn preflight_default_git_pre_commit_hook(
     if preflight.current_git_hooks_path.as_deref() == Some(GIT_HOOKS_PATH) {
         return Ok(());
     }
+    // Canon-managed reusable hooks live under `PRE_COMMIT_HOOK_PATH` with
+    // `core.hooksPath` pointing at `GIT_HOOKS_PATH`. The default Git hook path
+    // is user-owned whenever Git is not already configured for Canon, even if a
+    // file there happens to look compatible.
     if path_exists_no_follow(&root.join(DEFAULT_GIT_PRE_COMMIT_HOOK_PATH))? {
         return Err(pre_commit_hook_manual_advice());
     }

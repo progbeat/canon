@@ -75,6 +75,7 @@ impl RawExpectationExpansion<'_> {
                 RawExpectationItem::Explicit(item) => self.expectations.push(Expectation {
                     q: item.q,
                     a: item.a,
+                    prompt_scope: Vec::new(),
                     cooldown: item.cooldown,
                     thinking: item.thinking,
                 }),
@@ -97,11 +98,17 @@ impl RawExpectationExpansion<'_> {
     ) -> Result<(), String> {
         let item_number = index + 1;
         let files = self.expand_paths(config_path, &item.path, item_number, "path")?;
+        let uses_content = item.q_template.contains("{{content}}");
         for file in files {
-            let content = self.read_expanded_file(&file)?;
+            let content = if uses_content {
+                self.read_expanded_file(&file)?
+            } else {
+                String::new()
+            };
             self.expectations.push(Expectation {
                 q: render_generator_question(&item.q_template, &content),
                 a: item.a.clone(),
+                prompt_scope: if uses_content { vec![file] } else { Vec::new() },
                 cooldown: item.cooldown.clone(),
                 thinking: item.thinking.clone(),
             });

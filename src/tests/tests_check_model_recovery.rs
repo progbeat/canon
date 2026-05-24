@@ -208,7 +208,7 @@ fn check_runner_restarts_reused_thread_after_context_window_error() {
     );
     assert_eq!(
         restart["developerInstructions"].as_str(),
-        Some(developer_instructions(&config.agent, &full_scope()).as_str())
+        Some(developer_instructions(&full_scope()).as_str())
     );
     assert_eq!(runner.starts, 2);
     assert_eq!(

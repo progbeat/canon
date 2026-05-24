@@ -61,6 +61,23 @@ fn check_output_failed_and_error_records_use_specified_line_counts() {
 }
 
 #[test]
+fn check_summary_counts_silent_selected_passes_as_passed() {
+    let report = CheckRunReport {
+        records: Vec::new(),
+        non_selected: Vec::new(),
+        evaluated: 0,
+        selected: 0,
+        skipped: 1,
+        silent: 2,
+        narrowing: NarrowingStats::default(),
+    };
+
+    let summary = render_check_summary(&report, Duration::from_secs(1));
+
+    assert!(summary.contains("2 passed, 1 skipped"));
+}
+
+#[test]
 fn pass_improvement_notice_uses_specified_pluralization() {
     assert_eq!(pass_improvement_notice(0), None);
     assert_eq!(
@@ -89,7 +106,7 @@ fn check_agent_message_uses_required_all_pass_and_fallback_text() {
     assert_eq!(
         check_agent_message(
             &root,
-            &config.agent,
+            &config,
             &pass_report,
             &mut HistoryCache::new(),
             &mut ScopeHashCache::new(),
@@ -110,7 +127,7 @@ fn check_agent_message_uses_required_all_pass_and_fallback_text() {
     assert_eq!(
         check_agent_message(
             &root,
-            &config.agent,
+            &config,
             &fail_report,
             &mut HistoryCache::new(),
             &mut ScopeHashCache::new(),
@@ -140,7 +157,7 @@ fn check_agent_message_counts_human_review_as_non_ok() {
     assert_eq!(
         check_agent_message(
             &root,
-            &config.agent,
+            &config,
             &error_report,
             &mut HistoryCache::new(),
             &mut ScopeHashCache::new(),
@@ -189,7 +206,7 @@ fn staged_pass_notice_counts_passes_failed_at_head() {
     commit_all(&root, "initial");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
-    let head_hash = gate_head_tree_fingerprint(&root, &full_scope())
+    let head_hash = gate_head_tree_fingerprint(&root, &config.agent, &full_scope())
         .unwrap()
         .unwrap();
     append_history_record(
@@ -241,7 +258,7 @@ fn staged_pass_notice_counts_passes_even_with_existing_failure() {
     commit_all(&root, "initial");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1", "2"], false, true);
-    let head_hash = gate_head_tree_fingerprint(&root, &full_scope())
+    let head_hash = gate_head_tree_fingerprint(&root, &config.agent, &full_scope())
         .unwrap()
         .unwrap();
     append_history_record(
@@ -316,7 +333,7 @@ fn staged_pass_notice_counts_passes_even_with_existing_failure() {
     assert_eq!(
         check_agent_messages(
             &root,
-            &config.agent,
+            &config,
             &report,
             &mut HistoryCache::new(),
             &mut ScopeHashCache::new(),
@@ -326,6 +343,122 @@ fn staged_pass_notice_counts_passes_even_with_existing_failure() {
             "▷ +1 pass compared to HEAD. Commit the staged changes NOW!".to_string(),
             "▷ Then fix the remaining issues and run `canon check` again!".to_string(),
         ]
+    );
+    assert!(run_gate_command(&root, &[]).is_ok());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_agent_message_blocks_commit_when_regression_cache_is_missing() {
+    let root = git_project("check-agent-message-gate-missing-cache");
+    let yaml = r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: "Fixed?"
+    a: "yes"
+  - q: "Still failing?"
+    a: "no"
+  - q: "Unevaluated?"
+    a: "yes"
+"#;
+    fs::create_dir_all(root.join(".canon")).unwrap();
+    fs::write(root.join(CHECK_PATH), yaml).unwrap();
+    Command::new("git")
+        .arg("add")
+        .arg(CHECK_PATH)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    commit_all(&root, "initial");
+    let config = parse_check_config(yaml).unwrap();
+    let options = check_options(&config, &["1", "2", "3"], false, true);
+    let head_hash = gate_head_tree_fingerprint(&root, &config.agent, &full_scope())
+        .unwrap()
+        .unwrap();
+    append_history_record(
+        &root,
+        &options.selected[0],
+        &expectation_record(
+            &config.agent,
+            &options.selected[0],
+            "fail",
+            "no",
+            head_hash.clone(),
+        ),
+    )
+    .unwrap();
+    append_history_record(
+        &root,
+        &options.selected[1],
+        &expectation_record(
+            &config.agent,
+            &options.selected[1],
+            "fail",
+            "yes",
+            head_hash.clone(),
+        ),
+    )
+    .unwrap();
+    append_history_record(
+        &root,
+        &options.selected[2],
+        &expectation_record(
+            &config.agent,
+            &options.selected[2],
+            "pass",
+            "yes",
+            head_hash,
+        ),
+    )
+    .unwrap();
+    fs::write(root.join("README.md"), "changed\n").unwrap();
+    Command::new("git")
+        .arg("add")
+        .arg("README.md")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let current_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let current_pass = expectation_record(
+        &config.agent,
+        &options.selected[0],
+        "pass",
+        "yes",
+        current_hash.clone(),
+    );
+    let current_fail = expectation_record(
+        &config.agent,
+        &options.selected[1],
+        "fail",
+        "yes",
+        current_hash,
+    );
+    append_history_record(&root, &options.selected[0], &current_pass).unwrap();
+    append_history_record(&root, &options.selected[1], &current_fail).unwrap();
+    let report = CheckRunReport {
+        records: vec![current_pass, current_fail],
+        non_selected: Vec::new(),
+        evaluated: 2,
+        selected: 3,
+        skipped: 0,
+        silent: 0,
+        narrowing: NarrowingStats::default(),
+    };
+
+    assert_eq!(
+        check_agent_messages(
+            &root,
+            &config,
+            &report,
+            &mut HistoryCache::new(),
+            &mut ScopeHashCache::new(),
+        )
+        .unwrap(),
+        vec!["▷ Fix the issues and run `canon check` again!".to_string()]
     );
     let _ = fs::remove_dir_all(root);
 }
@@ -343,7 +476,7 @@ fn check_agent_message_prioritizes_regressions_over_fixes() {
     commit_all(&root, "initial");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1", "2"], false, true);
-    let head_hash = gate_head_tree_fingerprint(&root, &full_scope())
+    let head_hash = gate_head_tree_fingerprint(&root, &config.agent, &full_scope())
         .unwrap()
         .unwrap();
     append_history_record(
@@ -388,7 +521,7 @@ fn check_agent_message_prioritizes_regressions_over_fixes() {
     assert_eq!(
         check_agent_message(
             &root,
-            &config.agent,
+            &config,
             &report,
             &mut HistoryCache::new(),
             &mut ScopeHashCache::new(),
@@ -498,7 +631,7 @@ fn query_mode_uses_agent_and_does_not_write_history() {
     let output = render_query_output(&result.answer);
     assert_eq!(
         output,
-        "Observed: no\nEvidence: src/main.rs says no\nScope: [\"src\"]\n"
+        "Observed: no\nEvidence: `src/main.rs`: src/main.rs says no\nScope: [\"src\"]\n"
     );
     let log = fs::read_to_string(diagnostic_log.path()).unwrap();
     assert!(log.contains(r#""event":"query.result""#));
@@ -571,7 +704,10 @@ fn query_mode_accepts_narrowed_incorrect_answer_when_expected_is_known() {
     .unwrap();
 
     assert_eq!(result.answer.answer, "no");
-    assert_eq!(result.answer.evidence, "src/main.rs still fails it");
+    assert_eq!(
+        result.answer.evidence,
+        "`src/main.rs`: src/main.rs still fails it"
+    );
     assert_eq!(result.answer.scope, vec!["src"]);
     let _ = fs::remove_dir_all(root);
 }
@@ -603,7 +739,7 @@ fn query_mode_rejects_changed_narrowing_when_expected_is_unknown() {
     .unwrap();
 
     assert_eq!(result.answer.answer, "yes");
-    assert_eq!(result.answer.evidence, "full scope answer");
+    assert_eq!(result.answer.evidence, "`src/main.rs`: full scope answer");
     assert_eq!(result.answer.scope, full_scope());
     let _ = fs::remove_dir_all(root);
 }
@@ -647,7 +783,10 @@ fn query_mode_can_use_explicit_restricted_scope() {
     );
     assert_eq!(result.answer.answer, "yes");
     assert_eq!(result.answer.scope, full_scope());
-    assert_eq!(result.answer.evidence, "full-scope evidence answers it");
+    assert_eq!(
+        result.answer.evidence,
+        "`README.md`: full-scope evidence answers it"
+    );
     assert_eq!(runner.starts, 2);
     let log = fs::read_to_string(diagnostic_log.path()).unwrap();
     assert!(log.contains(r#""event":"query.result""#));
@@ -798,12 +937,12 @@ fn failed_narrowing_logs_stats_and_keeps_wider_final_result() {
     assert_eq!(report.narrowing.accepted, 0);
     assert_eq!(report.narrowing.rejected, 1);
     assert_eq!(report.records[0].observed, "no");
-    assert_eq!(report.records[0].evidence, "full answer");
+    assert_eq!(report.records[0].evidence, "`src/main.rs`: full answer");
     assert_eq!(report.records[0].scope, vec!["."]);
     let history = read_history_records(&root, &expectation).unwrap();
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].observed, "no");
-    assert_eq!(history[0].evidence, "full answer");
+    assert_eq!(history[0].evidence, "`src/main.rs`: full answer");
     assert_eq!(history[0].scope, vec!["."]);
     let log = fs::read_to_string(diagnostic_log.path()).unwrap();
     assert_eq!(log.matches(r#""event":"expectation.result""#).count(), 1);

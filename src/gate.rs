@@ -2,8 +2,7 @@ use crate::check_preflight::{
     is_canon_only_staged_change_bytes, is_canon_project_path_bytes, staged_changed_path_bytes,
 };
 use crate::check_selection::{
-    expectation_identities, final_selected_expectations, select_expectations_with_identities,
-    ExpectationIdentity,
+    expectation_identities, select_expectations_with_identities, ExpectationIdentity,
 };
 use crate::check_types::SelectedExpectation;
 use crate::cli::CommandError;
@@ -94,22 +93,14 @@ pub(crate) fn gate_pass_with_config(
     config: &CheckConfig,
     identities: &[ExpectationIdentity],
     mut caches: GateCaches<'_>,
-    now: u64,
+    _now: u64,
     emit_failure: impl FnMut(GateFailureEvent) -> Result<(), String>,
 ) -> Result<bool, String> {
     let selected_expectations = select_expectations_with_identities(config, identities, &[])?;
-    let selected_expectations = final_selected_expectations(
-        root,
-        &config.agent,
-        selected_expectations,
-        caches.history,
-        now,
-    )
-    .map(|selection| selection.selected)
-    .map_err(|err| err.error)?;
-    // The gate pseudocode is the raw comparison loop over this final selected
-    // set. Do not add gate-only pruning here; `canon check` and `canon gate`
-    // must agree on the no-selector final selected set.
+    // The gate pseudocode is the raw comparison loop over every no-selector
+    // expectation. Cooldown is only a `canon check` work-saving filter; the
+    // pre-commit gate still compares cached HEAD and staged results for the
+    // selected expectations.
     gate_selected_expectations(
         root,
         &config.agent,
@@ -119,6 +110,31 @@ pub(crate) fn gate_pass_with_config(
     )
 }
 
+pub(crate) fn gate_regression_count_with_config(
+    root: &Path,
+    config: &CheckConfig,
+    history_cache: &mut HistoryCache,
+    scope_hash_cache: &mut ScopeHashCache,
+) -> Result<usize, String> {
+    // This is the gate spec's expectation comparison as a count: HEAD pass
+    // followed by staged non-pass or missing cache.
+    let identities = expectation_identities(config)?;
+    let selected_expectations = select_expectations_with_identities(config, &identities, &[])?;
+    selected_expectations
+        .iter()
+        .map(|expectation| {
+            Ok(gate_expectation_status(
+                root,
+                &config.agent,
+                expectation,
+                history_cache,
+                scope_hash_cache,
+            )?
+            .is_blocking() as usize)
+        })
+        .sum()
+}
+
 fn gate_selected_expectations(
     root: &Path,
     agent: &AgentConfig,
@@ -126,40 +142,77 @@ fn gate_selected_expectations(
     caches: &mut GateCaches<'_>,
     mut emit_failure: impl FnMut(GateFailureEvent) -> Result<(), String>,
 ) -> Result<bool, String> {
+    // These statuses are the only expectation-related way `canon gate` can
+    // fail. Non-OK check results can remain non-blocking here when they did not
+    // regress from a HEAD pass.
+    // `gate_regression_count_with_config` counts these same statuses for
+    // `canon check`'s `num_regressions`; if that count is zero, this loop has
+    // no expectation-related failure branch to take.
     for expectation in selected_expectations {
-        let previous = exact_gate_cache_result_for_tree(
-            root,
-            agent,
-            expectation,
-            GateComparisonTree::Head,
-            caches.history,
-            caches.scope_hash,
-        )?;
-        let current = exact_gate_cache_result_for_tree(
-            root,
-            agent,
-            expectation,
-            GateComparisonTree::StagedIndex,
-            caches.history,
-            caches.scope_hash,
-        )?;
-        match (previous, current) {
-            (GateCacheResult::Pass, GateCacheResult::Pass) => {}
-            (GateCacheResult::Pass, GateCacheResult::Fail) => {
+        match gate_expectation_status(root, agent, expectation, caches.history, caches.scope_hash)?
+        {
+            GateExpectationStatus::PassedOrNonBlocking => {}
+            GateExpectationStatus::Regressed => {
                 emit_failure(GateFailureEvent::Regressed)?;
                 return Ok(false);
             }
-            (GateCacheResult::Pass, GateCacheResult::Missing) => {
+            GateExpectationStatus::MissingAfterHeadPass => {
                 emit_failure(GateFailureEvent::Missing)?;
                 emit_failure(GateFailureEvent::MissingComplete {
                     has_regressions: false,
                 })?;
                 return Ok(false);
             }
-            _ => {}
         }
     }
     Ok(true)
+}
+
+fn gate_expectation_status(
+    root: &Path,
+    agent: &AgentConfig,
+    expectation: &SelectedExpectation,
+    history_cache: &mut HistoryCache,
+    scope_hash_cache: &mut ScopeHashCache,
+) -> Result<GateExpectationStatus, String> {
+    let previous = exact_gate_cache_result_for_tree(
+        root,
+        agent,
+        expectation,
+        GateComparisonTree::Head,
+        history_cache,
+        scope_hash_cache,
+    )?;
+    let current = exact_gate_cache_result_for_tree(
+        root,
+        agent,
+        expectation,
+        GateComparisonTree::StagedIndex,
+        history_cache,
+        scope_hash_cache,
+    )?;
+    Ok(match (previous, current) {
+        (GateCacheResult::Pass, GateCacheResult::Fail) => GateExpectationStatus::Regressed,
+        (GateCacheResult::Pass, GateCacheResult::Missing) => {
+            GateExpectationStatus::MissingAfterHeadPass
+        }
+        _ => GateExpectationStatus::PassedOrNonBlocking,
+    })
+}
+
+enum GateExpectationStatus {
+    PassedOrNonBlocking,
+    Regressed,
+    MissingAfterHeadPass,
+}
+
+impl GateExpectationStatus {
+    fn is_blocking(&self) -> bool {
+        matches!(
+            self,
+            GateExpectationStatus::Regressed | GateExpectationStatus::MissingAfterHeadPass
+        )
+    }
 }
 
 pub(crate) struct GateCaches<'a> {
@@ -231,7 +284,7 @@ pub(crate) fn exact_gate_cache_result_for_tree(
                     .staged_scope_hash(root, agent, scope)
                     .map(Some),
                 GateComparisonTree::Head => {
-                    scope_hash_cache.gate_head_tree_fingerprint(root, scope)
+                    scope_hash_cache.gate_head_tree_fingerprint(root, agent, scope)
                 }
             },
         )?;

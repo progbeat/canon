@@ -8,12 +8,12 @@ pub(crate) fn parse_evaluator_response(
     agent: &AgentConfig,
 ) -> Result<ParsedAnswer, String> {
     let response = parse_evaluator_response_json(text)?;
-    if contains_line_break(&response.answer) {
-        return Err("answer must be a single-line string".to_string());
+    if response.answer.trim().is_empty() || contains_line_break(&response.answer) {
+        return Err("answer must be a non-empty single-line string".to_string());
     }
-    // Parsed answers stay vocabulary-neutral. `ObservedAnswerState` validates
-    // the answer shape against the expectation: yes/no questions reject
-    // free-form prose, while free-form expectations can compare exact strings.
+    // JSON parsing cannot validate question-relative answer vocabulary because
+    // the expected answer is not part of the evaluator response. The check
+    // record step applies that expectation-specific validation after parsing.
     Ok(ParsedAnswer {
         answer: response.answer,
         evidence: response.evidence,

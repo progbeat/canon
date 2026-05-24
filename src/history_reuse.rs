@@ -1,7 +1,5 @@
-// Cache responsibilities are intentionally split by operation. This module
-// owns lookup: newest-to-oldest history scanning plus current scopeTreeOid
-// matching. History file layout and writes live in `history`, `logging`, and
-// `history_append`; probabilistic retention lives in `history_compaction`.
+// Answer-history lookup for the Cache spec: newest-to-oldest history scanning
+// plus current scopeTreeOid matching.
 use crate::check_types::{CheckRecord, ObservedAnswerState, SelectedExpectation};
 use crate::config_types::AgentConfig;
 use crate::history::HistoryCache;
@@ -50,12 +48,15 @@ pub(crate) fn latest_history_record_matching_hash(
     history_cache: &mut HistoryCache,
     mut current_hash_for_scope: impl FnMut(&[String]) -> Result<Option<String>, String>,
 ) -> Result<Option<CheckRecord>, String> {
-    // The hash match is deliberately tested before answer-shape validation so
-    // the cache lookup follows the Cache spec's "first matching scopeTreeOid"
-    // rule. The final validation only protects readers from legacy history
-    // records that predate the current "answers only" write contract.
+    // Cache lookup follows the Cache spec's answer-history contract: non-answer
+    // states are not history records, so legacy rows with idk/malformed-style
+    // observed values are skipped before applying the newest-to-oldest
+    // scopeTreeOid match.
     let matched_record =
         scan_latest_history_records(root, expectation, history_cache, |mut record| {
+            if !is_reusable_history_record_for_expected(&record, &expectation.a) {
+                return Ok(HistoryRecordScan::Continue);
+            }
             let Ok(scope) = sanitize_scope_for_hash(&record.scope) else {
                 return Ok(HistoryRecordScan::Continue);
             };
@@ -68,13 +69,7 @@ pub(crate) fn latest_history_record_matching_hash(
             }
             Ok(HistoryRecordScan::Continue)
         })?;
-    let Some(record) = matched_record else {
-        return Ok(None);
-    };
-    if !is_reusable_history_record_for_expected(&record, &expectation.a) {
-        return Ok(None);
-    }
-    Ok(Some(record_with_current_expectation(record, expectation)))
+    Ok(matched_record.map(|record| record_with_current_expectation(record, expectation)))
 }
 
 pub(crate) fn cooldown_history_record(
@@ -115,8 +110,9 @@ pub(crate) fn latest_history_scope_with_cache(
     expectation: &SelectedExpectation,
     history_cache: &mut HistoryCache,
 ) -> Result<Option<Vec<String>>, String> {
-    // This returns only an enforced-scope seed for a fresh interrogation. It is
-    // not a cached check result and does not let callers skip evaluator work.
+    // Expectation-mode `canon check` calls this before each fresh interrogation.
+    // This returns only an enforced-scope seed; it is not a cached check result
+    // and does not let callers skip evaluator work.
     // The Interrogation Policy's "latest accepted scope" means the latest
     // reusable answer-history scope, not the latest passing scope. Verified
     // correct and incorrect answers both have accepted scopes; non-answer review

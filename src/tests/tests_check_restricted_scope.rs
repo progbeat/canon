@@ -1,6 +1,64 @@
 use super::*;
 
 #[test]
+fn generated_prompt_source_does_not_widen_restricted_history_scope() {
+    let root = git_project("generated-prompt-source-does-not-widen-scope");
+    fs::create_dir_all(root.join("specs")).unwrap();
+    fs::write(root.join("specs/a.md"), "Spec text").unwrap();
+    Command::new("git")
+        .args(["add", "specs/a.md"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let mut cache = RepoInspectionCache::new();
+    let config = parse_check_config_content_with_root(
+        &root,
+        Path::new("check.yml"),
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore:
+    - "specs/**"
+  plugins: []
+expectations:
+  - path: "specs/*.md"
+    q_template: "{{content}}\nImplemented?"
+    a: "yes"
+"#,
+        &mut cache,
+    )
+    .unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let expectation = options.selected[0].clone();
+    append_history_record(
+        &root,
+        &expectation,
+        &CheckRecord {
+            timestamp: "1970-01-01T00:00:00Z".to_string(),
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
+            number: expectation.number,
+            result: CheckResult::Pass,
+            prompt: Some(expectation.q.clone()),
+            expected: Some(expectation.a.clone()),
+            observed: "yes".to_string(),
+            evidence: "src/main.rs was previously enough".to_string(),
+            scope: vec!["src/main.rs".to_string()],
+            scope_hash: "old".to_string(),
+            cache_key: Some(history_cache_key(&config.agent, &expectation)),
+        },
+    )
+    .unwrap();
+    let mut runner = FakeRunner::new(&[&answer("yes", "src/main.rs answers it", &["src/main.rs"])]);
+
+    run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert_eq!(runner.start_scopes, vec![vec!["src/main.rs".to_string()]]);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn check_runner_replaces_restricted_idk_with_full_scope_answer() {
     let root = git_project("check-restricted-idk");
     let config = parse_check_config(check_config_yaml()).unwrap();
@@ -62,7 +120,7 @@ fn check_runner_replaces_restricted_idk_with_full_scope_answer() {
 }
 
 #[test]
-fn check_runner_reviews_restricted_idk_with_empty_evidence() {
+fn check_runner_retries_full_scope_for_restricted_idk_with_empty_evidence() {
     let root = git_project("check-restricted-idk-empty-evidence");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, false);
@@ -86,15 +144,20 @@ fn check_runner_reviews_restricted_idk_with_empty_evidence() {
         },
     )
     .unwrap();
-    let mut runner = FakeRunner::new(&[&answer("idk", "", &["src/main.rs"])]);
+    let mut runner = FakeRunner::new(&[
+        &answer("idk", "", &["src/main.rs"]),
+        &answer("yes", "full project answers it", &["."]),
+    ]);
 
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(!records.records[0].passed());
-    assert!(record_requires_human_review(&records.records[0]));
-    assert_eq!(records.records[0].observed, EMPTY_EVIDENCE_OBSERVED);
-    assert_eq!(runner.start_scopes, vec![vec!["src/main.rs".to_string()]]);
+    assert!(records.records[0].passed());
+    assert_eq!(records.records[0].observed, "yes");
+    assert_eq!(
+        runner.start_scopes,
+        vec![vec!["src/main.rs".to_string()], vec![".".to_string()]]
+    );
     let _ = fs::remove_dir_all(root);
 }
 
@@ -131,12 +194,17 @@ fn check_runner_retries_full_scope_for_restricted_idk_after_token_break_signal()
     let report =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert_eq!(report.records.len(), 1);
+    assert_eq!(report.records.len(), 2);
     assert_eq!(report.records[0].observed, "yes");
-    assert_eq!(runner.prompts.len(), 2);
+    assert_eq!(report.records[1].observed, "no");
+    assert_eq!(runner.prompts.len(), 3);
     assert_eq!(
         runner.start_scopes,
-        vec![vec!["src/main.rs".to_string()], vec![".".to_string()]]
+        vec![
+            vec!["src/main.rs".to_string()],
+            vec![".".to_string()],
+            vec![".".to_string()]
+        ]
     );
     let _ = fs::remove_dir_all(root);
 }
@@ -167,12 +235,17 @@ fn check_runner_retries_full_scope_for_restricted_idk_after_context_compaction()
     let report =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert_eq!(report.records.len(), 1);
+    assert_eq!(report.records.len(), 2);
     assert_eq!(report.records[0].observed, "yes");
-    assert_eq!(runner.prompts.len(), 2);
+    assert_eq!(report.records[1].observed, "no");
+    assert_eq!(runner.prompts.len(), 3);
     assert_eq!(
         runner.start_scopes,
-        vec![vec!["src/main.rs".to_string()], vec![".".to_string()]]
+        vec![
+            vec!["src/main.rs".to_string()],
+            vec![".".to_string()],
+            vec![".".to_string()]
+        ]
     );
     let _ = fs::remove_dir_all(root);
 }
@@ -583,7 +656,7 @@ fn check_runner_does_not_retry_restricted_widened_empty_evidence() {
 }
 
 #[test]
-fn check_runner_does_not_retry_restricted_widened_malformed_answer() {
+fn check_runner_does_not_retry_restricted_widened_empty_malformed_answer() {
     let root = git_project("check-restricted-widened-malformed");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, false);
@@ -599,7 +672,7 @@ fn check_runner_does_not_retry_restricted_widened_malformed_answer() {
 
     assert!(!records.records[0].passed());
     assert!(record_requires_human_review(&records.records[0]));
-    assert_eq!(records.records[0].observed, "malformed");
+    assert_eq!(records.records[0].observed, EMPTY_EVIDENCE_OBSERVED);
     assert_eq!(records.records[0].scope, vec!["src/main.rs"]);
     assert_eq!(runner.start_scopes, vec![vec!["src/main.rs".to_string()]]);
     assert_eq!(runner.prompts.len(), 1);

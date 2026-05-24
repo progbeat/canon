@@ -5,7 +5,10 @@ use crate::check_reporting::write_check_finish_event;
 use crate::check_types::{CheckRecord, CheckRunReport, SelectedExpectation};
 use crate::cli::CommandError;
 use crate::config_types::{AgentConfig, CheckConfig};
-use crate::gate::{exact_gate_cache_result_for_tree, GateCacheResult, GateComparisonTree};
+use crate::gate::{
+    exact_gate_cache_result_for_tree, gate_regression_count_with_config, GateCacheResult,
+    GateComparisonTree,
+};
 use crate::history::HistoryCache;
 use crate::scope_hash::ScopeHashCache;
 use std::io::Write;
@@ -43,23 +46,34 @@ pub(crate) fn finish_check_report(
     // and the public trailer have already been rendered, written, and flushed
     // by their own writers. This step computes only the remaining post-trailer
     // side effects: the agent message, lazy reset, and finish lifecycle log.
+    let mut post_finish_error = None;
+    let mut finish_error = error.map(str::to_string);
     if context.write_agent_message {
-        write_check_agent_message(
+        if let Err(err) = write_check_agent_message(
             context.root,
             context.config,
             report,
             context.result_output,
             context.check_caches,
-        )?;
+        ) {
+            finish_error.get_or_insert_with(|| err.to_string());
+            post_finish_error.get_or_insert(err);
+        }
     }
-    apply_lazy_full_scope_reset(
+    if let Err(err) = apply_lazy_full_scope_reset(
         context.root,
         context.config,
         report.evaluated,
         &report.non_selected,
         context.diagnostic_log,
-    )?;
-    write_check_finish_event(context.diagnostic_log, false, error)?;
+    ) {
+        finish_error.get_or_insert_with(|| err.clone());
+        post_finish_error.get_or_insert_with(|| err.into());
+    }
+    write_check_finish_event(context.diagnostic_log, false, finish_error.as_deref())?;
+    if let Some(err) = post_finish_error {
+        return Err(err);
+    }
     Ok(())
 }
 
@@ -130,7 +144,7 @@ fn write_check_agent_message(
 ) -> Result<(), CommandError> {
     let messages = check_agent_messages(
         root,
-        &config.agent,
+        config,
         report,
         &mut caches.history,
         &mut caches.scope_hash,
@@ -144,24 +158,28 @@ fn write_check_agent_message(
 #[cfg(test)]
 pub(crate) fn check_agent_message(
     root: &Path,
-    agent: &AgentConfig,
+    config: &CheckConfig,
     report: &CheckRunReport,
     history_cache: &mut HistoryCache,
     scope_hash_cache: &mut ScopeHashCache,
 ) -> Result<String, String> {
-    Ok(check_agent_messages(root, agent, report, history_cache, scope_hash_cache)?.join("\n"))
+    Ok(check_agent_messages(root, config, report, history_cache, scope_hash_cache)?.join("\n"))
 }
 
 pub(crate) fn check_agent_messages(
     root: &Path,
-    agent: &AgentConfig,
+    config: &CheckConfig,
     report: &CheckRunReport,
     history_cache: &mut HistoryCache,
     scope_hash_cache: &mut ScopeHashCache,
 ) -> Result<Vec<String>, String> {
+    let agent = &config.agent;
     let num_fixes = staged_pass_notice_count(root, agent, report, history_cache, scope_hash_cache)?;
+    // This is the check-command spec's `num_regressions`. Reusing gate's
+    // comparison keeps a same-tree commit instruction aligned with
+    // expectation-related `canon gate` failures.
     let num_regressions =
-        staged_regressions_count(root, agent, report, history_cache, scope_hash_cache)?;
+        gate_regression_count_with_config(root, config, history_cache, scope_hash_cache)?;
     let num_failed = report
         .records
         .iter()
@@ -179,40 +197,15 @@ pub(crate) fn check_agent_messages(
     if num_non_ok == 0 && num_fixes == 0 {
         return Ok(vec![ALL_CHECKS_PASSED_MESSAGE.to_string()]);
     }
+    // The commit notice is reachable only after `num_regressions == 0`.
+    // `num_regressions` is computed by `gate_regression_count_with_config`, so
+    // `canon gate` has no expectation-related failure branch left for this
+    // staged tree even if non-regressing non-OK records remain.
     let mut messages = vec![pass_improvement_notice(num_fixes).expect("positive fix count")];
     if num_non_ok > 0 {
         messages.push(THEN_FIX_REMAINING_MESSAGE.to_string());
     }
     Ok(messages)
-}
-
-fn staged_regressions_count(
-    root: &Path,
-    agent: &AgentConfig,
-    report: &CheckRunReport,
-    history_cache: &mut HistoryCache,
-    scope_hash_cache: &mut ScopeHashCache,
-) -> Result<usize, String> {
-    let mut count = 0usize;
-    for record in report.records.iter().filter(|record| !record.passed()) {
-        let Some(expectation) = selected_expectation_from_record(record) else {
-            continue;
-        };
-        if matches!(
-            exact_gate_cache_result_for_tree(
-                root,
-                agent,
-                &expectation,
-                GateComparisonTree::Head,
-                history_cache,
-                scope_hash_cache,
-            )?,
-            GateCacheResult::Pass
-        ) {
-            count += 1;
-        }
-    }
-    Ok(count)
 }
 
 pub(crate) fn staged_pass_notice_count(
@@ -238,6 +231,7 @@ fn selected_expectation_from_record(record: &CheckRecord) -> Option<SelectedExpe
         display_id: record.display_id.clone(),
         q: record.prompt.clone()?,
         a: record.expected.clone()?,
+        prompt_scope: Vec::new(),
         cooldown: None,
         thinking: None,
     })

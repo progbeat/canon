@@ -58,13 +58,12 @@ fn check_runner_all_checks_full_selected_set_after_failure() {
 }
 
 #[test]
-fn check_runner_breaks_after_turn_token_limit() {
+fn check_runner_breaks_after_turn_token_limit_by_default() {
     let root = git_project("check-break-after-tokens");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let mut options = parse_check_options(
         &config,
         &[
-            "--all".into(),
             "--break-after-tokens".into(),
             "100".into(),
             test_selector(&config, "1").into(),
@@ -113,6 +112,52 @@ fn check_runner_breaks_after_turn_token_limit() {
 }
 
 #[test]
+fn check_runner_all_continues_after_turn_token_limit_with_fresh_thread() {
+    let root = git_project("check-all-after-tokens");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let mut options = parse_check_options(
+        &config,
+        &[
+            "--all".into(),
+            "--break-after-tokens".into(),
+            "100".into(),
+            test_selector(&config, "1").into(),
+            test_selector(&config, "2").into(),
+        ],
+    )
+    .unwrap();
+    options.ignore_cache = true;
+    let mut runner = FakeRunner::new(&[
+        &answer("yes", "first answer", &["."]),
+        &answer("no", "second answer", &["."]),
+    ]);
+    runner.turn_usages.push_back(Some(EvaluatorTurnUsage {
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        usage: TokenUsage {
+            total_tokens: 121,
+            input_tokens: 90,
+            cached_input_tokens: 10,
+            output_tokens: 11,
+            reasoning_output_tokens: 0,
+        },
+        token_usage_updates: Vec::new(),
+        context_compaction_events: Vec::new(),
+    }));
+
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert_eq!(records.records.len(), 2);
+    assert_eq!(runner.prompts.len(), 2);
+    assert_eq!(
+        runner.sessions,
+        vec!["session-1".to_string(), "session-2".to_string()]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn check_runner_breaks_after_context_compaction_after_recording_turn() {
     let root = git_project("check-break-after-compaction");
     let config = parse_check_config(check_config_yaml()).unwrap();
@@ -155,5 +200,54 @@ fn check_runner_breaks_after_context_compaction_after_recording_turn() {
     assert_eq!(records.records.len(), 1);
     assert_eq!(records.records[0].id, options.selected[0].id);
     assert_eq!(runner.prompts.len(), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_runner_all_continues_after_context_compaction_with_fresh_thread() {
+    let root = git_project("check-all-after-compaction");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let mut options = check_options(&config, &["1", "2"], false, true);
+    options.ignore_cache = true;
+    let mut runner = FakeRunner::new(&[
+        &answer("yes", "first answer", &["."]),
+        &answer("no", "second answer", &["."]),
+    ]);
+    runner.turn_usages.push_back(Some(EvaluatorTurnUsage {
+        thread_id: "thread-1".to_string(),
+        turn_id: "turn-1".to_string(),
+        usage: TokenUsage {
+            total_tokens: 10,
+            input_tokens: 7,
+            cached_input_tokens: 0,
+            output_tokens: 3,
+            reasoning_output_tokens: 0,
+        },
+        token_usage_updates: Vec::new(),
+        context_compaction_events: vec![ContextCompactionEvent {
+            sequence: 1,
+            thread_id: "thread-1".to_string(),
+            turn_id: "turn-1".to_string(),
+            method: "item/completed".to_string(),
+            event: json!({
+                "method": "item/completed",
+                "params": {
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "item": {"type": "contextCompaction"}
+                }
+            }),
+        }],
+    }));
+
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert_eq!(records.records.len(), 2);
+    assert_eq!(runner.prompts.len(), 2);
+    assert_eq!(
+        runner.sessions,
+        vec!["session-1".to_string(), "session-2".to_string()]
+    );
     let _ = fs::remove_dir_all(root);
 }

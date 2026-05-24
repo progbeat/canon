@@ -1,6 +1,5 @@
 use crate::check::run_check_with_runner;
 use crate::check_types::CheckRecord;
-use crate::evaluator_prompt::response_format_block;
 use crate::logging::DiagnosticLogWriter;
 use crate::tests::{
     answer, check_config_yaml, check_options, enable_diagnostic_logs, git_project,
@@ -67,11 +66,10 @@ fn check_runner_hides_expected_answers_and_reuses_session() {
         vec!["medium".to_string(), "medium".to_string()]
     );
     assert!(runner.prompts.iter().all(|prompt| !prompt.contains("a:")));
-    let response_format_heading = response_format_block().lines().next().unwrap();
     assert!(runner
         .prompts
         .iter()
-        .all(|prompt| !prompt.contains(response_format_heading)));
+        .all(|prompt| !prompt.contains("Response format:")));
     let _ = fs::remove_dir_all(root);
 }
 

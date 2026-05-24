@@ -168,6 +168,9 @@ fn prepare_diagnostic_log(
     cache: &mut RepoInspectionCache,
 ) -> DiagnosticLogResult<PreparedDiagnosticLog> {
     let config = diagnostic_log_config(root)?;
+    // GIT_CANON_LOG_DIR is `${CANON_STATE_DIR}/logs`; `git_path` resolves it
+    // with `git rev-parse --git-path` so worktrees and nonstandard git-dir
+    // layouts keep logs under Canon's git-owned state directory.
     let log_dir = cache
         .git_path(root, GIT_CANON_LOG_DIR)
         .map_err(|message| external_log_error("resolve diagnostic log directory", message))?;

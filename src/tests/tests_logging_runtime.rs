@@ -253,6 +253,24 @@ fn runtime_log_event_rejects_agent_response_without_usage_source() {
 }
 
 #[test]
+fn runtime_log_event_rejects_agent_turn_error_without_usage_source() {
+    let err = render_runtime_log_event(
+        "error",
+        "agent.turn_error",
+        &[
+            ("id", json!("id-1")),
+            ("attempt", json!(1)),
+            ("reason", json!("initial")),
+            ("error", json!("missing evaluator turn usage")),
+            ("response", json!({"text": "ok"})),
+        ],
+    )
+    .unwrap_err();
+
+    assert!(err.to_string().contains("missing usage source"));
+}
+
+#[test]
 fn runtime_log_event_rejects_agent_response_empty_token_usage_updates() {
     let err = render_runtime_log_event(
         "info",

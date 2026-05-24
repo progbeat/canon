@@ -73,7 +73,7 @@ pub(crate) fn staged_changed_path_bytes_from_name_status_z(
 }
 
 pub(crate) fn is_canon_project_path_bytes(path: &[u8]) -> bool {
-    path == b".canon" || path.starts_with(b".canon/")
+    path.starts_with(b".canon/")
 }
 
 pub(crate) fn is_canon_only_staged_change_bytes(paths: &[Vec<u8>]) -> bool {

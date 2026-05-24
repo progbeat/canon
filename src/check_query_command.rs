@@ -21,10 +21,10 @@ pub(crate) fn run_check_query_command(
     query_scope: &[String],
     mut diagnostic_log: DiagnosticLogWriter,
 ) -> Result<(), String> {
-    // `canon check -q` runs one temporary query expectation. It has no
-    // persisted expected answer or history scope seed, but `run_query_with_runner`
-    // still applies the interrogation-policy retry and narrowing steps that do
-    // not require a configured expected answer.
+    // `canon check -q` runs one ad-hoc query, not the selected-expectation loop
+    // that uses persisted history scope seeds. `run_query_with_runner` still
+    // applies the shared evaluator retry and narrowing steps that do not
+    // require a configured expected answer.
     diagnostic_log
         .write_event(
             "info",

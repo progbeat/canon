@@ -53,6 +53,8 @@ pub(crate) fn default_thinking() -> String {
 pub(crate) struct Expectation {
     pub(crate) q: String,
     pub(crate) a: String,
+    #[serde(default, skip)]
+    pub(crate) prompt_scope: Vec<String>,
     #[serde(default)]
     pub(crate) cooldown: Option<String>,
     #[serde(default)]

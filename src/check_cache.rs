@@ -11,7 +11,7 @@ pub(crate) struct CheckCacheHit {
     pub(crate) record: CheckRecord,
 }
 
-pub(crate) struct FinalCacheSelection {
+pub(crate) struct CheckCacheWorkQueue {
     pub(crate) selected: Vec<SelectedExpectation>,
     pub(crate) skipped_passes: Vec<(SelectedExpectation, CheckCacheHit)>,
 }
@@ -43,13 +43,13 @@ pub(crate) fn cached_failure_for_expectation(
     )
 }
 
-pub(crate) fn final_selected_after_current_pass_cache(
+pub(crate) fn check_work_queue_after_current_pass_cache(
     root: &Path,
     agent: &AgentConfig,
     selected: Vec<SelectedExpectation>,
     history_cache: &mut HistoryCache,
     scope_hash_cache: &mut ScopeHashCache,
-) -> Result<FinalCacheSelection, String> {
+) -> Result<CheckCacheWorkQueue, String> {
     let mut remaining = Vec::new();
     let mut skipped_passes = Vec::new();
     for expectation in selected {
@@ -64,7 +64,7 @@ pub(crate) fn final_selected_after_current_pass_cache(
             _ => remaining.push(expectation),
         }
     }
-    Ok(FinalCacheSelection {
+    Ok(CheckCacheWorkQueue {
         selected: remaining,
         skipped_passes,
     })

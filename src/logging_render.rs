@@ -119,7 +119,7 @@ fn validate_runtime_log_nested_schema(
     event: &str,
     fields: &[(&str, Value)],
 ) -> DiagnosticLogResult<()> {
-    if event != "agent.response" {
+    if !matches!(event, "agent.response" | "agent.turn_error") {
         return Ok(());
     }
     let token_usage_updates = runtime_log_field_value(fields, "tokenUsageUpdates");

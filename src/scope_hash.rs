@@ -2,17 +2,19 @@ use crate::config_types::AgentConfig;
 use crate::git::git_head_tree_exists;
 use crate::hash::full_scope;
 use crate::project::command_output_trimmed;
-use crate::scope::sanitize_scope_for_hash;
+use crate::scope::{
+    effective_ignore_patterns, path_matches_pattern_bytes, sanitize_scope_for_hash,
+};
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 const HEX: &[u8; 16] = b"0123456789abcdef";
 const RAW_PATH_HEX_PREFIX: &str = "\0raw-path-hex:";
 
-type ScopeCacheKey = (PathBuf, Vec<String>);
+type ScopeCacheKey = (PathBuf, Vec<String>, Vec<String>);
 
 #[derive(Default)]
 pub(crate) struct ScopeHashCache {
@@ -65,22 +67,19 @@ impl ScopeHashCache {
     fn staged_scope_hash_option(
         &mut self,
         root: &Path,
-        _agent: &AgentConfig,
+        agent: &AgentConfig,
         scope: &[String],
     ) -> Result<Option<String>, String> {
         let scope = sanitize_scope_for_hash(scope)?;
-        let key = scope_cache_key(root, &scope);
+        let key = scope_cache_key(root, agent, &scope);
         if let Some(hash) = self.values.get(&key) {
             return Ok(hash.clone());
         }
-        let hash = if scope == full_scope() {
-            Some(self.staged_root_tree_oid(root)?)
-        } else {
-            let object_hash_algorithm = self.object_hash_algorithm(root)?;
-            self.staged_scope_entries_for_key(root, &scope, &key)?
-                .map(|entries| scope_tree_oid_from_entries(&entries, object_hash_algorithm))
-                .transpose()?
-        };
+        let object_hash_algorithm = self.object_hash_algorithm(root)?;
+        let hash = Some(scope_tree_oid_from_entries(
+            &self.staged_scope_entries_for_key(root, agent, &scope, &key)?,
+            object_hash_algorithm,
+        )?);
         self.values.insert(key, hash.clone());
         Ok(hash)
     }
@@ -88,28 +87,33 @@ impl ScopeHashCache {
     fn staged_scope_entries_for_key(
         &mut self,
         root: &Path,
+        agent: &AgentConfig,
         scope: &[String],
         key: &ScopeCacheKey,
-    ) -> Result<Option<Vec<String>>, String> {
+    ) -> Result<Vec<String>, String> {
         if let Some(entries) = self.entries.get(key) {
-            return Ok(entries.clone());
+            return entries
+                .clone()
+                .ok_or_else(|| "failed to cache staged scope entries".to_string());
         }
-        let entries = Some(self.staged_scope_entries_from_full_listing(root, scope)?);
-        self.entries.insert(key.clone(), entries.clone());
+        let entries = self.staged_scope_entries_from_full_listing(root, agent, scope)?;
+        self.entries.insert(key.clone(), Some(entries.clone()));
         Ok(entries)
     }
 
     fn staged_scope_entries_from_full_listing(
         &mut self,
         root: &Path,
+        agent: &AgentConfig,
         scope: &[String],
     ) -> Result<Vec<String>, String> {
         // Scope hashes may be requested for many selected, cached, and
-        // narrowed scopes during one `canon check`. Cache the full staged
-        // index listing once and filter it in memory so direct `git`
-        // subprocess count stays constant in the number of scopes.
+        // narrowed scopes during one `canon check`, so cache the full listing
+        // once. `scopeTreeOid` hashes the evaluator-visible subset of the
+        // scoped tracked tree: canon/evaluator-denied entries are tracked Git
+        // entries, but absent from the staged snapshot the evaluator sees.
         let entries = self.staged_all_scope_entries(root)?;
-        Ok(filter_scope_entries(entries, scope))
+        Ok(filter_visible_scope_entries(entries, agent, scope))
     }
 
     fn staged_all_scope_entries(&mut self, root: &Path) -> Result<&Vec<String>, String> {
@@ -145,10 +149,11 @@ impl ScopeHashCache {
     pub(crate) fn gate_head_tree_fingerprint(
         &mut self,
         root: &Path,
+        agent: &AgentConfig,
         scope: &[String],
     ) -> Result<Option<String>, String> {
         let scope = sanitize_scope_for_hash(scope)?;
-        let key = scope_cache_key(root, &scope);
+        let key = scope_cache_key(root, agent, &scope);
         if let Some(hash) = self.gate_head_values.get(&key) {
             return Ok(hash.clone());
         }
@@ -158,7 +163,7 @@ impl ScopeHashCache {
         // records produced by `staged_scope_hash`.
         let object_hash_algorithm = self.object_hash_algorithm(root)?;
         let hash = self
-            .gate_head_tree_entries_for_key(root, &scope, &key)?
+            .gate_head_tree_entries_for_key(root, agent, &scope, &key)?
             .map(|entries| scope_tree_oid_from_entries(&entries, object_hash_algorithm))
             .transpose()?;
         self.gate_head_values.insert(key, hash.clone());
@@ -168,6 +173,7 @@ impl ScopeHashCache {
     fn gate_head_tree_entries_for_key(
         &mut self,
         root: &Path,
+        agent: &AgentConfig,
         scope: &[String],
         key: &ScopeCacheKey,
     ) -> Result<Option<Vec<String>>, String> {
@@ -176,7 +182,7 @@ impl ScopeHashCache {
         }
         let entries = self
             .gate_head_entries_from_full_listing(root, scope)?
-            .map(|entries| filter_scope_entries(&entries, scope));
+            .map(|entries| filter_visible_scope_entries(&entries, agent, scope));
         self.gate_head_entries.insert(key.clone(), entries.clone());
         Ok(entries)
     }
@@ -219,8 +225,11 @@ impl ScopeHashCache {
     }
 }
 
-fn scope_cache_key(root: &Path, scope: &[String]) -> ScopeCacheKey {
-    (root.to_path_buf(), scope.to_vec())
+fn scope_cache_key(root: &Path, agent: &AgentConfig, scope: &[String]) -> ScopeCacheKey {
+    let mut deny_patterns = effective_ignore_patterns(agent);
+    deny_patterns.sort();
+    deny_patterns.dedup();
+    (root.to_path_buf(), scope.to_vec(), deny_patterns)
 }
 
 #[cfg(test)]
@@ -235,13 +244,19 @@ pub(crate) fn staged_scope_hash(
 #[cfg(test)]
 pub(crate) fn gate_head_tree_fingerprint(
     root: &Path,
+    agent: &AgentConfig,
     scope: &[String],
 ) -> Result<Option<String>, String> {
     let scope = sanitize_scope_for_hash(scope)?;
     let object_hash_algorithm = git_object_hash_algorithm(root)?;
     head_scope_entries(root, &scope).and_then(|entries| {
         entries
-            .map(|entries| scope_tree_oid_from_entries(&entries, object_hash_algorithm))
+            .map(|entries| {
+                scope_tree_oid_from_entries(
+                    &filter_visible_scope_entries(&entries, agent, &scope),
+                    object_hash_algorithm,
+                )
+            })
             .transpose()
     })
 }
@@ -632,6 +647,7 @@ fn git_object_hash_algorithm(root: &Path) -> Result<GitObjectHashAlgorithm, Stri
     }
 }
 
+#[cfg(test)]
 fn filter_scope_entries(entries: &[String], scope: &[String]) -> Vec<String> {
     if scope == full_scope() {
         return entries.to_vec();
@@ -645,6 +661,112 @@ fn filter_scope_entries(entries: &[String], scope: &[String]) -> Vec<String> {
         })
         .cloned()
         .collect()
+}
+
+fn filter_visible_scope_entries(
+    entries: &[String],
+    agent: &AgentConfig,
+    scope: &[String],
+) -> Vec<String> {
+    // The Cache spec intentionally says `scopeTreeOid` is a subset of tracked
+    // Git entries, not the full scoped tree. Entries outside the enforced scope
+    // or denied to the evaluator are tracked, but cannot support an evaluator
+    // answer, so they are outside the cache-reuse fingerprint.
+    let deny_patterns = effective_ignore_patterns(agent);
+    let visible_entries = entries
+        .iter()
+        .map(|entry| scope_entry_is_visible(entry, scope, &deny_patterns))
+        .collect::<Vec<_>>();
+    let hidden_ancestor_directories = non_visible_ancestor_directories(entries, &visible_entries);
+    entries
+        .iter()
+        .zip(visible_entries)
+        .filter(|(entry, visible)| {
+            *visible
+                && (!scope_entry_is_tree(entry)
+                    || scope_tree_entry_has_no_hidden_descendants(
+                        entry,
+                        &hidden_ancestor_directories,
+                    ))
+        })
+        .map(|(entry, _)| entry)
+        .cloned()
+        .collect()
+}
+
+fn non_visible_ancestor_directories(
+    entries: &[String],
+    visible_entries: &[bool],
+) -> BTreeSet<Vec<u8>> {
+    let mut directories = BTreeSet::new();
+    for (entry, visible) in entries.iter().zip(visible_entries) {
+        if *visible {
+            continue;
+        }
+        if let Ok(path) = scope_entry_path_bytes(entry) {
+            add_ancestor_directories(&path, &mut directories);
+        }
+    }
+    directories
+}
+
+fn add_ancestor_directories(path: &[u8], directories: &mut BTreeSet<Vec<u8>>) {
+    let mut end = path.len();
+    while let Some(index) = path[..end].iter().rposition(|byte| *byte == b'/') {
+        if index > 0 {
+            directories.insert(path[..index].to_vec());
+        }
+        end = index;
+    }
+}
+
+fn scope_entry_is_visible(entry: &str, scope: &[String], deny_patterns: &[String]) -> bool {
+    scope_entry_is_in_scope(entry, scope) && !scope_entry_is_denied(entry, deny_patterns)
+}
+
+fn scope_entry_is_in_scope(entry: &str, scope: &[String]) -> bool {
+    scope == full_scope()
+        || scope
+            .iter()
+            .any(|base| scope_entry_is_within_base(base, entry))
+}
+
+fn scope_entry_is_denied(entry: &str, deny_patterns: &[String]) -> bool {
+    let Ok(path) = scope_entry_path_bytes(entry) else {
+        return false;
+    };
+    deny_patterns
+        .iter()
+        .any(|pattern| path_matches_pattern_bytes(&path, pattern.as_bytes()))
+}
+
+fn scope_tree_entry_has_no_hidden_descendants(
+    entry: &str,
+    non_visible_ancestor_directories: &BTreeSet<Vec<u8>>,
+) -> bool {
+    let Ok(directory) = scope_entry_path_bytes(entry) else {
+        return true;
+    };
+    !non_visible_ancestor_directories.contains(&directory)
+}
+
+fn scope_entry_is_tree(entry: &str) -> bool {
+    let metadata = entry.split_once('\t').map(|(metadata, _)| metadata);
+    metadata
+        .and_then(|metadata| metadata.split_whitespace().next())
+        .is_some_and(is_git_tree_mode)
+}
+
+fn scope_entry_path_bytes(entry: &str) -> Result<Vec<u8>, String> {
+    let components = scope_tree_path_components(scope_entry_from_normalized_entry(entry))?;
+    let mut path = Vec::new();
+    for (index, component) in components.iter().enumerate() {
+        if index > 0 {
+            path.push(b'/');
+        }
+        path.extend_from_slice(component);
+    }
+    Ok(path)
 }
 
 fn scope_entry_is_within_base(base: &str, entry: &str) -> bool {

@@ -269,8 +269,8 @@ fn compact_history_drops_malformed_lines_and_keeps_latest_valid_records() {
 }
 
 #[test]
-fn compact_history_keeps_latest_valid_json_objects() {
-    let root = git_project("history-compact-valid-json-object");
+fn compact_history_drops_non_history_json_objects() {
+    let root = git_project("history-compact-non-history-json-object");
     let path = root.join(".git/canon/cache/example/history.jsonl");
     ensure_dir(path.parent().unwrap()).unwrap();
     let mut lines = (1..=5)
@@ -294,18 +294,14 @@ fn compact_history_keeps_latest_valid_json_objects() {
         .map(str::to_string)
         .collect::<Vec<_>>();
     assert_eq!(lines.len(), 5);
-    assert_eq!(
-        serde_json::from_str::<Value>(&lines[4]).unwrap()["n"],
-        json!(1)
-    );
     let compacted = read_history_records_from_path(&path).unwrap();
-    assert_eq!(compacted.len(), 4);
+    assert_eq!(compacted.len(), 5);
     assert_eq!(
         compacted
             .iter()
             .map(|record| record.evidence.clone())
             .collect::<Vec<_>>(),
-        vec!["record 2", "record 3", "record 4", "record 5"]
+        vec!["record 1", "record 2", "record 3", "record 4", "record 5"]
     );
     let _ = fs::remove_dir_all(root);
 }
