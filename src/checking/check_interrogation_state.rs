@@ -4,7 +4,7 @@ use crate::evaluator_config::app_server_model_key;
 use crate::evaluator_response_cache::EvaluatorResponseParseCache;
 use crate::evaluator_turn::evaluator_models;
 use crate::hash::full_scope;
-use crate::scope_hash::ScopeHashCache;
+use crate::visible_tree_oid::VisibleTreeOidCache;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -37,7 +37,7 @@ pub(crate) struct InterrogationState {
     pub(crate) sessions_by_scope: BTreeMap<String, String>,
     pub(crate) session_instructions: BTreeMap<String, String>,
     pub(crate) unavailable_models: BTreeSet<String>,
-    pub(crate) scope_hash_cache: ScopeHashCache,
+    pub(crate) visible_tree_oid_cache: VisibleTreeOidCache,
     pub(crate) parse_cache: EvaluatorResponseParseCache,
 }
 
@@ -47,7 +47,7 @@ impl InterrogationState {
             sessions_by_scope: BTreeMap::new(),
             session_instructions: BTreeMap::new(),
             unavailable_models: BTreeSet::new(),
-            scope_hash_cache: ScopeHashCache::new(),
+            visible_tree_oid_cache: VisibleTreeOidCache::new(),
             parse_cache: EvaluatorResponseParseCache::new(),
         }
     }

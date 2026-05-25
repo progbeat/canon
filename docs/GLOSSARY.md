@@ -13,6 +13,11 @@ of being selected from the configured expectations.
 Stored check history that lets `canon` avoid asking the evaluator again when a
 previous answer still applies to the current staged project state.
 
+## Cached result
+
+The reusable result for an expectation in the current Git state. It is the newer
+of the expectation's same-tree result and cooldown result, when either exists.
+
 ## Canon
 
 The set of expectations that describes what must stay true for a project. In a
@@ -35,6 +40,11 @@ The YAML file that defines evaluator settings and expectations. By default,
 A time window during which a recent passing result can remain valid without
 being re-proven for every small staged change. Cooldown is useful for broad
 review expectations that are expensive to recheck on every commit.
+
+## Cooldown result
+
+A passing answer-history record that is still inside the expectation's
+configured cooldown window.
 
 ## Evidence
 
@@ -72,8 +82,10 @@ history.
 ## `canon check`
 
 The command that evaluates expectations against the staged project state. It
-asks the evaluator when a reusable cached result is not available and records
-the resulting answer, evidence, and scope.
+collects configured expectations, computes cached results, and selects only the
+expectations that require evaluator work. With no selectors, cached failures are
+reported without fresh evaluation; if every cached result is a pass, uncached
+expectations are evaluated.
 
 ## `canon gate`
 
@@ -89,11 +101,28 @@ answer a question correctly. Full project scope is written as `.`.
 ## Scope narrowing
 
 The process of checking whether an expectation can be answered from a smaller
-scope than the full project. Narrower scopes make cached results more reusable
-when unrelated files change.
+scope than the full project. Narrower scopes make same-tree results more
+reusable when unrelated files change.
+
+## Same-tree result
+
+The latest answer-history record for an expectation whose stored
+`visibleTreeOid` matches the current `visibleTreeOid` for that record's scope.
+
+## Selected expectations
+
+The expectations that require evaluator work in the current `canon check` run.
+Explicit selectors select matching expectations directly; the default
+no-selector check subtracts cached passing expectations and evaluates none while
+cached failures are present.
 
 ## Staged snapshot
 
 The temporary Git-tracked project state that `canon check` evaluates. It comes
 from the Git index, so unstaged and untracked working tree files are not part of
 the snapshot.
+
+## `visibleTreeOid`
+
+The Git-compatible object ID of the tracked tree entries visible to the
+evaluator after enforced scope and ignore rules are applied.

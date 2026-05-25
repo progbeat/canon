@@ -18,8 +18,8 @@ use crate::config_types::CheckConfig;
 use crate::history_cleanup::{active_expectation_ids_from_identities, cleanup_stale_cache_dirs};
 use crate::logging::DiagnosticLogWriter;
 use crate::repo_inspection::RepoInspectionCache;
-use crate::scope_hash::ScopeHashCache;
 use crate::staged_worktree::StagedWorktreeView;
+use crate::visible_tree_oid::VisibleTreeOidCache;
 use crate::GIT_CANON_CACHE_DIR;
 use serde_json::json;
 use std::ffi::OsString;
@@ -54,7 +54,9 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     let query_start_field = if query_mode { Some(true) } else { None };
     // Scheduled lazy resets take effect at the beginning of the next
     // `canon check` invocation, including query-mode invocations that return
-    // before normal expectation selection and evaluation.
+    // before normal expectation selection and evaluation. Normal expectation
+    // checks also plan the next lazy reset at the end of this command through
+    // `check_command_finish::finish_check_report`.
     let identities = match expectation_identities(&config) {
         Ok(identities) => identities,
         Err(err) => {
@@ -111,7 +113,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         &mut diagnostic_log,
         false,
         0,
-        &mut check_caches.scope_hash,
+        &mut check_caches.visible_tree_oid,
     )
     .map_err(CommandError::from)?;
     if let Err(err) = execution
@@ -285,18 +287,18 @@ pub(crate) fn prepare_check_execution(
     diagnostic_log: &mut DiagnosticLogWriter,
     query: bool,
     errors_on_failure: usize,
-    scope_hash_cache: &mut ScopeHashCache,
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<PreparedCheckExecution, String> {
     // Materialize the staged Git snapshot outside the real working tree so
     // evaluator sessions cannot observe unstaged or untracked project content.
-    let staged_view = match StagedWorktreeView::apply_with_scope_hash_cache(root, scope_hash_cache)
-    {
-        Ok(staged_view) => staged_view,
-        Err(err) => {
-            write_prepare_check_failure(diagnostic_log, query, errors_on_failure, &err)?;
-            return Err(err);
-        }
-    };
+    let staged_view =
+        match StagedWorktreeView::apply_with_visible_tree_oid_cache(root, visible_tree_oid_cache) {
+            Ok(staged_view) => staged_view,
+            Err(err) => {
+                write_prepare_check_failure(diagnostic_log, query, errors_on_failure, &err)?;
+                return Err(err);
+            }
+        };
     // The app-server starts from the real project root so Canon-owned runtime
     // state and model catalog config stay under that repository's `.git/canon`.
     // Evaluator sessions get the staged snapshot as `thread/start.cwd` in

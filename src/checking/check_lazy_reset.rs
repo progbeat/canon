@@ -1,12 +1,13 @@
 use crate::check_selection::{selected_expectation_at, ExpectationIdentity};
-use crate::check_types::{CheckRecord, ObservedAnswerState, SelectedExpectation};
+use crate::check_types::{
+    CachedExpectation, CheckRecord, ObservedAnswerState, SelectedExpectation,
+};
 use crate::config_types::{AgentConfig, CheckConfig};
 use crate::fs_util::{for_each_nonempty_line, write_temp_file_then_replace};
 use crate::git::resolve_git_path;
 use crate::hash::full_scope;
 use crate::history::{read_history_records_from_path, HistoryCache};
 use crate::history_compaction::compact_history_temp_path;
-use crate::history_reuse::latest_history_scope_with_cache;
 use crate::logging::render_check_log_record;
 use crate::logging::DiagnosticLogWriter;
 use crate::scope::sanitize_scope_for_hash;
@@ -20,14 +21,14 @@ pub(crate) fn apply_lazy_full_scope_reset(
     root: &Path,
     config: &CheckConfig,
     evaluated_expectations: usize,
-    non_selected: &[SelectedExpectation],
+    cached: &[CachedExpectation],
     diagnostic_log: &mut DiagnosticLogWriter,
 ) -> Result<(), String> {
     let reset = plan_lazy_full_scope_reset(
         root,
         &config.agent,
         evaluated_expectations,
-        non_selected,
+        cached,
         random_reset_seed(),
     )?;
     diagnostic_log
@@ -84,23 +85,20 @@ pub(crate) struct LazyFullScopeResetPlan {
 }
 
 #[derive(Clone)]
-struct ScopedNonSelectedExpectation {
+struct CachedPassingExpectation {
     expectation: SelectedExpectation,
     scope: Vec<String>,
 }
 
 pub(crate) fn plan_lazy_full_scope_reset(
-    root: &Path,
-    agent: &AgentConfig,
+    _root: &Path,
+    _agent: &AgentConfig,
     evaluated_expectations: usize,
-    non_selected: &[SelectedExpectation],
+    cached: &[CachedExpectation],
     seed: u64,
 ) -> Result<LazyFullScopeResetPlan, String> {
-    let scoped_non_selected =
-        non_selected_expectations_with_current_scope(root, agent, non_selected)?;
-    // Spec candidates are only non-selected expectations whose current reusable
-    // scope seed is narrower than full scope.
-    let candidates = lazy_full_scope_reset_candidates(&scoped_non_selected);
+    let cached_passes = cached_passing_expectations_with_scope(cached);
+    let candidates = lazy_full_scope_reset_candidates(&cached_passes);
     let reset_count = lazy_full_scope_reset_count(evaluated_expectations, seed, candidates.len());
     Ok(LazyFullScopeResetPlan {
         evaluated_expectations,
@@ -109,31 +107,26 @@ pub(crate) fn plan_lazy_full_scope_reset(
     })
 }
 
-fn non_selected_expectations_with_current_scope(
-    root: &Path,
-    agent: &AgentConfig,
-    non_selected: &[SelectedExpectation],
-) -> Result<Vec<ScopedNonSelectedExpectation>, String> {
-    // `SelectedExpectation` does not store mutable answer-history scope. The
-    // policy's `e.scope` is Canon's latest reusable history scope, or full
-    // scope when no reusable answer exists.
-    let mut history_cache = HistoryCache::new();
+fn cached_passing_expectations_with_scope(
+    cached: &[CachedExpectation],
+) -> Vec<CachedPassingExpectation> {
     let mut scoped = Vec::new();
-    for expectation in non_selected {
-        let scope = latest_history_scope_with_cache(root, agent, expectation, &mut history_cache)?
-            .unwrap_or_else(full_scope);
-        scoped.push(ScopedNonSelectedExpectation {
-            expectation: expectation.clone(),
-            scope,
+    for cached in cached {
+        if !cached.record.passed() {
+            continue;
+        }
+        scoped.push(CachedPassingExpectation {
+            expectation: cached.expectation.clone(),
+            scope: cached.record.scope.clone(),
         });
     }
-    Ok(scoped)
+    scoped
 }
 
 fn lazy_full_scope_reset_candidates(
-    non_selected: &[ScopedNonSelectedExpectation],
+    cached: &[CachedPassingExpectation],
 ) -> Vec<SelectedExpectation> {
-    non_selected
+    cached
         .iter()
         .filter(|expectation| expectation.scope != full_scope())
         .map(|expectation| expectation.expectation.clone())
@@ -283,7 +276,7 @@ fn set_expectation_scope_to_full_for_next_check(
         // Lazy reset changes only the next interrogation scope seed. Removing
         // newer narrowed answer records exposes an older full-scope seed, or no
         // seed at all, without minting a fake full-scope cache hit. Every
-        // remaining history record keeps the scopeTreeOid that belongs to its
+        // remaining history record keeps the visibleTreeOid that belongs to its
         // own stored scope.
         records.remove(index);
         removed_narrowed = true;

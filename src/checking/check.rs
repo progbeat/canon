@@ -1,6 +1,5 @@
 use crate::check_cache::{
-    cached_failure_for_expectation, cached_record_for_expectation,
-    check_work_queue_after_current_pass_cache, write_cache_hit,
+    cached_result_for_expectation, write_cache_hit, CachedResultLookup, CheckCacheHit,
 };
 use crate::check_interrogation_policy::{
     interrogate_with_full_scope_retry, narrowed_scope_is_accepted,
@@ -13,13 +12,12 @@ use crate::check_order_state::{
 };
 use crate::check_output::{record_requires_human_review, write_and_flush_result_output};
 use crate::check_preflight::check_interrupted;
-use crate::check_selection::{
-    cooldown_filtered_check_work_queue, order_expectations_by_latest_non_pass, CheckWorkQueue,
-};
+use crate::check_selection::order_expectations_by_latest_non_pass;
 use crate::check_types::{
-    check_run_error, CheckOptions, CheckRecord, CheckRunError, CheckRunReport, NarrowingStats,
-    SelectedExpectation,
+    check_run_error, CachedExpectation, CheckOptions, CheckRecord, CheckRunError, CheckRunReport,
+    NarrowingStats, SelectedExpectation,
 };
+use crate::config_types::AgentConfig;
 #[cfg(test)]
 use crate::config_types::CheckConfig;
 use crate::evaluator_types::EvaluatorRunner;
@@ -29,22 +27,22 @@ use crate::history_append::append_history_record_with_cache;
 use crate::history_reuse::{is_reusable_history_record, latest_history_scope_with_cache};
 use crate::logging::DiagnosticLogWriter;
 use crate::scope::{is_strict_scope_subset, scope_is_within};
-use crate::scope_hash::ScopeHashCache;
-use crate::time::unix_timestamp;
+use crate::time::{parse_record_timestamp, unix_timestamp};
+use crate::visible_tree_oid::VisibleTreeOidCache;
+use std::cmp::Reverse;
 use std::io::Write;
-#[cfg(test)]
 use std::path::Path;
 
 pub(crate) struct CheckRunCaches {
     pub(crate) history: HistoryCache,
-    pub(crate) scope_hash: ScopeHashCache,
+    pub(crate) visible_tree_oid: VisibleTreeOidCache,
 }
 
 impl CheckRunCaches {
     pub(crate) fn new() -> CheckRunCaches {
         CheckRunCaches {
             history: HistoryCache::new(),
-            scope_hash: ScopeHashCache::new(),
+            visible_tree_oid: VisibleTreeOidCache::new(),
         }
     }
 }
@@ -84,15 +82,13 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     caches: &mut CheckRunCaches,
 ) -> Result<CheckRunReport, CheckRunError> {
     let mut records = Vec::new();
-    // Public selected/skipped counts describe command selection. Check-only
-    // work-saving filters are tracked separately as `silent` so the invariant
-    // `selected + skipped == all expectations` remains stable.
-    let selected = options.selected.len();
-    let skipped = options.skipped;
-    let mut silent = 0usize;
+    let mut cached = Vec::new();
+    let total_expectations = runtime.config.expectations.len();
+    let mut selected = 0usize;
+    let silent = 0usize;
     let mut evaluated = 0usize;
     let mut narrowing = NarrowingStats::default();
-    let mut non_selected = options.non_selected.clone();
+    let non_selected = options.non_selected.clone();
     let root = runtime.root;
     let config = runtime.config;
     // Per-run state is shared so equal canonical enforced scopes can reuse one
@@ -106,10 +102,13 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 check_run_report(
                     records.clone(),
                     non_selected.clone(),
-                    evaluated,
-                    selected,
-                    skipped,
-                    silent,
+                    cached.clone(),
+                    CheckRunReportCounts {
+                        evaluated,
+                        selected,
+                        skipped: skipped_count(total_expectations, records.len()),
+                        silent,
+                    },
                     narrowing,
                 ),
             )
@@ -120,62 +119,56 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             $expr.map_err(|err| current_error!(err.to_string()))?
         };
     }
-    let cooldown_queue = if options.ignore_cooldown || options.check_all {
-        CheckWorkQueue {
-            selected: options.selected.clone(),
-            skipped: Vec::new(),
-        }
-    } else {
-        match cooldown_filtered_check_work_queue(
+    let check_work_queue = if !options.selectors_provided && !options.check_all {
+        let selection = run_try!(default_check_selection(
             root,
             &config.agent,
-            options.selected.clone(),
+            options,
             &mut caches.history,
+            &mut caches.visible_tree_oid,
             run_try!(unix_timestamp()),
-        ) {
-            Ok(cooldown_queue) => cooldown_queue,
-            Err(err) => {
-                mark_expectations_silent(err.skipped, &mut non_selected, &mut silent);
-                return Err(current_error!(err.error));
-            }
-        }
-    };
-    let CheckWorkQueue {
-        selected: cooldown_selected,
-        skipped: cooldown_skipped,
-    } = cooldown_queue;
-    mark_expectations_silent(cooldown_skipped, &mut non_selected, &mut silent);
-    let ordered_cooldown_selected = run_try!(order_expectations_by_latest_non_pass(
-        root,
-        cooldown_selected,
-        &mut caches.history
-    ));
-    let check_work_queue = if options.ignore_cache || options.check_all {
-        ordered_cooldown_selected
-    } else {
-        // Passing exact-cache hits satisfy candidates before the
-        // selected-expectation work loop below. They remain command-selected
-        // expectations, but contribute to silent because no evaluator turn or
-        // per-expectation stdout is needed. Ordering happens before this skip
-        // so every selected expectation participates in the
-        // latest-non-pass ordering policy. Failed exact-cache hits stay in the
-        // work queue and are reported below.
-        let cache_selection = run_try!(check_work_queue_after_current_pass_cache(
-            root,
-            &config.agent,
-            ordered_cooldown_selected,
-            &mut caches.history,
-            &mut caches.scope_hash,
+            &mut diagnostic_log,
         ));
-        for (expectation, hit) in cache_selection.skipped_passes {
-            mark_expectations_silent(vec![expectation], &mut non_selected, &mut silent);
-            if let Some(writer) = diagnostic_log.as_deref_mut() {
-                run_try!(write_cache_hit(writer, &hit));
+        for CachedSelectionHit { expectation, hit } in selection.cached {
+            let record = hit.record;
+            if !record.passed() {
+                run_try!(write_and_flush_result_output(&mut result_output, &record));
+                records.push(record.clone());
             }
+            cached.push(CachedExpectation {
+                expectation,
+                record,
+            });
         }
-        cache_selection.selected
+        if selection.cached_failure_seen {
+            let skipped = skipped_count(total_expectations, records.len());
+            return Ok(check_run_report(
+                records,
+                non_selected,
+                cached,
+                CheckRunReportCounts {
+                    evaluated,
+                    selected,
+                    skipped,
+                    silent,
+                },
+                narrowing,
+            ));
+        }
+        selected = selection.selected.len();
+        run_try!(order_expectations_by_latest_non_pass(
+            root,
+            selection.selected,
+            &mut caches.history
+        ))
+    } else {
+        selected = options.selected.len();
+        run_try!(order_expectations_by_latest_non_pass(
+            root,
+            options.selected.clone(),
+            &mut caches.history
+        ))
     };
-    let stop_after_non_pass = !options.check_all;
     for expectation in &check_work_queue {
         macro_rules! return_expectation_error {
             ($error:expr) => {{
@@ -199,58 +192,14 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 }
             };
         }
-        // Each branch that produces a selected CheckRecord writes and flushes
-        // that record before moving to the next expectation. Silent passing
-        // cache hits have already been removed from `check_work_queue` unless
-        // `--all` requested a visible result for every selected expectation.
+        // Each selected CheckRecord is written and flushed before moving to
+        // the next expectation.
         if check_interrupted() {
             return_expectation_error!("interrupted");
         }
-        if !options.ignore_cache {
-            let cache_hit = if options.check_all {
-                cached_record_for_expectation(
-                    root,
-                    &config.agent,
-                    expectation,
-                    &mut caches.history,
-                    &mut caches.scope_hash,
-                )
-            } else {
-                cached_failure_for_expectation(
-                    root,
-                    &config.agent,
-                    expectation,
-                    &mut caches.history,
-                    &mut caches.scope_hash,
-                )
-            };
-            if let Some(hit) = run_expectation_try!(cache_hit) {
-                let should_stop = stop_after_non_pass && !hit.record.passed();
-                if let Some(writer) = diagnostic_log.as_deref_mut() {
-                    run_expectation_try!(write_cache_hit(writer, &hit));
-                }
-                run_expectation_try!(write_and_flush_result_output(
-                    &mut result_output,
-                    &hit.record
-                ));
-                records.push(hit.record);
-                if should_stop {
-                    return Ok(check_run_report(
-                        records,
-                        non_selected,
-                        evaluated,
-                        selected,
-                        skipped,
-                        silent,
-                        narrowing,
-                    ));
-                }
-                continue;
-            }
-        }
 
-        // `--ignore-cache` bypasses reusable answer records in the branch above,
-        // but it does not erase the interrogation-policy scope seed.
+        // Cache selection can bypass reusable answer records, but it does not
+        // erase the interrogation-policy scope seed.
         let mut enforced_scope = run_expectation_try!(latest_history_scope_with_cache(
             root,
             &config.agent,
@@ -258,6 +207,13 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             &mut caches.history
         ))
         .unwrap_or_else(full_scope);
+        if !run_expectation_try!(caches
+            .visible_tree_oid
+            .missing_staged_scope_paths(root, &enforced_scope))
+        .is_empty()
+        {
+            enforced_scope = full_scope();
+        }
         // Response-format problems and evaluator runner/model failures are
         // handled inside this call: they become non-pass review records that
         // are written through `write_latest_non_pass_record_with_cache` below.
@@ -273,7 +229,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             runner,
             &mut diagnostic_log,
             &mut interrogation_state,
-            &mut caches.scope_hash,
+            &mut caches.visible_tree_oid,
             options.break_after_tokens,
         ));
         evaluated += 1;
@@ -315,7 +271,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 runner,
                 &mut diagnostic_log,
                 &mut interrogation_state,
-                &mut caches.scope_hash,
+                &mut caches.visible_tree_oid,
                 options.break_after_tokens,
             ));
             break_after_tokens_hit |=
@@ -340,9 +296,9 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             if accepted {
                 interrogation = narrowed;
             } else {
-                let enforced_scope_hash = run_expectation_try!(caches
-                    .scope_hash
-                    .staged_scope_hash(root, &config.agent, &enforced_scope));
+                let enforced_visible_tree_oid = run_expectation_try!(caches
+                    .visible_tree_oid
+                    .staged_visible_tree_oid(root, &config.agent, &enforced_scope));
                 // A rejected narrowing invalidates only the evaluator's
                 // proposed reusable cache scope. The original answer/evidence
                 // came from the wider enforced scope, so keep that wide
@@ -352,7 +308,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 interrogation.record = restore_record_to_enforced_scope(
                     initial_record,
                     &enforced_scope,
-                    enforced_scope_hash,
+                    enforced_visible_tree_oid,
                 );
             }
         }
@@ -379,8 +335,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         }
         let run_stop_signal_hit =
             break_after_tokens_hit || context_compaction_hit || stop_after_current_expectation;
-        let should_stop =
-            stop_after_non_pass && (!interrogation.record.passed() || run_stop_signal_hit);
+        let should_stop = run_stop_signal_hit && !options.check_all;
         if run_stop_signal_hit {
             interrogation_state.clear_thread_sessions();
         }
@@ -390,54 +345,123 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         ));
         records.push(interrogation.record);
         if should_stop {
+            let skipped = skipped_count(total_expectations, records.len());
             return Ok(check_run_report(
                 records,
                 non_selected,
-                evaluated,
-                selected,
-                skipped,
-                silent,
+                cached,
+                CheckRunReportCounts {
+                    evaluated,
+                    selected,
+                    skipped,
+                    silent,
+                },
                 narrowing,
             ));
         }
     }
+    let skipped = skipped_count(total_expectations, records.len());
     Ok(check_run_report(
         records,
         non_selected,
-        evaluated,
-        selected,
-        skipped,
-        silent,
+        cached,
+        CheckRunReportCounts {
+            evaluated,
+            selected,
+            skipped,
+            silent,
+        },
         narrowing,
     ))
+}
+
+struct CachedSelection {
+    selected: Vec<SelectedExpectation>,
+    cached: Vec<CachedSelectionHit>,
+    cached_failure_seen: bool,
+}
+
+struct CachedSelectionHit {
+    expectation: SelectedExpectation,
+    hit: CheckCacheHit,
+}
+
+fn default_check_selection(
+    root: &Path,
+    agent: &AgentConfig,
+    options: &CheckOptions,
+    history_cache: &mut HistoryCache,
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
+    now: u64,
+    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+) -> Result<CachedSelection, String> {
+    let mut selected = Vec::new();
+    let mut cached = Vec::new();
+    let mut cached_failure_seen = false;
+    for expectation in options.selected.clone() {
+        match cached_result_for_expectation(
+            root,
+            agent,
+            &expectation,
+            history_cache,
+            visible_tree_oid_cache,
+            CachedResultLookup {
+                now,
+                include_same_tree: !options.ignore_cache,
+                include_cooldown: !options.ignore_cooldown,
+            },
+        )? {
+            Some(hit) => {
+                cached_failure_seen |= !hit.record.passed();
+                if let Some(writer) = diagnostic_log.as_deref_mut() {
+                    write_cache_hit(writer, &hit)?;
+                }
+                cached.push(CachedSelectionHit { expectation, hit });
+            }
+            None => selected.push(expectation),
+        }
+    }
+    if cached_failure_seen {
+        selected.clear();
+        cached.sort_by_key(|hit| Reverse(record_timestamp_sort_key(&hit.hit.record)));
+    }
+    Ok(CachedSelection {
+        selected,
+        cached,
+        cached_failure_seen,
+    })
+}
+
+fn record_timestamp_sort_key(record: &CheckRecord) -> u64 {
+    parse_record_timestamp(&record.timestamp).unwrap_or(0)
 }
 
 fn check_run_report(
     records: Vec<CheckRecord>,
     non_selected: Vec<SelectedExpectation>,
-    evaluated: usize,
-    selected: usize,
-    skipped: usize,
-    silent: usize,
+    cached: Vec<CachedExpectation>,
+    counts: CheckRunReportCounts,
     narrowing: NarrowingStats,
 ) -> CheckRunReport {
     CheckRunReport {
         records,
         non_selected,
-        evaluated,
-        selected,
-        skipped,
-        silent,
+        cached,
+        evaluated: counts.evaluated,
+        selected: counts.selected,
+        skipped: counts.skipped,
+        silent: counts.silent,
         narrowing,
     }
 }
 
-fn mark_expectations_silent(
-    expectations: Vec<SelectedExpectation>,
-    non_selected: &mut Vec<SelectedExpectation>,
-    silent: &mut usize,
-) {
-    let count = expectations.len();
-    non_selected.extend(expectations);
-    *silent += count;
+struct CheckRunReportCounts {
+    evaluated: usize,
+    selected: usize,
+    skipped: usize,
+    silent: usize,
+}
+
+fn skipped_count(total_expectations: usize, output_records: usize) -> usize {
+    total_expectations.saturating_sub(output_records)
 }

@@ -1,7 +1,8 @@
 use crate::project::{command_output_trimmed, path_from_git_stdout};
+use std::ffi::OsStr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 
 #[derive(Clone)]
 pub(crate) struct StagedTrackedFile {
@@ -90,10 +91,27 @@ fn parse_staged_tracked_file(entry: &[u8]) -> Result<Option<StagedTrackedFile>, 
 }
 
 pub(crate) fn read_git_blobs(root: &Path, object_ids: &[String]) -> Result<Vec<Vec<u8>>, String> {
+    read_git_blobs_with_git_program_inner(root, object_ids, OsStr::new("git"))
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn read_git_blobs_with_git_program(
+    root: &Path,
+    object_ids: &[String],
+    git_program: &OsStr,
+) -> Result<Vec<Vec<u8>>, String> {
+    read_git_blobs_with_git_program_inner(root, object_ids, git_program)
+}
+
+fn read_git_blobs_with_git_program_inner(
+    root: &Path,
+    object_ids: &[String],
+    git_program: &OsStr,
+) -> Result<Vec<Vec<u8>>, String> {
     if object_ids.is_empty() {
         return Ok(Vec::new());
     }
-    let mut child = Command::new("git")
+    let mut child = Command::new(git_program)
         .arg("-C")
         .arg(root)
         .args(["cat-file", "--batch"])
@@ -102,16 +120,25 @@ pub(crate) fn read_git_blobs(root: &Path, object_ids: &[String]) -> Result<Vec<V
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|err| format!("failed to run git cat-file: {}", err))?;
-    {
-        let stdin = child
-            .stdin
-            .as_mut()
-            .ok_or_else(|| "failed to open git cat-file stdin".to_string())?;
-        for object_id in object_ids {
-            writeln!(stdin, "{}", object_id)
-                .map_err(|err| format!("failed to write git cat-file input: {}", err))?;
+    let mut stdin = match child.stdin.take() {
+        Some(stdin) => stdin,
+        None => {
+            return Err(cleanup_git_cat_file_child(
+                child,
+                "failed to open git cat-file stdin".to_string(),
+            ))
+        }
+    };
+    for object_id in object_ids {
+        if let Err(err) = writeln!(stdin, "{}", object_id) {
+            drop(stdin);
+            return Err(cleanup_git_cat_file_child(
+                child,
+                format!("failed to write git cat-file input: {}", err),
+            ));
         }
     }
+    drop(stdin);
     let output = child
         .wait_with_output()
         .map_err(|err| format!("failed to read git cat-file output: {}", err))?;
@@ -122,6 +149,13 @@ pub(crate) fn read_git_blobs(root: &Path, object_ids: &[String]) -> Result<Vec<V
         ));
     }
     parse_git_blob_batch(&output.stdout, object_ids)
+}
+
+fn cleanup_git_cat_file_child(child: Child, message: String) -> String {
+    match child.wait_with_output() {
+        Ok(_) => message,
+        Err(err) => format!("{}; failed to reap git cat-file: {}", message, err),
+    }
 }
 
 fn parse_git_blob_batch(output: &[u8], object_ids: &[String]) -> Result<Vec<Vec<u8>>, String> {

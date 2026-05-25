@@ -168,8 +168,8 @@ pub(crate) struct CheckRecord {
     pub(crate) observed: String,
     pub(crate) evidence: String,
     pub(crate) scope: Vec<String>,
-    #[serde(rename = "scopeTreeOid", alias = "scopeHash")]
-    pub(crate) scope_hash: String,
+    #[serde(rename = "visibleTreeOid", alias = "scopeTreeOid", alias = "scopeHash")]
+    pub(crate) visible_tree_oid: String,
     #[serde(default)]
     pub(crate) id: String,
     #[serde(default, skip)]
@@ -183,7 +183,7 @@ pub(crate) struct CheckRecordOutcome {
     pub(crate) observed: String,
     pub(crate) evidence: String,
     pub(crate) scope: Vec<String>,
-    pub(crate) scope_hash: String,
+    pub(crate) visible_tree_oid: String,
 }
 
 impl CheckRecord {
@@ -221,7 +221,7 @@ impl CheckRecord {
             observed: outcome.observed,
             evidence: outcome.evidence,
             scope: outcome.scope,
-            scope_hash: outcome.scope_hash,
+            visible_tree_oid: outcome.visible_tree_oid,
             cache_key,
         }
     }
@@ -239,10 +239,12 @@ pub(crate) struct CheckOptions {
     // CLI-expanded selected expectations before check-only work-saving filters.
     pub(crate) selected: Vec<SelectedExpectation>,
     pub(crate) non_selected: Vec<SelectedExpectation>,
-    // Command-selector misses. This is the public summary `skipped` count.
+    pub(crate) selectors_provided: bool,
+    #[cfg_attr(not(test), allow(dead_code))]
+    // Command-selector misses before check-only work-saving filters.
     pub(crate) skipped: usize,
-    // `canon check` stops after the first final non-pass by default. `--all`
-    // keeps running the full already-selected set.
+    // `--all` treats the collected expectations as an explicit fresh
+    // evaluation request.
     pub(crate) check_all: bool,
     pub(crate) ignore_cache: bool,
     pub(crate) ignore_cooldown: bool,
@@ -295,14 +297,23 @@ pub(crate) struct NarrowingStats {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct CachedExpectation {
+    pub(crate) expectation: SelectedExpectation,
+    pub(crate) record: CheckRecord,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct CheckRunReport {
     pub(crate) records: Vec<CheckRecord>,
+    #[allow(dead_code)]
     pub(crate) non_selected: Vec<SelectedExpectation>,
+    pub(crate) cached: Vec<CachedExpectation>,
     // Freshly evaluated expectations in this run.
     pub(crate) evaluated: usize,
-    // CLI-expanded selected expectations before check-only work-saving filters.
+    // Expectations selected for evaluator work in this run.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) selected: usize,
-    // Command-selector misses. This is the public summary `skipped` count.
+    // Expectations with no per-expectation output category.
     pub(crate) skipped: usize,
     // Skipped expectations that were selected by the command but intentionally
     // produce no per-expectation stdout.

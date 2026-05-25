@@ -1,6 +1,29 @@
 use super::*;
 
 #[test]
+fn check_runner_ignores_latest_scope_seed_when_paths_are_absent() {
+    let root = git_project("check-stale-scope-seed");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let expectation = options.selected[0].clone();
+    let mut record = expectation_record(
+        &config.agent,
+        &expectation,
+        RESULT_PASS,
+        "yes",
+        "stale-visible-tree-oid".to_string(),
+    );
+    record.scope = vec!["src/old-location.rs".to_string()];
+    append_history_record(&root, &expectation, &record).unwrap();
+    let mut runner = FakeRunner::new(&[&answer("yes", "full scope after stale seed", &["."])]);
+
+    run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert_eq!(runner.start_scopes, vec![full_scope()]);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn generated_prompt_source_does_not_widen_restricted_history_scope() {
     let root = git_project("generated-prompt-source-does-not-widen-scope");
     fs::create_dir_all(root.join("specs")).unwrap();
@@ -45,7 +68,7 @@ expectations:
             observed: "yes".to_string(),
             evidence: "src/main.rs was previously enough".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            visible_tree_oid: "old".to_string(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -78,7 +101,7 @@ fn check_runner_replaces_restricted_idk_with_full_scope_answer() {
             observed: "yes".to_string(),
             evidence: "src/main.rs was previously enough".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            visible_tree_oid: "old".to_string(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -97,7 +120,7 @@ fn check_runner_replaces_restricted_idk_with_full_scope_answer() {
             observed: "idk".to_string(),
             evidence: "src/main.rs was not enough".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            visible_tree_oid: "old".to_string(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -139,7 +162,7 @@ fn check_runner_retries_full_scope_for_restricted_idk_with_empty_evidence() {
             observed: "yes".to_string(),
             evidence: "src/main.rs was previously enough".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            visible_tree_oid: "old".to_string(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -271,7 +294,7 @@ fn check_runner_rejects_widened_idk_scope_then_retries_full_scope() {
             observed: "yes".to_string(),
             evidence: "src/main.rs was previously enough".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            visible_tree_oid: "old".to_string(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -323,7 +346,7 @@ fn append_src_main_pass_history(
             observed: "yes".to_string(),
             evidence: "src/main.rs was previously enough".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            visible_tree_oid: "old".to_string(),
             cache_key: Some(history_cache_key(&config.agent, expectation)),
         },
     )
@@ -387,7 +410,7 @@ fn check_runner_starts_from_latest_answer_history_scope_even_when_failed() {
             observed: "no".to_string(),
             evidence: "restricted scope was misleading".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            visible_tree_oid: "old".to_string(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -426,7 +449,7 @@ fn check_runner_scope_seed_ignores_non_reusable_history_answer() {
             observed: UNPARSEABLE_OBSERVED.to_string(),
             evidence: "legacy review record kept a useful scope".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            visible_tree_oid: "old".to_string(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -461,7 +484,7 @@ fn check_runner_ignore_cache_uses_latest_history_scope() {
             observed: "yes".to_string(),
             evidence: "src/main.rs was previously enough".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            visible_tree_oid: "old".to_string(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -500,7 +523,7 @@ fn check_runner_verifies_narrower_scope_after_restricted_idk_retry() {
             observed: "yes".to_string(),
             evidence: "src/main.rs was previously enough".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            visible_tree_oid: "old".to_string(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -519,7 +542,7 @@ fn check_runner_verifies_narrower_scope_after_restricted_idk_retry() {
             observed: "idk".to_string(),
             evidence: "src/main.rs was not enough".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            visible_tree_oid: "old".to_string(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -569,7 +592,7 @@ fn check_runner_does_not_widen_restricted_answer_mismatch() {
             observed: "yes".to_string(),
             evidence: "src/main.rs was previously enough".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            visible_tree_oid: "old".to_string(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -608,7 +631,7 @@ fn check_runner_retries_full_scope_for_restricted_answer_widening() {
             observed: "yes".to_string(),
             evidence: "src/main.rs was previously enough".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            visible_tree_oid: "old".to_string(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -699,7 +722,7 @@ fn check_runner_does_not_widen_restricted_unparseable_response() {
             observed: "yes".to_string(),
             evidence: "src/main.rs was previously enough".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            visible_tree_oid: "old".to_string(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -718,7 +741,7 @@ fn check_runner_does_not_widen_restricted_unparseable_response() {
             observed: "malformed".to_string(),
             evidence: "restricted response was empty".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            visible_tree_oid: "old".to_string(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )

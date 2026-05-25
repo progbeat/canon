@@ -18,7 +18,7 @@ expectations:
     )
     .unwrap();
     let expectation = check_options(&config, &["1"], false, false).selected[0].clone();
-    let scope_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let visible_tree_oid = staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
     append_history_record(
         &root,
         &expectation,
@@ -33,7 +33,7 @@ expectations:
             observed: "yes".to_string(),
             evidence: "old pass".to_string(),
             scope: full_scope(),
-            scope_hash: scope_hash.clone(),
+            visible_tree_oid: visible_tree_oid.clone(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -52,7 +52,7 @@ expectations:
             observed: "no".to_string(),
             evidence: "latest fail".to_string(),
             scope: full_scope(),
-            scope_hash: scope_hash.clone(),
+            visible_tree_oid: visible_tree_oid.clone(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -71,7 +71,7 @@ expectations:
             observed: "no".to_string(),
             evidence: "invalid timestamp fail".to_string(),
             scope: full_scope(),
-            scope_hash: "newer".to_string(),
+            visible_tree_oid: "newer".to_string(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -86,7 +86,7 @@ expectations:
 }
 
 #[test]
-fn cooldown_reuse_stops_at_latest_valid_non_answer_record() {
+fn cooldown_reuse_skips_latest_legacy_non_answer_record() {
     let root = git_project("history-cooldown-latest-idk");
     let config = parse_check_config(
         r#"
@@ -103,7 +103,7 @@ expectations:
     )
     .unwrap();
     let expectation = check_options(&config, &["1"], false, false).selected[0].clone();
-    let scope_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let visible_tree_oid = staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
     append_history_record(
         &root,
         &expectation,
@@ -118,7 +118,7 @@ expectations:
             observed: "yes".to_string(),
             evidence: "old pass".to_string(),
             scope: full_scope(),
-            scope_hash: scope_hash.clone(),
+            visible_tree_oid: visible_tree_oid.clone(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -137,18 +137,19 @@ expectations:
             observed: OBSERVED_IDK.to_string(),
             evidence: "latest human review".to_string(),
             scope: full_scope(),
-            scope_hash,
+            visible_tree_oid,
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
     .unwrap();
 
     let mut history_cache = HistoryCache::new();
-    assert!(
+    let record =
         cooldown_history_record(&root, &config.agent, &expectation, &mut history_cache, 30)
             .unwrap()
-            .is_none()
-    );
+            .unwrap();
+    assert!(record.passed());
+    assert_eq!(record.evidence, "old pass");
     let _ = fs::remove_dir_all(root);
 }
 
@@ -184,7 +185,7 @@ expectations:
             observed: "yes".to_string(),
             evidence: "future pass".to_string(),
             scope: full_scope(),
-            scope_hash: staged_scope_hash(&root, &config.agent, &full_scope()).unwrap(),
+            visible_tree_oid: staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -238,7 +239,7 @@ expectations:
         &old_expectation,
         "pass",
         "yes",
-        staged_scope_hash(&root, &old_config.agent, &full_scope()).unwrap(),
+        staged_visible_tree_oid(&root, &old_config.agent, &full_scope()).unwrap(),
     );
     record.timestamp = format_record_timestamp(unix_timestamp().unwrap());
     append_history_record(&root, &old_expectation, &record).unwrap();
@@ -258,7 +259,7 @@ expectations:
 }
 
 #[test]
-fn cooldown_reuse_skips_records_with_invalid_timestamps() {
+fn cooldown_reuse_blocks_on_latest_answer_record_with_invalid_timestamp() {
     let root = git_project("history-cooldown-invalid-timestamp");
     let config = parse_check_config(
         r#"
@@ -275,7 +276,7 @@ expectations:
     )
     .unwrap();
     let expectation = check_options(&config, &["1"], false, false).selected[0].clone();
-    let scope_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let visible_tree_oid = staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
     append_history_record(
         &root,
         &expectation,
@@ -290,7 +291,7 @@ expectations:
             observed: "yes".to_string(),
             evidence: "old pass".to_string(),
             scope: full_scope(),
-            scope_hash,
+            visible_tree_oid,
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -309,22 +310,22 @@ expectations:
             observed: "yes".to_string(),
             evidence: "invalid timestamp pass".to_string(),
             scope: full_scope(),
-            scope_hash: "new".to_string(),
+            visible_tree_oid: "new".to_string(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
     .unwrap();
     let mut history_cache = HistoryCache::new();
-    let reused =
+    assert!(
         cooldown_history_record(&root, &config.agent, &expectation, &mut history_cache, 30)
             .unwrap()
-            .unwrap();
-    assert_eq!(reused.evidence, "old pass");
+            .is_none()
+    );
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn cooldown_reuse_returns_persisted_history_record_without_rehydrating_metadata() {
+fn cooldown_reuse_applies_current_expectation_metadata() {
     let root = git_project("history-cooldown-preserves-record");
     let config = parse_check_config(
         r#"
@@ -341,7 +342,7 @@ expectations:
     )
     .unwrap();
     let mut expectation = check_options(&config, &["1"], false, false).selected[0].clone();
-    let scope_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let visible_tree_oid = staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
     let record = CheckRecord {
         timestamp: "1970-01-01T00:00:10Z".to_string(),
         id: expectation.id.clone(),
@@ -353,7 +354,7 @@ expectations:
         observed: "yes".to_string(),
         evidence: "old pass".to_string(),
         scope: full_scope(),
-        scope_hash,
+        visible_tree_oid,
         cache_key: Some(history_cache_key(&config.agent, &expectation)),
     };
     append_history_record(&root, &expectation, &record).unwrap();
@@ -366,7 +367,7 @@ expectations:
             .unwrap();
 
     assert_eq!(reused.id, expectation.id);
-    assert_eq!(reused.number, 0);
+    assert_eq!(reused.number, 7);
     assert_eq!(reused.prompt.as_deref(), Some("Question?"));
     assert_eq!(reused.expected.as_deref(), Some("yes"));
     assert_eq!(reused.timestamp, "1970-01-01T00:00:10Z");

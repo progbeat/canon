@@ -26,6 +26,9 @@ fn history_record_required_fields_are_written_first() {
     assert!(json.get("displayId").is_none());
     assert_eq!(json["prompt"], "Question?");
     assert_eq!(json["expected"], "yes");
+    assert!(json.get("visibleTreeOid").is_some());
+    assert!(json.get("scopeTreeOid").is_none());
+    assert!(json.get("scopeHash").is_none());
 
     let expected_order = [
         "\"timestamp\"",
@@ -33,7 +36,7 @@ fn history_record_required_fields_are_written_first() {
         "\"observed\"",
         "\"evidence\"",
         "\"scope\"",
-        "\"scopeTreeOid\"",
+        "\"visibleTreeOid\"",
         "\"id\"",
         "\"prompt\"",
         "\"expected\"",
@@ -95,14 +98,14 @@ fn history_reader_skips_malformed_lines() {
 }
 
 #[test]
-fn history_parser_accepts_legacy_required_prefix_records() {
+fn history_parser_accepts_required_prefix_records() {
     let line = serde_json::to_string(&json!({
         "timestamp": "1970-01-01T00:00:00Z",
         "result": "pass",
         "observed": "yes",
         "evidence": "cached answer",
         "scope": ["."],
-        "scopeTreeOid": "AAAAAAAAAAAAAAAAAAAA"
+        "visibleTreeOid": "AAAAAAAAAAAAAAAAAAAA"
     }))
     .unwrap();
 
@@ -111,6 +114,41 @@ fn history_parser_accepts_legacy_required_prefix_records() {
     assert_eq!(record.prompt, None);
     assert_eq!(record.expected, None);
     assert_eq!(record.observed, "yes");
+    assert_eq!(record.visible_tree_oid, "AAAAAAAAAAAAAAAAAAAA");
+}
+
+#[test]
+fn history_parser_accepts_legacy_scope_tree_oid_records() {
+    let line = serde_json::to_string(&json!({
+        "timestamp": "1970-01-01T00:00:00Z",
+        "result": "pass",
+        "observed": "yes",
+        "evidence": "cached answer",
+        "scope": ["."],
+        "scopeTreeOid": "BBBBBBBBBBBBBBBBBBBB"
+    }))
+    .unwrap();
+
+    let record = parse_history_record_line(Path::new("history.jsonl"), 1, &line).unwrap();
+
+    assert_eq!(record.visible_tree_oid, "BBBBBBBBBBBBBBBBBBBB");
+}
+
+#[test]
+fn history_parser_accepts_legacy_scope_hash_records() {
+    let line = serde_json::to_string(&json!({
+        "timestamp": "1970-01-01T00:00:00Z",
+        "result": "pass",
+        "observed": "yes",
+        "evidence": "cached answer",
+        "scope": ["."],
+        "scopeHash": "CCCCCCCCCCCCCCCCCCCC"
+    }))
+    .unwrap();
+
+    let record = parse_history_record_line(Path::new("history.jsonl"), 1, &line).unwrap();
+
+    assert_eq!(record.visible_tree_oid, "CCCCCCCCCCCCCCCCCCCC");
 }
 
 #[test]
@@ -130,7 +168,7 @@ fn append_history_record_updates_in_memory_cache() {
         &expectation,
         "pass",
         "yes",
-        staged_scope_hash(&root, &config.agent, &full_scope()).unwrap(),
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap(),
     );
     append_history_record_with_cache(&root, &expectation, &record, &mut history_cache).unwrap();
 
@@ -159,7 +197,7 @@ fn append_history_record_refuses_symlinked_history_file() {
         &expectation,
         "pass",
         "yes",
-        staged_scope_hash(&root, &config.agent, &full_scope()).unwrap(),
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap(),
     );
 
     let err = append_history_record(&root, &expectation, &record).unwrap_err();
@@ -196,7 +234,7 @@ fn latest_non_pass_record_refuses_symlinked_state_file() {
 }
 
 #[test]
-fn history_compaction_uses_one_in_fifteen_chance() {
+fn history_compaction_uses_one_in_sixteen_chance() {
     assert!(should_compact_history_for_seed(0));
     assert!(!should_compact_history_for_seed(1));
     let hits = (0..(HISTORY_COMPACT_CHANCE_DENOMINATOR * 10))
@@ -211,7 +249,7 @@ fn compact_history_replaces_file_after_writing_latest_lines() {
     let root = git_project("history-compact");
     let path = root.join(".git/canon/cache/example/history.jsonl");
     ensure_dir(path.parent().unwrap()).unwrap();
-    let records = (1..=7)
+    let records = (1..=10)
         .map(|number| {
             let mut record = sample_record(number, "pass");
             record.evidence = format!("record {number}");
@@ -226,13 +264,22 @@ fn compact_history_replaces_file_after_writing_latest_lines() {
     compact_history(&path).unwrap();
 
     let compacted = read_history_records_from_path(&path).unwrap();
-    assert_eq!(compacted.len(), 5);
+    assert_eq!(compacted.len(), 8);
     assert_eq!(
         compacted
             .iter()
             .map(|record| record.evidence.clone())
             .collect::<Vec<_>>(),
-        vec!["record 3", "record 4", "record 5", "record 6", "record 7"]
+        vec![
+            "record 3",
+            "record 4",
+            "record 5",
+            "record 6",
+            "record 7",
+            "record 8",
+            "record 9",
+            "record 10",
+        ]
     );
     assert!(!compact_history_temp_path(&path).unwrap().exists());
     let _ = fs::remove_dir_all(root);
@@ -257,13 +304,13 @@ fn compact_history_drops_malformed_lines_and_keeps_latest_valid_records() {
     compact_history(&path).unwrap();
 
     let compacted = read_history_records_from_path(&path).unwrap();
-    assert_eq!(compacted.len(), 5);
+    assert_eq!(compacted.len(), 7);
     assert_eq!(
         compacted
             .iter()
             .map(|record| record.evidence.clone())
             .collect::<Vec<_>>(),
-        vec!["record 3", "record 4", "record 5", "record 6", "record 7"]
+        vec!["record 1", "record 2", "record 3", "record 4", "record 5", "record 6", "record 7",]
     );
     let _ = fs::remove_dir_all(root);
 }

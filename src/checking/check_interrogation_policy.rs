@@ -9,7 +9,7 @@ use crate::evaluator_types::EvaluatorRunner;
 use crate::hash::full_scope;
 use crate::history_reuse::is_reusable_history_record;
 use crate::logging::DiagnosticLogWriter;
-use crate::scope_hash::ScopeHashCache;
+use crate::visible_tree_oid::VisibleTreeOidCache;
 use std::path::Path;
 
 pub(crate) struct InterrogationCall<'a> {
@@ -42,7 +42,7 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     interrogation_state: &mut InterrogationState,
-    scope_hash_cache: &mut ScopeHashCache,
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
     break_after_tokens: Option<u64>,
 ) -> Result<InterrogationResult, String> {
     let mut interrogation = interrogate_or_error_record(
@@ -50,7 +50,7 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
         runner,
         diagnostic_log,
         interrogation_state,
-        scope_hash_cache,
+        visible_tree_oid_cache,
     )?;
     let should_stop_after_current_expectation =
         turn_exceeds_break_after_tokens(&interrogation, break_after_tokens)
@@ -66,7 +66,7 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
             runner,
             diagnostic_log,
             interrogation_state,
-            scope_hash_cache,
+            visible_tree_oid_cache,
         )?;
         interrogation.stop_after_current_expectation |= should_stop_after_current_expectation;
     } else if should_stop_after_current_expectation {
@@ -80,7 +80,7 @@ pub(crate) fn interrogate_or_error_record<R: EvaluatorRunner>(
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     interrogation_state: &mut InterrogationState,
-    scope_hash_cache: &mut ScopeHashCache,
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<InterrogationResult, String> {
     match interrogate_expectation_with_model_fallbacks(
         call.runtime,
@@ -98,7 +98,7 @@ pub(crate) fn interrogate_or_error_record<R: EvaluatorRunner>(
                 call.expectation,
                 call.scope,
                 &err,
-                scope_hash_cache,
+                visible_tree_oid_cache,
             )?,
             turn_usage: None,
             context_compacted: false,
@@ -132,10 +132,10 @@ pub(crate) fn narrowed_scope_is_accepted(wide: &CheckRecord, narrowed: &CheckRec
 pub(crate) fn restore_record_to_enforced_scope(
     mut record: CheckRecord,
     enforced_scope: &[String],
-    enforced_scope_hash: String,
+    enforced_visible_tree_oid: String,
 ) -> CheckRecord {
     record.scope = enforced_scope.to_vec();
-    record.scope_hash = enforced_scope_hash;
+    record.visible_tree_oid = enforced_visible_tree_oid;
     record
 }
 

@@ -77,7 +77,7 @@ pub(crate) fn record_from_response(
     expectation: &SelectedExpectation,
     response: ParsedAnswer,
     enforced_scope: Vec<String>,
-    scope_hash: String,
+    visible_tree_oid: String,
 ) -> Result<CheckRecord, String> {
     // This is the expectation-specific answer vocabulary gate: yes/no and
     // option expectations reject prose, while free-form exact-string
@@ -98,7 +98,7 @@ pub(crate) fn record_from_response(
             observed: response.answer,
             evidence: response.evidence,
             scope: enforced_scope,
-            scope_hash,
+            visible_tree_oid,
         },
     )
 }

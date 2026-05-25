@@ -65,14 +65,14 @@ use crate::check_reporting::{
     collect_check_token_usage, print_token_usage_summary, write_check_finish_event,
 };
 use crate::check_selection::{
-    cooldown_filtered_check_work_queue, expectation_identities, initial_non_selected_expectations,
+    expectation_identities, initial_non_selected_expectations,
     order_expectations_by_latest_non_pass, parse_check_options, parse_cooldown,
     select_expectations,
 };
 use crate::check_types::{
-    check_run_error, CheckCommandArgs, CheckOptions, CheckRecord, CheckResult, CheckRunError,
-    CheckRunReport, Cooldown, EvaluatorResponseJson, InterrogationResult, NarrowingStats,
-    ObservedAnswerState, ParsedAnswer, QueryResult, SelectedExpectation,
+    check_run_error, CachedExpectation, CheckCommandArgs, CheckOptions, CheckRecord, CheckResult,
+    CheckRunError, CheckRunReport, Cooldown, EvaluatorResponseJson, InterrogationResult,
+    NarrowingStats, ObservedAnswerState, ParsedAnswer, QueryResult, SelectedExpectation,
 };
 use crate::check_validation::{
     check_config_loads_plugins, codex_reasoning_effort, normalize_agent_ignore_pattern_for_config,
@@ -109,6 +109,8 @@ use crate::fs_util::{ensure_dir, for_each_nonempty_line, replace_file_with_temp}
 use crate::gate::*;
 #[cfg(unix)]
 use crate::git::git_path_from_raw_bytes;
+#[cfg(unix)]
+use crate::git::read_git_blobs_with_git_program;
 use crate::git::resolve_git_path;
 use crate::hash::{expectation_id, fnv64_with_seed, full_scope, hash_120, hash_key};
 use crate::history::{history_file_name, read_history_records};
@@ -125,7 +127,7 @@ use crate::history_compaction::{
 };
 use crate::history_reuse::{
     cooldown_history_record, is_reusable_history_record, latest_history_scope_with_cache,
-    reusable_history_record, reusable_history_record_with_cache,
+    same_tree_history_record, same_tree_history_record_with_cache,
 };
 use crate::hooks::*;
 use crate::logging::{
@@ -166,13 +168,6 @@ use crate::scope::{
     effective_ignore_patterns, is_denied_path, is_denied_path_bytes, is_strict_scope_subset,
     normalize_repo_path, sanitize_scope, sanitize_scope_for_hash, scope_contains, scope_is_within,
 };
-#[cfg(unix)]
-use crate::scope_hash::staged_scope_entries;
-use crate::scope_hash::ScopeHashCache;
-use crate::scope_hash::{
-    gate_head_tree_fingerprint, normalize_index_metadata, sha1_scope_tree_oid_from_entries,
-    staged_scope_hash,
-};
 #[cfg(all(unix, not(target_os = "macos")))]
 use crate::staged_worktree::initialize_snapshot_git_repo_for_test;
 use crate::staged_worktree::snapshot_parent_outside_worktree;
@@ -180,6 +175,13 @@ use crate::staged_worktree::StagedWorktreeView;
 use crate::time::{format_record_timestamp, parse_record_timestamp, unix_timestamp};
 use crate::token_usage_types::{
     reference_token_cost, ContextCompactionEvent, EvaluatorTurnUsage, TokenUsage, TokenUsageUpdate,
+};
+#[cfg(unix)]
+use crate::visible_tree_oid::staged_scope_entries;
+use crate::visible_tree_oid::VisibleTreeOidCache;
+use crate::visible_tree_oid::{
+    gate_head_tree_fingerprint, normalize_index_metadata, sha1_visible_tree_oid_from_entries,
+    staged_visible_tree_oid,
 };
 use crate::{
     APP_SERVER_TURN_TIMEOUT_SECS, CHECK_PATH, DEFAULT_CHECK_TEMPLATE, DEFAULT_PRE_COMMIT_HOOK,
@@ -227,6 +229,7 @@ pub(crate) fn enable_diagnostic_logs(root: &Path) {
     );
 }
 
+mod tests_app_server_process;
 mod tests_app_server_protocol;
 mod tests_check_command_args;
 mod tests_check_config_validation;
@@ -247,8 +250,8 @@ mod tests_git_runtime;
 mod tests_hash;
 mod tests_history_cached_check;
 mod tests_history_cooldown;
-mod tests_history_exact_reuse;
 mod tests_history_files;
+mod tests_history_same_tree_reuse;
 mod tests_hook_install;
 mod tests_init;
 mod tests_logging_runtime;

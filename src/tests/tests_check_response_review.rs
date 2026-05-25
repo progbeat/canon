@@ -320,6 +320,86 @@ fn check_runner_requires_human_review_when_evidence_stays_empty() {
 }
 
 #[test]
+fn check_runner_requires_human_review_when_evidence_has_no_project_citation() {
+    let root = git_project("check-missing-evidence-citation");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let response = serde_json::to_string(&json!({
+        "answer": "yes",
+        "evidence": "README.md has evidence but is not cited",
+        "scope": ["."]
+    }))
+    .unwrap();
+    let mut runner = FakeRunner::new(&[&response]);
+
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert!(!records.records[0].passed());
+    assert!(record_requires_human_review(&records.records[0]));
+    assert_eq!(records.records[0].observed, OBSERVED_MALFORMED);
+    assert!(records.records[0]
+        .evidence
+        .contains("backticked project-relative citation"));
+    assert!(read_history_records(&root, &options.selected[0])
+        .unwrap()
+        .is_empty());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_runner_requires_citation_for_idk_evidence() {
+    let root = git_project("check-idk-missing-evidence-citation");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let response = serde_json::to_string(&json!({
+        "answer": "idk",
+        "evidence": "README.md might have evidence but is not cited",
+        "scope": ["."]
+    }))
+    .unwrap();
+    let mut runner = FakeRunner::new(&[&response]);
+
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert!(!records.records[0].passed());
+    assert!(record_requires_human_review(&records.records[0]));
+    assert_eq!(records.records[0].observed, OBSERVED_MALFORMED);
+    assert!(records.records[0]
+        .evidence
+        .contains("backticked project-relative citation"));
+    assert_eq!(runner.prompts.len(), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_runner_requires_citation_for_malformed_evidence() {
+    let root = git_project("check-malformed-missing-evidence-citation");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let response = serde_json::to_string(&json!({
+        "answer": "malformed",
+        "evidence": "question is malformed but no project citation is present",
+        "scope": ["."]
+    }))
+    .unwrap();
+    let mut runner = FakeRunner::new(&[&response]);
+
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert!(!records.records[0].passed());
+    assert!(record_requires_human_review(&records.records[0]));
+    assert_eq!(records.records[0].observed, OBSERVED_MALFORMED);
+    assert!(records.records[0]
+        .evidence
+        .contains("backticked project-relative citation"));
+    assert_eq!(runner.prompts.len(), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn check_runner_requires_human_review_for_malformed_answer() {
     let root = git_project("check-malformed-answer");
     let config = parse_check_config(check_config_yaml()).unwrap();

@@ -26,7 +26,7 @@ fn diagnostic_log_is_written_to_numeric_active_file_and_flushed() {
     assert_eq!(json["observed"], "yes");
     assert_eq!(json["evidence"], "README.md has evidence");
     assert_eq!(json["scope"], json!(["."]));
-    assert!(json.get("scopeTreeOid").is_none());
+    assert!(json.get("visibleTreeOid").is_none());
     let expected_order = [
         "\"timestamp\"",
         "\"id\"",

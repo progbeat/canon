@@ -1,9 +1,8 @@
 use crate::check_order_state::latest_recorded_non_pass_timestamp_with_cache;
 use crate::check_types::{CheckOptions, Cooldown, RawCheckOptions, SelectedExpectation};
-use crate::config_types::{AgentConfig, CheckConfig};
+use crate::config_types::CheckConfig;
 use crate::hash::expectation_id;
 use crate::history::HistoryCache;
-use crate::history_reuse::cooldown_history_record;
 use crate::time::parse_record_timestamp;
 use clap::builder::OsStringValueParser;
 use clap::{Arg, ArgAction, ArgMatches, Command};
@@ -33,6 +32,7 @@ pub(crate) fn resolve_check_options_with_identities(
     Ok(CheckOptions {
         selected,
         non_selected,
+        selectors_provided: !options.selectors.is_empty(),
         skipped,
         check_all: options.check_all,
         ignore_cache: options.ignore_cache,
@@ -287,42 +287,6 @@ fn minimal_unique_expectation_prefix(id: &str, ids: &[String]) -> Option<String>
             .filter(|candidate| candidate.starts_with(prefix))
             .count();
         (matches == 1).then(|| prefix.to_string())
-    })
-}
-
-pub(crate) struct CheckWorkQueue {
-    pub(crate) selected: Vec<SelectedExpectation>,
-    pub(crate) skipped: Vec<SelectedExpectation>,
-}
-
-pub(crate) struct CheckWorkQueueError {
-    pub(crate) error: String,
-    pub(crate) skipped: Vec<SelectedExpectation>,
-}
-
-pub(crate) fn cooldown_filtered_check_work_queue(
-    root: &Path,
-    agent: &AgentConfig,
-    selected: Vec<SelectedExpectation>,
-    history_cache: &mut HistoryCache,
-    now: u64,
-) -> Result<CheckWorkQueue, CheckWorkQueueError> {
-    // Cooldown is a `canon check` work-saving filter, not command selection
-    // and not an answer-cache hit. A fresh latest pass removes a matching
-    // expectation from the evaluator work queue before exact-cache lookup and
-    // before any evaluator result can be reused as the observed answer.
-    let mut remaining = Vec::new();
-    let mut skipped = Vec::new();
-    for expectation in selected {
-        match cooldown_history_record(root, agent, &expectation, history_cache, now) {
-            Ok(None) => remaining.push(expectation),
-            Ok(Some(_)) => skipped.push(expectation),
-            Err(error) => return Err(CheckWorkQueueError { error, skipped }),
-        }
-    }
-    Ok(CheckWorkQueue {
-        selected: remaining,
-        skipped,
     })
 }
 

@@ -17,7 +17,7 @@ const RAW_PATH_HEX_PREFIX: &str = "\0raw-path-hex:";
 type ScopeCacheKey = (PathBuf, Vec<String>, Vec<String>);
 
 #[derive(Default)]
-pub(crate) struct ScopeHashCache {
+pub(crate) struct VisibleTreeOidCache {
     values: BTreeMap<ScopeCacheKey, Option<String>>,
     entries: BTreeMap<ScopeCacheKey, Option<Vec<String>>>,
     staged_all_entries: BTreeMap<PathBuf, Vec<String>>,
@@ -29,18 +29,18 @@ pub(crate) struct ScopeHashCache {
     object_hash_algorithms: BTreeMap<PathBuf, GitObjectHashAlgorithm>,
 }
 
-impl ScopeHashCache {
-    pub(crate) fn new() -> ScopeHashCache {
-        ScopeHashCache::default()
+impl VisibleTreeOidCache {
+    pub(crate) fn new() -> VisibleTreeOidCache {
+        VisibleTreeOidCache::default()
     }
 
-    pub(crate) fn staged_scope_hash(
+    pub(crate) fn staged_visible_tree_oid(
         &mut self,
         root: &Path,
         agent: &AgentConfig,
         scope: &[String],
     ) -> Result<String, String> {
-        self.staged_scope_hash_option(root, agent, scope)?
+        self.staged_visible_tree_oid_option(root, agent, scope)?
             .ok_or("failed to hash staged scope".to_string())
     }
 
@@ -64,7 +64,7 @@ impl ScopeHashCache {
             .collect())
     }
 
-    fn staged_scope_hash_option(
+    fn staged_visible_tree_oid_option(
         &mut self,
         root: &Path,
         agent: &AgentConfig,
@@ -76,7 +76,7 @@ impl ScopeHashCache {
             return Ok(hash.clone());
         }
         let object_hash_algorithm = self.object_hash_algorithm(root)?;
-        let hash = Some(scope_tree_oid_from_entries(
+        let hash = Some(visible_tree_oid_from_entries(
             &self.staged_scope_entries_for_key(root, agent, &scope, &key)?,
             object_hash_algorithm,
         )?);
@@ -107,9 +107,9 @@ impl ScopeHashCache {
         agent: &AgentConfig,
         scope: &[String],
     ) -> Result<Vec<String>, String> {
-        // Scope hashes may be requested for many selected, cached, and
+        // Visible tree OIDs may be requested for many selected, cached, and
         // narrowed scopes during one `canon check`, so cache the full listing
-        // once. `scopeTreeOid` hashes the evaluator-visible subset of the
+        // once. `visibleTreeOid` hashes the evaluator-visible subset of the
         // scoped tracked tree: canon/evaluator-denied entries are tracked Git
         // entries, but absent from the staged snapshot the evaluator sees.
         let entries = self.staged_all_scope_entries(root)?;
@@ -159,12 +159,12 @@ impl ScopeHashCache {
         }
         // Gate compares staged cache records with the committed HEAD tree to
         // tell whether a cached failure is a new regression. The same scoped
-        // tree object construction is used for answer-history `scopeTreeOid`
-        // records produced by `staged_scope_hash`.
+        // tree object construction is used for answer-history `visibleTreeOid`
+        // records produced by `staged_visible_tree_oid`.
         let object_hash_algorithm = self.object_hash_algorithm(root)?;
         let hash = self
             .gate_head_tree_entries_for_key(root, agent, &scope, &key)?
-            .map(|entries| scope_tree_oid_from_entries(&entries, object_hash_algorithm))
+            .map(|entries| visible_tree_oid_from_entries(&entries, object_hash_algorithm))
             .transpose()?;
         self.gate_head_values.insert(key, hash.clone());
         Ok(hash)
@@ -233,12 +233,12 @@ fn scope_cache_key(root: &Path, agent: &AgentConfig, scope: &[String]) -> ScopeC
 }
 
 #[cfg(test)]
-pub(crate) fn staged_scope_hash(
+pub(crate) fn staged_visible_tree_oid(
     root: &Path,
     agent: &AgentConfig,
     scope: &[String],
 ) -> Result<String, String> {
-    ScopeHashCache::new().staged_scope_hash(root, agent, scope)
+    VisibleTreeOidCache::new().staged_visible_tree_oid(root, agent, scope)
 }
 
 #[cfg(test)]
@@ -252,7 +252,7 @@ pub(crate) fn gate_head_tree_fingerprint(
     head_scope_entries(root, &scope).and_then(|entries| {
         entries
             .map(|entries| {
-                scope_tree_oid_from_entries(
+                visible_tree_oid_from_entries(
                     &filter_visible_scope_entries(&entries, agent, &scope),
                     object_hash_algorithm,
                 )
@@ -261,24 +261,24 @@ pub(crate) fn gate_head_tree_fingerprint(
     })
 }
 
-fn scope_tree_oid_from_entries(
+fn visible_tree_oid_from_entries(
     entries: &[String],
     object_hash_algorithm: GitObjectHashAlgorithm,
 ) -> Result<String, String> {
-    // `scopeTreeOid` is a Git-compatible tree object ID. We rebuild the scoped
+    // `visibleTreeOid` is a Git-compatible tree object ID. We rebuild the scoped
     // tree from Git-reported modes/object IDs, then hash the canonical `tree
     // <len>\0<body>` bytes with the repository's object hash algorithm.
     let mut tree = TreeNode::default();
     for entry in entries {
-        let parsed = parse_scope_tree_entry(entry)?;
+        let parsed = parse_visible_tree_entry(entry)?;
         tree.insert(&parsed.path, parsed.mode, parsed.object_id)?;
     }
     tree.oid(object_hash_algorithm)
 }
 
 #[cfg(test)]
-pub(crate) fn sha1_scope_tree_oid_from_entries(entries: &[String]) -> Result<String, String> {
-    scope_tree_oid_from_entries(entries, GitObjectHashAlgorithm::Sha1)
+pub(crate) fn sha1_visible_tree_oid_from_entries(entries: &[String]) -> Result<String, String> {
+    visible_tree_oid_from_entries(entries, GitObjectHashAlgorithm::Sha1)
 }
 
 #[derive(Clone, Copy)]
@@ -300,7 +300,7 @@ enum TreeEntry {
     DirectoryOid { object_id: String },
 }
 
-struct ScopeTreeEntry {
+struct VisibleTreeEntry {
     mode: String,
     object_id: String,
     path: Vec<Vec<u8>>,
@@ -309,7 +309,7 @@ struct ScopeTreeEntry {
 impl TreeNode {
     fn insert(&mut self, path: &[Vec<u8>], mode: String, object_id: String) -> Result<(), String> {
         let Some((name, rest)) = path.split_first() else {
-            return Err("scope tree entry path must not be empty".to_string());
+            return Err("visible tree entry path must not be empty".to_string());
         };
         if rest.is_empty() {
             let entry = if is_git_tree_mode(&mode) {
@@ -328,7 +328,7 @@ impl TreeNode {
             TreeEntry::Directory(directory) => directory.insert(rest, mode, object_id),
             TreeEntry::DirectoryOid { .. } => Ok(()),
             TreeEntry::File { .. } => Err(format!(
-                "scope tree path conflicts with file: {}",
+                "visible tree path conflicts with file: {}",
                 String::from_utf8_lossy(name)
             )),
         }
@@ -389,39 +389,39 @@ struct EncodedTreeEntry {
     is_directory: bool,
 }
 
-fn parse_scope_tree_entry(entry: &str) -> Result<ScopeTreeEntry, String> {
+fn parse_visible_tree_entry(entry: &str) -> Result<VisibleTreeEntry, String> {
     let (metadata, path) = entry
         .split_once('\t')
-        .ok_or_else(|| "scope tree entry missing path".to_string())?;
+        .ok_or_else(|| "visible tree entry missing path".to_string())?;
     let mut fields = metadata.split_whitespace();
     let mode = fields
         .next()
-        .ok_or_else(|| format!("scope tree entry missing mode for {}", path))?;
+        .ok_or_else(|| format!("visible tree entry missing mode for {}", path))?;
     let object_id = fields
         .next()
-        .ok_or_else(|| format!("scope tree entry missing object id for {}", path))?;
+        .ok_or_else(|| format!("visible tree entry missing object id for {}", path))?;
     if let Some(stage) = fields.next() {
         if stage != "0" {
             return Err(format!(
-                "scope tree entry has unresolved stage for {}",
+                "visible tree entry has unresolved stage for {}",
                 path
             ));
         }
     }
-    let path = scope_tree_path_components(path)?;
-    Ok(ScopeTreeEntry {
+    let path = visible_tree_path_components(path)?;
+    Ok(VisibleTreeEntry {
         mode: mode.to_string(),
         object_id: object_id.to_string(),
         path,
     })
 }
 
-fn scope_tree_path_components(path: &str) -> Result<Vec<Vec<u8>>, String> {
+fn visible_tree_path_components(path: &str) -> Result<Vec<Vec<u8>>, String> {
     let path = if let Some(encoded) = path.strip_prefix(RAW_PATH_HEX_PREFIX) {
         raw_path_hex_bytes(encoded)?
     } else {
         if path.contains('\0') {
-            return Err("scope tree entry contains invalid NUL path marker".to_string());
+            return Err("visible tree entry contains invalid NUL path marker".to_string());
         }
         path.as_bytes().to_vec()
     };
@@ -434,7 +434,7 @@ fn scope_tree_path_components(path: &str) -> Result<Vec<Vec<u8>>, String> {
 
 fn raw_path_hex_bytes(encoded: &str) -> Result<Vec<u8>, String> {
     if !encoded.len().is_multiple_of(2) {
-        return Err("scope tree entry has odd-length raw path hex".to_string());
+        return Err("visible tree entry has odd-length raw path hex".to_string());
     }
     let mut bytes = Vec::with_capacity(encoded.len() / 2);
     for pair in encoded.as_bytes().chunks(2) {
@@ -523,7 +523,7 @@ fn hex_bytes(bytes: &[u8]) -> String {
 
 #[cfg(all(test, unix))]
 pub(crate) fn staged_scope_entries(root: &Path, scope: &[String]) -> Result<Vec<String>, String> {
-    ScopeHashCache::new().staged_scope_entries(root, scope)
+    VisibleTreeOidCache::new().staged_scope_entries(root, scope)
 }
 
 #[cfg(test)]
@@ -668,7 +668,7 @@ fn filter_visible_scope_entries(
     agent: &AgentConfig,
     scope: &[String],
 ) -> Vec<String> {
-    // `scopeTreeOid` fingerprints the scoped evaluator-visible tree. Tracked
+    // `visibleTreeOid` fingerprints the scoped evaluator-visible tree. Tracked
     // entries outside the enforced scope or denied to the evaluator cannot
     // support that evaluator answer, so they are outside the cache-reuse
     // fingerprint.
@@ -758,7 +758,7 @@ fn scope_entry_is_tree(entry: &str) -> bool {
 }
 
 fn scope_entry_path_bytes(entry: &str) -> Result<Vec<u8>, String> {
-    let components = scope_tree_path_components(scope_entry_from_normalized_entry(entry))?;
+    let components = visible_tree_path_components(scope_entry_from_normalized_entry(entry))?;
     let mut path = Vec::new();
     for (index, component) in components.iter().enumerate() {
         if index > 0 {
@@ -771,10 +771,10 @@ fn scope_entry_path_bytes(entry: &str) -> Result<Vec<u8>, String> {
 
 fn scope_entry_is_within_base(base: &str, entry: &str) -> bool {
     let path = scope_entry_from_normalized_entry(entry);
-    let Ok(base_components) = scope_tree_path_components(base) else {
+    let Ok(base_components) = visible_tree_path_components(base) else {
         return false;
     };
-    let Ok(path_components) = scope_tree_path_components(path) else {
+    let Ok(path_components) = visible_tree_path_components(path) else {
         return false;
     };
     path_components.starts_with(&base_components)

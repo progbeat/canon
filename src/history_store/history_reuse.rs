@@ -1,57 +1,57 @@
 // Answer-history lookup for the Cache spec: newest-to-oldest history scanning
-// plus current scopeTreeOid matching.
+// plus current visibleTreeOid matching.
 use crate::check_types::{CheckRecord, ObservedAnswerState, SelectedExpectation};
 use crate::config_types::AgentConfig;
 use crate::history::HistoryCache;
 use crate::scope::sanitize_scope_for_hash;
-use crate::scope_hash::ScopeHashCache;
 use crate::time::parse_record_timestamp;
+use crate::visible_tree_oid::VisibleTreeOidCache;
 use std::path::Path;
 
 #[cfg(test)]
-pub(crate) fn reusable_history_record(
+pub(crate) fn same_tree_history_record(
     root: &Path,
     agent: &AgentConfig,
     expectation: &SelectedExpectation,
 ) -> Result<Option<CheckRecord>, String> {
-    let mut scope_hash_cache = ScopeHashCache::new();
+    let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
     let mut history_cache = HistoryCache::new();
-    reusable_history_record_with_cache(
+    same_tree_history_record_with_cache(
         root,
         agent,
         expectation,
         &mut history_cache,
-        &mut scope_hash_cache,
+        &mut visible_tree_oid_cache,
     )
 }
 
-pub(crate) fn reusable_history_record_with_cache(
+pub(crate) fn same_tree_history_record_with_cache(
     root: &Path,
     agent: &AgentConfig,
     expectation: &SelectedExpectation,
     history_cache: &mut HistoryCache,
-    scope_hash_cache: &mut ScopeHashCache,
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<Option<CheckRecord>, String> {
     // This is the answer-cache lookup described by the Cache spec: scan answer
     // history newest-to-oldest and accept only the first record whose stored
-    // scopeTreeOid still matches the current staged contents for that scope.
-    latest_history_record_matching_hash(root, expectation, history_cache, |scope| {
-        scope_hash_cache
-            .staged_scope_hash(root, agent, scope)
+    // visibleTreeOid still matches the current staged contents for that scope.
+    latest_history_record_matching_visible_tree_oid(root, expectation, history_cache, |scope| {
+        visible_tree_oid_cache
+            .staged_visible_tree_oid(root, agent, scope)
             .map(Some)
     })
 }
 
-pub(crate) fn latest_history_record_matching_hash(
+pub(crate) fn latest_history_record_matching_visible_tree_oid(
     root: &Path,
     expectation: &SelectedExpectation,
     history_cache: &mut HistoryCache,
-    mut current_hash_for_scope: impl FnMut(&[String]) -> Result<Option<String>, String>,
+    mut current_visible_tree_oid_for_scope: impl FnMut(&[String]) -> Result<Option<String>, String>,
 ) -> Result<Option<CheckRecord>, String> {
     // Cache lookup follows the Cache spec's answer-history contract: non-answer
     // states are not history records, so legacy rows with idk/malformed-style
     // observed values are skipped before applying the newest-to-oldest
-    // scopeTreeOid match.
+    // visibleTreeOid match.
     let matched_record =
         scan_latest_history_records(root, expectation, history_cache, |mut record| {
             if !is_reusable_history_record_for_expected(&record, &expectation.a) {
@@ -60,10 +60,10 @@ pub(crate) fn latest_history_record_matching_hash(
             let Ok(scope) = sanitize_scope_for_hash(&record.scope) else {
                 return Ok(HistoryRecordScan::Continue);
             };
-            let Some(current_hash) = current_hash_for_scope(&scope)? else {
+            let Some(current_visible_tree_oid) = current_visible_tree_oid_for_scope(&scope)? else {
                 return Ok(HistoryRecordScan::Continue);
             };
-            if current_hash == record.scope_hash {
+            if current_visible_tree_oid == record.visible_tree_oid {
                 record.scope = scope;
                 return Ok(HistoryRecordScan::Done(Some(record)));
             }
@@ -82,26 +82,28 @@ pub(crate) fn cooldown_history_record(
     let Some(cooldown) = expectation.cooldown else {
         return Ok(None);
     };
-    scan_latest_history_records(root, expectation, history_cache, |record| {
-        let Some(timestamp) = parse_record_timestamp(&record.timestamp) else {
+    let record = scan_latest_history_records(root, expectation, history_cache, |record| {
+        // Cooldown keys off the latest answer history record. Legacy non-answer
+        // rows are skipped here, while a newer valid fail still blocks cooldown
+        // reuse of an older pass.
+        if !is_reusable_history_record_for_expected(&record, &expectation.a) {
             return Ok(HistoryRecordScan::Continue);
+        }
+        let Some(timestamp) = parse_record_timestamp(&record.timestamp) else {
+            return Ok(HistoryRecordScan::Done(None));
         };
-        // Cooldown keys off the latest valid history record, not the latest
-        // reusable answer record. This is why a newer fail or human-review-style
-        // record blocks cooldown reuse of an older pass: after a failed check,
-        // the old pass is no longer the spec-defined fresh cooldown pass.
         if !record.passed() {
             return Ok(HistoryRecordScan::Done(None));
         }
         if now.saturating_sub(timestamp) >= cooldown.seconds {
             return Ok(HistoryRecordScan::Done(None));
         }
-        // Cooldown is not an answer-cache lookup and callers must not return
-        // this record as a cached observed result. It is only the Cooldown spec's
-        // selected-set filter: a fresh latest pass removes the expectation from
-        // this invocation before exact-cache lookup or evaluator interrogation.
+        // Cooldown is not a same-tree lookup: a fresh latest pass can be the
+        // cached result even when its visibleTreeOid differs from the current
+        // evaluator-visible tree.
         Ok(HistoryRecordScan::Done(Some(record)))
-    })
+    })?;
+    Ok(record.map(|record| record_with_current_expectation(record, expectation)))
 }
 
 pub(crate) fn latest_history_scope_with_cache(

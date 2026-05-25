@@ -9,7 +9,7 @@ use serde_json::json;
 use std::fs;
 
 #[test]
-fn check_runner_stops_after_first_failure_by_default() {
+fn check_runner_evaluates_full_selected_set_after_failure_by_default() {
     let root = git_project("check-default-stop");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = parse_check_options(
@@ -20,14 +20,17 @@ fn check_runner_stops_after_first_failure_by_default() {
         ],
     )
     .unwrap();
-    let mut runner = FakeRunner::new(&[&answer("no", "wrong", &["."])]);
+    let mut runner = FakeRunner::new(&[
+        &answer("no", "wrong", &["."]),
+        &answer("no", "second answer", &["."]),
+    ]);
 
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert_eq!(records.records.len(), 1);
+    assert_eq!(records.records.len(), 2);
     assert!(!records.records[0].passed());
-    assert_eq!(runner.prompts.len(), 1);
+    assert_eq!(runner.prompts.len(), 2);
     let _ = fs::remove_dir_all(root);
 }
 

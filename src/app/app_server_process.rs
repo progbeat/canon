@@ -3,6 +3,7 @@ use crate::config_types::AgentConfig;
 use crate::evaluator_config::app_server_args;
 use crate::evaluator_types::EvaluatorError;
 use crate::fs_util::ensure_dir_without_symlinks;
+use crate::output::write_stderr_bytes;
 use crate::platform;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -55,13 +56,32 @@ pub(crate) fn spawn_app_server_reader(
 }
 
 pub(crate) fn spawn_app_server_stderr_reader(
-    mut stderr: std::process::ChildStderr,
+    stderr: std::process::ChildStderr,
 ) -> (Receiver<String>, JoinHandle<()>) {
+    spawn_app_server_stderr_reader_with_forwarder(stderr, write_stderr_bytes)
+}
+
+pub(crate) fn spawn_app_server_stderr_reader_with_forwarder<R, F>(
+    mut stderr: R,
+    forward: F,
+) -> (Receiver<String>, JoinHandle<()>)
+where
+    R: Read + Send + 'static,
+    F: Fn(&[u8]) -> Result<(), String> + Send + 'static,
+{
     let (sender, receiver) = mpsc::channel();
     let reader = thread::spawn(move || {
-        let mut text = String::new();
-        if stderr.read_to_string(&mut text).is_ok() && !text.trim().is_empty() {
-            let _ = sender.send(text);
+        let mut buffer = [0u8; 8192];
+        loop {
+            match stderr.read(&mut buffer) {
+                Ok(0) => return,
+                Ok(n) => {
+                    let bytes = &buffer[..n];
+                    let _ = forward(bytes);
+                    let _ = sender.send(String::from_utf8_lossy(bytes).into_owned());
+                }
+                Err(_) => return,
+            }
         }
     });
     (receiver, reader)

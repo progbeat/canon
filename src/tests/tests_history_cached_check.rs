@@ -1,8 +1,8 @@
 use super::*;
 
 #[test]
-fn check_runner_reuses_exact_cached_failure_after_cooldown_miss() {
-    let root = git_project("check-cooldown-fail-exact-cache");
+fn check_runner_reuses_same_tree_cached_failure_after_cooldown_miss() {
+    let root = git_project("check-cooldown-fail-same-tree-cache");
     let config = parse_check_config(
         r#"
 version: 1
@@ -17,9 +17,10 @@ expectations:
 "#,
     )
     .unwrap();
-    let options = check_options(&config, &["1"], false, false);
+    let options = check_options(&config, &[], true, false);
     let expectation = options.selected[0].clone();
-    let current_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let current_visible_tree_oid =
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
     append_history_record(
         &root,
         &expectation,
@@ -32,9 +33,9 @@ expectations:
             prompt: Some(expectation.q.clone()),
             expected: Some(expectation.a.clone()),
             observed: "no".to_string(),
-            evidence: "exact cached failure".to_string(),
+            evidence: "same-tree cached failure".to_string(),
             scope: full_scope(),
-            scope_hash: current_hash,
+            visible_tree_oid: current_visible_tree_oid,
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -45,9 +46,12 @@ expectations:
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
     assert_eq!(records.records.len(), 1);
+    assert_eq!(records.cached.len(), 1);
     assert_eq!(records.evaluated, 0);
+    assert_eq!(records.selected, 0);
+    assert_eq!(records.skipped, 0);
     assert!(!records.records[0].passed());
-    assert_eq!(records.records[0].evidence, "exact cached failure");
+    assert_eq!(records.records[0].evidence, "same-tree cached failure");
     assert_eq!(runner.starts, 0);
     let _ = fs::remove_dir_all(root);
 }
@@ -55,10 +59,22 @@ expectations:
 #[test]
 fn check_runner_skips_cached_pass_without_result_output() {
     let root = git_project("check-cache-pass-output");
-    let config = parse_check_config(check_config_yaml()).unwrap();
-    let options = check_options(&config, &["1"], true, false);
+    let config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: "Question?"
+    a: "yes"
+"#,
+    )
+    .unwrap();
+    let options = check_options(&config, &[], true, false);
     let expectation = options.selected[0].clone();
-    let scope_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let visible_tree_oid = staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
     append_history_record(
         &root,
         &expectation,
@@ -73,7 +89,7 @@ fn check_runner_skips_cached_pass_without_result_output() {
             observed: "yes".to_string(),
             evidence: "cached pass".to_string(),
             scope: full_scope(),
-            scope_hash,
+            visible_tree_oid,
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -92,9 +108,10 @@ fn check_runner_skips_cached_pass_without_result_output() {
     )
     .unwrap();
 
-    assert_eq!(report.selected, 1);
+    assert_eq!(report.selected, 0);
     assert_eq!(report.skipped, 1);
-    assert_eq!(report.silent, 1);
+    assert_eq!(report.silent, 0);
+    assert_eq!(report.cached.len(), 1);
     assert_eq!(report_output_skipped_count(&report), 1);
     assert_eq!(runner.starts, 0);
     assert_eq!(output.flushes, 0);
@@ -103,12 +120,12 @@ fn check_runner_skips_cached_pass_without_result_output() {
 }
 
 #[test]
-fn check_runner_all_reports_cached_pass_without_silent_skip() {
+fn check_runner_all_evaluates_cached_pass() {
     let root = git_project("check-all-cache-pass-output");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, false);
     let expectation = options.selected[0].clone();
-    let scope_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let visible_tree_oid = staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
     append_history_record(
         &root,
         &expectation,
@@ -123,12 +140,12 @@ fn check_runner_all_reports_cached_pass_without_silent_skip() {
             observed: "yes".to_string(),
             evidence: "cached pass".to_string(),
             scope: full_scope(),
-            scope_hash,
+            visible_tree_oid,
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
     .unwrap();
-    let mut runner = FakeRunner::new(&[]);
+    let mut runner = FakeRunner::new(&[&answer("yes", "fresh answer", &["."])]);
     let mut output = FlushCountingWriter::new();
 
     let report = run_check_with_runner(
@@ -147,8 +164,8 @@ fn check_runner_all_reports_cached_pass_without_silent_skip() {
     assert_eq!(report.selected, 1);
     assert_eq!(report.skipped, 1);
     assert_eq!(report.silent, 0);
-    assert_eq!(report.evaluated, 0);
-    assert_eq!(runner.starts, 0);
+    assert_eq!(report.evaluated, 1);
+    assert_eq!(runner.starts, 1);
     let lines = String::from_utf8(output.bytes).unwrap();
     assert!(lines.contains(&format!("{}. OK", expectation.display_id)));
     let _ = fs::remove_dir_all(root);
@@ -160,7 +177,7 @@ fn check_runner_deselects_cached_pass_when_no_selectors_are_given() {
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &[], true, false);
     let expectation = options.selected[0].clone();
-    let scope_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let visible_tree_oid = staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
     append_history_record(
         &root,
         &expectation,
@@ -175,7 +192,7 @@ fn check_runner_deselects_cached_pass_when_no_selectors_are_given() {
             observed: "yes".to_string(),
             evidence: "cached pass".to_string(),
             scope: full_scope(),
-            scope_hash,
+            visible_tree_oid,
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -196,9 +213,10 @@ fn check_runner_deselects_cached_pass_when_no_selectors_are_given() {
 
     assert_eq!(report.records.len(), 1);
     assert_eq!(report.records[0].number, 2);
-    assert_eq!(report.selected, 2);
-    assert_eq!(report.skipped, 0);
-    assert_eq!(report.silent, 1);
+    assert_eq!(report.selected, 1);
+    assert_eq!(report.skipped, 1);
+    assert_eq!(report.silent, 0);
+    assert_eq!(report.cached.len(), 1);
     assert_eq!(runner.starts, 1);
     let lines = String::from_utf8(output.bytes).unwrap();
     assert!(lines.contains(&format!("{}. OK", report.records[0].display_id)));
@@ -225,8 +243,14 @@ expectations:
     .unwrap();
     let options = check_options(&config, &[], true, false);
     let expectation = options.selected[0].clone();
-    let old_hash = "old-scope".to_string();
-    let mut record = expectation_record(&config.agent, &expectation, "pass", "yes", old_hash);
+    let old_visible_tree_oid = "old-scope".to_string();
+    let mut record = expectation_record(
+        &config.agent,
+        &expectation,
+        "pass",
+        "yes",
+        old_visible_tree_oid,
+    );
     record.timestamp = format_record_timestamp(unix_timestamp().unwrap());
     append_history_record(&root, &expectation, &record).unwrap();
     let mut runner = FakeRunner::new(&[]);
@@ -244,10 +268,11 @@ expectations:
     .unwrap();
 
     assert!(report.records.is_empty());
-    assert_eq!(report.selected, 1);
-    assert_eq!(report.skipped, 0);
-    assert_eq!(report.silent, 1);
-    assert_eq!(report_output_skipped_count(&report), 0);
+    assert_eq!(report.selected, 0);
+    assert_eq!(report.skipped, 1);
+    assert_eq!(report.silent, 0);
+    assert_eq!(report.cached.len(), 1);
+    assert_eq!(report_output_skipped_count(&report), 1);
     assert_eq!(runner.starts, 0);
     assert!(output.bytes.is_empty());
     let _ = fs::remove_dir_all(root);
@@ -314,8 +339,14 @@ expectations:
     .unwrap();
     let options = check_options(&config, &[], true, true);
     let expectation = options.selected[0].clone();
-    let old_hash = "old-scope".to_string();
-    let mut record = expectation_record(&config.agent, &expectation, "pass", "yes", old_hash);
+    let old_visible_tree_oid = "old-scope".to_string();
+    let mut record = expectation_record(
+        &config.agent,
+        &expectation,
+        "pass",
+        "yes",
+        old_visible_tree_oid,
+    );
     record.timestamp = format_record_timestamp(unix_timestamp().unwrap());
     append_history_record(&root, &expectation, &record).unwrap();
     let mut runner = FakeRunner::new(&[]);
@@ -324,10 +355,11 @@ expectations:
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
     assert_eq!(report.records.len(), 0);
-    assert_eq!(report.selected, 1);
-    assert_eq!(report.skipped, 0);
-    assert_eq!(report.silent, 1);
-    assert_eq!(report_output_skipped_count(&report), 0);
+    assert_eq!(report.selected, 0);
+    assert_eq!(report.skipped, 1);
+    assert_eq!(report.silent, 0);
+    assert_eq!(report.cached.len(), 1);
+    assert_eq!(report_output_skipped_count(&report), 1);
     assert_eq!(runner.starts, 0);
     let _ = fs::remove_dir_all(root);
 }
@@ -352,8 +384,14 @@ expectations:
     let mut options = check_options(&config, &[], true, true);
     options.ignore_cooldown = true;
     let expectation = options.selected[0].clone();
-    let old_hash = "old-scope".to_string();
-    let mut record = expectation_record(&config.agent, &expectation, "pass", "yes", old_hash);
+    let old_visible_tree_oid = "old-scope".to_string();
+    let mut record = expectation_record(
+        &config.agent,
+        &expectation,
+        "pass",
+        "yes",
+        old_visible_tree_oid,
+    );
     record.timestamp = format_record_timestamp(unix_timestamp().unwrap());
     append_history_record(&root, &expectation, &record).unwrap();
     let mut runner = FakeRunner::new(&[&answer("yes", "fresh answer", &["."])]);

@@ -2,8 +2,6 @@ Response format:
 Return exactly one valid JSON object, no prose or fences: {"answer":"<single-line answer>","evidence":"<evidence with backticked project-relative refs>","scope":["<normalized repo-relative path>"]}. Escape quotes, backslashes, and control characters inside JSON strings.
 answer is only the exact yes/no token, option letter, exact requested single-line string, idk, or malformed; put explanation only in evidence. Evidence citations must be project-relative refs enclosed in backticks. Do not cite proxy evidence; cite the project files or code that directly support the answer.
 
-Enforced scope: {{scope}}
-
 Inspection policy:
 - Prefer `rg` and `rg --files` for text and file searches; fall back cleanly if unavailable.
 - Parallelize independent read-only inspections with `multi_tool_use.parallel` when practical, especially `cat`, `rg`, `sed`, `ls`, `git show`, `nl`, and `wc`.
@@ -20,3 +18,5 @@ Scoring policy:
 - `malformed`: N/A, human review required
 - Successful scope narrowing: +1
 - Failed scope narrowing: -5
+
+Enforced scope: {{scope}}

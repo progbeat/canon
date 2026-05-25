@@ -34,7 +34,7 @@ pub(crate) fn render_check_log_record(record: &CheckRecord) -> DiagnosticLogResu
         observed: &record.observed,
         evidence: &record.evidence,
         scope: &record.scope,
-        scope_tree_oid: &record.scope_hash,
+        visible_tree_oid: &record.visible_tree_oid,
         id: &record.id,
         prompt: record.prompt_text(),
         expected: record.expected_text(),
@@ -69,7 +69,7 @@ fn required_runtime_log_fields(event: &str) -> Option<&'static [&'static str]> {
         "agent.response" => Some(&["id", "attempt", "reason", "response"]),
         "agent.turn_error" => Some(&["id", "attempt", "reason", "error", "response"]),
         "cache.cleanup" => Some(&["removed", "kept"]),
-        "cache.exact_hit" => Some(&["id", "result", "scope"]),
+        "cache.hit" => Some(&["id", "result", "scope"]),
         "check.start" => Some(&["selected"]),
         "expectation.result"
         | "expectation.review_required"
@@ -245,8 +245,8 @@ struct HistoryLogRecord<'a> {
     observed: &'a str,
     evidence: &'a str,
     scope: &'a [String],
-    #[serde(rename = "scopeTreeOid")]
-    scope_tree_oid: &'a str,
+    #[serde(rename = "visibleTreeOid")]
+    visible_tree_oid: &'a str,
     id: &'a str,
     #[serde(skip_serializing_if = "str::is_empty")]
     prompt: &'a str,

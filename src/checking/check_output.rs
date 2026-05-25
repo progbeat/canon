@@ -62,11 +62,9 @@ fn write_stdout_record(
 }
 
 pub(crate) fn report_output_skipped_count(report: &CheckRunReport) -> usize {
-    debug_assert!(report.records.len() <= report.selected);
-    // The public summary `skipped` count is command non-selection only.
-    // Selected expectations removed by cooldown or passing-cache hits are
-    // tracked as `silent` because they intentionally emit no per-expectation
-    // stdout but are not summary-skipped by the check-output spec.
+    // `skipped` is the count of expectations with no output category. Cached
+    // passing results are skipped here because only selected/evaluated passes
+    // contribute to the public `passed` count.
     report.skipped
 }
 
@@ -149,10 +147,6 @@ pub(crate) fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -
             failed += 1;
         }
     }
-    // Silent selected expectations are cooldown or passing-cache hits. They
-    // intentionally emit no per-expectation stdout, but they still have final
-    // pass results and are not command-skipped.
-    passed += report.silent;
     let mut outcomes = Vec::new();
     if failed > 0 {
         outcomes.push(format!("{} failed", failed));

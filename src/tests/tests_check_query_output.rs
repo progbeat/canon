@@ -50,7 +50,7 @@ fn check_output_failed_and_error_records_use_specified_line_counts() {
         observed: "no".to_string(),
         evidence: "evidence".to_string(),
         scope: vec!["src".to_string()],
-        scope_hash: "hash".to_string(),
+        visible_tree_oid: "hash".to_string(),
         cache_key: None,
     };
 
@@ -61,10 +61,11 @@ fn check_output_failed_and_error_records_use_specified_line_counts() {
 }
 
 #[test]
-fn check_summary_counts_silent_selected_passes_as_passed() {
+fn check_summary_counts_cached_passes_as_skipped() {
     let report = CheckRunReport {
         records: Vec::new(),
         non_selected: Vec::new(),
+        cached: Vec::new(),
         evaluated: 0,
         selected: 0,
         skipped: 1,
@@ -74,7 +75,8 @@ fn check_summary_counts_silent_selected_passes_as_passed() {
 
     let summary = render_check_summary(&report, Duration::from_secs(1));
 
-    assert!(summary.contains("2 passed, 1 skipped"));
+    assert!(summary.contains("1 skipped"));
+    assert!(!summary.contains("passed"));
 }
 
 #[test]
@@ -97,6 +99,7 @@ fn check_agent_message_uses_required_all_pass_and_fallback_text() {
     let pass_report = CheckRunReport {
         records: Vec::new(),
         non_selected: Vec::new(),
+        cached: Vec::new(),
         evaluated: 0,
         selected: 0,
         skipped: 0,
@@ -109,7 +112,7 @@ fn check_agent_message_uses_required_all_pass_and_fallback_text() {
             &config,
             &pass_report,
             &mut HistoryCache::new(),
-            &mut ScopeHashCache::new(),
+            &mut VisibleTreeOidCache::new(),
         )
         .unwrap(),
         "✓ All checks passed. Commit is allowed."
@@ -118,6 +121,7 @@ fn check_agent_message_uses_required_all_pass_and_fallback_text() {
     let fail_report = CheckRunReport {
         records: vec![sample_record(1, "fail")],
         non_selected: Vec::new(),
+        cached: Vec::new(),
         evaluated: 1,
         selected: 1,
         skipped: 0,
@@ -130,7 +134,7 @@ fn check_agent_message_uses_required_all_pass_and_fallback_text() {
             &config,
             &fail_report,
             &mut HistoryCache::new(),
-            &mut ScopeHashCache::new(),
+            &mut VisibleTreeOidCache::new(),
         )
         .unwrap(),
         "▷ Fix the issues and run `canon check` again!"
@@ -147,6 +151,7 @@ fn check_agent_message_counts_human_review_as_non_ok() {
     let error_report = CheckRunReport {
         records: vec![error_record],
         non_selected: Vec::new(),
+        cached: Vec::new(),
         evaluated: 1,
         selected: 1,
         skipped: 0,
@@ -160,7 +165,7 @@ fn check_agent_message_counts_human_review_as_non_ok() {
             &config,
             &error_report,
             &mut HistoryCache::new(),
-            &mut ScopeHashCache::new(),
+            &mut VisibleTreeOidCache::new(),
         )
         .unwrap(),
         "▷ Fix the issues and run `canon check` again!"
@@ -169,7 +174,7 @@ fn check_agent_message_counts_human_review_as_non_ok() {
 }
 
 #[test]
-fn staged_pass_notice_ignores_missing_head_cache() {
+fn staged_pass_notice_counts_missing_head_cache_as_fix() {
     let root = git_project("check-head-pass-notice");
     commit_all(&root, "initial");
     fs::write(root.join("README.md"), "changed\n").unwrap();
@@ -188,7 +193,7 @@ fn staged_pass_notice_ignores_missing_head_cache() {
 
     assert_eq!(
         staged_passes_failed_at_head_count(&root, &config.agent, &report).unwrap(),
-        0
+        1
     );
     let _ = fs::remove_dir_all(root);
 }
@@ -237,7 +242,7 @@ fn staged_pass_notice_counts_passes_failed_at_head() {
             &config.agent,
             &report,
             &mut HistoryCache::new(),
-            &mut ScopeHashCache::new(),
+            &mut VisibleTreeOidCache::new(),
         )
         .unwrap(),
         1
@@ -292,26 +297,28 @@ fn staged_pass_notice_counts_passes_even_with_existing_failure() {
         .current_dir(&root)
         .output()
         .unwrap();
-    let current_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let current_visible_tree_oid =
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
     let current_pass = expectation_record(
         &config.agent,
         &options.selected[0],
         "pass",
         "yes",
-        current_hash.clone(),
+        current_visible_tree_oid.clone(),
     );
     let current_fail = expectation_record(
         &config.agent,
         &options.selected[1],
         "fail",
         "yes",
-        current_hash,
+        current_visible_tree_oid,
     );
     append_history_record(&root, &options.selected[0], &current_pass).unwrap();
     append_history_record(&root, &options.selected[1], &current_fail).unwrap();
     let report = CheckRunReport {
         records: vec![current_pass, current_fail],
         non_selected: Vec::new(),
+        cached: Vec::new(),
         evaluated: 2,
         selected: 2,
         skipped: 0,
@@ -325,7 +332,7 @@ fn staged_pass_notice_counts_passes_even_with_existing_failure() {
             &config.agent,
             &report,
             &mut HistoryCache::new(),
-            &mut ScopeHashCache::new(),
+            &mut VisibleTreeOidCache::new(),
         )
         .unwrap(),
         1
@@ -336,7 +343,7 @@ fn staged_pass_notice_counts_passes_even_with_existing_failure() {
             &config,
             &report,
             &mut HistoryCache::new(),
-            &mut ScopeHashCache::new(),
+            &mut VisibleTreeOidCache::new(),
         )
         .unwrap(),
         vec![
@@ -349,7 +356,7 @@ fn staged_pass_notice_counts_passes_even_with_existing_failure() {
 }
 
 #[test]
-fn check_agent_message_blocks_commit_when_regression_cache_is_missing() {
+fn check_agent_message_allows_commit_when_only_regression_cache_is_missing() {
     let root = git_project("check-agent-message-gate-missing-cache");
     let yaml = r#"
 version: 1
@@ -422,26 +429,28 @@ expectations:
         .current_dir(&root)
         .output()
         .unwrap();
-    let current_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let current_visible_tree_oid =
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
     let current_pass = expectation_record(
         &config.agent,
         &options.selected[0],
         "pass",
         "yes",
-        current_hash.clone(),
+        current_visible_tree_oid.clone(),
     );
     let current_fail = expectation_record(
         &config.agent,
         &options.selected[1],
         "fail",
         "yes",
-        current_hash,
+        current_visible_tree_oid,
     );
     append_history_record(&root, &options.selected[0], &current_pass).unwrap();
     append_history_record(&root, &options.selected[1], &current_fail).unwrap();
     let report = CheckRunReport {
         records: vec![current_pass, current_fail],
         non_selected: Vec::new(),
+        cached: Vec::new(),
         evaluated: 2,
         selected: 3,
         skipped: 0,
@@ -455,10 +464,13 @@ expectations:
             &config,
             &report,
             &mut HistoryCache::new(),
-            &mut ScopeHashCache::new(),
+            &mut VisibleTreeOidCache::new(),
         )
         .unwrap(),
-        vec!["▷ Fix the issues and run `canon check` again!".to_string()]
+        vec![
+            "▷ +1 pass compared to HEAD. Commit the staged changes NOW!".to_string(),
+            "▷ Then fix the remaining issues and run `canon check` again!".to_string(),
+        ]
     );
     let _ = fs::remove_dir_all(root);
 }
@@ -492,7 +504,16 @@ fn check_agent_message_prioritizes_regressions_over_fixes() {
         .current_dir(&root)
         .output()
         .unwrap();
-    let current_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let current_visible_tree_oid =
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
+    let current_fail = expectation_record(
+        &config.agent,
+        &options.selected[1],
+        "fail",
+        "yes",
+        current_visible_tree_oid.clone(),
+    );
+    append_history_record(&root, &options.selected[1], &current_fail).unwrap();
     let report = CheckRunReport {
         records: vec![
             expectation_record(
@@ -500,17 +521,12 @@ fn check_agent_message_prioritizes_regressions_over_fixes() {
                 &options.selected[0],
                 "pass",
                 "yes",
-                current_hash.clone(),
+                current_visible_tree_oid.clone(),
             ),
-            expectation_record(
-                &config.agent,
-                &options.selected[1],
-                "fail",
-                "yes",
-                current_hash,
-            ),
+            current_fail,
         ],
         non_selected: Vec::new(),
+        cached: Vec::new(),
         evaluated: 2,
         selected: 2,
         skipped: 0,
@@ -524,7 +540,7 @@ fn check_agent_message_prioritizes_regressions_over_fixes() {
             &config,
             &report,
             &mut HistoryCache::new(),
-            &mut ScopeHashCache::new(),
+            &mut VisibleTreeOidCache::new(),
         )
         .unwrap(),
         "▷ Fix the issues and run `canon check` again!"

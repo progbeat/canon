@@ -421,11 +421,11 @@ fn app_server_environment_does_not_inherit_parent_secrets() {
         "HOME",
         "PATH",
     ]);
+    let expected_path = env::var_os("PATH").map(|path| path.to_string_lossy().into_owned());
     env_snapshot.set("CANON_TEST_SECRET", "secret-token");
     env_snapshot.set("CODEX_HOME", "/tmp/source-codex-home");
     env_snapshot.set("CODEX_THREAD_ID", "parent-thread");
     env_snapshot.set("HOME", "/tmp/real-home");
-    env_snapshot.set("PATH", "/bin:/usr/bin");
     let isolated_home = Path::new("/tmp/canon/.codex");
     let mut command = Command::new("codex");
 
@@ -452,7 +452,7 @@ fn app_server_environment_does_not_inherit_parent_secrets() {
     );
     assert_eq!(
         envs.get("PATH").and_then(|value| value.as_deref()),
-        Some("/bin:/usr/bin")
+        expected_path.as_deref()
     );
     assert!(envs.contains_key("TMPDIR"));
 }

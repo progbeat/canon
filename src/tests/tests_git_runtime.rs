@@ -365,11 +365,11 @@ fn staged_worktree_view_excludes_local_hook_config_and_hook_file() {
 }
 
 #[test]
-fn staged_scope_hash_ignores_local_git_hook_metadata() {
-    let root = git_project("scope-hash-hooks");
+fn staged_visible_tree_oid_ignores_local_git_hook_metadata() {
+    let root = git_project("visible-tree-oid-hooks");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let scope = vec![".git".to_string()];
-    let before = staged_scope_hash(&root, &config.agent, &scope).unwrap();
+    let before = staged_visible_tree_oid(&root, &config.agent, &scope).unwrap();
 
     fs::create_dir_all(root.join(PRE_COMMIT_HOOK_PATH).parent().unwrap()).unwrap();
     fs::write(root.join(PRE_COMMIT_HOOK_PATH), DEFAULT_PRE_COMMIT_HOOK).unwrap();
@@ -378,14 +378,31 @@ fn staged_scope_hash_ignores_local_git_hook_metadata() {
         .current_dir(&root)
         .output()
         .unwrap();
-    let after_install = staged_scope_hash(&root, &config.agent, &scope).unwrap();
+    let after_install = staged_visible_tree_oid(&root, &config.agent, &scope).unwrap();
 
     fs::write(root.join(PRE_COMMIT_HOOK_PATH), "changed\n").unwrap();
-    let after_hook_change = staged_scope_hash(&root, &config.agent, &scope).unwrap();
+    let after_hook_change = staged_visible_tree_oid(&root, &config.agent, &scope).unwrap();
 
     assert_eq!(before, after_install);
     assert_eq!(after_install, after_hook_change);
     let _ = fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[test]
+fn read_git_blobs_reaps_git_cat_file_after_stdin_write_failure() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fake_git_dir = TestDir::new("fake-git-closes-stdin");
+    let fake_git = fake_git_dir.path().join("git");
+    fs::write(&fake_git, "#!/bin/sh\nexec 0<&-\nsleep 0.05\nexit 1\n").unwrap();
+    fs::set_permissions(&fake_git, fs::Permissions::from_mode(0o755)).unwrap();
+    let object_ids = vec!["0123456789012345678901234567890123456789".to_string(); 8192];
+
+    let err = read_git_blobs_with_git_program(Path::new("/"), &object_ids, fake_git.as_os_str())
+        .unwrap_err();
+
+    assert!(err.contains("failed to write git cat-file input"), "{err}");
 }
 
 #[test]

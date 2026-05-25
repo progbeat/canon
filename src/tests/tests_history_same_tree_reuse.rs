@@ -20,7 +20,7 @@ fn reusable_history_record_uses_current_expectation_metadata() {
             observed: "yes".to_string(),
             evidence: "cached answer".to_string(),
             scope: full_scope(),
-            scope_hash: staged_scope_hash(&root, &config.agent, &full_scope()).unwrap(),
+            visible_tree_oid: staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -28,7 +28,7 @@ fn reusable_history_record_uses_current_expectation_metadata() {
 
     let mut moved = expectation.clone();
     moved.number = 7;
-    let record = reusable_history_record(&root, &config.agent, &moved)
+    let record = same_tree_history_record(&root, &config.agent, &moved)
         .unwrap()
         .unwrap();
     assert_eq!(record.number, 7);
@@ -45,14 +45,14 @@ fn reusable_history_record_cache_is_refreshed_after_append() {
         .selected
         .remove(0);
     let mut history_cache = HistoryCache::new();
-    let mut scope_hash_cache = ScopeHashCache::new();
+    let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
 
-    assert!(reusable_history_record_with_cache(
+    assert!(same_tree_history_record_with_cache(
         &root,
         &config.agent,
         &expectation,
         &mut history_cache,
-        &mut scope_hash_cache,
+        &mut visible_tree_oid_cache,
     )
     .unwrap()
     .is_none());
@@ -62,16 +62,16 @@ fn reusable_history_record_cache_is_refreshed_after_append() {
         &expectation,
         "pass",
         "yes",
-        staged_scope_hash(&root, &config.agent, &full_scope()).unwrap(),
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap(),
     );
     append_history_record_with_cache(&root, &expectation, &record, &mut history_cache).unwrap();
 
-    assert!(reusable_history_record_with_cache(
+    assert!(same_tree_history_record_with_cache(
         &root,
         &config.agent,
         &expectation,
         &mut history_cache,
-        &mut scope_hash_cache,
+        &mut visible_tree_oid_cache,
     )
     .unwrap()
     .unwrap()
@@ -80,7 +80,7 @@ fn reusable_history_record_cache_is_refreshed_after_append() {
 }
 
 #[test]
-fn reusable_history_record_with_cache_rechecks_current_scope_hash() {
+fn reusable_history_record_with_cache_rechecks_current_visible_tree_oid() {
     let root = git_project("history-reuse-cache-rechecks-scope");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let expectation = check_options(&config, &["1"], false, true)
@@ -91,18 +91,18 @@ fn reusable_history_record_with_cache_rechecks_current_scope_hash() {
         &expectation,
         "pass",
         "yes",
-        staged_scope_hash(&root, &config.agent, &full_scope()).unwrap(),
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap(),
     );
     append_history_record(&root, &expectation, &record).unwrap();
     let mut history_cache = HistoryCache::new();
-    let mut scope_hash_cache = ScopeHashCache::new();
+    let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
 
-    assert!(reusable_history_record_with_cache(
+    assert!(same_tree_history_record_with_cache(
         &root,
         &config.agent,
         &expectation,
         &mut history_cache,
-        &mut scope_hash_cache,
+        &mut visible_tree_oid_cache,
     )
     .unwrap()
     .is_some());
@@ -114,14 +114,14 @@ fn reusable_history_record_with_cache_rechecks_current_scope_hash() {
         .current_dir(&root)
         .output()
         .unwrap();
-    let mut fresh_scope_hash_cache = ScopeHashCache::new();
+    let mut fresh_visible_tree_oid_cache = VisibleTreeOidCache::new();
 
-    assert!(reusable_history_record_with_cache(
+    assert!(same_tree_history_record_with_cache(
         &root,
         &config.agent,
         &expectation,
         &mut history_cache,
-        &mut fresh_scope_hash_cache,
+        &mut fresh_visible_tree_oid_cache,
     )
     .unwrap()
     .is_none());
@@ -129,19 +129,19 @@ fn reusable_history_record_with_cache_rechecks_current_scope_hash() {
 }
 
 #[test]
-fn reusable_history_record_skips_non_answer_history_before_scope_hash_match() {
-    let root = git_project("history-reuse-skip-non-answer-before-hash");
+fn reusable_history_record_skips_non_answer_history_before_visible_tree_oid_match() {
+    let root = git_project("history-reuse-skip-non-answer-before-oid");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let expectation = check_options(&config, &["1"], false, true)
         .selected
         .remove(0);
-    let hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let visible_tree_oid = staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
     let older = expectation_record(
         &config.agent,
         &expectation,
         RESULT_PASS,
         "yes",
-        hash.clone(),
+        visible_tree_oid.clone(),
     );
     append_history_record(&root, &expectation, &older).unwrap();
     let newer = expectation_record(
@@ -149,11 +149,11 @@ fn reusable_history_record_skips_non_answer_history_before_scope_hash_match() {
         &expectation,
         RESULT_FAIL,
         "Yes: concrete bug",
-        hash,
+        visible_tree_oid,
     );
     append_history_record(&root, &expectation, &newer).unwrap();
 
-    let record = reusable_history_record(&root, &config.agent, &expectation)
+    let record = same_tree_history_record(&root, &config.agent, &expectation)
         .unwrap()
         .unwrap();
 
@@ -172,12 +172,12 @@ fn reusable_history_record_allows_missing_cache_key() {
         &expectation,
         "pass",
         "yes",
-        staged_scope_hash(&root, &config.agent, &full_scope()).unwrap(),
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap(),
     );
     record.cache_key = None;
     append_history_record(&root, &expectation, &record).unwrap();
 
-    assert!(reusable_history_record(&root, &config.agent, &expectation)
+    assert!(same_tree_history_record(&root, &config.agent, &expectation)
         .unwrap()
         .unwrap()
         .passed());
@@ -238,7 +238,7 @@ fn yes_no_history_answers_reject_free_form_answer_shape() {
 }
 
 #[test]
-fn reusable_history_record_uses_scope_hash_not_cache_key_for_changed_evaluator_config() {
+fn reusable_history_record_uses_visible_tree_oid_not_cache_key_for_changed_evaluator_config() {
     let root = git_project("history-cache-key-not-reuse-gate");
     let old_config = parse_check_config(check_config_yaml()).unwrap();
     let new_config = parse_check_config(
@@ -271,13 +271,13 @@ expectations:
             &old_expectation,
             "pass",
             "yes",
-            staged_scope_hash(&root, &new_config.agent, &full_scope()).unwrap(),
+            staged_visible_tree_oid(&root, &new_config.agent, &full_scope()).unwrap(),
         ),
     )
     .unwrap();
 
     assert!(
-        reusable_history_record(&root, &new_config.agent, &new_expectation)
+        same_tree_history_record(&root, &new_config.agent, &new_expectation)
             .unwrap()
             .unwrap()
             .passed()
@@ -332,15 +332,19 @@ expectations:
             observed: "yes".to_string(),
             evidence: "README.md answers it".to_string(),
             scope: vec!["README.md".to_string()],
-            scope_hash: staged_scope_hash(&root, &base_config.agent, &["README.md".to_string()])
-                .unwrap(),
+            visible_tree_oid: staged_visible_tree_oid(
+                &root,
+                &base_config.agent,
+                &["README.md".to_string()],
+            )
+            .unwrap(),
             cache_key: Some(history_cache_key(&base_config.agent, &old_expectation)),
         },
     )
     .unwrap();
 
     let record =
-        reusable_history_record(&root, &ignored_readme_config.agent, &new_expectation).unwrap();
+        same_tree_history_record(&root, &ignored_readme_config.agent, &new_expectation).unwrap();
 
     assert!(record.is_none());
     let _ = fs::remove_dir_all(root);
@@ -430,8 +434,8 @@ expectations:
 }
 
 #[test]
-fn scope_hash_depends_on_agent_ignore_patterns() {
-    let root = git_project("history-scope-hash-ignore-dependent");
+fn visible_tree_oid_depends_on_agent_ignore_patterns() {
+    let root = git_project("history-visible-tree-oid-ignore-dependent");
     let base_config = parse_check_config(
         r#"
 version: 1
@@ -461,17 +465,17 @@ expectations:
     .unwrap();
 
     assert_ne!(
-        staged_scope_hash(&root, &base_config.agent, &full_scope()).unwrap(),
-        staged_scope_hash(&root, &ignored_readme_config.agent, &full_scope()).unwrap()
+        staged_visible_tree_oid(&root, &base_config.agent, &full_scope()).unwrap(),
+        staged_visible_tree_oid(&root, &ignored_readme_config.agent, &full_scope()).unwrap()
     );
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn scope_hash_excludes_evaluator_denied_canon_paths() {
-    let root = git_project("history-scope-hash-excludes-canon");
+fn visible_tree_oid_excludes_evaluator_denied_canon_paths() {
+    let root = git_project("history-visible-tree-oid-excludes-canon");
     let config = parse_check_config(check_config_yaml()).unwrap();
-    let before = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let before = staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
     write_check_config(&root);
     Command::new("git")
         .arg("add")
@@ -480,15 +484,15 @@ fn scope_hash_excludes_evaluator_denied_canon_paths() {
         .output()
         .unwrap();
 
-    let after = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let after = staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
 
     assert_eq!(before, after);
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn scope_hash_excludes_nested_ignored_descendants_from_parent_tree_oid() {
-    let root = git_project("history-scope-hash-nested-ignore");
+fn visible_tree_oid_excludes_nested_ignored_descendants_from_parent_tree_oid() {
+    let root = git_project("history-visible-tree-oid-nested-ignore");
     let config = parse_check_config(
         r#"
 version: 1
@@ -516,7 +520,7 @@ expectations:
         .output()
         .unwrap();
 
-    let before = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let before = staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
     fs::write(
         root.join("src/generated/schema.rs"),
         "pub fn generated_changed() {}\n",
@@ -527,14 +531,14 @@ expectations:
         .current_dir(&root)
         .output()
         .unwrap();
-    let ignored_change = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let ignored_change = staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
     fs::write(root.join("src/lib.rs"), "pub fn visible_changed() {}\n").unwrap();
     Command::new("git")
         .args(["add", "src/lib.rs"])
         .current_dir(&root)
         .output()
         .unwrap();
-    let visible_change = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let visible_change = staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
 
     assert_eq!(before, ignored_change);
     assert_ne!(before, visible_change);
@@ -542,7 +546,7 @@ expectations:
 }
 
 #[test]
-fn scope_hash_matches_git_write_tree_for_full_scope() {
+fn visible_tree_oid_matches_git_write_tree_for_full_scope() {
     let root = git_project("history-scope-tree-oid-write-tree");
     let config = parse_check_config(check_config_yaml()).unwrap();
 
@@ -559,14 +563,14 @@ fn scope_hash_matches_git_write_tree_for_full_scope() {
     let git_tree = command_output_trimmed(&output.stdout, "git write-tree stdout").unwrap();
 
     assert_eq!(
-        staged_scope_hash(&root, &config.agent, &full_scope()).unwrap(),
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap(),
         git_tree
     );
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn scope_hash_uses_sha256_for_sha256_git_repositories() {
+fn visible_tree_oid_uses_sha256_for_sha256_git_repositories() {
     let root = temp_home("history-scope-tree-oid-sha256");
     let init = Command::new("git")
         .args(["init", "--object-format=sha256"])
@@ -622,7 +626,7 @@ fn scope_hash_uses_sha256_for_sha256_git_repositories() {
 
     assert_eq!(git_tree.len(), 64);
     assert_eq!(
-        staged_scope_hash(&root, &config.agent, &full_scope()).unwrap(),
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap(),
         git_tree
     );
     let _ = fs::remove_dir_all(root);
@@ -630,8 +634,8 @@ fn scope_hash_uses_sha256_for_sha256_git_repositories() {
 
 #[test]
 #[cfg(unix)]
-fn scope_hash_handles_newline_paths_without_line_splitting() {
-    let root = git_project("history-scope-hash-newline-path");
+fn visible_tree_oid_handles_newline_paths_without_line_splitting() {
+    let root = git_project("history-visible-tree-oid-newline-path");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let path = "line\nbreak.txt";
     fs::write(root.join(path), "first").unwrap();
@@ -646,7 +650,7 @@ fn scope_hash_handles_newline_paths_without_line_splitting() {
 
     assert_eq!(entries.len(), 1);
     assert!(entries[0].ends_with(path));
-    let before = staged_scope_hash(&root, &config.agent, &[path.to_string()]).unwrap();
+    let before = staged_visible_tree_oid(&root, &config.agent, &[path.to_string()]).unwrap();
     fs::write(root.join(path), "second").unwrap();
     Command::new("git")
         .arg("add")
@@ -654,15 +658,15 @@ fn scope_hash_handles_newline_paths_without_line_splitting() {
         .current_dir(&root)
         .output()
         .unwrap();
-    let after = staged_scope_hash(&root, &config.agent, &[path.to_string()]).unwrap();
+    let after = staged_visible_tree_oid(&root, &config.agent, &[path.to_string()]).unwrap();
     assert_ne!(before, after);
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
 #[cfg(unix)]
-fn scope_hash_treats_git_pathspec_magic_as_literal_path() {
-    let root = git_project("history-scope-hash-literal-pathspec");
+fn visible_tree_oid_treats_git_pathspec_magic_as_literal_path() {
+    let root = git_project("history-visible-tree-oid-literal-pathspec");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let path = ":(literal)name.txt";
     fs::write(root.join(path), "first").unwrap();
@@ -679,7 +683,7 @@ fn scope_hash_treats_git_pathspec_magic_as_literal_path() {
 
     assert_eq!(entries.len(), 1);
     assert!(entries[0].ends_with(path));
-    let before = staged_scope_hash(&root, &config.agent, &[path.to_string()]).unwrap();
+    let before = staged_visible_tree_oid(&root, &config.agent, &[path.to_string()]).unwrap();
     fs::write(root.join(path), "second").unwrap();
     Command::new("git")
         .arg("-C")
@@ -689,13 +693,13 @@ fn scope_hash_treats_git_pathspec_magic_as_literal_path() {
         .arg(path)
         .output()
         .unwrap();
-    let after = staged_scope_hash(&root, &config.agent, &[path.to_string()]).unwrap();
+    let after = staged_visible_tree_oid(&root, &config.agent, &[path.to_string()]).unwrap();
     assert_ne!(before, after);
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn scope_hash_entry_encodes_non_utf8_path_bytes() {
+fn visible_tree_oid_entry_encodes_non_utf8_path_bytes() {
     let entry = normalize_index_metadata(
         "100644 0123456789012345678901234567890123456789 0",
         b"dir/nonutf8-\xff.txt",
@@ -704,33 +708,33 @@ fn scope_hash_entry_encodes_non_utf8_path_bytes() {
 
     assert!(entry.contains("\0raw-path-hex:"));
     assert_eq!(
-        sha1_scope_tree_oid_from_entries(&[entry]).unwrap().len(),
+        sha1_visible_tree_oid_from_entries(&[entry]).unwrap().len(),
         40
     );
 }
 
 #[test]
-fn scope_hash_reuses_fully_covered_directory_oid() {
+fn visible_tree_oid_reuses_fully_covered_directory_oid() {
     let directory_oid = "1111111111111111111111111111111111111111";
     let child_oid = "2222222222222222222222222222222222222222";
     let dir_entry = format!("40000 {}\tdir", directory_oid);
     let child_entry = format!("100644 {}\tdir/file.txt", child_oid);
-    let dir_only = sha1_scope_tree_oid_from_entries(std::slice::from_ref(&dir_entry)).unwrap();
+    let dir_only = sha1_visible_tree_oid_from_entries(std::slice::from_ref(&dir_entry)).unwrap();
 
     assert_eq!(
         dir_only,
-        sha1_scope_tree_oid_from_entries(&[dir_entry.clone(), child_entry.clone()]).unwrap()
+        sha1_visible_tree_oid_from_entries(&[dir_entry.clone(), child_entry.clone()]).unwrap()
     );
     assert_eq!(
         dir_only,
-        sha1_scope_tree_oid_from_entries(&[child_entry, dir_entry]).unwrap()
+        sha1_visible_tree_oid_from_entries(&[child_entry, dir_entry]).unwrap()
     );
 }
 
 #[cfg(unix)]
 #[test]
 fn staged_scope_entries_reuse_git_tree_oid_for_fully_covered_directory() {
-    let root = git_project("scope-hash-staged-tree-oid");
+    let root = git_project("visible-tree-oid-staged-tree-oid");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let root_tree = Command::new("git")
         .arg("-C")
@@ -763,8 +767,8 @@ fn staged_scope_entries_reuse_git_tree_oid_for_fully_covered_directory() {
 
     assert!(entries.iter().any(|entry| entry == &src_tree_entry));
     assert_eq!(
-        staged_scope_hash(&root, &config.agent, &scope).unwrap(),
-        sha1_scope_tree_oid_from_entries(&[src_tree_entry]).unwrap()
+        staged_visible_tree_oid(&root, &config.agent, &scope).unwrap(),
+        sha1_visible_tree_oid_from_entries(&[src_tree_entry]).unwrap()
     );
     let _ = fs::remove_dir_all(root);
 }

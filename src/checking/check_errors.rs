@@ -1,6 +1,6 @@
 use crate::check_types::{CheckRecord, CheckRecordOutcome, CheckResult, SelectedExpectation};
 use crate::config_types::AgentConfig;
-use crate::scope_hash::ScopeHashCache;
+use crate::visible_tree_oid::VisibleTreeOidCache;
 use crate::UNPARSEABLE_OBSERVED;
 use std::path::Path;
 
@@ -10,9 +10,9 @@ pub(crate) fn error_record_from_interrogation_error(
     expectation: &SelectedExpectation,
     scope: &[String],
     error: &str,
-    scope_hash_cache: &mut ScopeHashCache,
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<CheckRecord, String> {
-    let scope_hash = scope_hash_cache.staged_scope_hash(root, agent, scope)?;
+    let visible_tree_oid = visible_tree_oid_cache.staged_visible_tree_oid(root, agent, scope)?;
     CheckRecord::current_from_expectation(
         agent,
         expectation,
@@ -21,7 +21,7 @@ pub(crate) fn error_record_from_interrogation_error(
             observed: UNPARSEABLE_OBSERVED.to_string(),
             evidence: error.to_string(),
             scope: scope.to_vec(),
-            scope_hash,
+            visible_tree_oid,
         },
     )
 }

@@ -3,12 +3,12 @@ use crate::git::git_path_bytes;
 use crate::platform::checkout_index_prefix_arg;
 use crate::project::command_output_trimmed;
 use crate::scope::{effective_ignore_patterns, path_matches_pattern_bytes};
-use crate::scope_hash::ScopeHashCache;
 use crate::staged_worktree_git::run_git_command;
 use crate::staged_worktree_paths::create_snapshot_root;
 #[cfg(test)]
 pub(crate) use crate::staged_worktree_paths::snapshot_parent_outside_worktree;
 use crate::staged_worktree_validate::validate_snapshot_contains_no_symlinks;
+use crate::visible_tree_oid::VisibleTreeOidCache;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -20,16 +20,17 @@ pub(crate) struct StagedWorktreeView {
 impl StagedWorktreeView {
     #[cfg(test)]
     pub(crate) fn apply(root: &Path) -> Result<StagedWorktreeView, String> {
-        let mut scope_hash_cache = ScopeHashCache::new();
-        StagedWorktreeView::apply_with_scope_hash_cache(root, &mut scope_hash_cache)
+        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
+        StagedWorktreeView::apply_with_visible_tree_oid_cache(root, &mut visible_tree_oid_cache)
     }
 
-    pub(crate) fn apply_with_scope_hash_cache(
+    pub(crate) fn apply_with_visible_tree_oid_cache(
         root: &Path,
-        scope_hash_cache: &mut ScopeHashCache,
+        visible_tree_oid_cache: &mut VisibleTreeOidCache,
     ) -> Result<StagedWorktreeView, String> {
         let snapshot_root = create_snapshot_root(root)?;
-        if let Err(err) = materialize_staged_snapshot(root, &snapshot_root, scope_hash_cache) {
+        if let Err(err) = materialize_staged_snapshot(root, &snapshot_root, visible_tree_oid_cache)
+        {
             let _ = fs::remove_dir_all(&snapshot_root);
             return Err(err);
         }
@@ -65,7 +66,7 @@ impl Drop for StagedWorktreeView {
 fn materialize_staged_snapshot(
     root: &Path,
     snapshot_root: &Path,
-    _scope_hash_cache: &mut ScopeHashCache,
+    _visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<(), String> {
     initialize_snapshot_git_repo(snapshot_root)?;
     checkout_staged_index(root, snapshot_root)?;

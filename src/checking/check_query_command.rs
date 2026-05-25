@@ -9,7 +9,7 @@ use crate::config_types::CheckConfig;
 use crate::hash::full_scope;
 use crate::logging::DiagnosticLogWriter;
 use crate::scope::sanitize_scope;
-use crate::scope_hash::ScopeHashCache;
+use crate::visible_tree_oid::VisibleTreeOidCache;
 use serde_json::json;
 use std::io;
 use std::path::Path;
@@ -42,14 +42,14 @@ pub(crate) fn run_check_query_command(
             return Err(err);
         }
     };
-    let mut scope_hash_cache = ScopeHashCache::new();
+    let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
     let mut execution = prepare_check_execution(
         root,
         config,
         &mut diagnostic_log,
         true,
         1,
-        &mut scope_hash_cache,
+        &mut visible_tree_oid_cache,
     )?;
     execution
         .staged_view
@@ -95,9 +95,10 @@ pub(crate) fn run_check_query_command(
     // until pending app-server usage updates are drained above; once known,
     // `print_token_usage_summary` writes and flushes it immediately.
     print_token_usage_summary(Some(usage))?;
-    // Query mode is ad-hoc and has no selected/non-selected expectation set.
-    // Do not run lazy full-scope reset here; that reset invalidates expectation
-    // caches and belongs only to normal expectation-check invocations.
+    // Query mode is ad-hoc and has no selected/cached expectation set; for the
+    // lazy reset algorithm it is equivalent to `cached_expectations = []`.
+    // Scheduled resets were already applied by `run_check_command`, but this
+    // path must not plan a new reset from an empty query-only expectation set.
     write_check_finish_event(&mut diagnostic_log, true, None)
 }
 

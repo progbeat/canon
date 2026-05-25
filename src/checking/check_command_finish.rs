@@ -6,11 +6,11 @@ use crate::check_types::{CheckRecord, CheckRunReport, SelectedExpectation};
 use crate::cli::CommandError;
 use crate::config_types::{AgentConfig, CheckConfig};
 use crate::gate::{
-    exact_gate_cache_result_for_tree, gate_regression_count_with_config, GateCacheResult,
+    gate_cached_result_for_tree, gate_regression_count_with_config, GateCacheResult,
     GateComparisonTree,
 };
 use crate::history::HistoryCache;
-use crate::scope_hash::ScopeHashCache;
+use crate::visible_tree_oid::VisibleTreeOidCache;
 use std::io::Write;
 use std::path::Path;
 
@@ -64,7 +64,7 @@ pub(crate) fn finish_check_report(
         context.root,
         context.config,
         report.evaluated,
-        &report.non_selected,
+        &report.cached,
         context.diagnostic_log,
     ) {
         finish_error.get_or_insert_with(|| err.clone());
@@ -98,13 +98,13 @@ pub(crate) fn staged_passes_failed_at_head_count(
     report: &CheckRunReport,
 ) -> Result<usize, String> {
     let mut history_cache = HistoryCache::new();
-    let mut scope_hash_cache = ScopeHashCache::new();
+    let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
     staged_passes_failed_at_head_count_with_cache(
         root,
         agent,
         report,
         &mut history_cache,
-        &mut scope_hash_cache,
+        &mut visible_tree_oid_cache,
     )
 }
 
@@ -113,23 +113,23 @@ fn staged_passes_failed_at_head_count_with_cache(
     agent: &AgentConfig,
     report: &CheckRunReport,
     history_cache: &mut HistoryCache,
-    scope_hash_cache: &mut ScopeHashCache,
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<usize, String> {
     let mut count = 0usize;
     for record in report.records.iter().filter(|record| record.passed()) {
         let Some(expectation) = selected_expectation_from_record(record) else {
             continue;
         };
-        match exact_gate_cache_result_for_tree(
+        match gate_cached_result_for_tree(
             root,
             agent,
             &expectation,
             GateComparisonTree::Head,
             history_cache,
-            scope_hash_cache,
+            visible_tree_oid_cache,
         )? {
-            GateCacheResult::Fail => count += 1,
-            GateCacheResult::Pass | GateCacheResult::Missing => {}
+            GateCacheResult::Fail | GateCacheResult::Missing => count += 1,
+            GateCacheResult::Pass => {}
         }
     }
     Ok(count)
@@ -147,7 +147,7 @@ fn write_check_agent_message(
         config,
         report,
         &mut caches.history,
-        &mut caches.scope_hash,
+        &mut caches.visible_tree_oid,
     )?;
     for message in messages {
         write_stdout_line_record(output, &message, "check agent message")?;
@@ -161,9 +161,12 @@ pub(crate) fn check_agent_message(
     config: &CheckConfig,
     report: &CheckRunReport,
     history_cache: &mut HistoryCache,
-    scope_hash_cache: &mut ScopeHashCache,
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<String, String> {
-    Ok(check_agent_messages(root, config, report, history_cache, scope_hash_cache)?.join("\n"))
+    Ok(
+        check_agent_messages(root, config, report, history_cache, visible_tree_oid_cache)?
+            .join("\n"),
+    )
 }
 
 pub(crate) fn check_agent_messages(
@@ -171,15 +174,16 @@ pub(crate) fn check_agent_messages(
     config: &CheckConfig,
     report: &CheckRunReport,
     history_cache: &mut HistoryCache,
-    scope_hash_cache: &mut ScopeHashCache,
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<Vec<String>, String> {
     let agent = &config.agent;
-    let num_fixes = staged_pass_notice_count(root, agent, report, history_cache, scope_hash_cache)?;
+    let num_fixes =
+        staged_pass_notice_count(root, agent, report, history_cache, visible_tree_oid_cache)?;
     // This is the check-command spec's `num_regressions`. Reusing gate's
     // comparison keeps a same-tree commit instruction aligned with
     // expectation-related `canon gate` failures.
     let num_regressions =
-        gate_regression_count_with_config(root, config, history_cache, scope_hash_cache)?;
+        gate_regression_count_with_config(root, config, history_cache, visible_tree_oid_cache)?;
     let num_failed = report
         .records
         .iter()
@@ -213,14 +217,14 @@ pub(crate) fn staged_pass_notice_count(
     agent: &AgentConfig,
     report: &CheckRunReport,
     history_cache: &mut HistoryCache,
-    scope_hash_cache: &mut ScopeHashCache,
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<usize, String> {
     staged_passes_failed_at_head_count_with_cache(
         root,
         agent,
         report,
         history_cache,
-        scope_hash_cache,
+        visible_tree_oid_cache,
     )
 }
 

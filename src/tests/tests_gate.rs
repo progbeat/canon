@@ -14,11 +14,11 @@ fn gate_passes_with_current_cached_pass() {
     commit_all(&root, "add check config");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
-    let scope_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let visible_tree_oid = staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
     append_history_record(
         &root,
         &expectation,
-        &expectation_record(&config.agent, &expectation, "pass", "yes", scope_hash),
+        &expectation_record(&config.agent, &expectation, "pass", "yes", visible_tree_oid),
     )
     .unwrap();
 
@@ -48,7 +48,7 @@ fn gate_passes_when_cache_is_missing_without_head_pass() {
 }
 
 #[test]
-fn gate_fails_when_head_pass_has_no_current_cache() {
+fn gate_passes_when_head_pass_has_no_current_cache() {
     let root = git_project("gate-head-pass-current-missing");
     commit_all(&root, "initial");
     write_check_config(&root);
@@ -80,7 +80,7 @@ fn gate_fails_when_head_pass_has_no_current_cache() {
 
     let result = run_gate_command(&root, &[]);
 
-    assert_eq!(result.unwrap_err(), CommandError::GateFailed);
+    assert!(result.is_ok());
     let _ = fs::remove_dir_all(root);
 }
 
@@ -106,18 +106,10 @@ fn gate_rejects_arguments() {
 }
 
 #[test]
-fn gate_missing_cache_advice_prioritizes_regressions() {
+fn gate_regression_advice_is_actionable() {
     assert_eq!(
         gate_regression_advice(),
         "▷ Fix staged regressions and run `canon check` again!"
-    );
-    assert_eq!(
-        gate_missing_cache_advice(false),
-        Some("canon gate: run `canon check` before committing")
-    );
-    assert_eq!(
-        gate_missing_cache_advice(true),
-        Some("canon gate: fix staged regressions before filling missing cache")
     );
 }
 
@@ -152,15 +144,22 @@ fn gate_ignores_missing_cache_before_regression() {
         &expectation_record(&config.agent, &expectations[1], "pass", "no", head_hash),
     )
     .unwrap();
-    let current_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let current_visible_tree_oid =
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
     append_history_record(
         &root,
         &expectations[1],
-        &expectation_record(&config.agent, &expectations[1], "fail", "yes", current_hash),
+        &expectation_record(
+            &config.agent,
+            &expectations[1],
+            "fail",
+            "yes",
+            current_visible_tree_oid,
+        ),
     )
     .unwrap();
     let mut history_cache = HistoryCache::new();
-    let mut scope_hash_cache = ScopeHashCache::new();
+    let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
     let mut events = Vec::new();
 
     let passed = gate_pass_with_config(
@@ -169,19 +168,13 @@ fn gate_ignores_missing_cache_before_regression() {
         &identities,
         GateCaches {
             history: &mut history_cache,
-            scope_hash: &mut scope_hash_cache,
+            visible_tree_oid: &mut visible_tree_oid_cache,
         },
         unix_timestamp().unwrap(),
         |event| {
             match event {
                 GateFailureEvent::Regressed => {
                     events.push("regressed".to_string());
-                }
-                GateFailureEvent::Missing => {
-                    events.push("missing".to_string());
-                }
-                GateFailureEvent::MissingComplete { has_regressions } => {
-                    events.push(format!("complete:{has_regressions}"));
                 }
             }
             Ok(())
@@ -195,7 +188,7 @@ fn gate_ignores_missing_cache_before_regression() {
 }
 
 #[test]
-fn gate_passes_canon_only_change_without_checking_cache() {
+fn gate_passes_canon_only_change_after_regression_check() {
     let root = git_project("gate-canon-only");
     commit_all(&root, "initial");
     write_check_config(&root);
@@ -221,7 +214,7 @@ fn gate_canon_path_classification_matches_canon_subtree_only() {
 }
 
 #[test]
-fn gate_passes_canon_only_change_without_loading_config() {
+fn gate_fails_canon_only_change_with_invalid_config() {
     let root = git_project("gate-canon-only-invalid-config");
     commit_all(&root, "initial");
     fs::create_dir_all(root.join(".canon")).unwrap();
@@ -235,12 +228,12 @@ fn gate_passes_canon_only_change_without_loading_config() {
 
     let result = run_gate_command(&root, &[]);
 
-    assert!(result.is_ok());
+    assert_eq!(result.unwrap_err(), CommandError::GateFailed);
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn gate_passes_canon_only_deletion_without_loading_config() {
+fn gate_fails_canon_only_deletion_without_config() {
     let root = git_project("gate-canon-only-delete");
     commit_all(&root, "initial");
     fs::create_dir_all(root.join(".canon")).unwrap();
@@ -261,7 +254,7 @@ fn gate_passes_canon_only_deletion_without_loading_config() {
 
     let result = run_gate_command(&root, &[]);
 
-    assert!(result.is_ok());
+    assert_eq!(result.unwrap_err(), CommandError::GateFailed);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -310,7 +303,7 @@ fn gate_passes_non_canon_change_with_missing_cache_without_head_pass() {
 }
 
 #[test]
-fn gate_checks_fresh_cooldown_expectation_missing_cache() {
+fn gate_accepts_fresh_cooldown_pass_without_current_same_tree_cache() {
     let root = git_project("gate-cooldown-regression");
     commit_all(&root, "initial");
     let yaml = r#"
@@ -335,9 +328,15 @@ expectations:
     commit_all(&root, "add check config");
     let config = parse_check_config(yaml).unwrap();
     let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
-    let old_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
-    let mut record =
-        expectation_record(&config.agent, &expectation, "pass", "yes", old_hash.clone());
+    let old_visible_tree_oid =
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
+    let mut record = expectation_record(
+        &config.agent,
+        &expectation,
+        "pass",
+        "yes",
+        old_visible_tree_oid.clone(),
+    );
     record.timestamp = format_record_timestamp(unix_timestamp().unwrap());
     append_history_record(&root, &expectation, &record).unwrap();
     fs::write(root.join("README.md"), "changed\n").unwrap();
@@ -347,17 +346,18 @@ expectations:
         .current_dir(&root)
         .output()
         .unwrap();
-    let current_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
-    assert_ne!(current_hash, old_hash);
+    let current_visible_tree_oid =
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
+    assert_ne!(current_visible_tree_oid, old_visible_tree_oid);
 
     let result = run_gate_command(&root, &[]);
 
-    assert_eq!(result.unwrap_err(), CommandError::GateFailed);
+    assert!(result.is_ok());
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn gate_does_not_skip_fresh_cooldown_expectation() {
+fn gate_uses_fresh_cooldown_result() {
     let root = git_project("gate-default-cooldown");
     commit_all(&root, "initial");
     let yaml = r#"
@@ -382,8 +382,15 @@ expectations:
     commit_all(&root, "add check config");
     let config = parse_check_config(yaml).unwrap();
     let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
-    let old_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
-    let mut record = expectation_record(&config.agent, &expectation, "pass", "yes", old_hash);
+    let old_visible_tree_oid =
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
+    let mut record = expectation_record(
+        &config.agent,
+        &expectation,
+        "pass",
+        "yes",
+        old_visible_tree_oid,
+    );
     record.timestamp = format_record_timestamp(unix_timestamp().unwrap());
     append_history_record(&root, &expectation, &record).unwrap();
     fs::write(root.join("README.md"), "changed\n").unwrap();
@@ -396,12 +403,12 @@ expectations:
 
     let result = run_gate_command(&root, &[]);
 
-    assert_eq!(result.unwrap_err(), CommandError::GateFailed);
+    assert!(result.is_ok());
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn gate_checks_regression_even_with_fresh_cooldown_pass() {
+fn gate_uses_newer_fresh_cooldown_pass_over_older_same_tree_failure() {
     let root = git_project("gate-cooldown-regression-over-pass");
     commit_all(&root, "initial");
     let yaml = r#"
@@ -442,11 +449,18 @@ expectations:
         &expectation_record(&config.agent, &expectation, "pass", "yes", head_hash),
     )
     .unwrap();
-    let current_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let current_visible_tree_oid =
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
     append_history_record(
         &root,
         &expectation,
-        &expectation_record(&config.agent, &expectation, "fail", "no", current_hash),
+        &expectation_record(
+            &config.agent,
+            &expectation,
+            "fail",
+            "no",
+            current_visible_tree_oid,
+        ),
     )
     .unwrap();
     let mut pass = expectation_record(
@@ -461,7 +475,7 @@ expectations:
 
     let result = run_gate_command(&root, &[]);
 
-    assert_eq!(result.unwrap_err(), CommandError::GateFailed);
+    assert!(result.is_ok());
     let _ = fs::remove_dir_all(root);
 }
 
@@ -486,11 +500,18 @@ fn gate_passes_for_new_current_failure_without_head_pass() {
         .unwrap();
     let config = parse_check_config(check_config_yaml()).unwrap();
     let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
-    let current_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let current_visible_tree_oid =
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
     append_history_record(
         &root,
         &expectation,
-        &expectation_record(&config.agent, &expectation, "fail", "no", current_hash),
+        &expectation_record(
+            &config.agent,
+            &expectation,
+            "fail",
+            "no",
+            current_visible_tree_oid,
+        ),
     )
     .unwrap();
 
@@ -560,26 +581,28 @@ expectations:
         .current_dir(&root)
         .output()
         .unwrap();
-    let current_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let current_visible_tree_oid =
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
     let current_pass = expectation_record(
         &config.agent,
         &options.selected[0],
         "pass",
         "yes",
-        current_hash.clone(),
+        current_visible_tree_oid.clone(),
     );
     let current_fail = expectation_record(
         &config.agent,
         &options.selected[1],
         "fail",
         "yes",
-        current_hash,
+        current_visible_tree_oid,
     );
     append_history_record(&root, &options.selected[0], &current_pass).unwrap();
     append_history_record(&root, &options.selected[1], &current_fail).unwrap();
     let report = CheckRunReport {
         records: vec![current_pass, current_fail],
         non_selected: Vec::new(),
+        cached: Vec::new(),
         evaluated: 2,
         selected: 2,
         skipped: 0,
@@ -593,7 +616,7 @@ expectations:
             &config,
             &report,
             &mut HistoryCache::new(),
-            &mut ScopeHashCache::new(),
+            &mut VisibleTreeOidCache::new(),
         )
         .unwrap(),
         vec![
@@ -635,11 +658,18 @@ fn gate_accepts_failure_already_present_on_head() {
         .current_dir(&root)
         .output()
         .unwrap();
-    let current_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let current_visible_tree_oid =
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
     append_history_record(
         &root,
         &expectation,
-        &expectation_record(&config.agent, &expectation, "fail", "no", current_hash),
+        &expectation_record(
+            &config.agent,
+            &expectation,
+            "fail",
+            "no",
+            current_visible_tree_oid,
+        ),
     )
     .unwrap();
 

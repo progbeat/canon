@@ -212,6 +212,7 @@ pub(crate) fn check_options(
     CheckOptions {
         selected,
         non_selected,
+        selectors_provided: !selectors.is_empty(),
         skipped,
         check_all: !stop_after_non_pass,
         ignore_cache,
@@ -288,7 +289,7 @@ pub(crate) fn sample_record(number: usize, result: &str) -> CheckRecord {
         observed: if result == "pass" { "yes" } else { "no" }.to_string(),
         evidence: "README.md has evidence".to_string(),
         scope: vec![".".to_string()],
-        scope_hash: "AAAAAAAAAAAAAAAAAAAA".to_string(),
+        visible_tree_oid: "AAAAAAAAAAAAAAAAAAAA".to_string(),
         cache_key: None,
     }
 }
@@ -298,7 +299,7 @@ pub(crate) fn expectation_record(
     expectation: &SelectedExpectation,
     result: &str,
     observed: &str,
-    scope_hash: String,
+    visible_tree_oid: String,
 ) -> CheckRecord {
     CheckRecord {
         timestamp: "1970-01-01T00:00:00Z".to_string(),
@@ -311,7 +312,7 @@ pub(crate) fn expectation_record(
         observed: observed.to_string(),
         evidence: "cached answer".to_string(),
         scope: full_scope(),
-        scope_hash,
+        visible_tree_oid,
         cache_key: Some(history_cache_key(agent, expectation)),
     }
 }

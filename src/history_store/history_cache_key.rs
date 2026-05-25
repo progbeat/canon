@@ -6,7 +6,7 @@ use crate::scope::effective_ignore_patterns;
 pub(crate) fn history_cache_key(agent: &AgentConfig, expectation: &SelectedExpectation) -> String {
     // History directories stay keyed by q/a for stable cleanup semantics.
     // `cacheKey` is emitted for audit/debugging only; reusable cache selection
-    // remains governed by the history record's scope and current scopeTreeOid.
+    // remains governed by the history record's scope and current visibleTreeOid.
     let mut input = Vec::new();
     push_history_cache_key_part(&mut input, "schema", "2");
     push_history_cache_key_part(&mut input, "instructions", agent.custom_instructions());
