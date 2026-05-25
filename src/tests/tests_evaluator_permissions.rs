@@ -392,6 +392,72 @@ fn evaluator_codex_home_symlinks_auth_inside_codex_sandbox() {
 }
 
 #[test]
+#[cfg(unix)]
+fn evaluator_codex_home_rejects_symlinked_temp_parent() {
+    use std::os::unix::fs::symlink;
+
+    let _guard = ENV_LOCK.lock().expect("lock test environment");
+    let env_snapshot = EnvSnapshot::capture(&["CODEX_HOME", "TMPDIR"]);
+    env_snapshot.remove("CODEX_HOME");
+    let temp_root = TestDir::new("codex-home-temp-root");
+    let target_root = TestDir::new("codex-home-temp-target");
+    symlink(target_root.path(), temp_root.path().join("canon")).unwrap();
+    env_snapshot.set("TMPDIR", temp_root.path());
+    let root = git_project("app-server-symlinked-temp-canon");
+
+    let err = prepare_evaluator_codex_home(&root).unwrap_err();
+
+    assert!(err.contains("refusing to use symlink"), "{err}");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn app_server_environment_does_not_inherit_parent_secrets() {
+    let _guard = ENV_LOCK.lock().expect("lock test environment");
+    let env_snapshot = EnvSnapshot::capture(&[
+        "CANON_TEST_SECRET",
+        "CODEX_HOME",
+        "CODEX_THREAD_ID",
+        "HOME",
+        "PATH",
+    ]);
+    env_snapshot.set("CANON_TEST_SECRET", "secret-token");
+    env_snapshot.set("CODEX_HOME", "/tmp/source-codex-home");
+    env_snapshot.set("CODEX_THREAD_ID", "parent-thread");
+    env_snapshot.set("HOME", "/tmp/real-home");
+    env_snapshot.set("PATH", "/bin:/usr/bin");
+    let isolated_home = Path::new("/tmp/canon/.codex");
+    let mut command = Command::new("codex");
+
+    configure_app_server_environment(&mut command, Some(isolated_home)).unwrap();
+
+    let envs = command
+        .get_envs()
+        .map(|(key, value)| {
+            (
+                key.to_string_lossy().into_owned(),
+                value.map(|value| value.to_string_lossy().into_owned()),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert!(!envs.contains_key("CANON_TEST_SECRET"));
+    assert!(!envs.contains_key("CODEX_THREAD_ID"));
+    assert_eq!(
+        envs.get("CODEX_HOME").and_then(|value| value.as_deref()),
+        Some("/tmp/canon/.codex")
+    );
+    assert_eq!(
+        envs.get("HOME").and_then(|value| value.as_deref()),
+        Some("/tmp/canon")
+    );
+    assert_eq!(
+        envs.get("PATH").and_then(|value| value.as_deref()),
+        Some("/bin:/usr/bin")
+    );
+    assert!(envs.contains_key("TMPDIR"));
+}
+
+#[test]
 fn app_server_startup_config_escapes_toml_control_characters() {
     let agent = AgentConfig {
         model: ModelConfig::default(),

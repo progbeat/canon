@@ -668,10 +668,10 @@ fn filter_visible_scope_entries(
     agent: &AgentConfig,
     scope: &[String],
 ) -> Vec<String> {
-    // The Cache spec intentionally says `scopeTreeOid` is a subset of tracked
-    // Git entries, not the full scoped tree. Entries outside the enforced scope
-    // or denied to the evaluator are tracked, but cannot support an evaluator
-    // answer, so they are outside the cache-reuse fingerprint.
+    // `scopeTreeOid` fingerprints the scoped evaluator-visible tree. Tracked
+    // entries outside the enforced scope or denied to the evaluator cannot
+    // support that evaluator answer, so they are outside the cache-reuse
+    // fingerprint.
     let deny_patterns = effective_ignore_patterns(agent);
     let visible_entries = entries
         .iter()

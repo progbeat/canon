@@ -76,6 +76,40 @@ fn strict_scope_subset_canonicalizes_before_comparing() {
 }
 
 #[test]
+fn scope_containment_normalizes_repo_paths_before_comparing() {
+    assert!(scope_contains("./src", "src/main.rs"));
+    assert!(scope_contains("src", "./src/main.rs"));
+    assert!(scope_is_within(
+        &["./src/main.rs".to_string()],
+        &["src".to_string()]
+    ));
+    assert!(scope_is_within(
+        &["src/main.rs".to_string()],
+        &["./src".to_string()]
+    ));
+    assert!(!is_strict_scope_subset(
+        &["./src".to_string()],
+        &["src".to_string()]
+    ));
+    assert!(is_strict_scope_subset(
+        &["./src/main.rs".to_string()],
+        &["src".to_string()]
+    ));
+    assert!(!scope_is_within(
+        &["../src/main.rs".to_string()],
+        &["src".to_string()]
+    ));
+    assert!(!scope_is_within(
+        &[".".to_string(), "../secret.txt".to_string()],
+        &[".".to_string()]
+    ));
+    assert!(!is_strict_scope_subset(
+        &["src/main.rs".to_string()],
+        &[".".to_string(), "../secret.txt".to_string()]
+    ));
+}
+
+#[test]
 fn evaluator_session_key_is_not_newline_ambiguous() {
     assert_ne!(
         evaluator_session_key(&["a\nb".to_string(), "c".to_string()]),
@@ -100,6 +134,19 @@ fn evaluator_response_scope_rejects_denied_paths() {
 }
 
 #[test]
+fn full_scope_is_logical_and_still_keeps_denied_paths_denied() {
+    let config = parse_check_config(check_config_yaml()).unwrap();
+
+    assert_eq!(
+        parse_scope_strings(&[".".to_string()], &config.agent).unwrap(),
+        full_scope()
+    );
+    assert!(is_denied_path(&config.agent, ".canon/check.yml"));
+    assert!(is_denied_path(&config.agent, ".git/canon/logs/0.jsonl"));
+    assert!(is_denied_path(&config.agent, "target/output.txt"));
+}
+
+#[test]
 fn agent_ignore_patterns_are_normalized_before_runtime_matching() {
     let config = parse_check_config(
         r#"
@@ -118,6 +165,20 @@ expectations:
 
     assert_eq!(config.agent.ignore, vec!["foo/bar/**"]);
     assert!(parse_scope_strings(&["foo/bar/baz.rs".to_string()], &config.agent).is_err());
+}
+
+#[test]
+fn runtime_ignore_pattern_normalization_fails_closed_for_invalid_patterns() {
+    let agent = AgentConfig {
+        model: ModelConfig::default(),
+        thinking: "low".to_string(),
+        instructions: Some("x".to_string()),
+        ignore: vec!["../secrets/**".to_string()],
+        plugins: Vec::new(),
+    };
+
+    assert!(is_denied_path(&agent, "README.md"));
+    assert!(is_denied_path(&agent, "src/main.rs"));
 }
 
 #[test]
@@ -169,6 +230,30 @@ expectations:
     assert!(is_denied_path(&config.agent, "logs/app.log"));
     assert!(!is_denied_path(&config.agent, "logs/nested/app.log"));
     assert!(is_denied_path(&config.agent, "src/a*b.txt"));
+}
+
+#[test]
+fn agent_ignore_string_matching_normalizes_paths_and_matches_unicode_scalars() {
+    let config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore:
+    - "docs/?.md"
+    - "foo/bar/**"
+  plugins: []
+expectations:
+  - q: "Does this behavior work?"
+    a: "yes"
+"#,
+    )
+    .unwrap();
+
+    assert!(is_denied_path(&config.agent, "./docs/é.md"));
+    assert!(is_denied_path(&config.agent, "foo/./bar/baz.rs"));
+    assert!(!is_denied_path(&config.agent, "docs/ab.md"));
+    assert!(!is_denied_path(&config.agent, "foo/barbaz.rs"));
 }
 
 #[test]

@@ -15,8 +15,11 @@ pub(crate) fn history_cache_key(agent: &AgentConfig, expectation: &SelectedExpec
     for pattern in ignore_patterns {
         push_history_cache_key_part(&mut input, "ignore", &pattern);
     }
-    for plugin in &agent.plugins {
-        push_history_cache_key_part(&mut input, "plugin", plugin);
+    let mut plugins = agent.plugins.clone();
+    plugins.sort();
+    plugins.dedup();
+    for plugin in plugins {
+        push_history_cache_key_part(&mut input, "plugin", &plugin);
     }
     if let Some(primary) = &agent.model.primary {
         push_history_cache_key_part(&mut input, "model.primary", primary);

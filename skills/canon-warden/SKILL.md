@@ -5,9 +5,9 @@ description: Use when working in a project that contains `.canon/`.
 
 # Canon Warden
 
-## Role
+The canon is the single source of truth for how the project should work. You are the canon warden. Your job is to protect the canon and enforce it in the project.
 
-You're the canon warden. To check the canon, run `canon check` with escalation.
+To check the canon against the staged tree, run `canon check` with escalation.
 
 ## Change Constraints
 
@@ -18,6 +18,8 @@ Do not edit files under `.canon/` proactively. Edit them only when a human expli
 Before editing files, first read the relevant expectations under `.canon/` for the requested change. Do not start editing until you know which canon behavior must be preserved.
 
 ## Canon Enforcement
+
+Always stage your edits before running `canon check`, because it does not check unstaged changes.
 
 When `canon` writes an instruction prefixed with `▷ `, execute it. If the instruction says to commit, commit immediately.
 

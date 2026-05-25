@@ -388,6 +388,48 @@ expectations:
 }
 
 #[test]
+fn history_cache_key_ignores_agent_plugin_order_and_duplicates() {
+    let first_config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins:
+    - "alpha@plugins"
+    - "beta@plugins"
+expectations:
+  - q: "First?"
+    a: "yes"
+"#,
+    )
+    .unwrap();
+    let second_config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins:
+    - "beta@plugins"
+    - "alpha@plugins"
+    - "alpha@plugins"
+expectations:
+  - q: "First?"
+    a: "yes"
+"#,
+    )
+    .unwrap();
+    let first_expectation = check_options(&first_config, &["1"], false, true).selected[0].clone();
+    let second_expectation = check_options(&second_config, &["1"], false, true).selected[0].clone();
+
+    assert_eq!(
+        history_cache_key(&first_config.agent, &first_expectation),
+        history_cache_key(&second_config.agent, &second_expectation)
+    );
+}
+
+#[test]
 fn scope_hash_depends_on_agent_ignore_patterns() {
     let root = git_project("history-scope-hash-ignore-dependent");
     let base_config = parse_check_config(

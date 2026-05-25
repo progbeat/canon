@@ -2,6 +2,7 @@ use crate::app_server::AppServerRunner;
 use crate::config_types::AgentConfig;
 use crate::evaluator_config::app_server_args;
 use crate::evaluator_types::EvaluatorError;
+use crate::fs_util::ensure_dir_without_symlinks;
 use crate::platform;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -74,14 +75,13 @@ impl AppServerRunner {
     ) -> Result<AppServerRunner, EvaluatorError> {
         let mut command = Command::new("codex");
         command.args(app_server_args(root, load_plugins, agent)?);
-        if !load_plugins {
-            let codex_home = prepare_evaluator_codex_home(root).map_err(EvaluatorError::message)?;
-            command.env("CODEX_HOME", &codex_home);
-        }
-        // `canon check` can itself run inside a Codex thread. The evaluator
-        // app-server must create independent invocation-local threads, not
-        // attach to the parent conversation through inherited thread identity.
-        command.env_remove("CODEX_THREAD_ID");
+        let codex_home = if load_plugins {
+            None
+        } else {
+            Some(prepare_evaluator_codex_home(root).map_err(EvaluatorError::message)?)
+        };
+        configure_app_server_environment(&mut command, codex_home.as_deref())
+            .map_err(EvaluatorError::message)?;
         platform::prepare_app_server_command(&mut command);
         let mut child = command
             .stdin(Stdio::piped())
@@ -136,6 +136,40 @@ impl AppServerRunner {
     }
 }
 
+pub(crate) fn configure_app_server_environment(
+    command: &mut Command,
+    isolated_codex_home: Option<&Path>,
+) -> Result<(), String> {
+    let path = env::var_os("PATH");
+    let home = env::var_os("HOME");
+    let source_codex_home = env::var_os("CODEX_HOME");
+    let temp_root = evaluator_temp_root()?;
+    command.env_clear();
+    if let Some(path) = path {
+        command.env("PATH", path);
+    }
+    match isolated_codex_home {
+        Some(codex_home) => {
+            command.env("CODEX_HOME", codex_home);
+            if let Some(home) = codex_home.parent() {
+                command.env("HOME", home);
+            }
+        }
+        None => {
+            if let Some(codex_home) = source_codex_home {
+                command.env("CODEX_HOME", codex_home);
+            }
+            if let Some(home) = home {
+                command.env("HOME", home);
+            }
+        }
+    }
+    for key in ["TMPDIR", "TEMP", "TMP"] {
+        command.env(key, &temp_root);
+    }
+    Ok(())
+}
+
 pub(crate) fn prepare_evaluator_codex_home(_root: &Path) -> Result<PathBuf, String> {
     let codex_home = evaluator_codex_home_path()?;
     ensure_evaluator_codex_home_dir(&codex_home)?;
@@ -163,14 +197,18 @@ pub(crate) fn prepare_evaluator_codex_home(_root: &Path) -> Result<PathBuf, Stri
 }
 
 fn evaluator_codex_home_path() -> Result<PathBuf, String> {
-    let temp_root = env::temp_dir()
-        .canonicalize()
-        .map_err(|err| format!("failed to canonicalize temp dir: {}", err))?;
+    let temp_root = evaluator_temp_root()?;
     Ok(temp_root.join("canon").join(".codex"))
 }
 
+fn evaluator_temp_root() -> Result<PathBuf, String> {
+    env::temp_dir()
+        .canonicalize()
+        .map_err(|err| format!("failed to canonicalize temp dir: {}", err))
+}
+
 fn ensure_evaluator_codex_home_dir(path: &Path) -> Result<(), String> {
-    fs::create_dir_all(path).map_err(|err| format!("failed to create {}: {}", path.display(), err))
+    ensure_dir_without_symlinks(path)
 }
 
 fn write_empty_system_skills_marker(

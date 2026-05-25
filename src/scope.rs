@@ -21,6 +21,11 @@ fn sanitize_scope_paths(
     let mut has_full_scope = false;
     for path in scope {
         let path = normalize_repo_path(path)?;
+        // "." is the logical full project scope, not permission to read every
+        // physical subtree. Mandatory and agent ignore patterns are still
+        // enforced later when building evaluator permissions and visible scope
+        // hashes, so rejecting "." here would make full-scope checks
+        // impossible without increasing evaluator access.
         if path != "." && denied_agent.is_some_and(|agent| is_denied_path(agent, &path)) {
             return Err(format!("scope path is denied: {}", path));
         }
@@ -109,7 +114,23 @@ pub(crate) fn is_denied_path_bytes(agent: &AgentConfig, path: &[u8]) -> bool {
 }
 
 pub(crate) fn path_matches_pattern(path: &str, pattern: &str) -> bool {
-    path_matches_pattern_bytes(path.as_bytes(), pattern.as_bytes())
+    let Ok(path) = normalize_repo_path(path) else {
+        return false;
+    };
+    let Ok(pattern) = normalize_repo_path(pattern) else {
+        return false;
+    };
+    path_matches_normalized_pattern(&path, &pattern)
+}
+
+fn path_matches_normalized_pattern(path: &str, pattern: &str) -> bool {
+    if path == pattern {
+        return true;
+    }
+    if let Some(prefix) = pattern.strip_suffix("/**") {
+        return glob_path_matches(path, prefix) || glob_prefix_matches_path(path, prefix);
+    }
+    glob_path_matches(path, pattern)
 }
 
 pub(crate) fn path_matches_pattern_bytes(path: &[u8], pattern: &[u8]) -> bool {
@@ -119,12 +140,52 @@ pub(crate) fn path_matches_pattern_bytes(path: &[u8], pattern: &[u8]) -> bool {
         return true;
     }
     if let Some(prefix) = pattern.strip_suffix(b"/**") {
-        return glob_path_matches_bytes(path, prefix) || glob_prefix_matches_path(path, prefix);
+        return glob_path_matches_bytes(path, prefix)
+            || glob_prefix_matches_path_bytes(path, prefix);
     }
     glob_path_matches_bytes(path, pattern)
 }
 
-fn glob_prefix_matches_path(path: &[u8], prefix: &[u8]) -> bool {
+fn glob_prefix_matches_path(path: &str, prefix: &str) -> bool {
+    path.match_indices('/')
+        .any(|(index, _)| glob_path_matches(&path[..index], prefix))
+}
+
+fn glob_path_matches(path: &str, pattern: &str) -> bool {
+    let path = path.chars().collect::<Vec<_>>();
+    let pattern = pattern.chars().collect::<Vec<_>>();
+    let mut matches = vec![false; path.len() + 1];
+    matches[0] = true;
+    for pattern_char in pattern {
+        let mut next = vec![false; path.len() + 1];
+        for index in 0..=path.len() {
+            if !matches[index] {
+                continue;
+            }
+            match pattern_char {
+                '*' => {
+                    next[index] = true;
+                    let mut end = index;
+                    while end < path.len() && path[end] != '/' {
+                        end += 1;
+                        next[end] = true;
+                    }
+                }
+                '?' if index < path.len() && path[index] != '/' => {
+                    next[index + 1] = true;
+                }
+                literal if index < path.len() && path[index] == literal => {
+                    next[index + 1] = true;
+                }
+                _ => {}
+            }
+        }
+        matches = next;
+    }
+    matches[path.len()]
+}
+
+fn glob_prefix_matches_path_bytes(path: &[u8], prefix: &[u8]) -> bool {
     path.iter()
         .enumerate()
         .any(|(index, byte)| *byte == b'/' && glob_path_matches_bytes(&path[..index], prefix))
@@ -170,24 +231,69 @@ fn trim_dot_slash_bytes(mut path: &[u8]) -> &[u8] {
 }
 
 pub(crate) fn is_strict_scope_subset(proposed: &[String], current: &[String]) -> bool {
-    let proposed = canonicalize_scope_paths(proposed.to_vec());
-    let current = canonicalize_scope_paths(current.to_vec());
+    let Some(proposed) = normalize_scope_for_comparison(proposed) else {
+        return false;
+    };
+    let Some(current) = normalize_scope_for_comparison(current) else {
+        return false;
+    };
     if proposed == current {
         return false;
     }
-    proposed
-        .iter()
-        .all(|path| current.iter().any(|base| scope_contains(base, path)))
+    proposed.iter().all(|path| {
+        current
+            .iter()
+            .any(|base| normalized_scope_contains(base, path))
+    })
 }
 
 pub(crate) fn scope_is_within(proposed: &[String], current: &[String]) -> bool {
-    proposed
-        .iter()
-        .all(|path| current.iter().any(|base| scope_contains(base, path)))
+    let Some(proposed) = normalize_scope_for_comparison(proposed) else {
+        return false;
+    };
+    let Some(current) = normalize_scope_for_comparison(current) else {
+        return false;
+    };
+    proposed.iter().all(|path| {
+        current
+            .iter()
+            .any(|base| normalized_scope_contains(base, path))
+    })
 }
 
 pub(crate) fn scope_contains(base: &str, path: &str) -> bool {
+    let Ok(base) = normalize_repo_path(base) else {
+        return false;
+    };
+    let Ok(path) = normalize_repo_path(path) else {
+        return false;
+    };
+    normalized_scope_contains(&base, &path)
+}
+
+fn normalized_scope_contains(base: &str, path: &str) -> bool {
     base == "." || path == base || path.starts_with(&format!("{}/", base))
+}
+
+fn normalize_scope_for_comparison(scope: &[String]) -> Option<Vec<String>> {
+    if scope.is_empty() {
+        return None;
+    }
+    let mut normalized = Vec::new();
+    let mut has_full_scope = false;
+    for path in scope {
+        let path = normalize_repo_path(path).ok()?;
+        if path == "." {
+            has_full_scope = true;
+            continue;
+        }
+        normalized.push(path);
+    }
+    if has_full_scope || normalized.is_empty() {
+        Some(full_scope())
+    } else {
+        Some(canonicalize_scope_paths(normalized))
+    }
 }
 
 pub(crate) fn effective_ignore_patterns(agent: &AgentConfig) -> Vec<String> {
@@ -196,17 +302,26 @@ pub(crate) fn effective_ignore_patterns(agent: &AgentConfig) -> Vec<String> {
         .map(|pattern| (*pattern).to_string())
         .collect::<Vec<_>>();
     for pattern in &agent.ignore {
-        let pattern = normalized_ignore_pattern(pattern);
-        if !patterns.iter().any(|existing| existing == &pattern) {
-            patterns.push(pattern);
+        match normalized_ignore_pattern(pattern) {
+            Ok(pattern) => push_unique_pattern(&mut patterns, pattern),
+            Err(_) => {
+                for fallback in INVALID_IGNORE_PATTERN_FAIL_CLOSED_PATTERNS {
+                    push_unique_pattern(&mut patterns, (*fallback).to_string());
+                }
+            }
         }
     }
     patterns
 }
 
-pub(crate) fn normalized_ignore_pattern(pattern: &str) -> String {
+fn push_unique_pattern(patterns: &mut Vec<String>, pattern: String) {
+    if !patterns.iter().any(|existing| existing == &pattern) {
+        patterns.push(pattern);
+    }
+}
+
+pub(crate) fn normalized_ignore_pattern(pattern: &str) -> Result<String, String> {
     normalize_repo_path(pattern)
-        .unwrap_or_else(|_| pattern.strip_prefix("./").unwrap_or(pattern).to_string())
 }
 
 pub(crate) const MANDATORY_EVALUATOR_DENY_PATTERNS: &[&str] = &[
@@ -217,3 +332,5 @@ pub(crate) const MANDATORY_EVALUATOR_DENY_PATTERNS: &[&str] = &[
     ".git/canon/logs",
     ".git/canon/logs/**",
 ];
+
+const INVALID_IGNORE_PATTERN_FAIL_CLOSED_PATTERNS: &[&str] = &["*", "*/**"];
