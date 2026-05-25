@@ -1,7 +1,7 @@
 #![allow(unused_imports)]
 
 use crate::app_server::{AppServerRunner, LazyAppServerRunner};
-use crate::app_server_process::prepare_evaluator_codex_home;
+use crate::app_server_process::{configure_app_server_environment, prepare_evaluator_codex_home};
 use crate::app_server_protocol::{app_server_error_message, app_server_failure_from_message};
 use crate::app_server_protocol::{
     app_server_error_value, app_server_failure_from_value, app_server_message,
@@ -164,7 +164,7 @@ use crate::project_types::{Config, Note};
 use crate::repo_inspection::RepoInspectionCache;
 use crate::scope::{
     effective_ignore_patterns, is_denied_path, is_denied_path_bytes, is_strict_scope_subset,
-    normalize_repo_path, sanitize_scope, sanitize_scope_for_hash, scope_is_within,
+    normalize_repo_path, sanitize_scope, sanitize_scope_for_hash, scope_contains, scope_is_within,
 };
 #[cfg(unix)]
 use crate::scope_hash::staged_scope_entries;

@@ -29,14 +29,14 @@ states such as `idk` and `malformed` are not written to history.
 
 `timestamp` is UTC and records when the history record is produced.
 
-`scope` is the scope for the cached result. It is either `["."]` or a
-lexicographically sorted, duplicate-free list of normalized repository-relative
-paths with redundant child paths removed when a parent directory path already
-covers them.
+`scope` is either `["."]` or a list of normalized repository-relative paths with
+redundant child paths removed when a parent directory path already covers them.
 
-`scopeTreeOid` is the Git-compatible object ID of the scoped tree: the subset of
-tracked Git entries covered by `scope`, with repository-relative paths, modes,
-object IDs, and tree structure preserved from the Git state being checked.
+`scopeTreeOid` is the Git-compatible object ID of the scoped evaluator-visible
+tree: the tracked Git entries that are both covered by `scope` and visible to
+the evaluator after applying enforced scope and ignore rules, with
+repository-relative paths, modes, object IDs, and tree structure preserved from
+the Git state being checked.
 
 Canon reuses existing Git object IDs for files and fully covered directories,
 and only serializes/hashes synthetic tree objects for partially covered

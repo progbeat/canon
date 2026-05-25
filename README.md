@@ -5,8 +5,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 When an AI agent misses the mark, there is always a human expectation it
-violated. `canon` lets the human write those expectations down and make AI
-agents iterate until all of them are satisfied.
+failed to meet. `canon` lets the human write those expectations down and make
+AI agents iterate until all of them are satisfied.
 
 That is how this project was built: no human-written implementation code,
 just Codex working against `canon` until the repo satisfied its own canon.
@@ -34,7 +34,7 @@ Restart Codex after installing the skills.
 
 1. Ask Codex to implement a feature using `$canon-warden`.
 
-2. If something is off, add the violated expectation to `.canon/check.yml`,
+2. If something is off, add the unmet expectation to `.canon/check.yml`,
    then ask Codex to fix the project against the updated canon.
 
 3. Iterate.
