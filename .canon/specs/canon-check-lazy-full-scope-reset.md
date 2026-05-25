@@ -1,8 +1,6 @@
 # `canon check` Lazy Full-Scope Reset
 
-At the end of a `canon check` invocation, once final token usage data is
-available, the following lazy full-scope reset policy is applied to
-non-selected expectations:
+At the end of a `canon check` invocation, the following lazy full-scope reset policy is applied to cached expectations:
 
 ```
 def stochastic_round(x):
@@ -10,12 +8,8 @@ def stochastic_round(x):
     p = x - n
     return n + int(random() < p)
 
-def lazy_full_scope_reset(num_evaluated_expectations, skipped_expectations):
-    """
-    num_evaluated_expectations: Number of expectations processed by the evaluator agent.
-    skipped_expectations: Non-selected expectations.
-    """
-    candidates = [e for e in skipped_expectations if e.scope != ["."]]
+def lazy_full_scope_reset(num_evaluated_expectations, cached_expectations):
+    candidates = [e for e in cached_expectations if e.scope != ["."] and e.result == "pass"]
     num_to_reset = min(
         stochastic_round(num_evaluated_expectations / 128),
         len(candidates),
@@ -26,5 +20,4 @@ def lazy_full_scope_reset(num_evaluated_expectations, skipped_expectations):
     # Takes effect at the beginning of the next `canon check` invocation.
 ```
 
-This prevents long-lived narrowed scopes from missing rare cases where changes
-outside the last known expectation scope could affect the expectation's answer.
+This prevents long-lived narrowed scopes from missing rare cases where changes outside the last known expectation scope could affect the expectation's answer.

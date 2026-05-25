@@ -25,8 +25,12 @@ expectations:
     a: "yes"
 
   # Documentation
-  - q: Is README.md consistent with the current state of the repository?
-    a: "yes"
+  - q: "Are there any inconsistencies between `README.md` and the current state of the repository?"
+    a: "no"
+    cooldown: 1d
+
+  - q: "Are there any inconsistencies between `docs/GLOSSARY.md` and the codebase?"
+    a: "no"
     cooldown: 1d
 
   # Access control
@@ -46,7 +50,7 @@ expectations:
     a: "yes"
     cooldown: 3d
 
-  - q: "Does `canon` read runtime logs?'"
+  - q: "Does `canon` read runtime logs?"
     a: "no"  # because it's hack
     cooldown: 3d
 
@@ -82,15 +86,6 @@ expectations:
 
   - q: "For an expectation that defines only `q` and `a`, when `canon check -q <q>` and `canon check <ID> --ignore-cache` select the same expectation using the same check config and enforced scope, is the complete first-turn evaluator-model input identical before the evaluator answers?"
     a: "yes"
-
-  - q: "When no expectation selectors are provided, do `canon` commands end up with the same final selected expectation set?"
-    a: "yes"
-
-  - q: "|selected| + |skipped| == |all expectations|?"
-    a: "yes"
-
-  - q: "When no expectation selectors are provided, are expectations with cached passing results still selected?"
-    a: "no"
 
   - q: "Are expectation ID prefixes limited to human-readable output and CLI selection, with all non-temporary persistent state under CANON_STATE_DIR storing expectation references by full ID rather than minimal or user-provided prefixes?"
     a: "yes"
