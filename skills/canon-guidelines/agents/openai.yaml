@@ -1,0 +1,5 @@
+interface:
+  display_name: "Canon Guidelines"
+
+policy:
+  allow_implicit_invocation: false
