@@ -7,4 +7,5 @@
 - If the evaluator returns a valid answer that does not match the expected answer, never try to influence the answer through developer instructions.
 - Optimize evaluator developer instructions only to reduce token usage or to fix errors such as unparseable answers.
 - Keep the evaluator agent’s developer instructions concise.
+- Treat any codex_app_server ERROR or permission-config warning during canon check as a blocker, even if the command exits successfully.
 - For reference, Codex GitHub: https://github.com/openai/codex

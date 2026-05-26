@@ -144,7 +144,7 @@ pub(crate) fn evaluator_base_config(
 ) -> Value {
     let mut filesystem = Map::new();
     filesystem.insert(":root".to_string(), Value::String(root_access.to_string()));
-    filesystem.insert(":project_roots".to_string(), root_permissions);
+    filesystem.insert(":workspace_roots".to_string(), root_permissions);
     for (path, permission) in evaluator_runtime_permissions() {
         filesystem.insert(path, Value::String(permission));
     }
@@ -418,7 +418,7 @@ pub(crate) fn app_server_startup_filesystem_arg(agent: &AgentConfig) -> String {
     }
     entries.push(format!(
         "{}={{{}}}",
-        toml_key_segment(":project_roots"),
+        toml_key_segment(":workspace_roots"),
         project_root_entries.join(",")
     ));
     for (path, permission) in evaluator_runtime_permissions() {

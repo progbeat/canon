@@ -10,7 +10,7 @@ fn evaluator_permissions_always_deny_canon_and_agent_ignores() {
         plugins: Vec::new(),
     };
     let config = evaluator_thread_config(&agent, &full_scope(), None, &agent.thinking);
-    let root_permissions = config["permissions"]["canon_check"]["filesystem"][":project_roots"]
+    let root_permissions = config["permissions"]["canon_check"]["filesystem"][":workspace_roots"]
         .as_object()
         .unwrap();
     assert_eq!(root_permissions["."], "read");
@@ -245,7 +245,7 @@ fn app_server_starts_with_plugins_disabled_by_default() {
                 .then_some(pair[1].as_str())
         })
         .unwrap();
-    assert!(filesystem_arg.contains(r#"":project_roots"={"."="none""#));
+    assert!(filesystem_arg.contains(r#"":workspace_roots"={"."="none""#));
     assert!(filesystem_arg.contains(r#"".canon/**"="none""#));
     assert!(filesystem_arg.contains(r#""target"="none""#));
     assert!(filesystem_arg.contains(r#""target/**"="none""#));
@@ -316,16 +316,13 @@ fn evaluator_codex_home_preserves_auth_without_skills_or_plugins() {
 
     let root = git_project("app-server-empty-codex-home");
     let evaluator_home = prepare_evaluator_codex_home(&root).unwrap();
+    let canonical_root = root.canonicalize().unwrap();
 
     assert_eq!(
         evaluator_home,
-        env::temp_dir()
-            .canonicalize()
-            .unwrap()
-            .join("canon")
-            .join(".codex")
+        resolve_git_path(&canonical_root, "canon/evaluator-codex-home/.codex").unwrap()
     );
-    assert!(!evaluator_home.starts_with(&root));
+    assert!(evaluator_home.starts_with(resolve_git_path(&canonical_root, "canon").unwrap()));
     let auth_path = evaluator_home.join("auth.json");
     assert!(auth_path.exists());
     #[cfg(unix)]
@@ -393,17 +390,17 @@ fn evaluator_codex_home_symlinks_auth_inside_codex_sandbox() {
 
 #[test]
 #[cfg(unix)]
-fn evaluator_codex_home_rejects_symlinked_temp_parent() {
+fn evaluator_codex_home_rejects_symlinked_state_parent() {
     use std::os::unix::fs::symlink;
 
     let _guard = ENV_LOCK.lock().expect("lock test environment");
-    let env_snapshot = EnvSnapshot::capture(&["CODEX_HOME", "TMPDIR"]);
+    let env_snapshot = EnvSnapshot::capture(&["CODEX_HOME"]);
     env_snapshot.remove("CODEX_HOME");
-    let temp_root = TestDir::new("codex-home-temp-root");
-    let target_root = TestDir::new("codex-home-temp-target");
-    symlink(target_root.path(), temp_root.path().join("canon")).unwrap();
-    env_snapshot.set("TMPDIR", temp_root.path());
     let root = git_project("app-server-symlinked-temp-canon");
+    let state_root = resolve_git_path(&root, "canon").unwrap();
+    fs::create_dir_all(&state_root).unwrap();
+    let target_root = TestDir::new("codex-home-state-target");
+    symlink(target_root.path(), state_root.join("evaluator-codex-home")).unwrap();
 
     let err = prepare_evaluator_codex_home(&root).unwrap_err();
 

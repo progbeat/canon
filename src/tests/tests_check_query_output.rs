@@ -251,6 +251,93 @@ fn staged_pass_notice_counts_passes_failed_at_head() {
 }
 
 #[test]
+fn staged_pass_notice_counts_cached_passes_failed_at_head() {
+    let root = git_project("check-head-pass-notice-cached-pass");
+    let yaml = r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: "Fixed?"
+    a: "yes"
+"#;
+    fs::create_dir_all(root.join(".canon")).unwrap();
+    fs::write(root.join(CHECK_PATH), yaml).unwrap();
+    Command::new("git")
+        .arg("add")
+        .arg(CHECK_PATH)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    commit_all(&root, "initial");
+    let config = parse_check_config(yaml).unwrap();
+    let options = check_options(&config, &[], true, false);
+    let expectation = options.selected[0].clone();
+    let head_hash = gate_head_tree_fingerprint(&root, &config.agent, &full_scope())
+        .unwrap()
+        .unwrap();
+    append_history_record(
+        &root,
+        &expectation,
+        &expectation_record(&config.agent, &expectation, "fail", "no", head_hash),
+    )
+    .unwrap();
+    fs::write(root.join("README.md"), "changed\n").unwrap();
+    Command::new("git")
+        .arg("add")
+        .arg("README.md")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let current_visible_tree_oid =
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
+    append_history_record(
+        &root,
+        &expectation,
+        &expectation_record(
+            &config.agent,
+            &expectation,
+            "pass",
+            "yes",
+            current_visible_tree_oid,
+        ),
+    )
+    .unwrap();
+    let mut runner = FakeRunner::new(&[]);
+
+    let report =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert!(report.records.is_empty());
+    assert_eq!(report.cached.len(), 1);
+    assert_eq!(
+        staged_pass_notice_count(
+            &root,
+            &config.agent,
+            &report,
+            &mut HistoryCache::new(),
+            &mut VisibleTreeOidCache::new(),
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        check_agent_message(
+            &root,
+            &config,
+            &report,
+            &mut HistoryCache::new(),
+            &mut VisibleTreeOidCache::new(),
+        )
+        .unwrap(),
+        "▷ +1 pass compared to HEAD. Commit the staged changes NOW!"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn staged_pass_notice_counts_passes_even_with_existing_failure() {
     let root = git_project("check-head-pass-notice-existing-fail");
     write_check_config(&root);

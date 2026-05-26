@@ -116,10 +116,7 @@ fn staged_passes_failed_at_head_count_with_cache(
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<usize, String> {
     let mut count = 0usize;
-    for record in report.records.iter().filter(|record| record.passed()) {
-        let Some(expectation) = selected_expectation_from_record(record) else {
-            continue;
-        };
+    for expectation in report_passing_expectations(report) {
         match gate_cached_result_for_tree(
             root,
             agent,
@@ -133,6 +130,19 @@ fn staged_passes_failed_at_head_count_with_cache(
         }
     }
     Ok(count)
+}
+
+fn report_passing_expectations(report: &CheckRunReport) -> Vec<SelectedExpectation> {
+    let mut expectations = Vec::new();
+    for record in report.records.iter().filter(|record| record.passed()) {
+        if let Some(expectation) = selected_expectation_from_record(record) {
+            expectations.push(expectation);
+        }
+    }
+    for cached in report.cached.iter().filter(|cached| cached.record.passed()) {
+        expectations.push(cached.expectation.clone());
+    }
+    expectations
 }
 
 fn write_check_agent_message(

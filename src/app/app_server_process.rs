@@ -3,6 +3,7 @@ use crate::config_types::AgentConfig;
 use crate::evaluator_config::app_server_args;
 use crate::evaluator_types::EvaluatorError;
 use crate::fs_util::ensure_dir_without_symlinks;
+use crate::git::resolve_git_path;
 use crate::output::write_stderr_bytes;
 use crate::platform;
 use serde_json::{json, Value};
@@ -190,8 +191,8 @@ pub(crate) fn configure_app_server_environment(
     Ok(())
 }
 
-pub(crate) fn prepare_evaluator_codex_home(_root: &Path) -> Result<PathBuf, String> {
-    let codex_home = evaluator_codex_home_path()?;
+pub(crate) fn prepare_evaluator_codex_home(root: &Path) -> Result<PathBuf, String> {
+    let codex_home = evaluator_codex_home_path(root)?;
     ensure_evaluator_codex_home_dir(&codex_home)?;
     for file in EVALUATOR_CODEX_HOME_RESET_FILES {
         remove_existing_codex_home_entry(&codex_home.join(file))?;
@@ -216,9 +217,11 @@ pub(crate) fn prepare_evaluator_codex_home(_root: &Path) -> Result<PathBuf, Stri
     Ok(codex_home)
 }
 
-fn evaluator_codex_home_path() -> Result<PathBuf, String> {
-    let temp_root = evaluator_temp_root()?;
-    Ok(temp_root.join("canon").join(".codex"))
+fn evaluator_codex_home_path(root: &Path) -> Result<PathBuf, String> {
+    let root = root
+        .canonicalize()
+        .map_err(|err| format!("failed to canonicalize evaluator root: {}", err))?;
+    resolve_git_path(&root, "canon/evaluator-codex-home/.codex")
 }
 
 fn evaluator_temp_root() -> Result<PathBuf, String> {
