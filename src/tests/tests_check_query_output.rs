@@ -848,15 +848,16 @@ fn query_mode_rejects_changed_narrowing_when_expected_is_unknown() {
 }
 
 #[test]
-fn query_mode_can_use_explicit_restricted_scope() {
+fn query_mode_keeps_explicit_restricted_scope() {
     let root = git_project("query-mode-restricted-scope");
     enable_diagnostic_logs(&root);
     let config = parse_check_config(check_config_yaml()).unwrap();
     let scope = vec!["src".to_string()];
-    let mut runner = FakeRunner::new(&[
-        &answer("idk", "needs files outside this restricted scope", &["."]),
-        &answer("yes", "full-scope evidence answers it", &["."]),
-    ]);
+    let mut runner = FakeRunner::new(&[&answer(
+        "idk",
+        "needs files outside this restricted scope",
+        &["src"],
+    )]);
     let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
     let runtime = CheckRuntime {
         root: &root,
@@ -865,7 +866,7 @@ fn query_mode_can_use_explicit_restricted_scope() {
     };
     let mut interrogation_state = InterrogationState::new();
 
-    let result = run_query_with_runner(
+    let err = run_query_with_runner(
         &runtime,
         "Ad-hoc scoped question?",
         None,
@@ -874,26 +875,17 @@ fn query_mode_can_use_explicit_restricted_scope() {
         Some(&mut diagnostic_log),
         &mut interrogation_state,
     )
-    .unwrap();
+    .unwrap_err();
 
-    assert_eq!(runner.start_scopes, vec![scope, full_scope()]);
-    assert_eq!(
-        runner.prompts,
-        vec![
-            "Ad-hoc scoped question?".to_string(),
-            "Ad-hoc scoped question?".to_string()
-        ]
-    );
-    assert_eq!(result.answer.answer, "yes");
-    assert_eq!(result.answer.scope, full_scope());
-    assert_eq!(
-        result.answer.evidence,
-        "`README.md`: full-scope evidence answers it"
-    );
-    assert_eq!(runner.starts, 2);
+    assert!(err.contains("query requires human review: restricted-scope idk"));
+    assert_eq!(runner.start_scopes, vec![scope]);
+    assert_eq!(runner.prompts, vec!["Ad-hoc scoped question?".to_string()]);
+    assert_eq!(runner.starts, 1);
     let log = fs::read_to_string(diagnostic_log.path()).unwrap();
-    assert!(log.contains(r#""event":"query.result""#));
-    assert!(log.contains(r#""scope":["."]"#));
+    assert!(!log.contains(r#""event":"query.result""#));
+    assert!(log.contains(r#""event":"query.review_required""#));
+    assert!(log.contains(r#""reason":"restricted-scope idk""#));
+    assert!(log.contains(r#""scope":["src"]"#));
     let _ = fs::remove_dir_all(root);
 }
 

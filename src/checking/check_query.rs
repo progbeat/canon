@@ -8,7 +8,6 @@ use crate::check_types::{ObservedAnswerState, QueryResult};
 use crate::evaluator_types::{EvaluatorError, EvaluatorRunner};
 use crate::logging::DiagnosticLogWriter;
 use crate::scope::is_strict_scope_subset;
-use crate::OBSERVED_IDK;
 
 #[derive(Clone, Copy)]
 pub(crate) struct QueryRequest<'a> {
@@ -63,7 +62,7 @@ pub(crate) fn ask_query_with_model<R: EvaluatorRunner>(
     // same "unchanged or still incorrect" rule without adding expected text to
     // the evaluator task input. Pure ad-hoc queries have no expected answer, so
     // changed narrowed answers are not trusted as reusable narrower results.
-    let mut current_scope = query.enforced_scope.to_vec();
+    let current_scope = query.enforced_scope.to_vec();
     let mut result = ask_query_once(
         runtime,
         query.question,
@@ -73,18 +72,6 @@ pub(crate) fn ask_query_with_model<R: EvaluatorRunner>(
         state,
         model,
     )?;
-    if should_retry_query_full_scope(&result, &current_scope) {
-        current_scope = crate::hash::full_scope();
-        result = ask_query_once(
-            runtime,
-            query.question,
-            &current_scope,
-            runner,
-            diagnostic_log,
-            state,
-            model,
-        )?;
-    }
     if should_verify_query_narrowing(&result, &current_scope) {
         let narrowed_scope = result.answer.scope.clone();
         let narrowed = ask_query_once(
@@ -139,10 +126,6 @@ fn ask_query_once<R: EvaluatorRunner>(
     finalize_query_answer(runtime, state, enforced_scope, response.answer)
 }
 
-fn should_retry_query_full_scope(result: &QueryResult, enforced_scope: &[String]) -> bool {
-    result.answer.answer == OBSERVED_IDK && enforced_scope != crate::hash::full_scope()
-}
-
 fn should_verify_query_narrowing(result: &QueryResult, enforced_scope: &[String]) -> bool {
     ObservedAnswerState::from_observed(&result.answer.answer).is_reusable_history()
         && is_strict_scope_subset(&result.answer.scope, enforced_scope)
@@ -174,10 +157,11 @@ fn query_human_review_reason(
         ObservedAnswerState::Idk if enforced_scope == crate::hash::full_scope() => {
             Some("full-scope idk")
         }
+        ObservedAnswerState::Idk => Some("restricted-scope idk"),
         ObservedAnswerState::Malformed => Some("malformed evaluator response"),
         ObservedAnswerState::Unparseable => Some("unparseable evaluator response"),
         ObservedAnswerState::EmptyEvidence => Some("empty evaluator evidence"),
         ObservedAnswerState::Unknown => Some("unknown observed answer state"),
-        ObservedAnswerState::Idk | ObservedAnswerState::Answer => None,
+        ObservedAnswerState::Answer => None,
     }
 }

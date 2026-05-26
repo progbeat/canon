@@ -22,9 +22,8 @@ pub(crate) fn run_check_query_command(
     mut diagnostic_log: DiagnosticLogWriter,
 ) -> Result<(), String> {
     // `canon check -q` runs one ad-hoc query, not the selected-expectation loop
-    // that uses persisted history scope seeds. `run_query_with_runner` still
-    // applies the shared evaluator retry and narrowing steps that do not
-    // require a configured expected answer.
+    // that uses persisted history scope seeds. An explicit `--scope` is a hard
+    // query boundary; query mode still verifies narrower reusable scopes.
     diagnostic_log
         .write_event(
             "info",

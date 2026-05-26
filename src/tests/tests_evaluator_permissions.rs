@@ -14,14 +14,14 @@ fn evaluator_permissions_always_deny_canon_and_agent_ignores() {
         .as_object()
         .unwrap();
     assert_eq!(root_permissions["."], "read");
-    assert_eq!(root_permissions[".canon"], "none");
-    assert_eq!(root_permissions[".canon/**"], "none");
-    assert_eq!(root_permissions[".git/canon"], "none");
-    assert_eq!(root_permissions[".git/canon/**"], "none");
-    assert_eq!(root_permissions[".git/canon/logs"], "none");
-    assert_eq!(root_permissions[".git/canon/logs/**"], "none");
-    assert_eq!(root_permissions["target"], "none");
-    assert_eq!(root_permissions["target/**"], "none");
+    assert_eq!(root_permissions[".canon"], "deny");
+    assert_eq!(root_permissions[".canon/**"], "deny");
+    assert_eq!(root_permissions[".git/canon"], "deny");
+    assert_eq!(root_permissions[".git/canon/**"], "deny");
+    assert_eq!(root_permissions[".git/canon/logs"], "deny");
+    assert_eq!(root_permissions[".git/canon/logs/**"], "deny");
+    assert_eq!(root_permissions["target"], "deny");
+    assert_eq!(root_permissions["target/**"], "deny");
     assert_eq!(
         config["permissions"]["canon_check"]["filesystem"][":root"],
         "read"
@@ -41,19 +41,19 @@ fn evaluator_permissions_always_deny_canon_and_agent_ignores() {
         .is_none());
     assert_eq!(
         config["permissions"]["canon_check"]["filesystem"]["~/.codex/sessions"],
-        "none"
+        "deny"
     );
     assert_eq!(
         config["permissions"]["canon_check"]["filesystem"]["~/.codex/sessions/**"],
-        "none"
+        "deny"
     );
     assert_eq!(
         config["permissions"]["canon_check"]["filesystem"]["~/.codex/memories"],
-        "none"
+        "deny"
     );
     assert_eq!(
         config["permissions"]["canon_check"]["filesystem"]["~/.codex/memories/**"],
-        "none"
+        "deny"
     );
     assert!(config["permissions"]["canon_check"]["filesystem"]
         .as_object()
@@ -89,17 +89,17 @@ fn restricted_evaluator_scope_is_enforced_by_filesystem_permissions() {
     };
     let root_permissions = evaluator_thread_root_permissions(&agent, &["src".to_string()]);
 
-    assert_eq!(root_permissions["."], "none");
+    assert_eq!(root_permissions["."], "deny");
     assert_eq!(root_permissions["src"], "read");
     assert_eq!(root_permissions["src/**"], "read");
-    assert_eq!(root_permissions[".canon"], "none");
-    assert_eq!(root_permissions[".canon/**"], "none");
-    assert_eq!(root_permissions["target"], "none");
-    assert_eq!(root_permissions["target/**"], "none");
+    assert_eq!(root_permissions[".canon"], "deny");
+    assert_eq!(root_permissions[".canon/**"], "deny");
+    assert_eq!(root_permissions["target"], "deny");
+    assert_eq!(root_permissions["target/**"], "deny");
 
     let file_scope_permissions =
         evaluator_thread_root_permissions(&agent, &["src/bin/main.rs".to_string()]);
-    assert_eq!(file_scope_permissions["."], "none");
+    assert_eq!(file_scope_permissions["."], "deny");
     assert_eq!(file_scope_permissions["src"], "read");
     assert_eq!(file_scope_permissions["src/bin"], "read");
     assert_eq!(file_scope_permissions["src/bin/main.rs"], "read");
@@ -245,20 +245,20 @@ fn app_server_starts_with_plugins_disabled_by_default() {
                 .then_some(pair[1].as_str())
         })
         .unwrap();
-    assert!(filesystem_arg.contains(r#"":workspace_roots"={"."="none""#));
-    assert!(filesystem_arg.contains(r#"".canon/**"="none""#));
-    assert!(filesystem_arg.contains(r#""target"="none""#));
-    assert!(filesystem_arg.contains(r#""target/**"="none""#));
+    assert!(filesystem_arg.contains(r#"":workspace_roots"={"."="deny""#));
+    assert!(filesystem_arg.contains(r#"".canon/**"="deny""#));
+    assert!(filesystem_arg.contains(r#""target"="deny""#));
+    assert!(filesystem_arg.contains(r#""target/**"="deny""#));
     assert!(filesystem_arg.contains(r#"":root"="read""#));
     assert!(!filesystem_arg.contains(r#"":tmpdir""#));
     assert!(!filesystem_arg.contains(r#"":slash_tmp""#));
     assert!(!filesystem_arg.contains(r#""/private/tmp/**""#));
     assert!(!filesystem_arg.contains(r#""~/.codex/tmp/**""#));
     assert!(filesystem_arg.contains(r#""glob_scan_max_depth"=32"#));
-    assert!(filesystem_arg.contains(r#""~/.codex/sessions"="none""#));
-    assert!(filesystem_arg.contains(r#""~/.codex/sessions/**"="none""#));
-    assert!(filesystem_arg.contains(r#""~/.codex/memories"="none""#));
-    assert!(filesystem_arg.contains(r#""~/.codex/memories/**"="none""#));
+    assert!(filesystem_arg.contains(r#""~/.codex/sessions"="deny""#));
+    assert!(filesystem_arg.contains(r#""~/.codex/sessions/**"="deny""#));
+    assert!(filesystem_arg.contains(r#""~/.codex/memories"="deny""#));
+    assert!(filesystem_arg.contains(r#""~/.codex/memories/**"="deny""#));
     assert!(!filesystem_arg.contains(r#""write""#));
     assert!(!filesystem_arg.contains(r#""."="read""#));
     assert!(disabled
@@ -470,9 +470,9 @@ fn app_server_startup_config_escapes_toml_control_characters() {
 
     let filesystem_arg = app_server_startup_filesystem_arg(&agent);
 
-    assert!(filesystem_arg.contains(r#""quoted\"path"="none""#));
-    assert!(filesystem_arg.contains(r#""control\u0007path"="none""#));
-    assert!(filesystem_arg.contains(r#""delete\u007Fpath"="none""#));
+    assert!(filesystem_arg.contains(r#""quoted\"path"="deny""#));
+    assert!(filesystem_arg.contains(r#""control\u0007path"="deny""#));
+    assert!(filesystem_arg.contains(r#""delete\u007Fpath"="deny""#));
     assert!(!filesystem_arg.contains('\u{0007}'));
     assert!(!filesystem_arg.contains('\u{007f}'));
 }

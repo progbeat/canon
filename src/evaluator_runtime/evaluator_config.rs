@@ -13,6 +13,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const EVALUATOR_MODEL_CATALOG_DIR: &str = "canon/evaluator-model-catalogs";
+const FILESYSTEM_DENY: &str = "deny";
 // Evaluators should see only Canon's own instructions plus the essential
 // shell-command read/exec path governed by the read-only permission profile.
 const EVALUATOR_DISABLED_FEATURES: &[&str] = &[
@@ -68,7 +69,7 @@ pub(crate) fn evaluator_thread_root_permissions(
     if scope == full_scope() {
         root_permissions.insert(".".to_string(), "read".to_string());
     } else {
-        root_permissions.insert(".".to_string(), "none".to_string());
+        root_permissions.insert(".".to_string(), FILESYSTEM_DENY.to_string());
         for path in scope {
             allow_scope_ancestor_directories(&mut root_permissions, path);
             root_permissions.insert(path.clone(), "read".to_string());
@@ -91,7 +92,7 @@ fn allow_scope_ancestor_directories(root_permissions: &mut BTreeMap<String, Stri
 
 pub(crate) fn evaluator_startup_root_permissions(agent: &AgentConfig) -> BTreeMap<String, String> {
     let mut root_permissions = BTreeMap::new();
-    root_permissions.insert(".".to_string(), "none".to_string());
+    root_permissions.insert(".".to_string(), FILESYSTEM_DENY.to_string());
     deny_evaluator_project_paths(&mut root_permissions, agent);
     root_permissions
 }
@@ -103,7 +104,7 @@ pub(crate) fn deny_evaluator_project_paths(
     // Scope and ignore enforcement must stay in Codex filesystem permissions;
     // do not replace it with filtered project copies or hidden project paths.
     for pattern in evaluator_deny_permission_patterns(agent) {
-        root_permissions.insert(pattern, "none".to_string());
+        root_permissions.insert(pattern, FILESYSTEM_DENY.to_string());
     }
 }
 
@@ -211,8 +212,8 @@ pub(crate) fn evaluator_runtime_permissions() -> Vec<(String, String)> {
 }
 
 fn deny_runtime_tree(permissions: &mut Vec<(String, String)>, path: &str) {
-    permissions.push((path.to_string(), "none".to_string()));
-    permissions.push((format!("{}/**", path), "none".to_string()));
+    permissions.push((path.to_string(), FILESYSTEM_DENY.to_string()));
+    permissions.push((format!("{}/**", path), FILESYSTEM_DENY.to_string()));
 }
 
 pub(crate) fn enabled_plugins_config(agent: &AgentConfig) -> Value {
