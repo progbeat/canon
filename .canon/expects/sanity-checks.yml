@@ -19,3 +19,6 @@
 
 - q: "Are logs disabled if canon.logs.maxSize==0?"
   a: "yes"
+
+- q: "2+2=?"
+  a: "4"
