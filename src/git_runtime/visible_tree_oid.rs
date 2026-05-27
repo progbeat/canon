@@ -19,11 +19,12 @@ type ScopeCacheKey = (PathBuf, Vec<String>, Vec<String>);
 #[derive(Default)]
 pub(crate) struct VisibleTreeOidCache {
     values: BTreeMap<ScopeCacheKey, Option<String>>,
-    entries: BTreeMap<ScopeCacheKey, Option<Vec<String>>>,
+    // These root-level entries are the only staged-tree Git subprocess
+    // results used by `canon check`; scope-specific lookups filter/hash them
+    // in memory.
     staged_all_entries: BTreeMap<PathBuf, Vec<String>>,
     staged_root_tree_oids: BTreeMap<PathBuf, String>,
     gate_head_values: BTreeMap<ScopeCacheKey, Option<String>>,
-    gate_head_entries: BTreeMap<ScopeCacheKey, Option<Vec<String>>>,
     gate_head_all_entries: BTreeMap<PathBuf, Option<Vec<String>>>,
     head_exists: BTreeMap<PathBuf, bool>,
     object_hash_algorithms: BTreeMap<PathBuf, GitObjectHashAlgorithm>,
@@ -51,8 +52,7 @@ impl VisibleTreeOidCache {
         scope: &[String],
     ) -> Result<usize, String> {
         let scope = sanitize_scope_for_hash(scope)?;
-        let key = scope_cache_key(root, agent, &scope);
-        let entries = self.staged_scope_entries_for_key(root, agent, &scope, &key)?;
+        let entries = self.staged_scope_entries_from_full_listing(root, agent, &scope)?;
         Ok(entries
             .iter()
             .filter(|entry| !scope_entry_is_tree(entry))
@@ -92,28 +92,11 @@ impl VisibleTreeOidCache {
         }
         let object_hash_algorithm = self.object_hash_algorithm(root)?;
         let hash = Some(visible_tree_oid_from_entries(
-            &self.staged_scope_entries_for_key(root, agent, &scope, &key)?,
+            &self.staged_scope_entries_from_full_listing(root, agent, &scope)?,
             object_hash_algorithm,
         )?);
         self.values.insert(key, hash.clone());
         Ok(hash)
-    }
-
-    fn staged_scope_entries_for_key(
-        &mut self,
-        root: &Path,
-        agent: &AgentConfig,
-        scope: &[String],
-        key: &ScopeCacheKey,
-    ) -> Result<Vec<String>, String> {
-        if let Some(entries) = self.entries.get(key) {
-            return entries
-                .clone()
-                .ok_or_else(|| "failed to cache staged scope entries".to_string());
-        }
-        let entries = self.staged_scope_entries_from_full_listing(root, agent, scope)?;
-        self.entries.insert(key.clone(), Some(entries.clone()));
-        Ok(entries)
     }
 
     fn staged_scope_entries_from_full_listing(
@@ -178,34 +161,17 @@ impl VisibleTreeOidCache {
         // records produced by `staged_visible_tree_oid`.
         let object_hash_algorithm = self.object_hash_algorithm(root)?;
         let hash = self
-            .gate_head_tree_entries_for_key(root, agent, &scope, &key)?
+            .gate_head_entries_from_full_listing(root)?
+            .map(|entries| filter_visible_scope_entries(&entries, agent, &scope))
             .map(|entries| visible_tree_oid_from_entries(&entries, object_hash_algorithm))
             .transpose()?;
         self.gate_head_values.insert(key, hash.clone());
         Ok(hash)
     }
 
-    fn gate_head_tree_entries_for_key(
-        &mut self,
-        root: &Path,
-        agent: &AgentConfig,
-        scope: &[String],
-        key: &ScopeCacheKey,
-    ) -> Result<Option<Vec<String>>, String> {
-        if let Some(entries) = self.gate_head_entries.get(key) {
-            return Ok(entries.clone());
-        }
-        let entries = self
-            .gate_head_entries_from_full_listing(root, scope)?
-            .map(|entries| filter_visible_scope_entries(&entries, agent, scope));
-        self.gate_head_entries.insert(key.clone(), entries.clone());
-        Ok(entries)
-    }
-
     fn gate_head_entries_from_full_listing(
         &mut self,
         root: &Path,
-        _scope: &[String],
     ) -> Result<Option<Vec<String>>, String> {
         if self.gate_head_all_entries.contains_key(root) {
             return Ok(self.gate_head_all_entries.get(root).cloned().flatten());
@@ -692,16 +658,22 @@ fn filter_visible_scope_entries(
         .iter()
         .map(|entry| scope_entry_is_visible(entry, scope, &deny_patterns))
         .collect::<Vec<_>>();
-    let hidden_ancestor_directories = non_visible_ancestor_directories(entries, &visible_entries);
+    let directories_with_non_visible_descendants =
+        directories_with_non_visible_descendants(entries, &visible_entries);
     entries
         .iter()
         .zip(visible_entries)
         .filter(|(entry, visible)| {
+            // Dropping a Git-reported tree object here does not remove
+            // ancestor directory access from the evaluator-visible tree:
+            // `TreeNode::insert` rebuilds ancestor directories from visible
+            // file entries. We only reuse a tree object's existing OID when it
+            // cannot smuggle non-visible descendants into the fingerprint.
             *visible
                 && (!scope_entry_is_tree(entry)
-                    || scope_tree_entry_has_no_hidden_descendants(
+                    || tree_oid_entry_has_only_visible_descendants(
                         entry,
-                        &hidden_ancestor_directories,
+                        &directories_with_non_visible_descendants,
                     ))
         })
         .map(|(entry, _)| entry)
@@ -709,7 +681,7 @@ fn filter_visible_scope_entries(
         .collect()
 }
 
-fn non_visible_ancestor_directories(
+fn directories_with_non_visible_descendants(
     entries: &[String],
     visible_entries: &[bool],
 ) -> BTreeSet<Vec<u8>> {
@@ -755,14 +727,14 @@ fn scope_entry_is_denied(entry: &str, deny_patterns: &[String]) -> bool {
         .any(|pattern| path_matches_pattern_bytes(&path, pattern.as_bytes()))
 }
 
-fn scope_tree_entry_has_no_hidden_descendants(
+fn tree_oid_entry_has_only_visible_descendants(
     entry: &str,
-    non_visible_ancestor_directories: &BTreeSet<Vec<u8>>,
+    directories_with_non_visible_descendants: &BTreeSet<Vec<u8>>,
 ) -> bool {
     let Ok(directory) = scope_entry_path_bytes(entry) else {
         return true;
     };
-    !non_visible_ancestor_directories.contains(&directory)
+    !directories_with_non_visible_descendants.contains(&directory)
 }
 
 fn scope_entry_is_tree(entry: &str) -> bool {

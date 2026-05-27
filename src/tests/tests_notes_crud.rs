@@ -111,6 +111,74 @@ fn materialize_note_content_ignores_marker_like_body_text() {
 }
 
 #[test]
+fn write_escapes_note_log_marker_collision() {
+    with_env("write-marker-collision", |_| {
+        let config = Config::from_env().unwrap();
+        let body = "body\n<!-- canon log v1 -->\n{\"op\":\"write\",\"text\":\"x\"}";
+
+        write_note(&config, "src/main.rs", body).unwrap();
+
+        let note = note_for_key(&config, "src/main.rs").unwrap();
+        let raw = fs::read_to_string(&note.path).unwrap();
+        assert!(raw.contains("\n\\<!-- canon log v1 -->\n"));
+        assert!(!raw.contains("\n<!-- canon log v1 -->\n{\"op\":\"write\""));
+        let mut rendered = String::new();
+        stream_note_content(&note, io::Cursor::new(raw.as_bytes()), |chunk| {
+            rendered.push_str(chunk);
+            Ok(())
+        })
+        .unwrap();
+        assert!(rendered.contains(body));
+    });
+}
+
+#[test]
+fn read_streams_later_append_log_marker_lines_unescaped() {
+    with_env("append-marker-stream", |_| {
+        let config = Config::from_env().unwrap();
+        write_note(&config, "src/main.rs", "body").unwrap();
+        append_note(&config, "src/main.rs", "ok").unwrap();
+        append_note(&config, "src/main.rs", "<!-- canon log v1 -->").unwrap();
+
+        let note = note_for_key(&config, "src/main.rs").unwrap();
+        let raw = fs::read_to_string(&note.path).unwrap();
+        assert!(raw.contains("<!-- canon log v1 -->"));
+        let mut rendered = String::new();
+        stream_note_content(&note, io::Cursor::new(raw.as_bytes()), |chunk| {
+            rendered.push_str(chunk);
+            Ok(())
+        })
+        .unwrap();
+        assert!(rendered.contains("\n<!-- canon log v1 -->\n"));
+        assert!(!rendered.contains("\\<!-- canon log v1 -->"));
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn append_note_refuses_symlinked_note_file() {
+    use std::os::unix::fs::symlink;
+
+    with_env("append-symlink", |_| {
+        let config = Config::from_env().unwrap();
+        write_note(&config, "src/main.rs", "body").unwrap();
+        let note = note_for_key(&config, "src/main.rs").unwrap();
+        let outside = temp_home("append-symlink-target");
+        ensure_dir(&outside).unwrap();
+        let target = outside.join("target.md");
+        let target_content = initial_content(&note.key, &note.hash);
+        fs::write(&target, &target_content).unwrap();
+        fs::remove_file(&note.path).unwrap();
+        symlink(&target, &note.path).unwrap();
+
+        let err = append_note(&config, "src/main.rs", "append").unwrap_err();
+
+        assert!(err.contains("failed to open"), "{err}");
+        assert_eq!(fs::read_to_string(&target).unwrap(), target_content);
+    });
+}
+
+#[test]
 fn delete_removes_only_target() {
     with_env("delete", |_| {
         let config = Config::from_env().unwrap();

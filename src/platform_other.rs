@@ -36,6 +36,15 @@ pub(crate) fn set_materialized_file_permissions(_path: &Path, _mode: &str) -> Re
     Ok(())
 }
 
+pub(crate) fn open_file_for_append_without_following_symlink(
+    path: &Path,
+) -> Result<fs::File, String> {
+    fs::OpenOptions::new()
+        .append(true)
+        .open(path)
+        .map_err(|err| format!("failed to open {}: {}", path.display(), err))
+}
+
 pub(crate) fn add_staged_snapshot_parent_candidates(_parents: &mut Vec<PathBuf>) {}
 
 pub(crate) fn path_from_git_bytes(bytes: Vec<u8>) -> PathBuf {

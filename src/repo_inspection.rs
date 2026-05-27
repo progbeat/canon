@@ -23,6 +23,8 @@ type StagedBlobContents = BTreeMap<Vec<u8>, Vec<u8>>;
 pub(crate) struct RepoInspectionCache {
     git_paths: BTreeMap<GitPathCacheKey, Result<PathBuf, String>>,
     generator_paths: BTreeMap<GeneratorPathsCacheKey, Result<Vec<String>, String>>,
+    // Per-file decoded content is derived from the root-level staged blob
+    // batch below; cache misses here do not spawn additional git processes.
     staged_file_contents: BTreeMap<StagedFileContentCacheKey, Result<String, String>>,
     staged_files: BTreeMap<PathBuf, Result<Vec<StagedTrackedFile>, String>>,
     staged_blob_contents: BTreeMap<PathBuf, Result<StagedBlobContents, String>>,

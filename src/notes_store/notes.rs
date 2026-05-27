@@ -10,6 +10,7 @@ use crate::notes_restore::{
     restore_note_after_index_failure,
 };
 use crate::output::write_stdout;
+use crate::platform::open_file_for_append_without_following_symlink;
 use crate::project_types::{Config, Note};
 use crate::time::unix_timestamp;
 use serde::{Deserialize, Serialize};
@@ -124,10 +125,11 @@ fn upsert_note_index_after_create(config: &Config, key: &str, note: &Note) -> Re
 }
 
 fn append_note_log_record(path: &std::path::Path, record: &NoteRecord) -> Result<u64, String> {
-    reject_symlink(path)?;
-    let previous_size = fs::metadata(path)
+    let mut file = open_file_for_append_without_following_symlink(path)?;
+    let previous_size = file
+        .metadata()
         .map(|metadata| metadata.len())
-        .unwrap_or(0);
+        .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
     let mut line = serde_json::to_string(record).map_err(|err| {
         format!(
             "failed to encode note record for {}: {}",
@@ -136,10 +138,6 @@ fn append_note_log_record(path: &std::path::Path, record: &NoteRecord) -> Result
         )
     })?;
     line.push('\n');
-    let mut file = fs::OpenOptions::new()
-        .append(true)
-        .open(path)
-        .map_err(|err| format!("failed to open {}: {}", path.display(), err))?;
     file.write_all(b"\n")
         .and_then(|()| file.write_all(NOTE_LOG_MARKER.as_bytes()))
         .and_then(|()| file.write_all(b"\n"))
@@ -226,15 +224,53 @@ fn replacement_note_content(note: &Note, text: &str) -> String {
     format!(
         "{}{}\n",
         header(&note.key, &note.hash),
-        normalize_body(text)
+        encode_note_body_for_storage(text)
     )
 }
 
 fn append_note_section(output: &mut String, timestamp: u64, text: &str) {
+    append_note_section_with_body(output, timestamp, &encode_note_body_for_storage(text));
+}
+
+fn append_visible_note_section(output: &mut String, timestamp: u64, text: &str) {
+    append_note_section_with_body(output, timestamp, &normalize_body(text));
+}
+
+fn append_note_section_with_body(output: &mut String, timestamp: u64, body: &str) {
     if !output.ends_with('\n') {
         output.push('\n');
     }
-    output.push_str(&format!("\n## {}\n\n{}\n", timestamp, normalize_body(text)));
+    output.push_str(&format!("\n## {}\n\n{}\n", timestamp, body));
+}
+
+fn encode_note_body_for_storage(text: &str) -> String {
+    normalize_body(text)
+        .split('\n')
+        .map(encode_note_storage_line)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn encode_note_storage_line(line: &str) -> String {
+    if is_log_marker_family(line) {
+        format!("\\{}", line)
+    } else {
+        line.to_string()
+    }
+}
+
+fn decode_note_storage_line(line: &str) -> String {
+    let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
+    let suffix = &line[trimmed.len()..];
+    if trimmed.strip_prefix('\\').is_some_and(is_log_marker_family) {
+        format!("{}{}", &trimmed[1..], suffix)
+    } else {
+        line.to_string()
+    }
+}
+
+fn is_log_marker_family(line: &str) -> bool {
+    line.trim_start_matches('\\') == NOTE_LOG_MARKER
 }
 
 fn open_note_reader(note: &Note) -> Result<BufReader<fs::File>, String> {
@@ -244,7 +280,7 @@ fn open_note_reader(note: &Note) -> Result<BufReader<fs::File>, String> {
     Ok(BufReader::new(file))
 }
 
-fn stream_note_content(
+pub(crate) fn stream_note_content(
     note: &Note,
     mut reader: impl BufRead,
     mut write: impl FnMut(&str) -> Result<(), String>,
@@ -277,15 +313,15 @@ fn stream_note_content(
             match stream_note_log(note, &mut reader, &mut write)? {
                 NoteLogStream::Applied => return Ok(()),
                 NoteLogStream::FalseMarker { first_line } => {
-                    write(&line)?;
+                    write(&decode_note_storage_line(&line))?;
                     if let Some(first_line) = first_line {
-                        write(&first_line)?;
+                        write(&decode_note_storage_line(&first_line))?;
                     }
                 }
             }
             continue;
         }
-        write(&line)?;
+        write(&decode_note_storage_line(&line))?;
     }
 }
 
@@ -350,7 +386,7 @@ fn stream_note_record(
                 format!("## {}\n\n{}\n", timestamp, normalize_body(&text))
             } else {
                 let mut section = String::new();
-                append_note_section(&mut section, timestamp, &text);
+                append_visible_note_section(&mut section, timestamp, &text);
                 section
             };
             write(&section)

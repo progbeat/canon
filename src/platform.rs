@@ -49,6 +49,12 @@ pub(crate) fn set_materialized_file_permissions(path: &Path, mode: &str) -> Resu
     imp::set_materialized_file_permissions(path, mode)
 }
 
+pub(crate) fn open_file_for_append_without_following_symlink(
+    path: &Path,
+) -> Result<std::fs::File, String> {
+    imp::open_file_for_append_without_following_symlink(path)
+}
+
 pub(crate) fn staged_snapshot_parent_candidates() -> Vec<PathBuf> {
     let mut parents = Vec::new();
     imp::add_staged_snapshot_parent_candidates(&mut parents);

@@ -3,7 +3,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::os::unix::fs::{symlink, PermissionsExt};
+use std::os::unix::fs::{symlink, OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
@@ -154,6 +154,16 @@ pub(crate) fn set_materialized_file_permissions(path: &Path, mode: &str) -> Resu
     permissions.set_mode(unix_mode);
     fs::set_permissions(path, permissions)
         .map_err(|err| format!("failed to chmod {}: {}", path.display(), err))
+}
+
+pub(crate) fn open_file_for_append_without_following_symlink(
+    path: &Path,
+) -> Result<fs::File, String> {
+    fs::OpenOptions::new()
+        .append(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)
+        .map_err(|err| format!("failed to open {}: {}", path.display(), err))
 }
 
 pub(crate) fn add_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
