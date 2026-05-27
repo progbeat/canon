@@ -1,20 +1,34 @@
 use crate::config_types::AgentConfig;
-use crate::git::git_path_bytes;
-use crate::platform::checkout_index_prefix_arg;
-use crate::project::command_output_trimmed;
-use crate::scope::{effective_ignore_patterns, path_matches_pattern_bytes};
-use crate::staged_worktree_git::run_git_command;
+use crate::git::{read_git_blobs, staged_tracked_files, StagedTrackedFile};
+use crate::hash::full_scope;
+use crate::platform::os_string_from_bytes;
+use crate::scope::{effective_ignore_patterns, path_matches_pattern_bytes, sanitize_scope};
 use crate::staged_worktree_paths::create_snapshot_root;
 #[cfg(test)]
 pub(crate) use crate::staged_worktree_paths::snapshot_parent_outside_worktree;
-use crate::staged_worktree_validate::validate_snapshot_contains_no_symlinks;
 use crate::visible_tree_oid::VisibleTreeOidCache;
+use std::cell::{Cell, RefCell};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct ScopeMaterializationKey {
+    scope: Vec<String>,
+    deny_patterns: Vec<String>,
+}
 
 pub(crate) struct StagedWorktreeView {
-    snapshot_root: PathBuf,
+    source_root: PathBuf,
+    materialization_root: PathBuf,
+    lazy_root: PathBuf,
+    scope_roots: PathBuf,
+    files: Vec<StagedTrackedFile>,
+    lazy_trees_by_deny: RefCell<BTreeMap<Vec<String>, PathBuf>>,
+    unpacked_paths_by_deny: RefCell<BTreeMap<Vec<String>, BTreeSet<Vec<u8>>>>,
+    materialized_roots: RefCell<BTreeMap<ScopeMaterializationKey, PathBuf>>,
+    next_lazy_id: Cell<u64>,
+    next_scope_id: Cell<u64>,
 }
 
 impl StagedWorktreeView {
@@ -26,316 +40,282 @@ impl StagedWorktreeView {
 
     pub(crate) fn apply_with_visible_tree_oid_cache(
         root: &Path,
-        visible_tree_oid_cache: &mut VisibleTreeOidCache,
+        _visible_tree_oid_cache: &mut VisibleTreeOidCache,
     ) -> Result<StagedWorktreeView, String> {
-        let snapshot_root = create_snapshot_root(root)?;
-        if let Err(err) = materialize_staged_snapshot(root, &snapshot_root, visible_tree_oid_cache)
+        let materialization_root = create_snapshot_root(root)?;
+        if let Err(err) = fs::create_dir_all(materialization_root.join("lazy"))
+            .and_then(|_| fs::create_dir_all(materialization_root.join("scopes")))
         {
-            let _ = fs::remove_dir_all(&snapshot_root);
-            return Err(err);
+            let _ = fs::remove_dir_all(&materialization_root);
+            return Err(format!(
+                "failed to initialize evaluator materialization root {}: {}",
+                materialization_root.display(),
+                err
+            ));
         }
-        Ok(StagedWorktreeView { snapshot_root })
+        let files = match staged_tracked_files(root) {
+            Ok(files) => files,
+            Err(err) => {
+                let _ = fs::remove_dir_all(&materialization_root);
+                return Err(err);
+            }
+        };
+        Ok(StagedWorktreeView {
+            source_root: root.to_path_buf(),
+            lazy_root: materialization_root.join("lazy"),
+            scope_roots: materialization_root.join("scopes"),
+            materialization_root,
+            files,
+            lazy_trees_by_deny: RefCell::new(BTreeMap::new()),
+            unpacked_paths_by_deny: RefCell::new(BTreeMap::new()),
+            materialized_roots: RefCell::new(BTreeMap::new()),
+            next_lazy_id: Cell::new(0),
+            next_scope_id: Cell::new(0),
+        })
     }
 
-    pub(crate) fn snapshot_root(&self) -> &Path {
-        &self.snapshot_root
+    #[cfg(test)]
+    pub(crate) fn materialization_root(&self) -> &Path {
+        &self.materialization_root
     }
 
-    pub(crate) fn remove_evaluator_denied_paths(&self, agent: &AgentConfig) -> Result<(), String> {
-        let patterns = effective_ignore_patterns(agent);
-        remove_evaluator_denied_snapshot_paths(
-            &self.snapshot_root,
-            &self.snapshot_root,
-            &patterns,
-        )?;
-        if git_metadata_root_is_denied(&patterns) {
+    pub(crate) fn materialize_scope(
+        &self,
+        agent: &AgentConfig,
+        scope: &[String],
+    ) -> Result<PathBuf, String> {
+        let scope = sanitize_scope(scope, agent)?;
+        let deny_patterns = sorted_effective_ignore_patterns(agent);
+        let key = ScopeMaterializationKey {
+            scope,
+            deny_patterns,
+        };
+        if let Some(root) = self.materialized_roots.borrow().get(&key) {
+            return Ok(root.clone());
+        }
+
+        let visible_files = self.visible_files(&key.scope, &key.deny_patterns);
+        let lazy_tree = self.lazy_tree_for_deny_patterns(&key.deny_patterns)?;
+        self.unpack_missing_files(&lazy_tree, &key.deny_patterns, &visible_files)?;
+        let root = if key.scope == full_scope() {
+            lazy_tree
+        } else {
+            self.hardlink_scope_root(&lazy_tree, &visible_files)?
+        };
+        self.materialized_roots
+            .borrow_mut()
+            .insert(key, root.clone());
+        Ok(root)
+    }
+
+    fn visible_files(&self, scope: &[String], deny_patterns: &[String]) -> Vec<StagedTrackedFile> {
+        self.files
+            .iter()
+            .filter(|file| {
+                path_is_in_scope(&file.path, scope)
+                    && !deny_patterns
+                        .iter()
+                        .any(|pattern| path_matches_pattern_bytes(&file.path, pattern.as_bytes()))
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn lazy_tree_for_deny_patterns(&self, deny_patterns: &[String]) -> Result<PathBuf, String> {
+        if let Some(root) = self.lazy_trees_by_deny.borrow().get(deny_patterns) {
+            return Ok(root.clone());
+        }
+        let id = self.next_lazy_id.get();
+        self.next_lazy_id.set(id + 1);
+        let root = self.lazy_root.join(id.to_string());
+        fs::create_dir(&root).map_err(|err| {
+            format!(
+                "failed to create evaluator lazy tree {}: {}",
+                root.display(),
+                err
+            )
+        })?;
+        self.lazy_trees_by_deny
+            .borrow_mut()
+            .insert(deny_patterns.to_vec(), root.clone());
+        Ok(root)
+    }
+
+    fn unpack_missing_files(
+        &self,
+        lazy_tree: &Path,
+        deny_patterns: &[String],
+        files: &[StagedTrackedFile],
+    ) -> Result<(), String> {
+        let missing = {
+            let unpacked_by_deny = self.unpacked_paths_by_deny.borrow();
+            let unpacked = unpacked_by_deny.get(deny_patterns);
+            files
+                .iter()
+                .filter(|file| !unpacked.is_some_and(|paths| paths.contains(&file.path)))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        if missing.is_empty() {
             return Ok(());
         }
-        rebuild_snapshot_git_metadata(&self.snapshot_root)?;
-        remove_denied_rebuilt_git_metadata_paths(&self.snapshot_root, &patterns)?;
+
+        let object_ids = missing
+            .iter()
+            .map(|file| file.object_id.clone())
+            .collect::<Vec<_>>();
+        let blobs = read_git_blobs(&self.source_root, &object_ids)?;
+        for (file, blob) in missing.iter().zip(blobs) {
+            write_materialized_file(lazy_tree, file, &blob)?;
+        }
+        let mut unpacked_by_deny = self.unpacked_paths_by_deny.borrow_mut();
+        let unpacked = unpacked_by_deny.entry(deny_patterns.to_vec()).or_default();
+        for file in missing {
+            unpacked.insert(file.path);
+        }
         Ok(())
+    }
+
+    fn hardlink_scope_root(
+        &self,
+        lazy_tree: &Path,
+        files: &[StagedTrackedFile],
+    ) -> Result<PathBuf, String> {
+        let id = self.next_scope_id.get();
+        self.next_scope_id.set(id + 1);
+        let scope_root = self.scope_roots.join(id.to_string());
+        fs::create_dir(&scope_root).map_err(|err| {
+            format!(
+                "failed to create evaluator scope root {}: {}",
+                scope_root.display(),
+                err
+            )
+        })?;
+        for file in files {
+            let relative = relative_path_from_git_path(&file.path)?;
+            let source = lazy_tree.join(&relative);
+            let target = scope_root.join(&relative);
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent).map_err(|err| {
+                    format!(
+                        "failed to create evaluator scope directory {}: {}",
+                        parent.display(),
+                        err
+                    )
+                })?;
+            }
+            fs::hard_link(&source, &target).map_err(|err| {
+                format!(
+                    "failed to hardlink evaluator scope file {} to {}: {}",
+                    source.display(),
+                    target.display(),
+                    err
+                )
+            })?;
+        }
+        Ok(scope_root)
     }
 }
 
 impl Drop for StagedWorktreeView {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.snapshot_root);
+        let _ = fs::remove_dir_all(&self.materialization_root);
     }
 }
 
-fn materialize_staged_snapshot(
-    root: &Path,
-    snapshot_root: &Path,
-    _visible_tree_oid_cache: &mut VisibleTreeOidCache,
-) -> Result<(), String> {
-    initialize_snapshot_git_repo(snapshot_root)?;
-    checkout_staged_index(root, snapshot_root)?;
-    stage_snapshot_index(snapshot_root)?;
-    validate_snapshot_contains_no_symlinks(snapshot_root)
-}
-
-fn remove_evaluator_denied_snapshot_paths(
-    snapshot_root: &Path,
-    current: &Path,
-    patterns: &[String],
-) -> Result<(), String> {
-    let entries = fs::read_dir(current).map_err(|err| {
-        format!(
-            "failed to inspect staged snapshot {}: {}",
-            current.display(),
-            err
-        )
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|err| {
-            format!(
-                "failed to inspect staged snapshot entry under {}: {}",
-                current.display(),
-                err
-            )
-        })?;
-        let path = entry.path();
-        if snapshot_path_is_evaluator_denied(snapshot_root, &path, patterns)? {
-            remove_snapshot_path(&path)?;
-            continue;
-        }
-        if snapshot_path_is_git_metadata_root(snapshot_root, &path)? {
-            continue;
-        }
-        let file_type = entry.file_type().map_err(|err| {
-            format!(
-                "failed to inspect staged snapshot path {}: {}",
-                path.display(),
-                err
-            )
-        })?;
-        if file_type.is_dir() {
-            remove_evaluator_denied_snapshot_paths(snapshot_root, &path, patterns)?;
-        }
-    }
-    Ok(())
-}
-
-fn snapshot_path_is_git_metadata_root(snapshot_root: &Path, path: &Path) -> Result<bool, String> {
-    let relative = path.strip_prefix(snapshot_root).map_err(|_| {
-        format!(
-            "staged snapshot path {} is outside {}",
-            path.display(),
-            snapshot_root.display()
-        )
-    })?;
-    Ok(relative == Path::new(".git"))
-}
-
-fn git_metadata_root_is_denied(patterns: &[String]) -> bool {
+fn sorted_effective_ignore_patterns(agent: &AgentConfig) -> Vec<String> {
+    let mut patterns = effective_ignore_patterns(agent);
+    patterns.sort();
+    patterns.dedup();
     patterns
-        .iter()
-        .any(|pattern| path_matches_pattern_bytes(b".git", pattern.as_bytes()))
 }
 
-fn snapshot_path_is_evaluator_denied(
-    snapshot_root: &Path,
-    path: &Path,
-    patterns: &[String],
-) -> Result<bool, String> {
-    let relative = path.strip_prefix(snapshot_root).map_err(|_| {
-        format!(
-            "staged snapshot path {} is outside {}",
-            path.display(),
-            snapshot_root.display()
-        )
-    })?;
-    let mut relative_path = git_path_bytes(relative)?;
-    normalize_path_separators(&mut relative_path);
-    Ok(patterns
-        .iter()
-        .any(|pattern| path_matches_pattern_bytes(&relative_path, pattern.as_bytes())))
+fn path_is_in_scope(path: &[u8], scope: &[String]) -> bool {
+    scope == full_scope()
+        || scope
+            .iter()
+            .any(|base| path_components_start_with(path, base.as_bytes()))
 }
 
-fn normalize_path_separators(path: &mut [u8]) {
-    let separator = std::path::MAIN_SEPARATOR as u8;
-    if separator != b'/' {
-        for byte in path {
-            if *byte == separator {
-                *byte = b'/';
-            }
-        }
-    }
+fn path_components_start_with(path: &[u8], base: &[u8]) -> bool {
+    let path_parts = path_components(path);
+    let base_parts = path_components(base);
+    !base_parts.is_empty() && path_parts.starts_with(&base_parts)
 }
 
-fn remove_snapshot_path(path: &Path) -> Result<(), String> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(path),
-        Ok(_) => fs::remove_file(path),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(err) => {
-            return Err(format!(
-                "failed to inspect evaluator-denied snapshot path {}: {}",
-                path.display(),
+fn path_components(path: &[u8]) -> Vec<&[u8]> {
+    path.split(|byte| *byte == b'/')
+        .filter(|component| !component.is_empty())
+        .collect()
+}
+
+fn write_materialized_file(
+    lazy_tree: &Path,
+    file: &StagedTrackedFile,
+    blob: &[u8],
+) -> Result<(), String> {
+    let relative = relative_path_from_git_path(&file.path)?;
+    let target = lazy_tree.join(relative);
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|err| {
+            format!(
+                "failed to create evaluator lazy directory {}: {}",
+                parent.display(),
                 err
-            ));
-        }
+            )
+        })?;
     }
-    .map_err(|err| {
+    fs::write(&target, blob).map_err(|err| {
         format!(
-            "failed to remove evaluator-denied snapshot path {}: {}",
-            path.display(),
-            err
-        )
-    })
-}
-
-fn rebuild_snapshot_git_metadata(snapshot_root: &Path) -> Result<(), String> {
-    let git_dir = snapshot_root.join(".git");
-    remove_snapshot_path(&git_dir)?;
-    initialize_snapshot_git_repo(snapshot_root)?;
-    stage_snapshot_index(snapshot_root)
-}
-
-fn remove_denied_rebuilt_git_metadata_paths(
-    snapshot_root: &Path,
-    patterns: &[String],
-) -> Result<(), String> {
-    let mut recursive_patterns = Vec::new();
-    for pattern in patterns {
-        if remove_known_rebuilt_git_metadata_path_if_denied(snapshot_root, pattern)? {
-            continue;
-        }
-        if deny_pattern_may_match_rebuilt_git_metadata(pattern) {
-            recursive_patterns.push(pattern.clone());
-        }
-    }
-    if recursive_patterns.is_empty() {
-        return Ok(());
-    }
-    remove_evaluator_denied_snapshot_paths(
-        snapshot_root,
-        &snapshot_root.join(".git"),
-        &recursive_patterns,
-    )
-}
-
-fn remove_known_rebuilt_git_metadata_path_if_denied(
-    snapshot_root: &Path,
-    pattern: &str,
-) -> Result<bool, String> {
-    for relative in [".git/canon", ".git/canon/logs"] {
-        if path_matches_pattern_bytes(relative.as_bytes(), pattern.as_bytes()) {
-            remove_snapshot_path(&snapshot_root.join(relative))?;
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn deny_pattern_may_match_rebuilt_git_metadata(pattern: &str) -> bool {
-    let first_component = pattern.split('/').next().unwrap_or(pattern);
-    path_matches_pattern_bytes(b".git", first_component.as_bytes())
-}
-
-fn checkout_staged_index(root: &Path, snapshot_root: &Path) -> Result<(), String> {
-    // Keep staged symlinks as regular files containing the link target. That
-    // prevents evaluator reads from following a tracked symlink out of the
-    // staged snapshot while still showing the staged link target text.
-    checkout_index_into_snapshot(
-        root,
-        snapshot_root,
-        None,
-        "failed to materialize staged snapshot",
-    )
-}
-
-fn initialize_snapshot_git_repo(snapshot_root: &Path) -> Result<(), String> {
-    let template = snapshot_root.join(".canon-empty-git-template");
-    fs::create_dir(&template).map_err(|err| {
-        format!(
-            "failed to create empty Git template directory {}: {}",
-            template.display(),
+            "failed to write evaluator lazy file {}: {}",
+            target.display(),
             err
         )
     })?;
-    run_git_command(
-        Command::new("git")
-            .arg("-C")
-            .arg(snapshot_root)
-            .arg("init")
-            .arg("--quiet")
-            .arg("--template")
-            .arg(&template),
-        "git init",
-        "failed to initialize staged snapshot Git metadata",
-    )?;
-    let _ = fs::remove_dir(&template);
-    for (key, value) in [
-        ("core.autocrlf", "false"),
-        ("core.eol", "lf"),
-        ("core.symlinks", "false"),
-    ] {
-        set_snapshot_git_config(snapshot_root, key, value)?;
-    }
-    Ok(())
+    // Git mode 120000 stores symlink targets as blob bytes. The lazy
+    // materialization policy intentionally writes those bytes as a regular
+    // file so evaluator reads cannot follow links outside the staged tree.
+    set_materialized_file_permissions(&target, &file.mode)
 }
 
-#[cfg(all(test, unix, not(target_os = "macos")))]
-pub(crate) fn initialize_snapshot_git_repo_for_test(snapshot_root: &Path) -> Result<(), String> {
-    initialize_snapshot_git_repo(snapshot_root)
-}
-
-fn set_snapshot_git_config(snapshot_root: &Path, key: &str, value: &str) -> Result<(), String> {
-    run_git_command(
-        Command::new("git")
-            .arg("-C")
-            .arg(snapshot_root)
-            .args(["config", key, value]),
-        "git config",
-        "failed to configure staged snapshot Git metadata",
-    )
-}
-
-fn checkout_index_into_snapshot(
-    root: &Path,
-    snapshot_root: &Path,
-    index_file: Option<&Path>,
-    failure_message: &str,
-) -> Result<(), String> {
-    let prefix = checkout_index_prefix(snapshot_root)?;
-    let mut command = Command::new("git");
-    command
-        .arg("-C")
-        .arg(root)
-        .arg("-c")
-        .arg("core.symlinks=false")
-        .arg("checkout-index")
-        .arg("--all")
-        .arg("--force")
-        .arg(prefix);
-    if let Some(index_file) = index_file {
-        command.env("GIT_INDEX_FILE", index_file);
-    }
-    let output = command
-        .output()
-        .map_err(|err| format!("failed to run git checkout-index: {}", err))?;
-    if !output.status.success() {
+fn relative_path_from_git_path(path: &[u8]) -> Result<PathBuf, String> {
+    let path = PathBuf::from(os_string_from_bytes(path.to_vec())?);
+    if path.is_absolute() {
         return Err(format!(
-            "{}: {}",
-            failure_message,
-            command_output_trimmed(&output.stderr, "git checkout-index stderr")?
+            "staged file path must be relative: {}",
+            path.display()
         ));
     }
+    if path
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(format!(
+            "staged file path must not contain '..': {}",
+            path.display()
+        ));
+    }
+    Ok(path)
+}
+
+fn set_materialized_file_permissions(path: &Path, mode: &str) -> Result<(), String> {
+    set_materialized_file_permissions_impl(path, mode)
+}
+
+#[cfg(unix)]
+fn set_materialized_file_permissions_impl(path: &Path, mode: &str) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let unix_mode = if mode == "100755" { 0o755 } else { 0o644 };
+    let mut permissions = fs::metadata(path)
+        .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?
+        .permissions();
+    permissions.set_mode(unix_mode);
+    fs::set_permissions(path, permissions)
+        .map_err(|err| format!("failed to chmod {}: {}", path.display(), err))
+}
+
+#[cfg(not(unix))]
+fn set_materialized_file_permissions_impl(_path: &Path, _mode: &str) -> Result<(), String> {
     Ok(())
-}
-
-fn stage_snapshot_index(snapshot_root: &Path) -> Result<(), String> {
-    run_git_command(
-        Command::new("git")
-            .arg("-C")
-            .arg(snapshot_root)
-            .args(["add", "--all", "--force"]),
-        "git add",
-        "failed to stage snapshot Git index",
-    )
-}
-
-fn checkout_index_prefix(snapshot_root: &Path) -> Result<std::ffi::OsString, String> {
-    checkout_index_prefix_arg(snapshot_root)
 }

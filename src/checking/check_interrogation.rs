@@ -32,7 +32,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
     state: &mut InterrogationState,
     request: ThreadTurnRequest<'_>,
 ) -> Result<ParsedTurnResponse, EvaluatorError> {
-    let session_key = evaluator_session_key(request.enforced_scope, request.model);
+    let session_key = evaluator_session_key(request.agent, request.enforced_scope, request.model);
     // Threads are reused only to preserve the same enforced scope and rendered
     // developer instructions. Each turn still sends the current expectation
     // prompt as the only active task input.
@@ -142,8 +142,11 @@ fn start_thread_session<R: EvaluatorRunner>(
     request: ThreadTurnRequest<'_>,
 ) -> Result<ThreadLifecycleLog, EvaluatorError> {
     let developer_instructions = developer_instructions(request.enforced_scope);
+    let session_root = runtime
+        .session_root_for_scope(request.agent, request.enforced_scope)
+        .map_err(EvaluatorError::message)?;
     let created = match runner.start_session(
-        runtime.snapshot_root,
+        &session_root,
         &developer_instructions,
         request.agent,
         request.model,

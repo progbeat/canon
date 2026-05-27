@@ -2,9 +2,7 @@ use crate::check_validation::codex_reasoning_effort;
 use crate::config_types::AgentConfig;
 use crate::fs_util::write_temp_file_then_replace;
 use crate::git::resolve_git_path;
-use crate::hash::full_scope;
 use crate::logging_config::{thread_reuse_config, ThreadReuseConfig};
-use crate::scope::{effective_ignore_patterns, normalize_repo_path};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 use std::env;
@@ -42,18 +40,16 @@ const EVALUATOR_DISABLED_FEATURES: &[&str] = &[
 
 pub(crate) fn evaluator_thread_config(
     agent: &AgentConfig,
-    scope: &[String],
+    _scope: &[String],
     model: Option<&str>,
     thinking: &str,
     session_root: &Path,
 ) -> Value {
-    let root_permissions = evaluator_thread_root_permissions(agent, scope);
-    let mut config = evaluator_base_config(
-        permission_map_value(&root_permissions),
-        FILESYSTEM_DENY,
-        codex_reasoning_effort(thinking),
-    );
-    add_evaluator_session_root_permissions(&mut config, agent, scope, session_root);
+    // Scope and ignore filtering is enforced by the materialized evaluator
+    // working tree. App-server permissions only sandbox that already-filtered
+    // cwd, so they must not encode scoped project paths.
+    let mut config = evaluator_base_config(FILESYSTEM_DENY, codex_reasoning_effort(thinking));
+    add_evaluator_working_tree_permissions(&mut config, session_root);
     if let Some(model) = model.or_else(|| agent.models.first().map(String::as_str)) {
         config["model"] = Value::String(model.to_string());
     }
@@ -63,75 +59,24 @@ pub(crate) fn evaluator_thread_config(
     config
 }
 
-fn add_evaluator_session_root_permissions(
-    config: &mut Value,
-    agent: &AgentConfig,
-    scope: &[String],
-    session_root: &Path,
-) {
+fn add_evaluator_working_tree_permissions(config: &mut Value, session_root: &Path) {
     let Some(filesystem) = config["permissions"]["canon_check"]["filesystem"].as_object_mut()
     else {
         return;
     };
-    for (path, permission) in evaluator_session_root_permissions(agent, scope, session_root) {
+    for (path, permission) in evaluator_working_tree_permissions(session_root) {
         filesystem.insert(path, Value::String(permission));
     }
 }
 
-pub(crate) fn evaluator_session_root_permissions(
-    agent: &AgentConfig,
-    scope: &[String],
-    session_root: &Path,
-) -> BTreeMap<String, String> {
+pub(crate) fn evaluator_working_tree_permissions(session_root: &Path) -> BTreeMap<String, String> {
     let mut permissions = BTreeMap::new();
-    if scope == full_scope() {
-        permissions.insert(absolute_session_path(session_root, "."), "read".to_string());
-        permissions.insert(
-            absolute_session_glob(session_root, "**"),
-            "read".to_string(),
-        );
-    } else {
-        permissions.insert(
-            absolute_session_path(session_root, "."),
-            FILESYSTEM_DENY.to_string(),
-        );
-        permissions.insert(
-            absolute_session_glob(session_root, "**"),
-            FILESYSTEM_DENY.to_string(),
-        );
-        for path in scope {
-            allow_absolute_scope_ancestor_directories(&mut permissions, session_root, path);
-            permissions.insert(
-                absolute_session_path(session_root, path),
-                "read".to_string(),
-            );
-            permissions.insert(
-                absolute_session_glob(session_root, &format!("{path}/**")),
-                "read".to_string(),
-            );
-        }
-    }
-    for pattern in evaluator_deny_permission_patterns(agent) {
-        permissions.insert(
-            absolute_session_glob(session_root, &pattern),
-            FILESYSTEM_DENY.to_string(),
-        );
-    }
+    permissions.insert(absolute_session_path(session_root, "."), "read".to_string());
+    permissions.insert(
+        absolute_session_glob(session_root, "**"),
+        "read".to_string(),
+    );
     permissions
-}
-
-fn allow_absolute_scope_ancestor_directories(
-    permissions: &mut BTreeMap<String, String>,
-    session_root: &Path,
-    path: &str,
-) {
-    let mut current = path;
-    while let Some((parent, _)) = current.rsplit_once('/') {
-        permissions
-            .entry(absolute_session_path(session_root, parent))
-            .or_insert_with(|| "read".to_string());
-        current = parent;
-    }
 }
 
 fn absolute_session_path(session_root: &Path, path: &str) -> String {
@@ -145,92 +90,10 @@ fn absolute_session_glob(session_root: &Path, pattern: &str) -> String {
     session_root.join(pattern).display().to_string()
 }
 
-pub(crate) fn evaluator_thread_root_permissions(
-    agent: &AgentConfig,
-    scope: &[String],
-) -> BTreeMap<String, String> {
-    let mut root_permissions = BTreeMap::new();
-    if scope == full_scope() {
-        root_permissions.insert(".".to_string(), "read".to_string());
-    } else {
-        root_permissions.insert(".".to_string(), FILESYSTEM_DENY.to_string());
-        for path in scope {
-            allow_scope_ancestor_directories(&mut root_permissions, path);
-            root_permissions.insert(path.clone(), "read".to_string());
-            root_permissions.insert(format!("{}/**", path), "read".to_string());
-        }
-    }
-    deny_evaluator_project_paths(&mut root_permissions, agent);
-    root_permissions
-}
-
-fn allow_scope_ancestor_directories(root_permissions: &mut BTreeMap<String, String>, path: &str) {
-    let mut current = path;
-    while let Some((parent, _)) = current.rsplit_once('/') {
-        root_permissions
-            .entry(parent.to_string())
-            .or_insert_with(|| "read".to_string());
-        current = parent;
-    }
-}
-
-pub(crate) fn evaluator_startup_root_permissions(agent: &AgentConfig) -> BTreeMap<String, String> {
-    let mut root_permissions = BTreeMap::new();
-    root_permissions.insert(".".to_string(), FILESYSTEM_DENY.to_string());
-    deny_evaluator_project_paths(&mut root_permissions, agent);
-    root_permissions
-}
-
-pub(crate) fn deny_evaluator_project_paths(
-    root_permissions: &mut BTreeMap<String, String>,
-    agent: &AgentConfig,
-) {
-    // Scope and ignore enforcement must stay in Codex filesystem permissions;
-    // do not replace it with filtered project copies or hidden project paths.
-    for pattern in evaluator_deny_permission_patterns(agent) {
-        root_permissions.insert(pattern, FILESYSTEM_DENY.to_string());
-    }
-}
-
-pub(crate) fn evaluator_deny_permission_patterns(agent: &AgentConfig) -> Vec<String> {
-    let mut patterns = Vec::new();
-    // `effective_ignore_patterns` includes the mandatory `.git/canon/**` deny,
-    // so even a full-scope `.` read cannot expose runtime state to evaluator sessions.
-    for pattern in effective_ignore_patterns(agent) {
-        let pattern = normalize_repo_path(&pattern).unwrap_or(pattern);
-        // A recursive deny must also deny the directory entry itself, otherwise
-        // root listings can still reveal ignored directories like `target/`.
-        if let Some(prefix) = pattern.strip_suffix("/**") {
-            push_unique_permission_pattern(&mut patterns, prefix.to_string());
-        }
-        push_unique_permission_pattern(&mut patterns, pattern);
-    }
-    patterns
-}
-
-pub(crate) fn push_unique_permission_pattern(patterns: &mut Vec<String>, pattern: String) {
-    if !patterns.iter().any(|existing| existing == &pattern) {
-        patterns.push(pattern);
-    }
-}
-
-pub(crate) fn permission_map_value(permissions: &BTreeMap<String, String>) -> Value {
-    let mut object = Map::new();
-    for (path, permission) in permissions {
-        object.insert(path.clone(), Value::String(permission.clone()));
-    }
-    Value::Object(object)
-}
-
-pub(crate) fn evaluator_base_config(
-    root_permissions: Value,
-    root_access: &str,
-    reasoning_effort: Option<&str>,
-) -> Value {
+pub(crate) fn evaluator_base_config(root_access: &str, reasoning_effort: Option<&str>) -> Value {
     let mut filesystem = Map::new();
     filesystem.insert(":root".to_string(), Value::String(root_access.to_string()));
     filesystem.insert(":minimal".to_string(), Value::String("read".to_string()));
-    filesystem.insert(":workspace_roots".to_string(), root_permissions);
     for (path, permission) in evaluator_runtime_permissions() {
         filesystem.insert(path, Value::String(permission));
     }
@@ -363,7 +226,7 @@ pub(crate) fn app_server_startup_config_args(
     }
     push_config_arg(&mut args, "permissions.canon_check.network.enabled=false");
     push_evaluator_context_isolation_args(&mut args);
-    push_config_arg(&mut args, &app_server_startup_filesystem_arg(agent));
+    push_config_arg(&mut args, &app_server_startup_filesystem_arg());
     push_config_arg(
         &mut args,
         &thread_reuse_carryover_token_target_arg(&thread_reuse),
@@ -501,19 +364,10 @@ pub(crate) fn app_server_model_key(model: Option<&str>) -> String {
     model.unwrap_or("<default>").to_string()
 }
 
-pub(crate) fn app_server_startup_filesystem_arg(agent: &AgentConfig) -> String {
+pub(crate) fn app_server_startup_filesystem_arg() -> String {
     let mut entries = Vec::new();
     entries.push(toml_assignment(":root", &toml_string("read")));
     entries.push(toml_assignment(":minimal", &toml_string("read")));
-    let mut project_root_entries = Vec::new();
-    for (path, permission) in evaluator_startup_root_permissions(agent) {
-        project_root_entries.push(toml_assignment(&path, &toml_string(&permission)));
-    }
-    entries.push(format!(
-        "{}={{{}}}",
-        toml_key_segment(":workspace_roots"),
-        project_root_entries.join(",")
-    ));
     for (path, permission) in evaluator_runtime_permissions() {
         entries.push(toml_assignment(&path, &toml_string(&permission)));
     }

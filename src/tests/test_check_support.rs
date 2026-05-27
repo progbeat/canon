@@ -227,7 +227,7 @@ pub(crate) fn check_options(
 pub(crate) fn test_selector(config: &CheckConfig, selector: &str) -> String {
     if let Ok(number) = selector.parse::<usize>() {
         if let Some(expectation) = config.expectations.get(number.saturating_sub(1)) {
-            return expectation_id(&expectation.q, &expectation.a);
+            return expectation_id(&expectation.q);
         }
     }
     selector.to_string()
@@ -288,7 +288,7 @@ fn check_result_from_label(label: &str) -> CheckResult {
 pub(crate) fn sample_record(number: usize, result: &str) -> CheckRecord {
     let prompt = "Question?".to_string();
     let expected = "yes".to_string();
-    let id = expectation_id(&prompt, &expected);
+    let id = expectation_id(&prompt);
     CheckRecord {
         timestamp: "1970-01-01T00:00:00Z".to_string(),
         id: id.clone(),

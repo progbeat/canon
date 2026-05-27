@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn evaluator_permissions_always_deny_canon_and_agent_ignores() {
+fn evaluator_permissions_allow_only_materialized_working_tree_without_scope_filters() {
     let agent = AgentConfig {
         models: Vec::new(),
         thinking: "low".to_string(),
@@ -12,21 +12,9 @@ fn evaluator_permissions_always_deny_canon_and_agent_ignores() {
     let session_root = Path::new("/tmp/canon-check-snapshot");
     let config =
         evaluator_thread_config(&agent, &full_scope(), None, &agent.thinking, session_root);
-    let root_permissions = config["permissions"]["canon_check"]["filesystem"][":workspace_roots"]
-        .as_object()
-        .unwrap();
     let filesystem = config["permissions"]["canon_check"]["filesystem"]
         .as_object()
         .unwrap();
-    assert_eq!(root_permissions["."], "read");
-    assert_eq!(root_permissions[".canon"], "deny");
-    assert_eq!(root_permissions[".canon/**"], "deny");
-    assert_eq!(root_permissions[".git/canon"], "deny");
-    assert_eq!(root_permissions[".git/canon/**"], "deny");
-    assert_eq!(root_permissions[".git/canon/logs"], "deny");
-    assert_eq!(root_permissions[".git/canon/logs/**"], "deny");
-    assert_eq!(root_permissions["target"], "deny");
-    assert_eq!(root_permissions["target/**"], "deny");
     assert_eq!(
         config["permissions"]["canon_check"]["filesystem"][":root"],
         "deny"
@@ -37,15 +25,19 @@ fn evaluator_permissions_always_deny_canon_and_agent_ignores() {
     );
     assert_eq!(filesystem["/tmp/canon-check-snapshot"], "read");
     assert_eq!(filesystem["/tmp/canon-check-snapshot/**"], "read");
-    assert_eq!(filesystem["/tmp/canon-check-snapshot/.canon"], "deny");
-    assert_eq!(filesystem["/tmp/canon-check-snapshot/.canon/**"], "deny");
-    assert_eq!(filesystem["/tmp/canon-check-snapshot/.git/canon"], "deny");
-    assert_eq!(
-        filesystem["/tmp/canon-check-snapshot/.git/canon/**"],
-        "deny"
-    );
-    assert_eq!(filesystem["/tmp/canon-check-snapshot/target"], "deny");
-    assert_eq!(filesystem["/tmp/canon-check-snapshot/target/**"], "deny");
+    assert!(filesystem.get(":workspace_roots").is_none());
+    assert!(filesystem.get(".canon").is_none());
+    assert!(filesystem.get(".canon/**").is_none());
+    assert!(filesystem.get("target").is_none());
+    assert!(filesystem.get("target/**").is_none());
+    assert!(filesystem.get("/tmp/canon-check-snapshot/.canon").is_none());
+    assert!(filesystem
+        .get("/tmp/canon-check-snapshot/.canon/**")
+        .is_none());
+    assert!(filesystem.get("/tmp/canon-check-snapshot/target").is_none());
+    assert!(filesystem
+        .get("/tmp/canon-check-snapshot/target/**")
+        .is_none());
     assert_eq!(filesystem["/etc/**"], "read");
     assert_eq!(filesystem["/private/etc/**"], "read");
     assert_eq!(filesystem["/usr/share/**"], "read");
@@ -105,7 +97,7 @@ fn evaluator_permissions_always_deny_canon_and_agent_ignores() {
 }
 
 #[test]
-fn restricted_evaluator_scope_is_enforced_by_filesystem_permissions() {
+fn evaluator_working_tree_permissions_do_not_encode_restricted_scope() {
     let agent = AgentConfig {
         models: Vec::new(),
         thinking: "low".to_string(),
@@ -113,57 +105,39 @@ fn restricted_evaluator_scope_is_enforced_by_filesystem_permissions() {
         ignore: vec!["target/**".to_string()],
         plugins: Vec::new(),
     };
-    let root_permissions = evaluator_thread_root_permissions(&agent, &["src".to_string()]);
-
-    assert_eq!(root_permissions["."], "deny");
-    assert_eq!(root_permissions["src"], "read");
-    assert_eq!(root_permissions["src/**"], "read");
-    assert_eq!(root_permissions[".canon"], "deny");
-    assert_eq!(root_permissions[".canon/**"], "deny");
-    assert_eq!(root_permissions["target"], "deny");
-    assert_eq!(root_permissions["target/**"], "deny");
-
-    let file_scope_permissions =
-        evaluator_thread_root_permissions(&agent, &["src/bin/main.rs".to_string()]);
-    assert_eq!(file_scope_permissions["."], "deny");
-    assert_eq!(file_scope_permissions["src"], "read");
-    assert_eq!(file_scope_permissions["src/bin"], "read");
-    assert_eq!(file_scope_permissions["src/bin/main.rs"], "read");
-    assert_eq!(file_scope_permissions["src/bin/main.rs/**"], "read");
-    assert!(!file_scope_permissions.contains_key("src/**"));
-    assert!(!file_scope_permissions.contains_key("src/bin/**"));
-
-    let file_session_permissions = evaluator_session_root_permissions(
+    let config = evaluator_thread_config(
         &agent,
         &["src/bin/main.rs".to_string()],
-        Path::new("/tmp/canon-check-snapshot"),
+        None,
+        &agent.thinking,
+        Path::new("/tmp/canon-check-snapshot/scopes/0"),
     );
+    let filesystem = config["permissions"]["canon_check"]["filesystem"]
+        .as_object()
+        .unwrap();
+
+    assert_eq!(filesystem["/tmp/canon-check-snapshot/scopes/0"], "read");
+    assert_eq!(filesystem["/tmp/canon-check-snapshot/scopes/0/**"], "read");
+    assert!(filesystem
+        .get("/tmp/canon-check-snapshot/scopes/0/src")
+        .is_none());
+    assert!(filesystem
+        .get("/tmp/canon-check-snapshot/scopes/0/src/bin/main.rs")
+        .is_none());
+    assert!(filesystem.get("src").is_none());
+    assert!(filesystem.get("src/**").is_none());
+    assert!(filesystem.get("target/**").is_none());
+
+    let working_tree_permissions =
+        evaluator_working_tree_permissions(Path::new("/tmp/canon-check-snapshot/scopes/0"));
     assert_eq!(
-        file_session_permissions["/tmp/canon-check-snapshot"],
-        "deny"
-    );
-    assert_eq!(
-        file_session_permissions["/tmp/canon-check-snapshot/**"],
-        "deny"
-    );
-    assert_eq!(
-        file_session_permissions["/tmp/canon-check-snapshot/src"],
+        working_tree_permissions["/tmp/canon-check-snapshot/scopes/0"],
         "read"
     );
     assert_eq!(
-        file_session_permissions["/tmp/canon-check-snapshot/src/bin"],
+        working_tree_permissions["/tmp/canon-check-snapshot/scopes/0/**"],
         "read"
     );
-    assert_eq!(
-        file_session_permissions["/tmp/canon-check-snapshot/src/bin/main.rs"],
-        "read"
-    );
-    assert_eq!(
-        file_session_permissions["/tmp/canon-check-snapshot/src/bin/main.rs/**"],
-        "read"
-    );
-    assert!(!file_session_permissions.contains_key("/tmp/canon-check-snapshot/src/**"));
-    assert!(!file_session_permissions.contains_key("/tmp/canon-check-snapshot/src/bin/**"));
 }
 
 #[test]
@@ -314,10 +288,10 @@ fn app_server_starts_with_plugins_disabled_by_default() {
                 .then_some(pair[1].as_str())
         })
         .unwrap();
-    assert!(filesystem_arg.contains(r#"":workspace_roots"={"."="deny""#));
-    assert!(filesystem_arg.contains(r#"".canon/**"="deny""#));
-    assert!(filesystem_arg.contains(r#""target"="deny""#));
-    assert!(filesystem_arg.contains(r#""target/**"="deny""#));
+    assert!(!filesystem_arg.contains(r#"":workspace_roots""#));
+    assert!(!filesystem_arg.contains(r#"".canon/**"="deny""#));
+    assert!(!filesystem_arg.contains(r#""target"="deny""#));
+    assert!(!filesystem_arg.contains(r#""target/**"="deny""#));
     assert!(filesystem_arg.contains(r#"":root"="read""#));
     assert!(filesystem_arg.contains(r#"":minimal"="read""#));
     assert!(!filesystem_arg.contains(r#"":tmpdir""#));
@@ -526,23 +500,11 @@ fn app_server_environment_does_not_inherit_parent_secrets() {
 
 #[test]
 fn app_server_startup_config_escapes_toml_control_characters() {
-    let agent = AgentConfig {
-        models: Vec::new(),
-        thinking: "low".to_string(),
-        instructions: Some("Answer from files only.".to_string()),
-        ignore: vec![
-            "quoted\"path/**".to_string(),
-            "control\u{0007}path/**".to_string(),
-            "delete\u{007f}path/**".to_string(),
-        ],
-        plugins: Vec::new(),
-    };
+    let filesystem_arg = app_server_startup_filesystem_arg();
 
-    let filesystem_arg = app_server_startup_filesystem_arg(&agent);
-
-    assert!(filesystem_arg.contains(r#""quoted\"path"="deny""#));
-    assert!(filesystem_arg.contains(r#""control\u0007path"="deny""#));
-    assert!(filesystem_arg.contains(r#""delete\u007Fpath"="deny""#));
+    assert!(!filesystem_arg.contains("quoted"));
+    assert!(!filesystem_arg.contains("control"));
+    assert!(!filesystem_arg.contains("delete"));
     assert!(!filesystem_arg.contains('\u{0007}'));
     assert!(!filesystem_arg.contains('\u{007f}'));
 }

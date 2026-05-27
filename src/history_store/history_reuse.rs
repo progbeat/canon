@@ -1,6 +1,6 @@
 // Answer-history lookup for the Cache spec: newest-to-oldest history scanning
 // plus current visibleTreeOid matching.
-use crate::check_types::{CheckRecord, ObservedAnswerState, SelectedExpectation};
+use crate::check_types::{CheckRecord, CheckResult, ObservedAnswerState, SelectedExpectation};
 use crate::config_types::AgentConfig;
 use crate::history::HistoryCache;
 use crate::scope::sanitize_scope_for_hash;
@@ -92,7 +92,7 @@ pub(crate) fn cooldown_history_record(
         let Some(timestamp) = parse_record_timestamp(&record.timestamp) else {
             return Ok(HistoryRecordScan::Done(None));
         };
-        if !record.passed() {
+        if current_result_for_history_record(&record, expectation) != CheckResult::Pass {
             return Ok(HistoryRecordScan::Done(None));
         }
         if now.saturating_sub(timestamp) >= cooldown.seconds {
@@ -170,6 +170,7 @@ fn record_with_current_expectation(
     record.number = expectation.number;
     record.prompt = Some(expectation.q.clone());
     record.expected = Some(expectation.a.clone());
+    record.result = current_result_for_history_record(&record, expectation);
     record
 }
 
@@ -182,4 +183,11 @@ pub(crate) fn is_reusable_history_record(record: &CheckRecord) -> bool {
 fn is_reusable_history_record_for_expected(record: &CheckRecord, expected: &str) -> bool {
     ObservedAnswerState::from_expected_and_observed(expected, &record.observed)
         .is_reusable_history()
+}
+
+fn current_result_for_history_record(
+    record: &CheckRecord,
+    expectation: &SelectedExpectation,
+) -> CheckResult {
+    CheckResult::from_expected_answer(&expectation.a, &record.observed)
 }

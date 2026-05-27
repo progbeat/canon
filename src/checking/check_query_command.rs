@@ -50,14 +50,7 @@ pub(crate) fn run_check_query_command(
         1,
         &mut visible_tree_oid_cache,
     )?;
-    execution
-        .staged_view
-        .remove_evaluator_denied_paths(&config.agent)?;
-    let runtime = CheckRuntime {
-        root,
-        snapshot_root: execution.staged_view.snapshot_root(),
-        config,
-    };
+    let runtime = CheckRuntime::materialized(root, &execution.staged_view, config);
     let mut interrogation_state = InterrogationState::new();
     let result = run_query_with_runner(
         &runtime,

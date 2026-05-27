@@ -90,8 +90,8 @@ use crate::evaluator::{
 };
 use crate::evaluator_config::{
     app_server_args, app_server_model_key, app_server_startup_filesystem_arg,
-    evaluator_model_catalog_json, evaluator_session_root_permissions, evaluator_thread_config,
-    evaluator_thread_root_permissions, thread_reuse_carryover_token_target_arg, toml_string,
+    evaluator_model_catalog_json, evaluator_thread_config, evaluator_working_tree_permissions,
+    thread_reuse_carryover_token_target_arg, toml_string,
 };
 use crate::evaluator_prompt::{developer_instructions, EVALUATOR_BASE_INSTRUCTIONS};
 use crate::evaluator_response::parse_evaluator_response;

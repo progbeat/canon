@@ -12,7 +12,7 @@ pub(crate) fn active_expectation_ids(config: &CheckConfig) -> BTreeSet<String> {
     config
         .expectations
         .iter()
-        .map(|expectation| expectation_id(&expectation.q, &expectation.a))
+        .map(|expectation| expectation_id(&expectation.q))
         .collect()
 }
 

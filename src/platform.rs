@@ -66,6 +66,7 @@ pub(crate) fn git_path_bytes(path: &Path) -> Result<Vec<u8>, String> {
     imp::git_path_bytes(path)
 }
 
+#[cfg(test)]
 pub(crate) fn checkout_index_prefix_arg(path: &Path) -> Result<OsString, String> {
     let mut prefix = git_path_bytes(path)?;
     let separator = std::path::MAIN_SEPARATOR as u8;
@@ -75,6 +76,10 @@ pub(crate) fn checkout_index_prefix_arg(path: &Path) -> Result<OsString, String>
     let mut arg = b"--prefix=".to_vec();
     arg.extend(prefix);
     imp::os_string_from_bytes(arg)
+}
+
+pub(crate) fn os_string_from_bytes(bytes: Vec<u8>) -> Result<OsString, String> {
+    imp::os_string_from_bytes(bytes)
 }
 
 #[cfg(all(test, unix))]

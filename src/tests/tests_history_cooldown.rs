@@ -214,6 +214,65 @@ expectations:
 }
 
 #[test]
+fn cooldown_reuse_recomputes_result_from_current_expected_answer() {
+    let root = git_project("history-cooldown-current-result");
+    let old_config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: "Question?"
+    a: "no"
+    cooldown: 1d
+"#,
+    )
+    .unwrap();
+    let new_config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: "Question?"
+    a: "yes"
+    cooldown: 1d
+"#,
+    )
+    .unwrap();
+    let old_expectation = check_options(&old_config, &["1"], false, false).selected[0].clone();
+    let new_expectation = check_options(&new_config, &["1"], false, false).selected[0].clone();
+    let mut record = expectation_record(
+        &old_config.agent,
+        &old_expectation,
+        "fail",
+        "yes",
+        staged_visible_tree_oid(&root, &old_config.agent, &full_scope()).unwrap(),
+    );
+    record.timestamp = "1970-01-01T00:00:10Z".to_string();
+    append_history_record(&root, &old_expectation, &record).unwrap();
+
+    let mut history_cache = HistoryCache::new();
+    let reused = cooldown_history_record(
+        &root,
+        &new_config.agent,
+        &new_expectation,
+        &mut history_cache,
+        30,
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(reused.expected.as_deref(), Some("yes"));
+    assert!(reused.passed());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn cooldown_reuse_uses_fresh_pass_without_cache_key_filter() {
     let root = git_project("history-cooldown-no-cache-key-gate");
     let old_config = parse_check_config(

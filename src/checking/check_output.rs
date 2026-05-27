@@ -1,6 +1,4 @@
-use crate::check_types::{
-    is_line_break_char, CheckRecord, CheckRunReport, ObservedAnswerState, ParsedAnswer,
-};
+use crate::check_types::{is_line_break_char, CheckRecord, CheckRunReport, ParsedAnswer};
 use crate::logging::push_json_control_escape;
 use crate::token_usage_types::TokenUsage;
 use std::io::Write;
@@ -103,9 +101,10 @@ pub(crate) fn render_check_output_record(record: &CheckRecord) -> String {
     output.push('\n');
     if is_error {
         output.push_str("Error: ");
-        output.push_str(&escape_check_output_text(
-            record.error.as_deref().unwrap_or(&record.observed),
-        ));
+        let error = record
+            .review_error_text()
+            .expect("error records must expose an error value");
+        output.push_str(&escape_check_output_text(error));
         output.push('\n');
     } else {
         output.push_str("Expected: ");
@@ -194,16 +193,7 @@ pub(crate) fn pad_summary_line(inner: &str) -> String {
 }
 
 pub(crate) fn record_requires_human_review(record: &CheckRecord) -> bool {
-    if record.error.is_some() {
-        return true;
-    }
-    record
-        .expected_text()
-        .map(|expected| {
-            ObservedAnswerState::from_expected_and_observed(expected, &record.observed)
-                .requires_human_review()
-        })
-        .unwrap_or(true)
+    record.review_error_text().is_some()
 }
 
 pub(crate) fn compact_json_string_array(values: &[String]) -> String {

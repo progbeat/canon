@@ -12,7 +12,9 @@ use crate::check_order_state::{
 };
 use crate::check_output::{record_requires_human_review, write_and_flush_result_output};
 use crate::check_preflight::check_interrupted;
-use crate::check_selection::order_expectations_by_latest_non_pass;
+use crate::check_selection::{
+    latest_non_pass_timestamp_with_cache, order_expectations_by_latest_non_pass,
+};
 use crate::check_types::{
     check_run_error, CachedExpectation, CheckOptions, CheckRecord, CheckRunError, CheckRunReport,
     NarrowingStats, SelectedExpectation,
@@ -27,9 +29,8 @@ use crate::history_append::append_history_record_with_cache;
 use crate::history_reuse::{is_reusable_history_record, latest_history_scope_with_cache};
 use crate::logging::DiagnosticLogWriter;
 use crate::scope::{sanitize_scope, scope_is_within};
-use crate::time::{parse_record_timestamp, unix_timestamp};
+use crate::time::unix_timestamp;
 use crate::visible_tree_oid::VisibleTreeOidCache;
-use std::cmp::Reverse;
 use std::io::Write;
 use std::path::Path;
 
@@ -58,11 +59,7 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
     result_output: Option<&mut dyn Write>,
 ) -> Result<CheckRunReport, CheckRunError> {
     let mut caches = CheckRunCaches::new();
-    let runtime = CheckRuntime {
-        root,
-        snapshot_root,
-        config,
-    };
+    let runtime = CheckRuntime::fixed(root, snapshot_root, config);
     run_check_with_runner_and_caches(
         runtime,
         options,
@@ -427,7 +424,32 @@ fn default_check_selection(
     }
     if cached_failure_seen {
         selected.clear();
-        cached.sort_by_key(|hit| Reverse(record_timestamp_sort_key(&hit.hit.record)));
+        let mut ordered_cached = cached
+            .into_iter()
+            .enumerate()
+            .map(|(index, hit)| {
+                Ok(OrderedCachedSelectionHit {
+                    latest_non_pass: latest_non_pass_timestamp_with_cache(
+                        root,
+                        &hit.expectation,
+                        history_cache,
+                    )?
+                    .unwrap_or(0),
+                    index,
+                    hit,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        ordered_cached.sort_by(|left, right| {
+            right
+                .latest_non_pass
+                .cmp(&left.latest_non_pass)
+                .then_with(|| left.index.cmp(&right.index))
+        });
+        cached = ordered_cached
+            .into_iter()
+            .map(|ordered| ordered.hit)
+            .collect();
     }
     Ok(CachedSelection {
         selected,
@@ -436,8 +458,10 @@ fn default_check_selection(
     })
 }
 
-fn record_timestamp_sort_key(record: &CheckRecord) -> u64 {
-    parse_record_timestamp(&record.timestamp).unwrap_or(0)
+struct OrderedCachedSelectionHit {
+    hit: CachedSelectionHit,
+    latest_non_pass: u64,
+    index: usize,
 }
 
 fn should_verify_q_scope_suggestion(

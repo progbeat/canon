@@ -40,6 +40,60 @@ fn reusable_history_record_uses_current_expectation_metadata() {
 }
 
 #[test]
+fn reusable_history_record_recomputes_result_from_current_expected_answer() {
+    let root = git_project("history-current-result");
+    let old_config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: "Question?"
+    a: "yes"
+"#,
+    )
+    .unwrap();
+    let new_config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: "Question?"
+    a: "no"
+"#,
+    )
+    .unwrap();
+    let old_expectation = check_options(&old_config, &["1"], false, true)
+        .selected
+        .remove(0);
+    let new_expectation = check_options(&new_config, &["1"], false, true)
+        .selected
+        .remove(0);
+    let record = expectation_record(
+        &old_config.agent,
+        &old_expectation,
+        "pass",
+        "yes",
+        staged_visible_tree_oid(&root, &old_config.agent, &full_scope()).unwrap(),
+    );
+    append_history_record(&root, &old_expectation, &record).unwrap();
+
+    let reused = same_tree_history_record(&root, &new_config.agent, &new_expectation)
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(reused.observed, "yes");
+    assert_eq!(reused.expected.as_deref(), Some("no"));
+    assert!(!reused.passed());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn reusable_history_record_cache_is_refreshed_after_append() {
     let root = git_project("history-reuse-cache-append");
     let config = parse_check_config(check_config_yaml()).unwrap();

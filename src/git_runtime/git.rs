@@ -7,6 +7,7 @@ use std::process::{Child, Command, Stdio};
 #[derive(Clone)]
 pub(crate) struct StagedTrackedFile {
     pub(crate) path: Vec<u8>,
+    pub(crate) mode: String,
     pub(crate) object_id: String,
 }
 
@@ -72,7 +73,7 @@ fn parse_staged_tracked_file(entry: &[u8]) -> Result<Option<StagedTrackedFile>, 
     let metadata = std::str::from_utf8(&entry[..tab])
         .map_err(|_| "git ls-files entry metadata must be valid UTF-8".to_string())?;
     let mut fields = metadata.split_whitespace();
-    let _mode = fields
+    let mode = fields
         .next()
         .ok_or_else(|| "git ls-files entry missing mode".to_string())?;
     let object_id = fields
@@ -86,6 +87,7 @@ fn parse_staged_tracked_file(entry: &[u8]) -> Result<Option<StagedTrackedFile>, 
     }
     Ok(Some(StagedTrackedFile {
         path: entry[tab + 1..].to_vec(),
+        mode: mode.to_string(),
         object_id: object_id.to_string(),
     }))
 }

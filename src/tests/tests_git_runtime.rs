@@ -30,14 +30,17 @@ fn staged_worktree_view_materializes_staged_snapshot_without_touching_worktree()
 
     {
         let staged_view = StagedWorktreeView::apply(&root).unwrap();
-        snapshot_root = staged_view.snapshot_root().to_path_buf();
-        assert_ne!(snapshot_root, root);
+        snapshot_root = staged_view.materialization_root().to_path_buf();
+        let scope_root = staged_view
+            .materialize_scope(&empty_test_agent(), &full_scope())
+            .unwrap();
+        assert_ne!(scope_root, root);
         assert_eq!(
-            fs::read_to_string(snapshot_root.join("README.md")).unwrap(),
+            fs::read_to_string(scope_root.join("README.md")).unwrap(),
             "staged\n"
         );
-        assert!(snapshot_root.join(".git").exists());
-        assert!(!snapshot_root.join("untracked.txt").exists());
+        assert!(!scope_root.join(".git").exists());
+        assert!(!scope_root.join("untracked.txt").exists());
         assert_eq!(
             fs::read_to_string(root.join("README.md")).unwrap(),
             "unstaged\n"
@@ -98,45 +101,26 @@ fn staged_worktree_view_removes_evaluator_denied_paths_from_snapshot() {
 
     {
         let staged_view = StagedWorktreeView::apply(&root).unwrap();
-        assert!(staged_view
-            .snapshot_root()
-            .join(".canon/draft/private.md")
-            .exists());
-        assert!(staged_view
-            .snapshot_root()
-            .join("target/cache.txt")
-            .exists());
-        staged_view
-            .remove_evaluator_denied_paths(&config.agent)
+        let scope_root = staged_view
+            .materialize_scope(&config.agent, &full_scope())
             .unwrap();
 
-        assert!(!staged_view.snapshot_root().join(".canon").exists());
-        assert!(!staged_view
-            .snapshot_root()
-            .join("secrets/passwords.txt")
-            .exists());
-        assert!(!staged_view.snapshot_root().join("target").exists());
-        assert!(staged_view.snapshot_root().join("README.md").exists());
-        assert!(staged_view.snapshot_root().join(".git").exists());
+        assert!(!scope_root.join(".canon").exists());
+        assert!(!scope_root.join("secrets/passwords.txt").exists());
+        assert!(!scope_root.join("target").exists());
+        assert!(scope_root.join("README.md").exists());
+        assert!(!scope_root.join(".git").exists());
 
         let ls_files = Command::new("git")
             .args(["ls-files"])
-            .current_dir(staged_view.snapshot_root())
+            .current_dir(&scope_root)
             .output()
             .unwrap();
-        assert!(
-            ls_files.status.success(),
-            "{}",
-            String::from_utf8_lossy(&ls_files.stderr)
-        );
-        let files = String::from_utf8_lossy(&ls_files.stdout);
-        assert!(!files.contains(".canon/"));
-        assert!(!files.contains("secrets/passwords.txt"));
-        assert!(!files.contains("target/cache.txt"));
+        assert!(!ls_files.status.success());
 
         let secret_object = Command::new("git")
             .args(["cat-file", "-e", &secret_oid])
-            .current_dir(staged_view.snapshot_root())
+            .current_dir(&scope_root)
             .output()
             .unwrap();
         assert!(!secret_object.status.success());
@@ -144,6 +128,36 @@ fn staged_worktree_view_removes_evaluator_denied_paths_from_snapshot() {
     assert!(root.join(".canon/draft/private.md").exists());
     assert!(root.join("secrets/passwords.txt").exists());
     assert!(root.join("target/cache.txt").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn staged_worktree_view_materializes_restricted_scope_without_non_scoped_files() {
+    let root = git_project("staged-snapshot-restricted-scope");
+    fs::create_dir_all(root.join("src/bin")).unwrap();
+    fs::write(root.join("src/bin/main.rs"), "main\n").unwrap();
+    fs::write(root.join("src/lib.rs"), "lib\n").unwrap();
+    fs::write(root.join("README.md"), "readme\n").unwrap();
+    Command::new("git")
+        .args(["add", "src/bin/main.rs", "src/lib.rs", "README.md"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let staged_view = StagedWorktreeView::apply(&root).unwrap();
+
+    let scope_root = staged_view
+        .materialize_scope(&empty_test_agent(), &["src/bin/main.rs".to_string()])
+        .unwrap();
+
+    assert_eq!(
+        fs::read_to_string(scope_root.join("src/bin/main.rs")).unwrap(),
+        "main\n"
+    );
+    assert!(scope_root.join("src").is_dir());
+    assert!(scope_root.join("src/bin").is_dir());
+    assert!(!scope_root.join("src/lib.rs").exists());
+    assert!(!scope_root.join("README.md").exists());
+    assert!(!scope_root.join(".git").exists());
     let _ = fs::remove_dir_all(root);
 }
 
@@ -161,18 +175,18 @@ fn staged_worktree_view_removes_git_metadata_when_git_is_denied() {
 
     {
         let staged_view = StagedWorktreeView::apply(&root).unwrap();
-        staged_view
-            .remove_evaluator_denied_paths(&config.agent)
+        let scope_root = staged_view
+            .materialize_scope(&config.agent, &full_scope())
             .unwrap();
 
-        assert!(!staged_view.snapshot_root().join(".git").exists());
+        assert!(!scope_root.join(".git").exists());
         assert_eq!(
-            fs::read_to_string(staged_view.snapshot_root().join("README.md")).unwrap(),
+            fs::read_to_string(scope_root.join("README.md")).unwrap(),
             "staged\n"
         );
         let ls_files = Command::new("git")
             .args(["ls-files"])
-            .current_dir(staged_view.snapshot_root())
+            .current_dir(&scope_root)
             .output()
             .unwrap();
         assert!(!ls_files.status.success());
@@ -196,14 +210,14 @@ fn staged_worktree_view_removes_git_metadata_when_git_tree_is_denied() {
 
     {
         let staged_view = StagedWorktreeView::apply(&root).unwrap();
-        staged_view
-            .remove_evaluator_denied_paths(&config.agent)
+        let scope_root = staged_view
+            .materialize_scope(&config.agent, &full_scope())
             .unwrap();
 
-        assert!(!staged_view.snapshot_root().join(".git").exists());
+        assert!(!scope_root.join(".git").exists());
         let ls_files = Command::new("git")
             .args(["ls-files"])
-            .current_dir(staged_view.snapshot_root())
+            .current_dir(&scope_root)
             .output()
             .unwrap();
         assert!(!ls_files.status.success());
@@ -227,25 +241,18 @@ fn staged_worktree_view_removes_denied_rebuilt_git_metadata_paths() {
 
     {
         let staged_view = StagedWorktreeView::apply(&root).unwrap();
-        staged_view
-            .remove_evaluator_denied_paths(&config.agent)
+        let scope_root = staged_view
+            .materialize_scope(&config.agent, &full_scope())
             .unwrap();
 
-        assert!(staged_view.snapshot_root().join(".git").exists());
-        assert!(!staged_view.snapshot_root().join(".git/config").exists());
+        assert!(!scope_root.join(".git").exists());
         let ls_files = Command::new("git")
             .args(["ls-files"])
-            .current_dir(staged_view.snapshot_root())
+            .current_dir(&scope_root)
             .output()
             .unwrap();
-        assert!(
-            ls_files.status.success(),
-            "{}",
-            String::from_utf8_lossy(&ls_files.stderr)
-        );
-        let files = String::from_utf8_lossy(&ls_files.stdout);
-        assert!(files.lines().any(|path| path == "README.md"));
-        assert!(!files.lines().any(|path| path == ".git/config"));
+        assert!(!ls_files.status.success());
+        assert!(scope_root.join("README.md").exists());
     }
 
     assert!(root.join(".git/config").exists());
@@ -290,36 +297,25 @@ fn staged_worktree_view_exposes_staged_index_without_git_history() {
 
     {
         let staged_view = StagedWorktreeView::apply(&root).unwrap();
+        let scope_root = staged_view
+            .materialize_scope(&empty_test_agent(), &full_scope())
+            .unwrap();
         assert_eq!(
-            fs::read_to_string(staged_view.snapshot_root().join("README.md")).unwrap(),
+            fs::read_to_string(scope_root.join("README.md")).unwrap(),
             "staged\n"
         );
 
-        let ls_files = Command::new("git")
-            .args(["ls-files"])
-            .current_dir(staged_view.snapshot_root())
-            .output()
-            .unwrap();
-        assert!(
-            ls_files.status.success(),
-            "{}",
-            String::from_utf8_lossy(&ls_files.stderr)
-        );
-        let files = String::from_utf8_lossy(&ls_files.stdout)
-            .lines()
-            .map(|line| line.to_string())
-            .collect::<Vec<_>>();
-        assert!(files.iter().any(|path| path == "README.md"));
-        assert!(files.iter().any(|path| path == "ADDED.md"));
+        assert!(scope_root.join("README.md").exists());
+        assert!(scope_root.join("ADDED.md").exists());
         #[cfg(unix)]
-        assert!(files.iter().any(|path| path == literal_added));
-        assert!(files.iter().any(|path| path == "new-name.txt"));
-        assert!(!files.iter().any(|path| path == "old-name.txt"));
-        assert!(!files.iter().any(|path| path == "src/main.rs"));
+        assert!(scope_root.join(literal_added).exists());
+        assert!(scope_root.join("new-name.txt").exists());
+        assert!(!scope_root.join("old-name.txt").exists());
+        assert!(!scope_root.join("src/main.rs").exists());
 
         let log = Command::new("git")
             .args(["log", "--oneline", "-1"])
-            .current_dir(staged_view.snapshot_root())
+            .current_dir(&scope_root)
             .output()
             .unwrap();
         assert!(!log.status.success());
@@ -346,19 +342,19 @@ fn staged_worktree_view_excludes_local_hook_config_and_hook_file() {
 
     {
         let staged_view = StagedWorktreeView::apply(&root).unwrap();
+        let scope_root = staged_view
+            .materialize_scope(&empty_test_agent(), &full_scope())
+            .unwrap();
         let hooks_path = Command::new("git")
             .args(["config", "--local", "--get", "core.hooksPath"])
-            .current_dir(staged_view.snapshot_root())
+            .current_dir(&scope_root)
             .output()
             .unwrap();
         assert!(!hooks_path.status.success());
         assert!(String::from_utf8_lossy(&hooks_path.stdout)
             .trim()
             .is_empty());
-        assert!(!staged_view
-            .snapshot_root()
-            .join(PRE_COMMIT_HOOK_PATH)
-            .exists());
+        assert!(!scope_root.join(PRE_COMMIT_HOOK_PATH).exists());
     }
 
     let _ = fs::remove_dir_all(root);
@@ -439,11 +435,14 @@ fn staged_worktree_view_leaves_ignored_worktree_files_outside_snapshot() {
 
     {
         let staged_view = StagedWorktreeView::apply(&root).unwrap();
+        let scope_root = staged_view
+            .materialize_scope(&empty_test_agent(), &full_scope())
+            .unwrap();
         assert_eq!(
-            fs::read_to_string(staged_view.snapshot_root().join("README.md")).unwrap(),
+            fs::read_to_string(scope_root.join("README.md")).unwrap(),
             "staged\n"
         );
-        assert!(!staged_view.snapshot_root().join("ignored.txt").exists());
+        assert!(!scope_root.join("ignored.txt").exists());
     }
 
     assert_eq!(
@@ -474,8 +473,11 @@ fn staged_worktree_view_materializes_literal_pathspec_names_from_index() {
 
     {
         let staged_view = StagedWorktreeView::apply(&root).unwrap();
+        let scope_root = staged_view
+            .materialize_scope(&empty_test_agent(), &full_scope())
+            .unwrap();
         assert_eq!(
-            fs::read_to_string(staged_view.snapshot_root().join(special)).unwrap(),
+            fs::read_to_string(scope_root.join(special)).unwrap(),
             "staged\n"
         );
     }
@@ -507,7 +509,10 @@ fn staged_worktree_view_materializes_symlinks_as_regular_files() {
 
     {
         let staged_view = StagedWorktreeView::apply(&root).unwrap();
-        let snapshot_link = staged_view.snapshot_root().join("outside-link");
+        let scope_root = staged_view
+            .materialize_scope(&empty_test_agent(), &full_scope())
+            .unwrap();
+        let snapshot_link = scope_root.join("outside-link");
         let metadata = fs::symlink_metadata(&snapshot_link).unwrap();
         assert!(!metadata.file_type().is_symlink());
         assert!(metadata.file_type().is_file());
@@ -534,6 +539,16 @@ fn stash_count(root: &Path) -> usize {
     String::from_utf8(output.stdout).unwrap().lines().count()
 }
 
+fn empty_test_agent() -> AgentConfig {
+    AgentConfig {
+        models: Vec::new(),
+        thinking: "medium".to_string(),
+        instructions: None,
+        ignore: Vec::new(),
+        plugins: Vec::new(),
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn git_stdout_path_preserves_non_utf8_bytes() {
@@ -558,26 +573,31 @@ fn checkout_index_prefix_preserves_non_utf8_snapshot_path() {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 #[test]
-fn initialize_snapshot_git_repo_accepts_non_utf8_snapshot_path() {
-    use std::ffi::OsString;
-    use std::os::unix::ffi::OsStringExt;
-
-    let parent = TestDir::new("staged-snapshot-non-utf8-init");
-    let snapshot_root = parent
-        .path()
-        .join(OsString::from_vec(b"snapshot-\xff".to_vec()));
-    fs::create_dir(&snapshot_root).unwrap();
-
-    initialize_snapshot_git_repo_for_test(&snapshot_root).unwrap();
-
-    let ls_files = Command::new("git")
-        .args(["ls-files"])
-        .current_dir(&snapshot_root)
+fn staged_worktree_view_materializes_non_utf8_paths() {
+    let root = git_project("staged-snapshot-non-utf8-path");
+    let name = git_path_from_raw_bytes(b"nonutf8-\xff.txt").unwrap();
+    fs::write(root.join(&name), "staged\n").unwrap();
+    let output = Command::new("git")
+        .arg("add")
+        .arg("--")
+        .arg(&name)
+        .current_dir(&root)
         .output()
         .unwrap();
     assert!(
-        ls_files.status.success(),
+        output.status.success(),
         "{}",
-        String::from_utf8_lossy(&ls_files.stderr)
+        String::from_utf8_lossy(&output.stderr)
     );
+
+    let staged_view = StagedWorktreeView::apply(&root).unwrap();
+    let scope_root = staged_view
+        .materialize_scope(&empty_test_agent(), &full_scope())
+        .unwrap();
+
+    assert_eq!(
+        fs::read_to_string(scope_root.join(name)).unwrap(),
+        "staged\n"
+    );
+    let _ = fs::remove_dir_all(root);
 }

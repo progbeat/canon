@@ -6,10 +6,10 @@ pub(crate) fn full_scope() -> Vec<String> {
     vec![".".to_string()]
 }
 
-pub(crate) fn expectation_id(prompt: &str, expected: &str) -> String {
+pub(crate) fn expectation_id(prompt: &str) -> String {
     // Expectation IDs are the Cache spec's 20-character base62 IDs. The
     // base64url `hash_120` helper below is for other cache keys, not IDs.
-    expectation_id_base62_20(format!("q\0{}\0a\0{}", prompt, expected).as_bytes())
+    expectation_id_base62_20(prompt.as_bytes())
 }
 
 pub(crate) fn hash_key(key: &str) -> String {

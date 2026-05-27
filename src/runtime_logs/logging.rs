@@ -1,4 +1,4 @@
-use crate::check_types::{CheckRecord, ObservedAnswerState};
+use crate::check_types::CheckRecord;
 use crate::fs_util::ensure_dir_without_symlinks;
 use crate::logging_config::{
     active_log_file_name, diagnostic_log_files, diagnostic_logs_explicitly_disabled,
@@ -129,16 +129,7 @@ fn record_log_fields(record: &CheckRecord) -> Vec<(&'static str, Value)> {
 }
 
 fn record_requires_human_review(record: &CheckRecord) -> bool {
-    if record.error.is_some() {
-        return true;
-    }
-    record
-        .expected_text()
-        .map(|expected| {
-            ObservedAnswerState::from_expected_and_observed(expected, &record.observed)
-                .requires_human_review()
-        })
-        .unwrap_or(true)
+    record.review_error_text().is_some()
 }
 
 #[cfg(test)]

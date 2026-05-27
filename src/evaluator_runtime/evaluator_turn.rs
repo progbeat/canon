@@ -78,10 +78,10 @@ pub(crate) fn record_from_response(
     enforced_scope: Vec<String>,
     visible_tree_oid: String,
 ) -> Result<CheckRecord, String> {
-    let result = if response.error.is_none() && response.answer == expectation.a {
-        CheckResult::Pass
-    } else {
+    let result = if response.error.is_some() {
         CheckResult::Fail
+    } else {
+        CheckResult::from_expected_answer(&expectation.a, &response.answer)
     };
     let error = response.error.clone();
     let suggested_q_scope = response.q_scope_suggestion.clone();

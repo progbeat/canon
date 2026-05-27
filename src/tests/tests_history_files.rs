@@ -21,22 +21,24 @@ fn history_record_required_fields_are_written_first() {
     let record = sample_record(1, "pass");
     let line = render_check_log_record(&record).unwrap();
     let json: Value = serde_json::from_str(&line).unwrap();
-    assert_eq!(json["id"], expectation_id("Question?", "yes"));
+    assert_eq!(json["id"], expectation_id("Question?"));
     assert!(json.get("display_id").is_none());
     assert!(json.get("displayId").is_none());
     assert_eq!(json["prompt"], "Question?");
     assert_eq!(json["expected"], "yes");
+    assert_eq!(json["qScope"], json!(["."]));
+    assert!(json.get("scope").is_none());
     assert!(json.get("visibleTreeOid").is_some());
     assert!(json.get("scopeTreeOid").is_none());
     assert!(json.get("scopeHash").is_none());
 
     let expected_order = [
         "\"timestamp\"",
-        "\"result\"",
         "\"observed\"",
         "\"evidence\"",
-        "\"scope\"",
+        "\"qScope\"",
         "\"visibleTreeOid\"",
+        "\"result\"",
         "\"id\"",
         "\"prompt\"",
         "\"expected\"",
@@ -104,7 +106,7 @@ fn history_parser_accepts_required_prefix_records() {
         "result": "pass",
         "observed": "yes",
         "evidence": "cached answer",
-        "scope": ["."],
+        "qScope": ["."],
         "visibleTreeOid": "AAAAAAAAAAAAAAAAAAAA"
     }))
     .unwrap();
@@ -115,6 +117,23 @@ fn history_parser_accepts_required_prefix_records() {
     assert_eq!(record.expected, None);
     assert_eq!(record.observed, "yes");
     assert_eq!(record.visible_tree_oid, "AAAAAAAAAAAAAAAAAAAA");
+}
+
+#[test]
+fn history_parser_accepts_legacy_scope_records() {
+    let line = serde_json::to_string(&json!({
+        "timestamp": "1970-01-01T00:00:00Z",
+        "result": "pass",
+        "observed": "yes",
+        "evidence": "cached answer",
+        "scope": ["."],
+        "visibleTreeOid": "AAAAAAAAAAAAAAAAAAAA"
+    }))
+    .unwrap();
+
+    let record = parse_history_record_line(Path::new("history.jsonl"), 1, &line).unwrap();
+
+    assert_eq!(record.scope, full_scope());
 }
 
 #[test]

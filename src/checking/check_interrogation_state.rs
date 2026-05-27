@@ -4,9 +4,11 @@ use crate::evaluator_config::app_server_model_key;
 use crate::evaluator_response_cache::EvaluatorResponseParseCache;
 use crate::evaluator_turn::evaluator_models;
 use crate::hash::full_scope;
+use crate::scope::effective_ignore_patterns;
+use crate::staged_worktree::StagedWorktreeView;
 use crate::visible_tree_oid::VisibleTreeOidCache;
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(crate) fn should_retry_full_scope_after_restricted_insufficient_evidence(
     record: &CheckRecord,
@@ -17,9 +19,27 @@ pub(crate) fn should_retry_full_scope_after_restricted_insufficient_evidence(
             == ObservedAnswerState::InsufficientEvidence
 }
 
-pub(crate) fn evaluator_session_key(scope: &[String], model: Option<&str>) -> String {
+pub(crate) fn evaluator_session_key(
+    agent: &AgentConfig,
+    scope: &[String],
+    model: Option<&str>,
+) -> String {
     let mut key = String::new();
     key.push_str(model.unwrap_or("<default>"));
+    key.push('\0');
+    for plugin in &agent.plugins {
+        key.push_str(&plugin.len().to_string());
+        key.push('\0');
+        key.push_str(plugin);
+        key.push('\0');
+    }
+    key.push('\0');
+    for pattern in effective_ignore_patterns(agent) {
+        key.push_str(&pattern.len().to_string());
+        key.push('\0');
+        key.push_str(&pattern);
+        key.push('\0');
+    }
     key.push('\0');
     for path in scope {
         key.push_str(&path.len().to_string());
@@ -32,8 +52,55 @@ pub(crate) fn evaluator_session_key(scope: &[String], model: Option<&str>) -> St
 
 pub(crate) struct CheckRuntime<'a> {
     pub(crate) root: &'a Path,
-    pub(crate) snapshot_root: &'a Path,
     pub(crate) config: &'a CheckConfig,
+    session_roots: CheckSessionRoots<'a>,
+}
+
+enum CheckSessionRoots<'a> {
+    #[cfg(test)]
+    Fixed(&'a Path),
+    Materialized(&'a StagedWorktreeView),
+}
+
+impl<'a> CheckRuntime<'a> {
+    #[cfg(test)]
+    pub(crate) fn fixed(
+        root: &'a Path,
+        snapshot_root: &'a Path,
+        config: &'a CheckConfig,
+    ) -> CheckRuntime<'a> {
+        CheckRuntime {
+            root,
+            config,
+            session_roots: CheckSessionRoots::Fixed(snapshot_root),
+        }
+    }
+
+    pub(crate) fn materialized(
+        root: &'a Path,
+        staged_view: &'a StagedWorktreeView,
+        config: &'a CheckConfig,
+    ) -> CheckRuntime<'a> {
+        CheckRuntime {
+            root,
+            config,
+            session_roots: CheckSessionRoots::Materialized(staged_view),
+        }
+    }
+
+    pub(crate) fn session_root_for_scope(
+        &self,
+        agent: &AgentConfig,
+        scope: &[String],
+    ) -> Result<PathBuf, String> {
+        match self.session_roots {
+            #[cfg(test)]
+            CheckSessionRoots::Fixed(path) => Ok(path.to_path_buf()),
+            CheckSessionRoots::Materialized(staged_view) => {
+                staged_view.materialize_scope(agent, scope)
+            }
+        }
+    }
 }
 
 pub(crate) struct InterrogationState {

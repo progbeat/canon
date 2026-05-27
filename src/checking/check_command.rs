@@ -116,12 +116,6 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         &mut check_caches.visible_tree_oid,
     )
     .map_err(CommandError::from)?;
-    if let Err(err) = execution
-        .staged_view
-        .remove_evaluator_denied_paths(&config.agent)
-    {
-        return fail_check_after_start(&mut diagnostic_log, false, 1, err);
-    }
     let cache_dir = repo_cache
         .git_path(root, GIT_CANON_CACHE_DIR)
         .map_err(CommandError::from)?;
@@ -147,11 +141,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     // selected expectation; that helper renders the public human-readable
     // check-output record (`P. OK`, `P. FAILED`, or `P. ERROR`) and flushes it
     // before the next expectation starts.
-    let runtime = CheckRuntime {
-        root,
-        snapshot_root: execution.staged_view.snapshot_root(),
-        config: &config,
-    };
+    let runtime = CheckRuntime::materialized(root, &execution.staged_view, &config);
     // This expectation loop computes the final `CheckRunReport`. It writes and
     // flushes each per-expectation stdout record inside the loop; the public
     // trailer does not exist until the report and final token usage exist.
@@ -289,8 +279,9 @@ pub(crate) fn prepare_check_execution(
     errors_on_failure: usize,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<PreparedCheckExecution, String> {
-    // Materialize the staged Git snapshot outside the real working tree so
-    // evaluator sessions cannot observe unstaged or untracked project content.
+    // Prepare a scope materializer outside the real working tree so evaluator
+    // sessions cannot observe unstaged, untracked, or non-visible project
+    // content.
     let staged_view =
         match StagedWorktreeView::apply_with_visible_tree_oid_cache(root, visible_tree_oid_cache) {
             Ok(staged_view) => staged_view,
@@ -301,7 +292,7 @@ pub(crate) fn prepare_check_execution(
         };
     // The app-server starts from the real project root so Canon-owned runtime
     // state and model catalog config stay under that repository's `.git/canon`.
-    // Evaluator sessions get the staged snapshot as `thread/start.cwd` in
+    // Evaluator sessions get a materialized visible tree as `thread/start.cwd` in
     // `check_interrogation::start_thread_session`.
     let runner = LazyAppServerRunner::new(root, check_config_loads_plugins(config), &config.agent);
     Ok(PreparedCheckExecution {

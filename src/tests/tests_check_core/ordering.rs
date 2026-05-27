@@ -28,7 +28,7 @@ fn selected_expectations_run_latest_non_pass_first() {
         &config.agent,
         &second,
         "fail",
-        "no",
+        "yes",
         staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap(),
     );
     record.timestamp = "2026-01-01T00:00:00Z".to_string();
@@ -142,6 +142,51 @@ fn check_runner_skips_all_cached_passes_before_evaluation() {
     let log = fs::read_to_string(diagnostic_log.path()).unwrap();
     assert!(log.contains(&format!(r#""id":"{}""#, first.id)));
     assert!(log.contains(&format!(r#""id":"{}""#, second.id)));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_runner_orders_cached_failures_by_latest_non_pass_state() {
+    let root = git_project("check-order-cached-failures");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &[], true, false);
+    let first = options.selected[0].clone();
+    let second = options.selected[1].clone();
+    let current_visible_tree_oid =
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
+
+    let mut first_cached = expectation_record(
+        &config.agent,
+        &first,
+        "fail",
+        "no",
+        current_visible_tree_oid.clone(),
+    );
+    first_cached.timestamp = "2026-01-03T00:00:00Z".to_string();
+    append_history_record(&root, &first, &first_cached).unwrap();
+
+    let mut second_cached = expectation_record(
+        &config.agent,
+        &second,
+        "fail",
+        "yes",
+        current_visible_tree_oid,
+    );
+    second_cached.timestamp = "2026-01-01T00:00:00Z".to_string();
+    append_history_record(&root, &second, &second_cached).unwrap();
+
+    let mut second_latest = second_cached.clone();
+    second_latest.timestamp = "2026-01-04T00:00:00Z".to_string();
+    write_latest_non_pass_record(&root, &second, &second_latest).unwrap();
+    let mut runner = FakeRunner::new(&[]);
+
+    let report =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert_eq!(report.records.len(), 2);
+    assert_eq!(report.records[0].id, second.id);
+    assert_eq!(report.records[1].id, first.id);
+    assert_eq!(runner.starts, 0);
     let _ = fs::remove_dir_all(root);
 }
 

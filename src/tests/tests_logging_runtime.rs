@@ -17,7 +17,7 @@ fn diagnostic_log_is_written_to_numeric_active_file_and_flushed() {
     assert_eq!(lines.len(), 1);
     let json: Value = serde_json::from_str(lines[0]).unwrap();
     assert_eq!(json["result"], "pass");
-    assert_eq!(json["id"], expectation_id("Question?", "yes"));
+    assert_eq!(json["id"], expectation_id("Question?"));
     assert!(json.get("display_id").is_none());
     assert!(json.get("displayId").is_none());
     assert!(json.get("number").is_none());

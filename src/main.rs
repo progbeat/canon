@@ -170,12 +170,8 @@ mod repo_inspection;
 mod scope;
 #[path = "staged_snapshot/staged_worktree.rs"]
 mod staged_worktree;
-#[path = "staged_snapshot/staged_worktree_git.rs"]
-mod staged_worktree_git;
 #[path = "staged_snapshot/staged_worktree_paths.rs"]
 mod staged_worktree_paths;
-#[path = "staged_snapshot/staged_worktree_validate.rs"]
-mod staged_worktree_validate;
 mod time;
 mod token_usage_types;
 #[path = "git_runtime/visible_tree_oid.rs"]

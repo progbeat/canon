@@ -25,16 +25,17 @@ pub(crate) fn render_runtime_log_event(
 }
 
 pub(crate) fn render_check_log_record(record: &CheckRecord) -> DiagnosticLogResult<String> {
-    // History records intentionally start with the cache.md required field
-    // prefix. Extra persisted metadata follows it; expectation references use
-    // the resolved full ID, never the display/selector prefix.
+    // History records intentionally start with the Cache spec's required
+    // answer-history fields. Extra persisted metadata follows that prefix;
+    // expectation references use the resolved full ID, never the
+    // display/selector prefix.
     let history = HistoryLogRecord {
         timestamp: &record.timestamp,
-        result: record.result,
         observed: &record.observed,
         evidence: &record.evidence,
-        scope: &record.scope,
+        q_scope: &record.scope,
         visible_tree_oid: &record.visible_tree_oid,
+        result: record.result,
         id: &record.id,
         prompt: record.prompt_text(),
         expected: record.expected_text(),
@@ -247,12 +248,13 @@ impl Serialize for RuntimeLogEvent<'_> {
 #[derive(Serialize)]
 struct HistoryLogRecord<'a> {
     timestamp: &'a str,
-    result: CheckResult,
     observed: &'a str,
     evidence: &'a str,
-    scope: &'a [String],
+    #[serde(rename = "qScope")]
+    q_scope: &'a [String],
     #[serde(rename = "visibleTreeOid")]
     visible_tree_oid: &'a str,
+    result: CheckResult,
     id: &'a str,
     #[serde(skip_serializing_if = "str::is_empty")]
     prompt: &'a str,

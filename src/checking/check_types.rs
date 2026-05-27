@@ -139,6 +139,14 @@ impl CheckResult {
             CheckResult::Fail => RESULT_FAIL,
         }
     }
+
+    pub(crate) fn from_expected_answer(expected: &str, observed: &str) -> CheckResult {
+        if observed == expected {
+            CheckResult::Pass
+        } else {
+            CheckResult::Fail
+        }
+    }
 }
 
 impl std::fmt::Display for CheckResult {
@@ -169,6 +177,7 @@ pub(crate) struct CheckRecord {
     #[serde(default)]
     pub(crate) error: Option<String>,
     pub(crate) evidence: String,
+    #[serde(rename = "qScope", alias = "scope")]
     pub(crate) scope: Vec<String>,
     #[serde(default, rename = "suggestedQScope")]
     pub(crate) suggested_q_scope: Option<Vec<String>>,
@@ -195,6 +204,20 @@ pub(crate) struct CheckRecordOutcome {
 impl CheckRecord {
     pub(crate) fn passed(&self) -> bool {
         self.result == CheckResult::Pass
+    }
+
+    pub(crate) fn review_error_text(&self) -> Option<&str> {
+        if let Some(error) = self.error.as_deref() {
+            return Some(error);
+        }
+        let expected = self.expected_text()?;
+        if ObservedAnswerState::from_expected_and_observed(expected, &self.observed)
+            .requires_human_review()
+        {
+            Some(&self.observed)
+        } else {
+            None
+        }
     }
 
     pub(crate) fn current_from_expectation(
