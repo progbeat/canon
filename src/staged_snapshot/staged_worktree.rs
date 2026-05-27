@@ -1,7 +1,7 @@
 use crate::config_types::AgentConfig;
 use crate::git::{read_git_blobs, staged_tracked_files, StagedTrackedFile};
 use crate::hash::full_scope;
-use crate::platform::os_string_from_bytes;
+use crate::platform;
 use crate::scope::{effective_ignore_patterns, path_matches_pattern_bytes, sanitize_scope};
 use crate::staged_worktree_paths::create_snapshot_root;
 #[cfg(test)]
@@ -275,11 +275,11 @@ fn write_materialized_file(
     // Git mode 120000 stores symlink targets as blob bytes. The lazy
     // materialization policy intentionally writes those bytes as a regular
     // file so evaluator reads cannot follow links outside the staged tree.
-    set_materialized_file_permissions(&target, &file.mode)
+    platform::set_materialized_file_permissions(&target, &file.mode)
 }
 
 fn relative_path_from_git_path(path: &[u8]) -> Result<PathBuf, String> {
-    let path = PathBuf::from(os_string_from_bytes(path.to_vec())?);
+    let path = PathBuf::from(platform::os_string_from_bytes(path.to_vec())?);
     if path.is_absolute() {
         return Err(format!(
             "staged file path must be relative: {}",
@@ -296,26 +296,4 @@ fn relative_path_from_git_path(path: &[u8]) -> Result<PathBuf, String> {
         ));
     }
     Ok(path)
-}
-
-fn set_materialized_file_permissions(path: &Path, mode: &str) -> Result<(), String> {
-    set_materialized_file_permissions_impl(path, mode)
-}
-
-#[cfg(unix)]
-fn set_materialized_file_permissions_impl(path: &Path, mode: &str) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let unix_mode = if mode == "100755" { 0o755 } else { 0o644 };
-    let mut permissions = fs::metadata(path)
-        .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?
-        .permissions();
-    permissions.set_mode(unix_mode);
-    fs::set_permissions(path, permissions)
-        .map_err(|err| format!("failed to chmod {}: {}", path.display(), err))
-}
-
-#[cfg(not(unix))]
-fn set_materialized_file_permissions_impl(_path: &Path, _mode: &str) -> Result<(), String> {
-    Ok(())
 }

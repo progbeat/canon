@@ -146,6 +146,16 @@ pub(crate) fn make_hook_executable(path: &Path) -> Result<(), String> {
         .map_err(|err| format!("failed to chmod {}: {}", path.display(), err))
 }
 
+pub(crate) fn set_materialized_file_permissions(path: &Path, mode: &str) -> Result<(), String> {
+    let unix_mode = if mode == "100755" { 0o755 } else { 0o644 };
+    let mut permissions = fs::metadata(path)
+        .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?
+        .permissions();
+    permissions.set_mode(unix_mode);
+    fs::set_permissions(path, permissions)
+        .map_err(|err| format!("failed to chmod {}: {}", path.display(), err))
+}
+
 pub(crate) fn add_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
     add_linux_staged_snapshot_parent(parents);
 }

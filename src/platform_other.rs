@@ -32,6 +32,10 @@ pub(crate) fn make_hook_executable(_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+pub(crate) fn set_materialized_file_permissions(_path: &Path, _mode: &str) -> Result<(), String> {
+    Ok(())
+}
+
 pub(crate) fn add_staged_snapshot_parent_candidates(_parents: &mut Vec<PathBuf>) {}
 
 pub(crate) fn path_from_git_bytes(bytes: Vec<u8>) -> PathBuf {

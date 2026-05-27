@@ -45,6 +45,10 @@ pub(crate) fn make_hook_executable(path: &Path) -> Result<(), String> {
     imp::make_hook_executable(path)
 }
 
+pub(crate) fn set_materialized_file_permissions(path: &Path, mode: &str) -> Result<(), String> {
+    imp::set_materialized_file_permissions(path, mode)
+}
+
 pub(crate) fn staged_snapshot_parent_candidates() -> Vec<PathBuf> {
     let mut parents = Vec::new();
     imp::add_staged_snapshot_parent_candidates(&mut parents);
