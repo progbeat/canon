@@ -9,7 +9,7 @@ use crate::app_server_protocol::{
     turn_started_id, turn_text,
 };
 use crate::app_server_runner::turn_start_request;
-use crate::app_server_transport::{
+use crate::app_server_usage::{
     carryover_tokens, record_context_compaction_event, record_token_usage_update,
     thread_reuse_policy_should_retire,
 };

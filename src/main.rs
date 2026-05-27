@@ -38,6 +38,8 @@ pub(crate) struct DiagnosticLogConfig {
 
 #[path = "app/app_server.rs"]
 mod app_server;
+#[path = "app/app_server_io.rs"]
+mod app_server_io;
 #[path = "app/app_server_process.rs"]
 mod app_server_process;
 #[path = "app/app_server_protocol.rs"]
@@ -46,6 +48,8 @@ mod app_server_protocol;
 mod app_server_runner;
 #[path = "app/app_server_transport.rs"]
 mod app_server_transport;
+#[path = "app/app_server_usage.rs"]
+mod app_server_usage;
 #[path = "checking/check.rs"]
 mod check;
 #[path = "checking/check_cache.rs"]
