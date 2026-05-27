@@ -105,6 +105,32 @@ fn concurrent_appends_keep_note_log_records_materializable() {
 }
 
 #[test]
+fn failed_append_rollback_removes_partial_note_log_record() {
+    with_env("append-log-rollback", |_| {
+        let config = Config::from_env().unwrap();
+        write_note(&config, "src/main.rs", "body").unwrap();
+        append_note(&config, "src/main.rs", "kept").unwrap();
+        let note = note_for_key(&config, "src/main.rs").unwrap();
+        let previous_size = fs::metadata(&note.path).unwrap().len();
+        let partial = b"\n<!-- canon log v1 -->\n{\"op\":\"append\"";
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(&note.path)
+            .unwrap();
+        file.write_all(partial).unwrap();
+        file.flush().unwrap();
+
+        rollback_note_log_append_for_test(&note.path, previous_size).unwrap();
+
+        let raw = fs::read_to_string(&note.path).unwrap();
+        assert_eq!(raw.len() as u64, previous_size);
+        let content = materialize_note_content(&note, &raw).unwrap();
+        assert!(content.contains("kept"));
+        assert!(!content.contains(r#"{"op":"append""#));
+    });
+}
+
+#[test]
 fn append_compacts_note_log_after_threshold() {
     with_env("append-log-compact", |_| {
         let config = Config::from_env().unwrap();

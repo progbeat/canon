@@ -151,10 +151,39 @@ fn append_note_log_record(path: &Path, record: &NoteRecord) -> Result<u64, Strin
     entry.push_str(NOTE_LOG_MARKER);
     entry.push('\n');
     entry.push_str(&line);
-    file.write_all(entry.as_bytes())
-        .and_then(|()| file.flush())
-        .map_err(|err| format!("failed to append {}: {}", path.display(), err))?;
+    if let Err(err) = file.write_all(entry.as_bytes()).and_then(|()| file.flush()) {
+        return Err(error_with_restore_context(
+            format!("failed to append {}: {}", path.display(), err),
+            rollback_note_log_append(path, &mut file, previous_size),
+        ));
+    }
     Ok(previous_size)
+}
+
+fn rollback_note_log_append(
+    path: &Path,
+    file: &mut fs::File,
+    previous_size: u64,
+) -> Result<(), String> {
+    file.set_len(previous_size)
+        .and_then(|()| file.flush())
+        .map_err(|err| {
+            format!(
+                "failed to roll back {} to {} bytes after append failure: {}",
+                path.display(),
+                previous_size,
+                err
+            )
+        })
+}
+
+#[cfg(test)]
+pub(crate) fn rollback_note_log_append_for_test(
+    path: &Path,
+    previous_size: u64,
+) -> Result<(), String> {
+    let mut file = open_file_for_append_without_following_symlink(path)?;
+    rollback_note_log_append(path, &mut file, previous_size)
 }
 
 fn write_compacted_note_record(note: &Note, record: NoteRecord) -> Result<(), String> {
@@ -502,7 +531,14 @@ fn lock_note(note: &Note) -> Result<NoteLock, String> {
 }
 
 fn note_lock_is_stale(path: &Path) -> Result<bool, String> {
-    reject_symlink(path)?;
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(format!("refusing to use symlink {}", path.display()));
+        }
+        Ok(_) => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(format!("failed to inspect {}: {}", path.display(), err)),
+    }
     let metadata = fs::metadata(path)
         .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
     let modified = metadata

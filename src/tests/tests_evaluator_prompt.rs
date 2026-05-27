@@ -95,6 +95,7 @@ expectations:
     assert!(instructions.contains("Response format:"));
     assert!(instructions.contains("Prefer `rg` and `rg --files`"));
     assert!(instructions.contains("project-relative refs enclosed in backticks"));
+    assert!(instructions.contains("For self-contained questions"));
     assert!(instructions.contains("Do not cite proxy evidence"));
     assert!(instructions.contains("qScopeSuggestion"));
     assert!(instructions.contains("Enforced scope: [\".\"]"));
