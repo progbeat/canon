@@ -26,7 +26,6 @@ A generator item contains `path`, `q_template`, and `a`:
   a: "yes"
 ```
 
-Expectation items may include other fields not described here.
+For every matched file, `q_template` is rendered by substituting `{{content}}` with the UTF-8 file contents to produce the generated expectation question.
 
-For every matched spec file, `q_template` is rendered by substituting `{{content}}`
-with the UTF-8 file contents to produce the generated expectation question.
+Expectation items may include other fields not described here.
