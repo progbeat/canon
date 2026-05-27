@@ -17,7 +17,7 @@ An evaluator response must be a single JSON object matching this JSON Schema:
     },
     "error": {
       "type": "string",
-      "enum": ["idk", "malformed", "unparsable"]
+      "enum": ["insufficient-evidence", "invalid-question", "unparsable"]
     },
     "evidence": {
       "type": "string"
@@ -45,7 +45,7 @@ An unparsable evaluator response is invalid JSON or does not match the evaluator
 
 A fresh interrogation uses the stored q-scope for that expectation, or full project scope if no q-scope is stored.
 
-When an interrogation that does not use full project scope returns `error: "idk"`, `canon check` retries with full project scope. The restricted `idk` is not final.
+When an interrogation that does not use full project scope returns `error: "insufficient-evidence"`, `canon check` retries with full project scope. The restricted `insufficient-evidence` is not final.
 
 When the final evaluator response has `error`, human review is required.
 
