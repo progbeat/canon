@@ -17,7 +17,7 @@ An evaluator response must be a single JSON object matching this JSON Schema:
     },
     "error": {
       "type": "string",
-      "enum": ["idk", "malformed"]
+      "enum": ["idk", "malformed", "unparsable"]
     },
     "evidence": {
       "type": "string"
@@ -41,15 +41,13 @@ An evaluator response must be a single JSON object matching this JSON Schema:
 }
 ```
 
-An **unparseable** evaluator response is invalid JSON or does not match the evaluator response schema. The contents of schema-valid fields do not make a response unparseable.
+An unparsable evaluator response is invalid JSON or does not match the evaluator response schema. The contents of schema-valid fields do not make a response unparsable. `canon check` treats an unparsable evaluator response as `{"error":"unparsable","evidence":"<parse-error>"}`.
 
 A fresh interrogation uses the stored q-scope for that expectation, or full project scope if no q-scope is stored.
 
-When an interrogation returns `error: "idk"`, `canon check` retries with full project scope and does not treat the restricted `idk` as final when evidence from full project scope can answer.
+When an interrogation that does not use full project scope returns `error: "idk"`, `canon check` retries with full project scope. The restricted `idk` is not final.
 
-When an interrogation using full project scope returns `error: "idk"`, human review is required.
-
-When the response has `error`, human review is required.
+When the final evaluator response has `error`, human review is required.
 
 If the evaluator returns an answer and a `qScopeSuggestion`, `canon check` verifies the suggestion with an independent interrogation only when the visible tree induced by that suggestion contains at least 25% fewer files than the current visible tree.
 The narrowed scope is accepted and stored only when the verification interrogation produces a valid response with an `answer` field.

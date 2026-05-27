@@ -12,7 +12,7 @@
 It may or may not be a valid q-scope.
 
 **visible scope** is the scope applied to a Git-tracked tree for an evaluator interrogation.
-It is formed from the latest q-scope for the expectation, or full project scope when no verified q-scope exists, with configured ignore patterns added as excluding pathspecs applied last.
+It is formed from the latest q-scope for the expectation, or full project scope when no verified q-scope exists. Configured ignore patterns are normalized as project-relative pathspec items, converted to excluding pathspec items, and applied last.
 
 **visible tree** is the scoped tree induced by the visible scope.
 
