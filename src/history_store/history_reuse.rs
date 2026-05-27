@@ -106,6 +106,32 @@ pub(crate) fn cooldown_history_record(
     Ok(record.map(|record| record_with_current_expectation(record, expectation)))
 }
 
+pub(crate) enum CachedHistoryRecord {
+    SameTree(CheckRecord),
+    Cooldown(CheckRecord),
+}
+
+pub(crate) fn newer_cached_history_record(
+    same_tree: Option<CheckRecord>,
+    cooldown: Option<CheckRecord>,
+) -> Option<CachedHistoryRecord> {
+    // Cached Result combines the same-tree and cooldown candidates by record
+    // timestamp. The newer candidate wins; equal or unparsable timestamps keep
+    // the same-tree result deterministic.
+    match (same_tree, cooldown) {
+        (Some(same_tree), Some(cooldown)) => {
+            if record_timestamp_sort_key(&cooldown) > record_timestamp_sort_key(&same_tree) {
+                Some(CachedHistoryRecord::Cooldown(cooldown))
+            } else {
+                Some(CachedHistoryRecord::SameTree(same_tree))
+            }
+        }
+        (Some(record), None) => Some(CachedHistoryRecord::SameTree(record)),
+        (None, Some(record)) => Some(CachedHistoryRecord::Cooldown(record)),
+        (None, None) => None,
+    }
+}
+
 pub(crate) fn latest_history_scope_with_cache(
     root: &Path,
     _agent: &AgentConfig,
@@ -190,4 +216,8 @@ fn current_result_for_history_record(
     expectation: &SelectedExpectation,
 ) -> CheckResult {
     CheckResult::from_expected_answer(&expectation.a, &record.observed)
+}
+
+fn record_timestamp_sort_key(record: &CheckRecord) -> u64 {
+    parse_record_timestamp(&record.timestamp).unwrap_or(0)
 }

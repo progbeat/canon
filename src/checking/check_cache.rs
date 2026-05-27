@@ -1,9 +1,11 @@
 use crate::check_types::{CheckRecord, SelectedExpectation};
 use crate::config_types::AgentConfig;
 use crate::history::HistoryCache;
-use crate::history_reuse::{cooldown_history_record, same_tree_history_record_with_cache};
+use crate::history_reuse::{
+    cooldown_history_record, newer_cached_history_record, same_tree_history_record_with_cache,
+    CachedHistoryRecord,
+};
 use crate::logging::DiagnosticLogWriter;
-use crate::time::parse_record_timestamp;
 use crate::visible_tree_oid::VisibleTreeOidCache;
 use serde_json::json;
 use std::path::Path;
@@ -41,47 +43,26 @@ pub(crate) fn cached_result_for_expectation(
             history_cache,
             visible_tree_oid_cache,
         )?
-        .map(|record| CheckCacheHit {
-            record,
-            kind: CachedResultKind::SameTree,
-        })
     } else {
         None
     };
     let cooldown = if lookup.include_cooldown {
-        cooldown_history_record(root, agent, expectation, history_cache, lookup.now)?.map(
-            |record| CheckCacheHit {
-                record,
-                kind: CachedResultKind::Cooldown,
-            },
-        )
+        cooldown_history_record(root, agent, expectation, history_cache, lookup.now)?
     } else {
         None
     };
-    Ok(newer_cache_hit(same_tree, cooldown))
-}
-
-fn newer_cache_hit(
-    same_tree: Option<CheckCacheHit>,
-    cooldown: Option<CheckCacheHit>,
-) -> Option<CheckCacheHit> {
-    match (same_tree, cooldown) {
-        (Some(same_tree), Some(cooldown)) => {
-            if record_timestamp_sort_key(&cooldown.record)
-                > record_timestamp_sort_key(&same_tree.record)
-            {
-                Some(cooldown)
-            } else {
-                Some(same_tree)
-            }
-        }
-        (Some(hit), None) | (None, Some(hit)) => Some(hit),
-        (None, None) => None,
-    }
-}
-
-fn record_timestamp_sort_key(record: &CheckRecord) -> u64 {
-    parse_record_timestamp(&record.timestamp).unwrap_or(0)
+    Ok(
+        newer_cached_history_record(same_tree, cooldown).map(|hit| match hit {
+            CachedHistoryRecord::SameTree(record) => CheckCacheHit {
+                record,
+                kind: CachedResultKind::SameTree,
+            },
+            CachedHistoryRecord::Cooldown(record) => CheckCacheHit {
+                record,
+                kind: CachedResultKind::Cooldown,
+            },
+        }),
+    )
 }
 
 pub(crate) fn write_cache_hit(

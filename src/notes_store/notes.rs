@@ -16,14 +16,11 @@ use crate::time::unix_timestamp;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
-use std::thread;
-use std::time::Duration;
+use std::path::Path;
+#[cfg(not(unix))]
+use std::path::PathBuf;
 
 const NOTE_LOG_MARKER: &str = "<!-- canon log v1 -->";
-const NOTE_LOCK_STALE_AFTER_SECS: u64 = 300;
-const NOTE_LOCK_WAIT_RETRIES: usize = 200;
-const NOTE_LOCK_WAIT_SLEEP: Duration = Duration::from_millis(10);
 pub(crate) const NOTE_LOG_COMPACT_MIN_BYTES: u64 = 64 * 1024;
 
 #[derive(Deserialize, Serialize)]
@@ -492,10 +489,18 @@ pub(crate) fn delete_note(config: &Config, key: &str) -> Result<(), String> {
 
 // Note compaction replaces the note file, so same-note mutations use a sidecar
 // lock that stays stable across append-log writes, compaction, and delete.
+#[cfg(unix)]
 struct NoteLock {
+    _file: fs::File,
+}
+
+#[cfg(not(unix))]
+struct NoteLock {
+    _file: fs::File,
     path: PathBuf,
 }
 
+#[cfg(not(unix))]
 impl Drop for NoteLock {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
@@ -504,61 +509,48 @@ impl Drop for NoteLock {
 
 fn lock_note(note: &Note) -> Result<NoteLock, String> {
     let path = note.path.with_extension("md.lock");
-    for attempt in 0..=NOTE_LOCK_WAIT_RETRIES {
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-        {
-            Ok(_) => return Ok(NoteLock { path }),
-            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-                if note_lock_is_stale(&path)? {
-                    remove_note_lock(&path)?;
-                    continue;
-                }
-                if attempt == NOTE_LOCK_WAIT_RETRIES {
-                    return Err(format!(
-                        "failed to lock {}: lock is already held",
-                        path.display()
-                    ));
-                }
-                thread::sleep(NOTE_LOCK_WAIT_SLEEP);
-            }
-            Err(err) => return Err(format!("failed to lock {}: {}", path.display(), err)),
-        }
-    }
-    Err(format!("failed to lock {}", path.display()))
+    lock_note_at_path(&path)
 }
 
-fn note_lock_is_stale(path: &Path) -> Result<bool, String> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            return Err(format!("refusing to use symlink {}", path.display()));
-        }
-        Ok(_) => {}
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
-        Err(err) => return Err(format!("failed to inspect {}: {}", path.display(), err)),
-    }
-    let metadata = fs::metadata(path)
-        .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
-    let modified = metadata
-        .modified()
-        .map_err(|err| format!("failed to inspect mtime for {}: {}", path.display(), err))?;
-    let age = modified
-        .elapsed()
-        .map_err(|err| format!("failed to inspect age for {}: {}", path.display(), err))?;
-    Ok(age >= Duration::from_secs(NOTE_LOCK_STALE_AFTER_SECS))
+#[cfg(unix)]
+fn lock_note_at_path(path: &Path) -> Result<NoteLock, String> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true);
+    use std::os::unix::fs::OpenOptionsExt;
+    options.custom_flags(libc::O_NOFOLLOW);
+    let file = options
+        .open(&path)
+        .map_err(|err| format!("failed to open lock {}: {}", path.display(), err))?;
+    lock_note_file(&file, &path)?;
+    Ok(NoteLock { _file: file })
 }
 
-fn remove_note_lock(path: &Path) -> Result<(), String> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(format!(
-            "failed to remove stale lock {}: {}",
-            path.display(),
-            err
-        )),
+#[cfg(not(unix))]
+fn lock_note_at_path(path: &Path) -> Result<NoteLock, String> {
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|err| format!("failed to lock {}: {}", path.display(), err))?;
+    Ok(NoteLock {
+        _file: file,
+        path: path.to_path_buf(),
+    })
+}
+
+#[cfg(unix)]
+fn lock_note_file(file: &fs::File, path: &Path) -> Result<(), String> {
+    use std::os::fd::AsRawFd;
+    loop {
+        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        if result == 0 {
+            return Ok(());
+        }
+        let err = io::Error::last_os_error();
+        if err.kind() == io::ErrorKind::Interrupted {
+            continue;
+        }
+        return Err(format!("failed to lock {}: {}", path.display(), err));
     }
 }
 
