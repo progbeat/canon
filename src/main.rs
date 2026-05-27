@@ -6,9 +6,9 @@ const CHECK_PATH: &str = ".canon/check.yml";
 // `CANON_STATE_DIR = git rev-parse --git-path canon`.
 const CANON_STATE_DIR_GIT_PATH: &str = "canon";
 // `${CANON_STATE_DIR}/cache`, resolved through `git rev-parse --git-path`.
-const GIT_CANON_CACHE_DIR: &str = "canon/cache";
+const CANON_CACHE_DIR_GIT_PATH: &str = "canon/cache";
 // `${CANON_STATE_DIR}/logs`, resolved through `git rev-parse --git-path`.
-const GIT_CANON_LOG_DIR: &str = "canon/logs";
+const CANON_LOG_DIR_GIT_PATH: &str = "canon/logs";
 const DEFAULT_DIAGNOSTIC_LOG_FILES: [&str; 8] = [
     "0.jsonl", "1.jsonl", "2.jsonl", "3.jsonl", "4.jsonl", "5.jsonl", "6.jsonl", "7.jsonl",
 ];

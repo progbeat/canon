@@ -9,7 +9,7 @@ fn history_path_uses_expectation_id_directory() {
     assert_eq!(
         history_path(&root, &expectation).unwrap(),
         root.join(".git")
-            .join(GIT_CANON_CACHE_DIR)
+            .join(CANON_CACHE_DIR_GIT_PATH)
             .join(&expectation.id)
             .join(history_file_name())
     );

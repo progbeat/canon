@@ -1,7 +1,7 @@
 use crate::check_types::{CheckRecord, SelectedExpectation};
 use crate::fs_util::for_each_nonempty_line;
 use crate::git::resolve_git_path;
-use crate::GIT_CANON_CACHE_DIR;
+use crate::CANON_CACHE_DIR_GIT_PATH;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -10,7 +10,7 @@ pub(crate) fn history_path(
     root: &Path,
     expectation: &SelectedExpectation,
 ) -> Result<PathBuf, String> {
-    Ok(resolve_git_path(root, GIT_CANON_CACHE_DIR)?
+    Ok(resolve_git_path(root, CANON_CACHE_DIR_GIT_PATH)?
         .join(&expectation.id)
         .join(history_file_name()))
 }
@@ -109,7 +109,7 @@ impl HistoryCache {
         if let Some(path) = self.cache_dirs.get(&key) {
             return Ok(path.clone());
         }
-        let path = resolve_git_path(root, GIT_CANON_CACHE_DIR)?;
+        let path = resolve_git_path(root, CANON_CACHE_DIR_GIT_PATH)?;
         self.cache_dirs.insert(key, path.clone());
         Ok(path)
     }

@@ -1,4 +1,4 @@
-use crate::git_config::{git_config_get, git_config_get_or_default, GitConfigGetError};
+use crate::git_config::{git_config_get, git_config_get_or_else, GitConfigGetError};
 use crate::logging_error::{external_log_error, DiagnosticLogError, DiagnosticLogResult};
 use crate::{DiagnosticLogConfig, DEFAULT_DIAGNOSTIC_LOG_CONFIG};
 use std::path::Path;
@@ -127,10 +127,10 @@ pub(crate) fn thread_reuse_config(root: &Path) -> Result<ThreadReuseConfig, Stri
 }
 
 fn configured_carryover_token_target(root: &Path) -> Result<CarryoverTokenTarget, String> {
-    git_config_get_or_default(
+    git_config_get_or_else(
         root,
         THREAD_REUSE_CARRYOVER_TOKEN_TARGET_CONFIG_KEY,
-        DEFAULT_THREAD_REUSE_CONFIG.carryover_token_target,
+        || DEFAULT_THREAD_REUSE_CONFIG.carryover_token_target,
         parse_carryover_token_target,
         thread_reuse_git_config_error,
     )

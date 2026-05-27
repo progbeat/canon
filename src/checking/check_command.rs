@@ -20,7 +20,7 @@ use crate::platform::{install_check_signal_handlers, reset_check_interrupted};
 use crate::repo_inspection::RepoInspectionCache;
 use crate::staged_worktree::StagedWorktreeView;
 use crate::visible_tree_oid::VisibleTreeOidCache;
-use crate::GIT_CANON_CACHE_DIR;
+use crate::CANON_CACHE_DIR_GIT_PATH;
 use serde_json::json;
 use std::ffi::OsString;
 use std::io::{self, Write};
@@ -117,7 +117,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     )
     .map_err(CommandError::from)?;
     let cache_dir = repo_cache
-        .git_path(root, GIT_CANON_CACHE_DIR)
+        .git_path(root, CANON_CACHE_DIR_GIT_PATH)
         .map_err(CommandError::from)?;
     let active_ids = active_expectation_ids_from_identities(&identities);
     let cleanup = match cleanup_stale_cache_dirs(&cache_dir, &active_ids) {

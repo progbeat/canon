@@ -11,7 +11,7 @@ use crate::logging_rotation::{
     rotate_diagnostic_logs_with_config,
 };
 use crate::repo_inspection::RepoInspectionCache;
-use crate::{DiagnosticLogConfig, GIT_CANON_LOG_DIR};
+use crate::{DiagnosticLogConfig, CANON_LOG_DIR_GIT_PATH};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
@@ -162,11 +162,11 @@ fn prepare_diagnostic_log(
     cache: &mut RepoInspectionCache,
 ) -> DiagnosticLogResult<PreparedDiagnosticLog> {
     let config = diagnostic_log_config(root)?;
-    // GIT_CANON_LOG_DIR is `${CANON_STATE_DIR}/logs`; `git_path` resolves it
+    // CANON_LOG_DIR_GIT_PATH is `${CANON_STATE_DIR}/logs`; `git_path` resolves it
     // with `git rev-parse --git-path` so worktrees and nonstandard git-dir
     // layouts keep logs under Canon's git-owned state directory.
     let log_dir = cache
-        .git_path(root, GIT_CANON_LOG_DIR)
+        .git_path(root, CANON_LOG_DIR_GIT_PATH)
         .map_err(|message| external_log_error("resolve diagnostic log directory", message))?;
     if !diagnostic_logs_explicitly_disabled(&config) {
         ensure_dir_without_symlinks(&log_dir)

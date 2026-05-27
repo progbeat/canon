@@ -31,6 +31,9 @@ pub(crate) fn git_config_get(root: &Path, key: &str) -> Result<Option<String>, G
                 message,
             }
         })?;
+    if output.status.success() {
+        return Ok(Some(stdout.to_string()));
+    }
     let stderr =
         command_output_trimmed(&output.stderr, "git config stderr").map_err(|message| {
             GitConfigGetError::InvalidOutput {
@@ -38,9 +41,6 @@ pub(crate) fn git_config_get(root: &Path, key: &str) -> Result<Option<String>, G
                 message,
             }
         })?;
-    if output.status.success() {
-        return Ok(Some(stdout.to_string()));
-    }
     if stdout.is_empty() && stderr.is_empty() {
         return Ok(None);
     }
@@ -50,15 +50,15 @@ pub(crate) fn git_config_get(root: &Path, key: &str) -> Result<Option<String>, G
     })
 }
 
-pub(crate) fn git_config_get_or_default<T, E>(
+pub(crate) fn git_config_get_or_else<T, E>(
     root: &Path,
     key: &str,
-    default: T,
+    default: impl FnOnce() -> T,
     parse: impl FnOnce(&str) -> Result<T, E>,
     map_error: impl FnOnce(GitConfigGetError) -> E,
 ) -> Result<T, E> {
     match git_config_get(root, key).map_err(map_error)? {
         Some(value) => parse(&value),
-        None => Ok(default),
+        None => Ok(default()),
     }
 }
