@@ -51,11 +51,8 @@ When an interrogation using full project scope returns `error: "idk"`, human rev
 
 When the response has `error`, human review is required.
 
-If the evaluator returns an answer and a `qScopeSuggestion`, `canon check`
-verifies the suggestion with an independent interrogation only when the visible
-tree induced by that suggestion contains at least 25% fewer files than the
-current visible tree.
-The narrowed scope is accepted and stored only when the observed answer is unchanged or incorrect.
+If the evaluator returns an answer and a `qScopeSuggestion`, `canon check` verifies the suggestion with an independent interrogation only when the visible tree induced by that suggestion contains at least 25% fewer files than the current visible tree.
+The narrowed scope is accepted and stored only when the verification interrogation produces a valid response with an `answer` field.
 
 If the evaluator returns an invalid `qScopeSuggestion`, `canon check` does not attempt narrowing from it.
 

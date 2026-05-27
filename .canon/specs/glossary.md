@@ -8,12 +8,14 @@
 
 **q-scope** (**question scope**) is a scope complete for a question: if files outside the q-scope change while files inside it stay the same, the correct answer to the question should not change.
 
-**q-scope suggestion** is an evaluator-provided scope claiming to be a narrow scope sufficient to answer the question. It may or may not be a valid q-scope.
+**q-scope suggestion** is an evaluator-provided scope claiming to be a narrow scope sufficient to answer the question.
+It may or may not be a valid q-scope.
 
-**visible scope** is the scope applied to a Git-tracked tree for an evaluator interrogation. It is formed from the latest q-scope for the expectation, or full project scope when no verified q-scope exists, with configured ignore patterns added as excluding pathspecs applied last.
+**visible scope** is the scope applied to a Git-tracked tree for an evaluator interrogation.
+It is formed from the latest q-scope for the expectation, or full project scope when no verified q-scope exists, with configured ignore patterns added as excluding pathspecs applied last.
 
 **visible tree** is the scoped tree induced by the visible scope.
 
-**evidence** is evaluator-provided text that directly justifies an answer by citing files or code in the visible tree with project-relative references enclosed in backticks.
+**evidence** is evaluator-provided text that directly justifies an answer.
 
 **evaluator thread** is an ephemeral, reusable evaluator interaction context with no persisted history. All interrogations on one thread must use the same evaluator model and the same visible tree; an interrogation with a different evaluator model or visible tree must use a different thread.

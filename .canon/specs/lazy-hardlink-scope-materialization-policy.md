@@ -11,6 +11,8 @@ scope_roots = materialization_root / "scopes"
 unpacked_paths = set()
 ```
 
+The temporary materialization root should be created on a memory-backed temporary filesystem when the host platform provides one. Otherwise, ordinary temporary storage may be used.
+
 The policy materializes one evaluator working tree for each visible scope:
 
 ```
