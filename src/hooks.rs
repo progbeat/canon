@@ -11,7 +11,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::{Command, ExitStatus, Output};
 
 // User-facing output names the repository's pre-commit hook role at Git's
 // default hook path. The managed script is stored at `PRE_COMMIT_HOOK_PATH`
@@ -124,26 +124,26 @@ fn preflight_default_git_pre_commit_hook(
 }
 
 pub(crate) fn preflight_pre_commit_hook_content(content: Option<&str>) -> Result<(), String> {
-    if let Some(existing) = content {
-        if pre_commit_hook_is_reusable(existing) {
-            return Ok(());
-        }
-        return Err(pre_commit_hook_manual_advice());
-    }
-    Ok(())
+    preflight_optional_hook_owner(content, pre_commit_hook_is_reusable)
 }
 
 pub(crate) fn preflight_git_hooks_path(preflight: &HookInstallPreflight) -> Result<(), String> {
     // Canon owns the hook directory only when Git has no custom hook manager or
     // already points at Canon's hook directory. Any other `core.hooksPath`
     // belongs to existing project Git integration and needs manual handling.
-    if let Some(existing) = preflight.current_git_hooks_path.as_deref() {
-        if existing == GIT_HOOKS_PATH {
-            return Ok(());
-        }
-        return Err(pre_commit_hook_manual_advice());
+    preflight_optional_hook_owner(preflight.current_git_hooks_path.as_deref(), |existing| {
+        existing == GIT_HOOKS_PATH
+    })
+}
+
+fn preflight_optional_hook_owner(
+    existing: Option<&str>,
+    is_allowed: impl FnOnce(&str) -> bool,
+) -> Result<(), String> {
+    match existing {
+        Some(value) if !is_allowed(value) => Err(pre_commit_hook_manual_advice()),
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 pub(crate) fn pre_commit_hook_is_reusable(content: &str) -> bool {
@@ -175,19 +175,18 @@ pub(crate) fn make_executable(path: &Path) -> Result<(), String> {
 }
 
 pub(crate) fn current_git_hooks_path_for_worktree(root: &Path) -> Result<Option<String>, String> {
-    let output = run_git_config(root, &["--local", "--get", "core.hooksPath"])?;
+    let output = run_git_config_with_status(
+        root,
+        &["--local", "--get", "core.hooksPath"],
+        "failed to read git core.hooksPath",
+        |status| status.success() || status.code() == Some(1),
+    )?;
     if output.status.success() {
         return Ok(Some(
             command_output_trimmed(&output.stdout, "git config stdout")?.to_string(),
         ));
     }
-    if output.status.code() == Some(1) {
-        return Ok(None);
-    }
-    Err(format!(
-        "failed to read git core.hooksPath: {}",
-        command_output_trimmed(&output.stderr, "git config stderr")?
-    ))
+    Ok(None)
 }
 
 pub(crate) fn configure_git_hooks_path(
@@ -214,25 +213,23 @@ fn uses_canon_git_hooks_path(preflight: &HookInstallPreflight) -> bool {
 }
 
 pub(crate) fn set_git_hooks_path(root: &Path) -> Result<(), String> {
-    let output = run_git_config(root, &["--local", "core.hooksPath", GIT_HOOKS_PATH])?;
-    if output.status.success() {
-        return Ok(());
-    }
-    Err(format!(
-        "failed to set git core.hooksPath: {}",
-        command_output_trimmed(&output.stderr, "git config stderr")?
-    ))
+    run_git_config_with_status(
+        root,
+        &["--local", "core.hooksPath", GIT_HOOKS_PATH],
+        "failed to set git core.hooksPath",
+        ExitStatus::success,
+    )
+    .map(|_| ())
 }
 
 pub(crate) fn unset_git_hooks_path(root: &Path) -> Result<(), String> {
-    let output = run_git_config(root, &["--local", "--unset", "core.hooksPath"])?;
-    if output.status.success() || output.status.code() == Some(5) {
-        return Ok(());
-    }
-    Err(format!(
-        "failed to unset git core.hooksPath: {}",
-        command_output_trimmed(&output.stderr, "git config stderr")?
-    ))
+    run_git_config_with_status(
+        root,
+        &["--local", "--unset", "core.hooksPath"],
+        "failed to unset git core.hooksPath",
+        |status| status.success() || status.code() == Some(5),
+    )
+    .map(|_| ())
 }
 
 fn run_git_config(root: &Path, args: &[&str]) -> Result<Output, String> {
@@ -243,6 +240,23 @@ fn run_git_config(root: &Path, args: &[&str]) -> Result<Output, String> {
         .args(args)
         .output()
         .map_err(|err| format!("failed to run git config: {}", err))
+}
+
+fn run_git_config_with_status(
+    root: &Path,
+    args: &[&str],
+    failure_message: &str,
+    accepts: impl FnOnce(&ExitStatus) -> bool,
+) -> Result<Output, String> {
+    let output = run_git_config(root, args)?;
+    if accepts(&output.status) {
+        return Ok(output);
+    }
+    Err(format!(
+        "{}: {}",
+        failure_message,
+        command_output_trimmed(&output.stderr, "git config stderr")?
+    ))
 }
 
 pub(crate) fn is_git_worktree(root: &Path) -> Result<bool, String> {

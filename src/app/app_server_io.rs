@@ -1,6 +1,6 @@
 use crate::app_server::AppServerRunner;
-use crate::check_preflight::check_interrupted;
 use crate::evaluator_types::EvaluatorError;
+use crate::platform::check_interrupted;
 use serde_json::{json, Value};
 use std::io::Write;
 use std::sync::mpsc::RecvTimeoutError;

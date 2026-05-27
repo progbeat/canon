@@ -11,7 +11,6 @@ use crate::check_order_state::{
     write_latest_non_pass_error_with_cache, write_latest_non_pass_record_with_cache,
 };
 use crate::check_output::{record_requires_human_review, write_and_flush_result_output};
-use crate::check_preflight::check_interrupted;
 use crate::check_selection::{
     latest_non_pass_timestamp_with_cache, order_expectations_by_latest_non_pass,
 };
@@ -28,6 +27,7 @@ use crate::history::HistoryCache;
 use crate::history_append::append_history_record_with_cache;
 use crate::history_reuse::{is_reusable_history_record, latest_history_scope_with_cache};
 use crate::logging::DiagnosticLogWriter;
+use crate::platform::check_interrupted;
 use crate::scope::{sanitize_scope, scope_is_within};
 use crate::time::unix_timestamp;
 use crate::visible_tree_oid::VisibleTreeOidCache;

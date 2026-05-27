@@ -1,6 +1,7 @@
 use crate::fs_util::ensure_dir_without_symlinks;
 use crate::git::resolve_git_path;
 use crate::output::write_stdout_line;
+use crate::platform::path_from_git_stdout;
 use crate::project_types::Config;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -90,8 +91,4 @@ pub(crate) fn git_project_root(start: &Path) -> Result<PathBuf, String> {
         ));
     }
     Ok(path_from_git_stdout(output.stdout))
-}
-
-pub(crate) fn path_from_git_stdout(bytes: Vec<u8>) -> PathBuf {
-    crate::platform::path_from_git_stdout(bytes)
 }

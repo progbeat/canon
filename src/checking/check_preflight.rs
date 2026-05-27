@@ -1,18 +1,5 @@
-use crate::platform;
 use std::path::Path;
 use std::process::Command;
-
-pub(crate) fn install_sigint_handler() -> Result<(), String> {
-    platform::install_check_signal_handlers()
-}
-
-pub(crate) fn reset_check_interrupted() {
-    platform::reset_check_interrupted();
-}
-
-pub(crate) fn check_interrupted() -> bool {
-    platform::check_interrupted()
-}
 
 #[cfg(test)]
 pub(crate) fn staged_changed_paths(root: &Path) -> Result<Vec<String>, String> {

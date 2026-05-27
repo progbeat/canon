@@ -3,9 +3,8 @@ use crate::check_generator_paths::{
     expand_generator_paths, expand_staged_generator_paths_from_listing,
 };
 use crate::config_types::{CheckConfig, RawExpectationItem};
-use crate::git::{
-    git_path_bytes, read_git_blobs, resolve_git_path, staged_tracked_files, StagedTrackedFile,
-};
+use crate::git::{read_git_blobs, resolve_git_path, staged_tracked_files, StagedTrackedFile};
+use crate::platform::git_path_bytes;
 use crate::CHECK_PATH;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

@@ -1,4 +1,5 @@
-use crate::project::{command_output_trimmed, path_from_git_stdout};
+use crate::platform::path_from_git_stdout;
+use crate::project::command_output_trimmed;
 use std::ffi::OsStr;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -213,13 +214,4 @@ fn parse_git_blob_batch(output: &[u8], object_ids: &[String]) -> Result<Vec<Vec<
         return Err("git cat-file output has trailing data".to_string());
     }
     Ok(blobs)
-}
-
-pub(crate) fn git_path_bytes(path: &Path) -> Result<Vec<u8>, String> {
-    crate::platform::git_path_bytes(path)
-}
-
-#[cfg(all(test, unix))]
-pub(crate) fn git_path_from_raw_bytes(path: &[u8]) -> Result<std::ffi::OsString, String> {
-    crate::platform::git_path_from_raw_bytes(path)
 }

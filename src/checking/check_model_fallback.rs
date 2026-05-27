@@ -1,11 +1,11 @@
 use crate::check_interrogation::interrogate_expectation_with_model;
 use crate::check_interrogation_state::{CheckRuntime, InterrogationState};
-use crate::check_preflight::check_interrupted;
 use crate::check_types::{InterrogationResult, SelectedExpectation};
 use crate::config_types::AgentConfig;
 use crate::evaluator_turn::{is_model_technical_failure, model_label};
 use crate::evaluator_types::{EvaluatorError, EvaluatorRunner};
 use crate::logging::DiagnosticLogWriter;
+use crate::platform::check_interrupted;
 use serde_json::json;
 
 pub(crate) fn interrogate_expectation_with_model_fallbacks<R: EvaluatorRunner>(

@@ -5,7 +5,6 @@ use crate::check_command_finish::{finish_check_report, CheckReportFinishContext}
 use crate::check_interrogation_state::CheckRuntime;
 use crate::check_lazy_reset::apply_scheduled_lazy_full_scope_resets;
 use crate::check_output::write_summary_line;
-use crate::check_preflight::{install_sigint_handler, reset_check_interrupted};
 use crate::check_query_command::run_check_query_command;
 use crate::check_reporting::{
     collect_check_token_usage, print_token_usage_summary, write_check_finish_event,
@@ -17,6 +16,7 @@ use crate::cli::CommandError;
 use crate::config_types::CheckConfig;
 use crate::history_cleanup::{active_expectation_ids_from_identities, cleanup_stale_cache_dirs};
 use crate::logging::DiagnosticLogWriter;
+use crate::platform::{install_check_signal_handlers, reset_check_interrupted};
 use crate::repo_inspection::RepoInspectionCache;
 use crate::staged_worktree::StagedWorktreeView;
 use crate::visible_tree_oid::VisibleTreeOidCache;
@@ -29,7 +29,7 @@ use std::time::Instant;
 
 pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), CommandError> {
     let started = Instant::now();
-    install_sigint_handler().map_err(CommandError::from)?;
+    install_check_signal_handlers().map_err(CommandError::from)?;
     reset_check_interrupted();
     let write_agent_message = check_command_writes_agent_message(args);
     let command = parse_check_command_args(args)?;

@@ -27,8 +27,7 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
             "canon gate does not accept arguments\n▷ Run `canon gate` without arguments.".into(),
         );
     }
-    let project_change = gate_result_or_failure(gate_project_change(root))?;
-    if let GateProjectChange::MixedCanonAndNonCanon = project_change {
+    if gate_result_or_failure(has_mixed_canon_and_non_canon_changes(root))? {
         write_stderr_line(
             "canon gate: .canon/** changes must not be mixed with non-.canon changes",
         )?;
@@ -39,13 +38,6 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
     if num_regressions > 0 {
         write_gate_failure_event(GateFailureEvent::Regressed)?;
         return Err(CommandError::GateFailed);
-    }
-    match project_change {
-        GateProjectChange::MixedCanonAndNonCanon => {
-            unreachable!("mixed canon changes return before regression checks");
-        }
-        GateProjectChange::CanonOnly => return Ok(()),
-        GateProjectChange::Other => {}
     }
     Ok(())
 }
@@ -78,25 +70,12 @@ pub(crate) enum GateFailureEvent {
     Regressed,
 }
 
-#[derive(Clone, Copy)]
-enum GateProjectChange {
-    MixedCanonAndNonCanon,
-    CanonOnly,
-    Other,
-}
-
-fn gate_project_change(root: &Path) -> Result<GateProjectChange, String> {
+fn has_mixed_canon_and_non_canon_changes(root: &Path) -> Result<bool, String> {
     let changed_paths = staged_changed_path_bytes(root)?;
     let has_canon_change = changed_paths
         .iter()
         .any(|path| is_canon_project_path_bytes(path));
-    if has_canon_change && !is_canon_only_staged_change_bytes(&changed_paths) {
-        return Ok(GateProjectChange::MixedCanonAndNonCanon);
-    }
-    if has_canon_change {
-        return Ok(GateProjectChange::CanonOnly);
-    }
-    Ok(GateProjectChange::Other)
+    Ok(has_canon_change && !is_canon_only_staged_change_bytes(&changed_paths))
 }
 
 #[cfg(test)]

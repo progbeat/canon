@@ -298,7 +298,7 @@ fn remove_existing_codex_home_entry(path: &Path) -> Result<(), String> {
 
 impl Drop for AppServerRunner {
     fn drop(&mut self) {
-        let _ = terminate_app_server_child(&mut self.child);
+        let _ = platform::terminate_app_server_child(&mut self.child);
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
         }
@@ -309,7 +309,7 @@ impl Drop for AppServerRunner {
 }
 
 fn cleanup_error_after_missing_pipe(child: &mut Child, message: &str) -> EvaluatorError {
-    match terminate_app_server_child(child) {
+    match platform::terminate_app_server_child(child) {
         Ok(()) => EvaluatorError::message(message),
         Err(err) => EvaluatorError::message(format!("{}; cleanup failed: {}", message, err)),
     }
@@ -321,8 +321,4 @@ fn take_child_pipe<T>(
     message: &str,
 ) -> Result<T, EvaluatorError> {
     take(child).ok_or_else(|| cleanup_error_after_missing_pipe(child, message))
-}
-
-pub(crate) fn terminate_app_server_child(child: &mut Child) -> Result<(), String> {
-    platform::terminate_app_server_child(child)
 }

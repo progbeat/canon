@@ -3,9 +3,9 @@ use crate::app_server_protocol::{
     agent_message_delta, app_server_error_value, app_server_failure_from_value, app_server_message,
     append_completed_agent_text, turn_idle_timed_out, turn_started_id, turn_text,
 };
-use crate::check_preflight::check_interrupted;
 use crate::evaluator_turn::EvaluatorFailureKind;
 use crate::evaluator_types::EvaluatorError;
+use crate::platform::check_interrupted;
 use crate::APP_SERVER_TURN_TIMEOUT_SECS;
 use serde_json::Value;
 use std::time::Instant;
