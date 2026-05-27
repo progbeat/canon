@@ -1,34 +1,20 @@
 use crate::check_selection::parse_cooldown;
 use crate::check_types::contains_line_break;
-use crate::config_types::CheckConfig;
+use crate::config_types::{AgentConfig, CheckConfig};
 use crate::scope::normalize_repo_path;
-use crate::{OBSERVED_IDK, OBSERVED_MALFORMED};
+use crate::{ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION, ERROR_UNPARSABLE};
 
 pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> {
     if config.version != 1 {
         return Err("check.yml version must be 1".to_string());
     }
-    // Prompt rendering trims optional custom instructions; reject explicitly
-    // blank-looking values so a configured policy cannot silently disappear.
-    if let Some(instructions) = config.agent.instructions.as_deref() {
-        if !contains_visible_config_text(instructions) {
-            return Err("check.yml agent.instructions must contain visible text".to_string());
-        }
+    if !config.presets.contains_key("default") {
+        return Err("check.yml presets must contain default".to_string());
     }
-    validate_optional_model(config.agent.model.primary.as_deref(), "agent.model.primary")?;
-    for (index, model) in config.agent.model.fallbacks.iter().enumerate() {
-        validate_optional_model(
-            Some(model.as_str()),
-            &format!("agent.model.fallbacks[{}]", index),
-        )?;
+    for (name, preset) in &config.presets {
+        validate_agent_config(preset, &format!("presets.{}", name))?;
     }
-    validate_thinking(&config.agent.thinking)?;
-    for path in &config.agent.ignore {
-        normalize_agent_ignore_pattern_for_config(path)?;
-    }
-    for plugin in &config.agent.plugins {
-        validate_plugin_config_key(plugin)?;
-    }
+    validate_agent_config(&config.agent, "presets.default")?;
     if config.expectations.is_empty() {
         return Err("check.yml expectations must not be empty".to_string());
     }
@@ -52,9 +38,12 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
                 number
             ));
         }
-        if matches!(expectation.a.as_str(), OBSERVED_IDK | OBSERVED_MALFORMED) {
+        if matches!(
+            expectation.a.as_str(),
+            ERROR_INSUFFICIENT_EVIDENCE | ERROR_INVALID_QUESTION | ERROR_UNPARSABLE
+        ) {
             return Err(format!(
-                "expectation {} expected answer must not be idk or malformed",
+                "expectation {} expected answer must not be an evaluator error token",
                 number
             ));
         }
@@ -62,10 +51,34 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
             parse_cooldown(cooldown)
                 .map_err(|err| format!("expectation {} cooldown: {}", number, err))?;
         }
-        if let Some(thinking) = expectation.thinking.as_deref() {
-            validate_thinking(thinking)
-                .map_err(|err| format!("expectation {} thinking: {}", number, err))?;
+        validate_agent_config(&expectation.agent, &format!("expectation {}", number))?;
+    }
+    Ok(())
+}
+
+fn validate_agent_config(agent: &AgentConfig, label: &str) -> Result<(), String> {
+    // Prompt rendering trims optional custom instructions; reject explicitly
+    // blank-looking values so a configured policy cannot silently disappear.
+    if let Some(instructions) = agent.instructions.as_deref() {
+        if !contains_visible_config_text(instructions) {
+            return Err(format!(
+                "check.yml {}.instructions must contain visible text",
+                label
+            ));
         }
+    }
+    for (index, model) in agent.models.iter().enumerate() {
+        validate_optional_model(
+            Some(model.as_str()),
+            &format!("{}.models[{}]", label, index),
+        )?;
+    }
+    validate_thinking(&agent.thinking).map_err(|err| format!("{}: {}", label, err))?;
+    for path in &agent.ignore {
+        normalize_agent_ignore_pattern_for_config(path)?;
+    }
+    for plugin in &agent.plugins {
+        validate_plugin_config_key(plugin)?;
     }
     Ok(())
 }
@@ -195,30 +208,32 @@ pub(crate) fn validate_thinking(value: &str) -> Result<(), String> {
     // reason as model-name validation: capability checks belong at the
     // app-server boundary, not in static config parsing.
     if value.trim().is_empty() {
-        return Err("check.yml agent.thinking must not be empty".to_string());
+        return Err("thinking must not be empty".to_string());
     }
     if contains_line_break(value) {
-        return Err("check.yml agent.thinking must be a single-line string".to_string());
+        return Err("thinking must be a single-line string".to_string());
     }
     match value {
-        "off" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max" => {
-            Ok(())
-        }
-        _ => Err(format!("unsupported check.yml agent.thinking: {}", value)),
+        "minimal" | "low" | "medium" | "high" | "xhigh" => Ok(()),
+        _ => Err(format!("unsupported thinking: {}", value)),
     }
 }
 
 pub(crate) fn codex_reasoning_effort(thinking: &str) -> Option<&str> {
     match thinking {
-        "adaptive" => None,
-        "off" | "none" => Some("none"),
-        "max" => Some("xhigh"),
         value => Some(value),
     }
 }
 
 pub(crate) fn check_config_loads_plugins(config: &CheckConfig) -> bool {
-    !config.agent.plugins.is_empty()
+    config
+        .expectations
+        .iter()
+        .any(|expectation| !expectation.agent.plugins.is_empty())
+        || config
+            .presets
+            .values()
+            .any(|preset| !preset.plugins.is_empty())
 }
 
 pub(crate) fn validate_relative_config_path(value: &str, label: &str) -> Result<(), String> {

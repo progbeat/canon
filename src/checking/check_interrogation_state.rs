@@ -8,16 +8,19 @@ use crate::visible_tree_oid::VisibleTreeOidCache;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-pub(crate) fn should_retry_full_scope_after_restricted_idk(
+pub(crate) fn should_retry_full_scope_after_restricted_insufficient_evidence(
     record: &CheckRecord,
     scope: &[String],
 ) -> bool {
     scope != full_scope()
-        && ObservedAnswerState::from_observed(&record.observed) == ObservedAnswerState::Idk
+        && ObservedAnswerState::from_observed(&record.observed)
+            == ObservedAnswerState::InsufficientEvidence
 }
 
-pub(crate) fn evaluator_session_key(scope: &[String]) -> String {
+pub(crate) fn evaluator_session_key(scope: &[String], model: Option<&str>) -> String {
     let mut key = String::new();
+    key.push_str(model.unwrap_or("<default>"));
+    key.push('\0');
     for path in scope {
         key.push_str(&path.len().to_string());
         key.push('\0');

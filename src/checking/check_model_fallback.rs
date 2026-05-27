@@ -17,7 +17,7 @@ pub(crate) fn interrogate_expectation_with_model_fallbacks<R: EvaluatorRunner>(
     enforced_scope: &[String],
 ) -> Result<InterrogationResult, String> {
     run_with_model_fallbacks(
-        &runtime.config.agent,
+        &expectation.agent,
         state,
         diagnostic_log,
         Some(&expectation.id),

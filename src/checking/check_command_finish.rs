@@ -116,7 +116,7 @@ fn staged_passes_failed_at_head_count_with_cache(
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<usize, String> {
     let mut count = 0usize;
-    for expectation in report_passing_expectations(report) {
+    for expectation in report_passing_expectations(report, agent) {
         match gate_cached_result_for_tree(
             root,
             agent,
@@ -132,10 +132,13 @@ fn staged_passes_failed_at_head_count_with_cache(
     Ok(count)
 }
 
-fn report_passing_expectations(report: &CheckRunReport) -> Vec<SelectedExpectation> {
+fn report_passing_expectations(
+    report: &CheckRunReport,
+    agent: &AgentConfig,
+) -> Vec<SelectedExpectation> {
     let mut expectations = Vec::new();
     for record in report.records.iter().filter(|record| record.passed()) {
-        if let Some(expectation) = selected_expectation_from_record(record) {
+        if let Some(expectation) = selected_expectation_from_record(record, agent) {
             expectations.push(expectation);
         }
     }
@@ -238,7 +241,10 @@ pub(crate) fn staged_pass_notice_count(
     )
 }
 
-fn selected_expectation_from_record(record: &CheckRecord) -> Option<SelectedExpectation> {
+fn selected_expectation_from_record(
+    record: &CheckRecord,
+    agent: &AgentConfig,
+) -> Option<SelectedExpectation> {
     Some(SelectedExpectation {
         number: record.number,
         id: record.id.clone(),
@@ -246,6 +252,7 @@ fn selected_expectation_from_record(record: &CheckRecord) -> Option<SelectedExpe
         q: record.prompt.clone()?,
         a: record.expected.clone()?,
         prompt_scope: Vec::new(),
+        agent: agent.clone(),
         cooldown: None,
         thinking: None,
     })

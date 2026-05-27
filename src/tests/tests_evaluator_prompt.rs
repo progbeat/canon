@@ -6,7 +6,7 @@ fn evaluator_prompt_is_only_current_question_text() {
     let prompt = "Permission question?".to_string();
     assert_eq!(prompt, "Permission question?");
     assert!(!prompt.contains("Response format:"));
-    assert!(!prompt.contains("ANSWER: <single-line answer>"));
+    assert!(!prompt.contains("answer/error schema"));
     assert!(!prompt.contains("Instructions:"));
     assert!(config.agent.instructions.is_none());
     assert!(!prompt.contains("Current context:"));
@@ -31,19 +31,36 @@ fn evaluator_turn_input_is_plain_question_string() {
 fn evaluator_turn_uses_strict_json_output_schema() {
     let schema = evaluator_response_output_schema();
     assert_eq!(schema["type"], "object");
-    assert_eq!(schema["required"], json!(["answer", "evidence", "scope"]));
+    assert_eq!(schema["required"], json!(["evidence"]));
     assert_eq!(schema["additionalProperties"], false);
     assert_eq!(schema["properties"]["answer"]["type"], "string");
     assert_eq!(schema["properties"]["answer"]["minLength"], 1);
     assert_eq!(schema["properties"]["answer"]["pattern"], "^[^\\r\\n]*$");
-    assert_eq!(schema["properties"]["evidence"]["type"], "string");
-    assert_eq!(schema["properties"]["scope"]["type"], "array");
-    assert_eq!(schema["properties"]["scope"]["minItems"], 1);
-    assert_eq!(schema["properties"]["scope"]["items"]["type"], "string");
-    assert_eq!(schema["properties"]["scope"]["items"]["minLength"], 1);
     assert_eq!(
-        schema["properties"]["scope"]["items"]["pattern"],
+        schema["properties"]["error"]["enum"],
+        json!(["insufficient-evidence", "invalid-question", "unparsable"])
+    );
+    assert_eq!(schema["properties"]["evidence"]["type"], "string");
+    assert_eq!(schema["properties"]["qScopeSuggestion"]["type"], "array");
+    assert_eq!(schema["properties"]["qScopeSuggestion"]["minItems"], 1);
+    assert_eq!(
+        schema["properties"]["qScopeSuggestion"]["items"]["type"],
+        "string"
+    );
+    assert_eq!(
+        schema["properties"]["qScopeSuggestion"]["items"]["minLength"],
+        1
+    );
+    assert_eq!(
+        schema["properties"]["qScopeSuggestion"]["items"]["pattern"],
         "^[^\\r\\n]*$"
+    );
+    assert_eq!(
+        schema["oneOf"],
+        json!([
+            {"required": ["answer"], "not": { "required": ["error"] }},
+            {"required": ["error"], "not": { "required": ["answer"] }}
+        ])
     );
 }
 
@@ -77,12 +94,11 @@ expectations:
     assert!(!instructions.contains("Answer from files only."));
     assert!(instructions.contains("Response format:"));
     assert!(instructions.contains("Prefer `rg` and `rg --files`"));
-    assert!(instructions.contains("Correct answer: +5"));
     assert!(instructions.contains("project-relative refs enclosed in backticks"));
     assert!(instructions.contains("Do not cite proxy evidence"));
+    assert!(instructions.contains("qScopeSuggestion"));
     assert!(instructions.contains("Enforced scope: [\".\"]"));
     assert!(instructions.contains("Answer-selection policy:"));
-    assert!(instructions.contains("Never output the raw answer as the whole response."));
     assert!(!instructions.contains("Instruction-boundary policy"));
 }
 

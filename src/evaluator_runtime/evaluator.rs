@@ -1,18 +1,14 @@
 use crate::output::write_stdout_line;
 use serde_json::{json, Value};
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn evaluator_response_output_schema() -> Value {
-    // This schema is the app-server first pass for the interrogation response
-    // contract. The parser still enforces constraints JSON Schema cannot express
-    // safely here: exact top-level key order, no surrounding prose, and
-    // canonical scope normalization/parent-path reduction. The check
-    // interrogation policy independently verifies any strict narrowing before
-    // writing that narrower scope to answer history.
-    // The answer vocabulary is intentionally not enumerated here: most canon
-    // expectations use yes/no/options, but free-form exact single-line answers
-    // such as "Rust" are valid when the expectation asks for one. The
-    // expectation-relative vocabulary check happens after parsing in
-    // ObservedAnswerState::from_expected_and_observed.
+    // This schema mirrors the canon interrogation response contract. The parser
+    // enforces it at runtime, rejects surrounding prose, and normalizes invalid
+    // JSON/schema mismatches into an `unparsable` evaluator error.
+    // The answer vocabulary is intentionally not enumerated here: any
+    // schema-valid single-line answer is an observed answer, and expectation
+    // comparison decides pass versus fail.
     json!({
         "type": "object",
         "properties": {
@@ -21,8 +17,12 @@ pub(crate) fn evaluator_response_output_schema() -> Value {
                 "minLength": 1,
                 "pattern": "^[^\\r\\n]*$"
             },
+            "error": {
+                "type": "string",
+                "enum": ["insufficient-evidence", "invalid-question", "unparsable"]
+            },
             "evidence": { "type": "string" },
-            "scope": {
+            "qScopeSuggestion": {
                 "type": "array",
                 "minItems": 1,
                 "items": {
@@ -32,7 +32,11 @@ pub(crate) fn evaluator_response_output_schema() -> Value {
                 }
             }
         },
-        "required": ["answer", "evidence", "scope"],
+        "required": ["evidence"],
+        "oneOf": [
+            {"required": ["answer"], "not": { "required": ["error"] }},
+            {"required": ["error"], "not": { "required": ["answer"] }}
+        ],
         "additionalProperties": false
     })
 }

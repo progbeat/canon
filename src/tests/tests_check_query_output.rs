@@ -48,16 +48,19 @@ fn check_output_failed_and_error_records_use_specified_line_counts() {
         prompt: Some("Question?".to_string()),
         expected: Some("yes".to_string()),
         observed: "no".to_string(),
+        error: None,
         evidence: "evidence".to_string(),
         scope: vec!["src".to_string()],
+        suggested_q_scope: None,
         visible_tree_oid: "hash".to_string(),
         cache_key: None,
     };
 
-    assert_eq!(render_check_output_record(&record).lines().count(), 6);
-
-    record.observed = OBSERVED_IDK.to_string();
     assert_eq!(render_check_output_record(&record).lines().count(), 5);
+
+    record.observed = ERROR_INSUFFICIENT_EVIDENCE.to_string();
+    record.error = Some(ERROR_INSUFFICIENT_EVIDENCE.to_string());
+    assert_eq!(render_check_output_record(&record).lines().count(), 4);
 }
 
 #[test]
@@ -147,7 +150,7 @@ fn check_agent_message_counts_human_review_as_non_ok() {
     let root = git_project("check-agent-message-human-review");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let mut error_record = sample_record(1, "fail");
-    error_record.observed = OBSERVED_IDK.to_string();
+    error_record.observed = ERROR_INSUFFICIENT_EVIDENCE.to_string();
     let error_report = CheckRunReport {
         records: vec![error_record],
         non_selected: Vec::new(),
@@ -706,35 +709,17 @@ fn query_mode_uses_agent_and_does_not_write_history() {
     .unwrap();
 
     assert_eq!(result.answer.answer, "no");
-    assert_eq!(result.answer.scope, vec!["src"]);
-    assert_eq!(
-        runner.prompts,
-        vec![
-            "Ad-hoc question?".to_string(),
-            "Ad-hoc question?".to_string()
-        ]
-    );
-    assert_eq!(
-        runner.start_scopes,
-        vec![vec![".".to_string()], vec!["src".to_string()]]
-    );
-    assert_eq!(
-        runner.start_models,
-        vec![
-            Some("gpt-5.4-mini".to_string()),
-            Some("gpt-5.4-mini".to_string())
-        ]
-    );
-    assert_eq!(
-        runner.start_thinking,
-        vec!["medium".to_string(), "medium".to_string()]
-    );
+    assert_eq!(result.answer.scope, full_scope());
+    assert_eq!(runner.prompts, vec!["Ad-hoc question?".to_string()]);
+    assert_eq!(runner.start_scopes, vec![vec![".".to_string()]]);
+    assert_eq!(runner.start_models, vec![Some("gpt-5.4-mini".to_string())]);
+    assert_eq!(runner.start_thinking, vec!["medium".to_string()]);
     let cache_dir = root.join(".git/canon/cache");
     assert!(!cache_dir.exists() || fs::read_dir(&cache_dir).unwrap().next().is_none());
     let output = render_query_output(&result.answer);
     assert_eq!(
         output,
-        "Observed: no\nEvidence: `src/main.rs`: src/main.rs says no\nScope: [\"src\"]\n"
+        "Observed: no\nEvidence: `src/main.rs`: src/main.rs says no\nSuggested q-scope: [\"src\"]\n"
     );
     let log = fs::read_to_string(diagnostic_log.path()).unwrap();
     assert!(log.contains(r#""event":"query.result""#));
@@ -806,12 +791,9 @@ fn query_mode_accepts_narrowed_incorrect_answer_when_expected_is_known() {
     )
     .unwrap();
 
-    assert_eq!(result.answer.answer, "no");
-    assert_eq!(
-        result.answer.evidence,
-        "`src/main.rs`: src/main.rs still fails it"
-    );
-    assert_eq!(result.answer.scope, vec!["src"]);
+    assert_eq!(result.answer.answer, "yes");
+    assert_eq!(result.answer.evidence, "`src/main.rs`: full scope passes");
+    assert_eq!(result.answer.scope, full_scope());
     let _ = fs::remove_dir_all(root);
 }
 
@@ -853,10 +835,9 @@ fn query_mode_keeps_explicit_restricted_scope() {
     enable_diagnostic_logs(&root);
     let config = parse_check_config(check_config_yaml()).unwrap();
     let scope = vec!["src".to_string()];
-    let mut runner = FakeRunner::new(&[&answer(
-        "idk",
+    let mut runner = FakeRunner::new(&[&error_response(
+        ERROR_INSUFFICIENT_EVIDENCE,
         "needs files outside this restricted scope",
-        &["src"],
     )]);
     let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
     let runtime = CheckRuntime {
@@ -877,24 +858,65 @@ fn query_mode_keeps_explicit_restricted_scope() {
     )
     .unwrap_err();
 
-    assert!(err.contains("query requires human review: restricted-scope idk"));
+    assert!(err.contains("query requires human review: insufficient evidence"));
     assert_eq!(runner.start_scopes, vec![scope]);
     assert_eq!(runner.prompts, vec!["Ad-hoc scoped question?".to_string()]);
     assert_eq!(runner.starts, 1);
     let log = fs::read_to_string(diagnostic_log.path()).unwrap();
     assert!(!log.contains(r#""event":"query.result""#));
     assert!(log.contains(r#""event":"query.review_required""#));
-    assert!(log.contains(r#""reason":"restricted-scope idk""#));
-    assert!(log.contains(r#""scope":["src"]"#));
+    assert!(log.contains(r#""reason":"insufficient evidence""#));
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn query_mode_errors_when_full_scope_idk_needs_review() {
-    let root = git_project("query-mode-full-scope-idk");
+fn query_mode_accepts_denied_command_no_without_widening_scope() {
+    let root = git_project("query-mode-denied-command-no");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let scope = vec!["src/main.rs".to_string()];
+    let response = serde_json::to_string(&json!({
+        "answer": "no",
+        "evidence": "`wc src/cli.rs` failed with `wc: src/cli.rs: open: Operation not permitted`, so I could not see its output.",
+        "qScopeSuggestion": ["src/cli.rs"]
+    }))
+    .unwrap();
+    let mut runner = FakeRunner::new(&[&response]);
+    let runtime = CheckRuntime {
+        root: &root,
+        snapshot_root: &root,
+        config: &config,
+    };
+    let mut interrogation_state = InterrogationState::new();
+
+    let result = run_query_with_runner(
+        &runtime,
+        "Try to run `wc src/cli.rs`. Can you see its output?",
+        None,
+        &scope,
+        &mut runner,
+        None,
+        &mut interrogation_state,
+    )
+    .unwrap();
+
+    assert_eq!(result.answer.answer, "no");
+    assert_eq!(result.answer.scope, scope);
+    assert_eq!(
+        result.answer.evidence,
+        "`wc src/cli.rs` failed with `wc: src/cli.rs: open: Operation not permitted`, so I could not see its output."
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn query_mode_errors_when_full_scope_insufficient_evidence_needs_review() {
+    let root = git_project("query-mode-full-scope-insufficient-evidence");
     enable_diagnostic_logs(&root);
     let config = parse_check_config(check_config_yaml()).unwrap();
-    let mut runner = FakeRunner::new(&[&answer("idk", "full scope still cannot answer", &["."])]);
+    let mut runner = FakeRunner::new(&[&error_response(
+        ERROR_INSUFFICIENT_EVIDENCE,
+        "full scope still cannot answer",
+    )]);
     let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
     let runtime = CheckRuntime {
         root: &root,
@@ -914,11 +936,50 @@ fn query_mode_errors_when_full_scope_idk_needs_review() {
     )
     .unwrap_err();
 
-    assert!(err.contains("query requires human review: full-scope idk"));
+    assert!(err.contains("query requires human review: insufficient evidence"));
     let log = fs::read_to_string(diagnostic_log.path()).unwrap();
     assert!(!log.contains(r#""event":"query.result""#));
     assert!(log.contains(r#""event":"query.review_required""#));
-    assert!(log.contains(r#""reason":"full-scope idk""#));
+    assert!(log.contains(r#""reason":"insufficient evidence""#));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn query_mode_allows_self_contained_evidence_without_project_citation() {
+    let root = git_project("query-mode-self-contained-evidence");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let response = serde_json::to_string(&json!({
+        "answer": "4",
+        "evidence": "Basic arithmetic: 2+2=4.",
+        "qScopeSuggestion": ["."]
+    }))
+    .unwrap();
+    let mut runner = FakeRunner::new(&[&response]);
+    let runtime = CheckRuntime {
+        root: &root,
+        snapshot_root: &root,
+        config: &config,
+    };
+    let mut interrogation_state = InterrogationState::new();
+
+    let result = run_query_with_runner(
+        &runtime,
+        "2+2=?",
+        None,
+        &full_scope(),
+        &mut runner,
+        None,
+        &mut interrogation_state,
+    )
+    .unwrap();
+
+    assert_eq!(result.answer.answer, "4");
+    assert_eq!(result.answer.evidence, "Basic arithmetic: 2+2=4.");
+    assert_eq!(result.answer.scope, full_scope());
+    assert_eq!(
+        render_query_output(&result.answer),
+        "Observed: 4\nEvidence: Basic arithmetic: 2+2=4.\nSuggested q-scope: [\".\"]\n"
+    );
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1029,20 +1090,20 @@ fn failed_narrowing_logs_stats_and_keeps_wider_final_result() {
     .unwrap();
 
     assert_eq!(report.narrowing.attempted, 1);
-    assert_eq!(report.narrowing.accepted, 0);
-    assert_eq!(report.narrowing.rejected, 1);
-    assert_eq!(report.records[0].observed, "no");
-    assert_eq!(report.records[0].evidence, "`src/main.rs`: full answer");
-    assert_eq!(report.records[0].scope, vec!["."]);
+    assert_eq!(report.narrowing.accepted, 1);
+    assert_eq!(report.narrowing.rejected, 0);
+    assert_eq!(report.records[0].observed, "yes");
+    assert_eq!(report.records[0].evidence, "`src/main.rs`: narrow answer");
+    assert_eq!(report.records[0].scope, vec!["src"]);
     let history = read_history_records(&root, &expectation).unwrap();
     assert_eq!(history.len(), 1);
-    assert_eq!(history[0].observed, "no");
-    assert_eq!(history[0].evidence, "`src/main.rs`: full answer");
-    assert_eq!(history[0].scope, vec!["."]);
+    assert_eq!(history[0].observed, "yes");
+    assert_eq!(history[0].evidence, "`src/main.rs`: narrow answer");
+    assert_eq!(history[0].scope, vec!["src"]);
     let log = fs::read_to_string(diagnostic_log.path()).unwrap();
     assert_eq!(log.matches(r#""event":"expectation.result""#).count(), 1);
     assert_eq!(log.matches(r#""event":"interrogation.result""#).count(), 2);
     assert!(log.contains(r#""event":"scope.narrowing""#));
-    assert!(log.contains(r#""accepted":false"#));
+    assert!(log.contains(r#""accepted":true"#));
     let _ = fs::remove_dir_all(root);
 }

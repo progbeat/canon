@@ -35,19 +35,6 @@ expectations:
 "#
     )
     .is_err());
-    assert!(parse_check_config(
-        r#"
-version: 1
-agent:
-  instructions: x
-  ignore: []
-  plugins: []
-expectations:
-  - q: x
-    a: malformed
-"#
-    )
-    .is_err());
 }
 
 #[test]
@@ -59,10 +46,9 @@ fn cooldown_parser_rejects_non_ascii_unit_without_panicking() {
 fn check_config_rejects_missing_required_fields() {
     assert!(parse_check_config("version: 1\n").is_err());
     assert!(parse_check_config("version: 1\nagent: {}\nexpectations: []\n").is_err());
-    assert!(parse_check_config(
-        "version: 1\nagent:\n  instructions: x\n  ignore: []\nexpectations:\n  - q: x\n    a: y\n"
-    )
-    .is_err());
+    assert!(
+        parse_check_config("version: 1\npresets: {}\nexpectations:\n  - q: x\n    a: y\n").is_err()
+    );
 }
 
 #[test]
@@ -218,7 +204,7 @@ agent:
   plugins: []
 expectations:
   - q: x
-    a: idk
+    a: insufficient-evidence
 "#
     )
     .is_err());
@@ -231,7 +217,20 @@ agent:
   plugins: []
 expectations:
   - q: x
-    a: malformed
+    a: invalid-question
+"#
+    )
+    .is_err());
+    assert!(parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: x
+    a: unparsable
 "#
     )
     .is_err());

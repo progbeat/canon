@@ -230,6 +230,7 @@ fn trim_dot_slash_bytes(mut path: &[u8]) -> &[u8] {
     path
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn is_strict_scope_subset(proposed: &[String], current: &[String]) -> bool {
     let Some(proposed) = normalize_scope_for_comparison(proposed) else {
         return false;

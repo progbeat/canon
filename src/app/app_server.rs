@@ -25,6 +25,7 @@ pub(crate) struct AppServerRunner {
     pub(crate) context_compaction_events_by_turn: BTreeMap<String, Vec<ContextCompactionEvent>>,
     pub(crate) last_turn_usage: Option<EvaluatorTurnUsage>,
     pub(crate) retired_sessions: BTreeSet<String>,
+    pub(crate) session_cwds: BTreeMap<String, PathBuf>,
 }
 
 pub(crate) struct LazyAppServerRunner {
@@ -69,8 +70,12 @@ impl LazyAppServerRunner {
 
 impl AppServerRunner {
     pub(crate) fn drain_retired_sessions(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.retired_sessions)
+        let retired = std::mem::take(&mut self.retired_sessions)
             .into_iter()
-            .collect()
+            .collect::<Vec<_>>();
+        for session_id in &retired {
+            self.session_cwds.remove(session_id);
+        }
+        retired
     }
 }

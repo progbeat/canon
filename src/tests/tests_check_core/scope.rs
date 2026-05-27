@@ -4,10 +4,11 @@ use crate::check_output::record_requires_human_review;
 use crate::check_selection::parse_check_options;
 use crate::history::read_history_records;
 use crate::tests::{
-    answer, check_config_yaml, check_options, git_project, parse_check_config, test_selector,
-    FakeRunner,
+    answer, check_config_yaml, check_options, error_response, git_project, parse_check_config,
+    test_selector, FakeRunner,
 };
 use crate::token_usage_types::{EvaluatorTurnUsage, TokenUsage};
+use crate::ERROR_INSUFFICIENT_EVIDENCE;
 use std::fs;
 
 #[test]
@@ -98,24 +99,27 @@ fn check_runner_verifies_narrowed_scope_before_history_reuse() {
     ]);
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
-    assert!(!records.records[0].passed());
-    assert_eq!(records.records[0].observed, "no");
+    assert!(records.records[0].passed());
+    assert_eq!(records.records[0].observed, "yes");
     assert_eq!(
         records.records[0].evidence,
-        "`src/main.rs`: full scope fails it"
+        "`src/main.rs`: src/main.rs changes to a passing answer"
     );
-    assert_eq!(records.records[0].scope, vec!["."]);
+    assert_eq!(records.records[0].scope, vec!["src/main.rs"]);
     let history = read_history_records(&root, &options.selected[0]).unwrap();
     assert_eq!(history.len(), 1);
-    assert_eq!(history[0].observed, "no");
-    assert_eq!(history[0].evidence, "`src/main.rs`: full scope fails it");
-    assert_eq!(history[0].scope, vec!["."]);
+    assert_eq!(history[0].observed, "yes");
+    assert_eq!(
+        history[0].evidence,
+        "`src/main.rs`: src/main.rs changes to a passing answer"
+    );
+    assert_eq!(history[0].scope, vec!["src/main.rs"]);
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn check_runner_treats_full_scope_idk_as_human_review() {
-    let root = git_project("check-full-scope-idk");
+fn check_runner_treats_full_scope_insufficient_evidence_as_human_review() {
+    let root = git_project("check-full-scope-insufficient-evidence");
     let config = parse_check_config(
         r#"
 version: 1
@@ -131,14 +135,17 @@ expectations:
     )
     .unwrap();
     let options = check_options(&config, &["1"], false, true);
-    let mut runner = FakeRunner::new(&[&answer("idk", "not enough evidence", &["."])]);
+    let mut runner = FakeRunner::new(&[&error_response(
+        ERROR_INSUFFICIENT_EVIDENCE,
+        "not enough evidence",
+    )]);
 
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
     assert!(!records.records[0].passed());
     assert!(record_requires_human_review(&records.records[0]));
-    assert_eq!(records.records[0].observed, "idk");
+    assert_eq!(records.records[0].observed, ERROR_INSUFFICIENT_EVIDENCE);
     assert!(
         latest_recorded_non_pass_timestamp(&root, &options.selected[0])
             .unwrap()
@@ -149,14 +156,16 @@ expectations:
 }
 
 #[test]
-fn check_runner_retries_full_scope_when_narrowing_verification_returns_idk() {
-    let root = git_project("check-narrowing-verification-idk-retry");
+fn check_runner_rejects_narrowing_verification_error() {
+    let root = git_project("check-narrowing-verification-error");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
     let mut runner = FakeRunner::new(&[
         &answer("yes", "full scope supports it", &["src/main.rs"]),
-        &answer("idk", "src/main.rs alone is insufficient", &["src/main.rs"]),
-        &answer("yes", "full scope still supports it", &["."]),
+        &error_response(
+            ERROR_INSUFFICIENT_EVIDENCE,
+            "src/main.rs alone is insufficient",
+        ),
     ]);
 
     let records =
@@ -165,17 +174,17 @@ fn check_runner_retries_full_scope_when_narrowing_verification_returns_idk() {
     assert!(records.records[0].passed());
     assert_eq!(
         records.records[0].evidence,
-        "`README.md`: full scope still supports it"
+        "`src/main.rs`: full scope supports it"
     );
     assert_eq!(records.records[0].scope, vec![".".to_string()]);
     assert_eq!(records.narrowing.attempted, 1);
-    assert_eq!(records.narrowing.accepted, 1);
-    assert_eq!(records.narrowing.rejected, 0);
+    assert_eq!(records.narrowing.accepted, 0);
+    assert_eq!(records.narrowing.rejected, 1);
     assert_eq!(
         runner.start_scopes,
         vec![vec![".".to_string()], vec!["src/main.rs".to_string()]]
     );
-    assert_eq!(runner.prompts.len(), 3);
+    assert_eq!(runner.prompts.len(), 2);
     let _ = fs::remove_dir_all(root);
 }
 

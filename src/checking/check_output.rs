@@ -70,52 +70,62 @@ pub(crate) fn report_output_skipped_count(report: &CheckRunReport) -> usize {
 
 pub(crate) fn render_query_output(answer: &ParsedAnswer) -> String {
     let mut output = String::new();
-    output.push_str("Observed: ");
-    output.push_str(&escape_check_output_text(&answer.answer));
+    if let Some(error) = answer.error.as_deref() {
+        output.push_str("Error: ");
+        output.push_str(&escape_check_output_text(error));
+    } else {
+        output.push_str("Observed: ");
+        output.push_str(&escape_check_output_text(&answer.answer));
+    }
     output.push('\n');
     output.push_str("Evidence: ");
     output.push_str(&escape_check_output_text(&answer.evidence));
     output.push('\n');
-    output.push_str("Scope: ");
-    output.push_str(&compact_json_string_array(&answer.scope));
-    output.push('\n');
+    if let Some(suggestion) = answer.q_scope_suggestion.as_deref() {
+        output.push_str("Suggested q-scope: ");
+        output.push_str(&compact_json_string_array(suggestion));
+        output.push('\n');
+    }
     output
 }
 
 pub(crate) fn render_check_output_record(record: &CheckRecord) -> String {
-    // Check-output line counts are part of the public contract:
-    // pass => 1 line, failed => 6 lines including Scope, error => 5 lines
-    // without Scope. Every evaluator-supplied text field is escaped here
-    // before stdout sees it.
     if record.passed() {
         return format!("{}. OK\n", record.display_id);
     }
-    let status = if record_requires_human_review(record) {
-        "ERROR"
-    } else {
-        "FAILED"
-    };
+    let is_error = record_requires_human_review(record);
+    let status = if is_error { "ERROR" } else { "FAILED" };
     let mut output = String::new();
     output.push_str(&format!("{}. {}\n", record.display_id, status));
     // This is the spec's `<escaped question>` line, not an extra line beyond
     // the six-line failed and five-line error layouts.
     output.push_str(&escape_check_output_text(record.prompt_text()));
     output.push('\n');
-    output.push_str("Expected: ");
-    output.push_str(&escape_check_output_text(
-        record.expected_text().unwrap_or(""),
-    ));
-    output.push('\n');
-    output.push_str("Observed: ");
-    output.push_str(&escape_check_output_text(&record.observed));
-    output.push('\n');
+    if is_error {
+        output.push_str("Error: ");
+        output.push_str(&escape_check_output_text(
+            record.error.as_deref().unwrap_or(&record.observed),
+        ));
+        output.push('\n');
+    } else {
+        output.push_str("Expected: ");
+        output.push_str(&escape_check_output_text(
+            record.expected_text().unwrap_or(""),
+        ));
+        output.push('\n');
+        output.push_str("Observed: ");
+        output.push_str(&escape_check_output_text(&record.observed));
+        output.push('\n');
+    }
     output.push_str("Evidence: ");
     output.push_str(&escape_check_output_text(&record.evidence));
     output.push('\n');
-    if status == "FAILED" {
-        output.push_str("Scope: ");
-        output.push_str(&compact_json_string_array(&record.scope));
-        output.push('\n');
+    if !is_error {
+        if let Some(suggestion) = record.suggested_q_scope.as_deref() {
+            output.push_str("Suggested q-scope: ");
+            output.push_str(&compact_json_string_array(suggestion));
+            output.push('\n');
+        }
     }
     output
 }
@@ -184,9 +194,9 @@ pub(crate) fn pad_summary_line(inner: &str) -> String {
 }
 
 pub(crate) fn record_requires_human_review(record: &CheckRecord) -> bool {
-    // Restricted-scope `idk` records are retried at full scope before output.
-    // Any `idk` that reaches final check rendering is therefore the
-    // human-review state described by the check-output contract.
+    if record.error.is_some() {
+        return true;
+    }
     record
         .expected_text()
         .map(|expected| {

@@ -3,15 +3,15 @@ use super::*;
 pub(crate) fn check_config_yaml() -> &'static str {
     r#"
 version: 1
-agent:
-  model:
-    primary: gpt-5.4-mini
-    fallbacks:
+presets:
+  default:
+    models:
+      - gpt-5.4-mini
       - gpt-5.3-codex-spark
-  thinking: medium
-  ignore:
-    - "target/**"
-  plugins: []
+    thinking: medium
+    ignore:
+      - "target/**"
+    plugins: []
 expectations:
   - q: "First?"
     a: "yes"
@@ -107,8 +107,11 @@ impl EvaluatorRunner for FakeRunner {
         self.start_instructions.push(instructions.to_string());
         self.start_roots.push(session_cwd.to_path_buf());
         self.start_ignores.push(effective_ignore_patterns(agent));
-        self.start_models
-            .push(model.or(agent.model.primary.as_deref()).map(str::to_string));
+        self.start_models.push(
+            model
+                .or_else(|| agent.models.first().map(String::as_str))
+                .map(str::to_string),
+        );
         self.start_thinking.push(thinking.to_string());
         self.start_plugins.push(agent.plugins.clone());
         self.start_scopes.push(scope.to_vec());
@@ -235,7 +238,15 @@ pub(crate) fn answer(answer: &str, evidence: &str, scope: &[&str]) -> String {
     serde_json::to_string(&json!({
         "answer": answer,
         "evidence": evidence,
-        "scope": scope,
+        "qScopeSuggestion": scope,
+    }))
+    .unwrap()
+}
+
+pub(crate) fn error_response(error: &str, evidence: &str) -> String {
+    serde_json::to_string(&json!({
+        "error": error,
+        "evidence": evidence,
     }))
     .unwrap()
 }
@@ -287,8 +298,10 @@ pub(crate) fn sample_record(number: usize, result: &str) -> CheckRecord {
         prompt: Some(prompt),
         expected: Some(expected),
         observed: if result == "pass" { "yes" } else { "no" }.to_string(),
+        error: None,
         evidence: "README.md has evidence".to_string(),
         scope: vec![".".to_string()],
+        suggested_q_scope: None,
         visible_tree_oid: "AAAAAAAAAAAAAAAAAAAA".to_string(),
         cache_key: None,
     }
@@ -310,8 +323,10 @@ pub(crate) fn expectation_record(
         prompt: Some(expectation.q.clone()),
         expected: Some(expectation.a.clone()),
         observed: observed.to_string(),
+        error: None,
         evidence: "cached answer".to_string(),
         scope: full_scope(),
+        suggested_q_scope: None,
         visible_tree_oid,
         cache_key: Some(history_cache_key(agent, expectation)),
     }

@@ -2,9 +2,9 @@ use crate::check_cache::{
     cached_result_for_expectation, write_cache_hit, CachedResultLookup, CheckCacheHit,
 };
 use crate::check_interrogation_policy::{
-    interrogate_with_full_scope_retry, narrowed_scope_is_accepted,
+    interrogate_or_error_record, interrogate_with_full_scope_retry, narrowed_scope_is_accepted,
     restore_record_to_enforced_scope, turn_exceeds_break_after_tokens, turn_has_context_compaction,
-    write_scope_narrowing_event, ScopedInterrogation,
+    write_scope_narrowing_event, InterrogationCall, ScopedInterrogation,
 };
 use crate::check_interrogation_state::{CheckRuntime, InterrogationState};
 use crate::check_order_state::{
@@ -26,7 +26,7 @@ use crate::history::HistoryCache;
 use crate::history_append::append_history_record_with_cache;
 use crate::history_reuse::{is_reusable_history_record, latest_history_scope_with_cache};
 use crate::logging::DiagnosticLogWriter;
-use crate::scope::{is_strict_scope_subset, scope_is_within};
+use crate::scope::{sanitize_scope, scope_is_within};
 use crate::time::{parse_record_timestamp, unix_timestamp};
 use crate::visible_tree_oid::VisibleTreeOidCache;
 use std::cmp::Reverse;
@@ -90,7 +90,6 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     let mut narrowing = NarrowingStats::default();
     let non_selected = options.non_selected.clone();
     let root = runtime.root;
-    let config = runtime.config;
     // Per-run state is shared so equal canonical enforced scopes can reuse one
     // ephemeral evaluator thread; InterrogationState stores thread IDs by scope,
     // so different enforced scopes still start separate threads within the run.
@@ -122,7 +121,6 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     let check_work_queue = if !options.selectors_provided && !options.check_all {
         let selection = run_try!(default_check_selection(
             root,
-            &config.agent,
             options,
             &mut caches.history,
             &mut caches.visible_tree_oid,
@@ -202,7 +200,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         // erase the interrogation-policy scope seed.
         let mut enforced_scope = run_expectation_try!(latest_history_scope_with_cache(
             root,
-            &config.agent,
+            &expectation.agent,
             expectation,
             &mut caches.history
         ))
@@ -239,40 +237,48 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         let mut stop_after_current_expectation = interrogation.stop_after_current_expectation;
 
         let record_scope = interrogation.record.scope.clone();
-        // Interrogation finalization rejects evaluator-proposed widening before
-        // this point. Restricted widening becomes an enforced-scope `idk` so
-        // full-scope retry can decide whether the restricted context was
-        // insufficient; full-scope malformed/unparseable states remain review
-        // records.
+        // Interrogation finalization records the enforced scope before this
+        // point. A restricted insufficient-evidence error has already had its
+        // full-scope retry; final errors remain review records.
         debug_assert!(scope_is_within(&record_scope, &enforced_scope));
         // Cache-spec narrowing verification applies only to verified answers.
-        // Non-answer states (`idk`, `malformed`, unparseable) are never reusable
-        // cache records and are handled by the review-required/idk policy above.
+        // Error and unparsable states are never reusable cache records and are
+        // handled by the review-required policy above.
         // Token-break and context-compaction signals are run-level stop
         // signals in default mode; they do not skip the independent
         // verification needed to trust a strictly narrower cache scope for
         // this expectation's final record.
         if !record_requires_human_review(&interrogation.record)
-            && is_strict_scope_subset(&record_scope, &enforced_scope)
+            && run_expectation_try!(should_verify_q_scope_suggestion(
+                root,
+                &expectation.agent,
+                interrogation.record.suggested_q_scope.as_deref(),
+                &enforced_scope,
+                &mut caches.visible_tree_oid,
+            ))
         {
             narrowing.attempted += 1;
-            // A narrower scope from one evaluator response becomes reusable
-            // only when an independent interrogation returns either the same
-            // answer or an incorrect answer.
+            // A q-scope suggestion becomes reusable only when an independent
+            // interrogation under that suggested scope returns a valid answer.
             let initial_record = interrogation.record.clone();
-            let mut verification_scope = record_scope.clone();
-            let narrowed = run_expectation_try!(interrogate_with_full_scope_retry(
-                ScopedInterrogation {
+            let verification_scope = run_expectation_try!(sanitize_scope(
+                initial_record
+                    .suggested_q_scope
+                    .as_deref()
+                    .expect("suggestion was validated before verification"),
+                &expectation.agent,
+            ));
+            let narrowed = run_expectation_try!(interrogate_or_error_record(
+                InterrogationCall {
                     root,
                     runtime: &runtime,
                     expectation,
-                    enforced_scope: &mut verification_scope,
+                    scope: &verification_scope,
                 },
                 runner,
                 &mut diagnostic_log,
                 &mut interrogation_state,
                 &mut caches.visible_tree_oid,
-                options.break_after_tokens,
             ));
             break_after_tokens_hit |=
                 turn_exceeds_break_after_tokens(&narrowed, options.break_after_tokens);
@@ -298,7 +304,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             } else {
                 let enforced_visible_tree_oid = run_expectation_try!(caches
                     .visible_tree_oid
-                    .staged_visible_tree_oid(root, &config.agent, &enforced_scope));
+                    .staged_visible_tree_oid(root, &expectation.agent, &enforced_scope));
                 // A rejected narrowing invalidates only the evaluator's
                 // proposed reusable cache scope. The original answer/evidence
                 // came from the wider enforced scope, so keep that wide
@@ -313,9 +319,8 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             }
         }
         // Correct and incorrect parsed answers are reusable for every
-        // expectation shape, including free-form exact strings. Human-review
-        // states such as idk, malformed, and unparseable responses are not
-        // written to history.
+        // expectation shape, including free-form exact strings. Error and
+        // unparsable responses are not written to history.
         if is_reusable_history_record(&interrogation.record) {
             run_expectation_try!(append_history_record_with_cache(
                 root,
@@ -388,7 +393,6 @@ struct CachedSelectionHit {
 
 fn default_check_selection(
     root: &Path,
-    agent: &AgentConfig,
     options: &CheckOptions,
     history_cache: &mut HistoryCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
@@ -401,7 +405,7 @@ fn default_check_selection(
     for expectation in options.selected.clone() {
         match cached_result_for_expectation(
             root,
-            agent,
+            &expectation.agent,
             &expectation,
             history_cache,
             visible_tree_oid_cache,
@@ -434,6 +438,36 @@ fn default_check_selection(
 
 fn record_timestamp_sort_key(record: &CheckRecord) -> u64 {
     parse_record_timestamp(&record.timestamp).unwrap_or(0)
+}
+
+fn should_verify_q_scope_suggestion(
+    root: &Path,
+    agent: &AgentConfig,
+    suggestion: Option<&[String]>,
+    current_scope: &[String],
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
+) -> Result<bool, String> {
+    let Some(suggestion) = suggestion else {
+        return Ok(false);
+    };
+    let suggestion = match sanitize_scope(suggestion, agent) {
+        Ok(scope) => scope,
+        Err(_) => return Ok(false),
+    };
+    if !visible_tree_oid_cache
+        .missing_staged_scope_paths(root, &suggestion)?
+        .is_empty()
+    {
+        return Ok(false);
+    }
+    let current_count =
+        visible_tree_oid_cache.staged_visible_file_count(root, agent, current_scope)?;
+    if current_count == 0 {
+        return Ok(false);
+    }
+    let suggested_count =
+        visible_tree_oid_cache.staged_visible_file_count(root, agent, &suggestion)?;
+    Ok(suggested_count.saturating_mul(4) <= current_count.saturating_mul(3))
 }
 
 fn check_run_report(

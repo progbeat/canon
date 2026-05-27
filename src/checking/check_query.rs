@@ -7,19 +7,17 @@ use crate::check_model_fallback::run_with_model_fallbacks;
 use crate::check_types::{ObservedAnswerState, QueryResult};
 use crate::evaluator_types::{EvaluatorError, EvaluatorRunner};
 use crate::logging::DiagnosticLogWriter;
-use crate::scope::is_strict_scope_subset;
 
 #[derive(Clone, Copy)]
 pub(crate) struct QueryRequest<'a> {
     pub(crate) question: &'a str,
-    pub(crate) expected_answer: Option<&'a str>,
     pub(crate) enforced_scope: &'a [String],
 }
 
 pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
     runtime: &CheckRuntime<'_>,
     question: &str,
-    expected_answer: Option<&str>,
+    _expected_answer: Option<&str>,
     enforced_scope: &[String],
     runner: &mut R,
     diagnostic_log: Option<&mut DiagnosticLogWriter>,
@@ -36,7 +34,6 @@ pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
                 runtime,
                 QueryRequest {
                     question,
-                    expected_answer,
                     enforced_scope,
                 },
                 runner,
@@ -62,34 +59,16 @@ pub(crate) fn ask_query_with_model<R: EvaluatorRunner>(
     // same "unchanged or still incorrect" rule without adding expected text to
     // the evaluator task input. Pure ad-hoc queries have no expected answer, so
     // changed narrowed answers are not trusted as reusable narrower results.
-    let current_scope = query.enforced_scope.to_vec();
-    let mut result = ask_query_once(
+    let result = ask_query_once(
         runtime,
         query.question,
-        &current_scope,
+        query.enforced_scope,
         runner,
         diagnostic_log,
         state,
         model,
     )?;
-    if should_verify_query_narrowing(&result, &current_scope) {
-        let narrowed_scope = result.answer.scope.clone();
-        let narrowed = ask_query_once(
-            runtime,
-            query.question,
-            &narrowed_scope,
-            runner,
-            diagnostic_log,
-            state,
-            model,
-        )?;
-        if narrowed_query_answer_is_accepted(&result, &narrowed, query.expected_answer) {
-            result = narrowed;
-        } else {
-            result.answer.scope = current_scope.clone();
-        }
-    }
-    if let Some(reason) = query_human_review_reason(&result, &current_scope) {
+    if let Some(reason) = query_human_review_reason(&result) {
         write_query_review_required_event(query.question, diagnostic_log, &result.answer, reason)?;
         return Err(EvaluatorError::message(format!(
             "query requires human review: {}",
@@ -116,6 +95,7 @@ fn ask_query_once<R: EvaluatorRunner>(
         diagnostic_log,
         state,
         ThreadTurnRequest {
+            agent: &runtime.config.agent,
             enforced_scope,
             model,
             thinking: &runtime.config.agent.thinking,
@@ -123,44 +103,14 @@ fn ask_query_once<R: EvaluatorRunner>(
             prompt: &prompt,
         },
     )?;
-    finalize_query_answer(runtime, state, enforced_scope, response.answer)
+    finalize_query_answer(runtime, state, enforced_scope, question, response.answer)
 }
 
-fn should_verify_query_narrowing(result: &QueryResult, enforced_scope: &[String]) -> bool {
-    ObservedAnswerState::from_observed(&result.answer.answer).is_reusable_history()
-        && is_strict_scope_subset(&result.answer.scope, enforced_scope)
-}
-
-fn narrowed_query_answer_is_accepted(
-    wide: &QueryResult,
-    narrowed: &QueryResult,
-    expected_answer: Option<&str>,
-) -> bool {
-    if !ObservedAnswerState::from_observed(&narrowed.answer.answer).is_reusable_history() {
-        return false;
-    }
-    if narrowed.answer.answer == wide.answer.answer {
-        return true;
-    }
-    expected_answer.is_some_and(|expected| {
-        ObservedAnswerState::from_expected_and_observed(expected, &narrowed.answer.answer)
-            .is_reusable_history()
-            && narrowed.answer.answer != expected
-    })
-}
-
-fn query_human_review_reason(
-    result: &QueryResult,
-    enforced_scope: &[String],
-) -> Option<&'static str> {
+fn query_human_review_reason(result: &QueryResult) -> Option<&'static str> {
     match ObservedAnswerState::from_observed(&result.answer.answer) {
-        ObservedAnswerState::Idk if enforced_scope == crate::hash::full_scope() => {
-            Some("full-scope idk")
-        }
-        ObservedAnswerState::Idk => Some("restricted-scope idk"),
-        ObservedAnswerState::Malformed => Some("malformed evaluator response"),
-        ObservedAnswerState::Unparseable => Some("unparseable evaluator response"),
-        ObservedAnswerState::EmptyEvidence => Some("empty evaluator evidence"),
+        ObservedAnswerState::InsufficientEvidence => Some("insufficient evidence"),
+        ObservedAnswerState::InvalidQuestion => Some("invalid question"),
+        ObservedAnswerState::Unparsable => Some("unparsable evaluator response"),
         ObservedAnswerState::Unknown => Some("unknown observed answer state"),
         ObservedAnswerState::Answer => None,
     }

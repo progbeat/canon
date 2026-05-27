@@ -8,6 +8,7 @@ use crate::app_server_protocol::{
     append_completed_agent_text, context_compaction_event, token_usage_update, turn_idle_timed_out,
     turn_started_id, turn_text,
 };
+use crate::app_server_runner::turn_start_request;
 use crate::app_server_transport::{
     carryover_tokens, record_context_compaction_event, record_token_usage_update,
     thread_reuse_policy_should_retire,
@@ -32,8 +33,8 @@ use crate::check_interrogation::{
 };
 use crate::check_interrogation_records::finalize_interrogation_response;
 use crate::check_interrogation_state::{
-    evaluator_session_key, should_retry_full_scope_after_restricted_idk, CheckRuntime,
-    InterrogationState,
+    evaluator_session_key, should_retry_full_scope_after_restricted_insufficient_evidence,
+    CheckRuntime, InterrogationState,
 };
 use crate::check_lazy_reset::{
     apply_scheduled_lazy_full_scope_resets, lazy_full_scope_reset_count,
@@ -81,7 +82,6 @@ use crate::check_validation::{
 use crate::check_validation::{validate_optional_model, validate_plugin_config_key};
 use crate::cli::CommandError;
 use crate::cli::{command_error_has_public_diagnostic, run};
-use crate::config_types::ModelConfig;
 use crate::config_types::{
     AgentConfig, CheckConfig, Expectation, RawCheckConfig, RawExpectationItem,
 };
@@ -90,10 +90,9 @@ use crate::evaluator::{
 };
 use crate::evaluator_config::{
     app_server_args, app_server_model_key, app_server_startup_filesystem_arg,
-    evaluator_model_catalog_json, evaluator_thread_config, evaluator_thread_root_permissions,
-    thread_reuse_carryover_token_target_arg, toml_string,
+    evaluator_model_catalog_json, evaluator_session_root_permissions, evaluator_thread_config,
+    evaluator_thread_root_permissions, thread_reuse_carryover_token_target_arg, toml_string,
 };
-use crate::evaluator_json::validate_evaluator_response_key_order;
 use crate::evaluator_prompt::{developer_instructions, EVALUATOR_BASE_INSTRUCTIONS};
 use crate::evaluator_response::parse_evaluator_response;
 use crate::evaluator_response_cache::{response_excerpt, EvaluatorResponseParseCache};
@@ -185,9 +184,9 @@ use crate::visible_tree_oid::{
 };
 use crate::{
     APP_SERVER_TURN_TIMEOUT_SECS, CHECK_PATH, DEFAULT_CHECK_TEMPLATE, DEFAULT_PRE_COMMIT_HOOK,
-    EMPTY_EVIDENCE_OBSERVED, GIT_CANON_CACHE_DIR, GIT_CANON_LOG_DIR, GIT_HOOKS_PATH,
-    HISTORY_COMPACT_CHANCE_DENOMINATOR, HISTORY_COMPACT_KEEP_RECORDS, OBSERVED_IDK,
-    OBSERVED_MALFORMED, PRE_COMMIT_HOOK_PATH, RESULT_FAIL, RESULT_PASS, UNPARSEABLE_OBSERVED,
+    ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION, ERROR_UNPARSABLE, GIT_CANON_CACHE_DIR,
+    GIT_CANON_LOG_DIR, GIT_HOOKS_PATH, HISTORY_COMPACT_CHANCE_DENOMINATOR,
+    HISTORY_COMPACT_KEEP_RECORDS, PRE_COMMIT_HOOK_PATH, RESULT_FAIL, RESULT_PASS,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -210,8 +209,8 @@ mod test_git_support;
 // surface explicit here so ownership still points back to the fixture module
 // that defines each helper.
 pub(crate) use test_check_support::{
-    answer, check_config_yaml, check_options, expectation_record, parse_check_config,
-    sample_record, test_selector, FakeRunner, FlushCountingWriter,
+    answer, check_config_yaml, check_options, error_response, expectation_record,
+    parse_check_config, sample_record, test_selector, FakeRunner, FlushCountingWriter,
 };
 pub(crate) use test_env::{temp_home, test_path, with_env, EnvSnapshot, TestDir, ENV_LOCK};
 pub(crate) use test_git_support::{commit_all, git_project, write_check_config};

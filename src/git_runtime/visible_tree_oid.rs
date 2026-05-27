@@ -44,6 +44,21 @@ impl VisibleTreeOidCache {
             .ok_or("failed to hash staged scope".to_string())
     }
 
+    pub(crate) fn staged_visible_file_count(
+        &mut self,
+        root: &Path,
+        agent: &AgentConfig,
+        scope: &[String],
+    ) -> Result<usize, String> {
+        let scope = sanitize_scope_for_hash(scope)?;
+        let key = scope_cache_key(root, agent, &scope);
+        let entries = self.staged_scope_entries_for_key(root, agent, &scope, &key)?;
+        Ok(entries
+            .iter()
+            .filter(|entry| !scope_entry_is_tree(entry))
+            .count())
+    }
+
     pub(crate) fn missing_staged_scope_paths(
         &mut self,
         root: &Path,

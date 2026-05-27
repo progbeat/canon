@@ -129,6 +129,9 @@ fn record_log_fields(record: &CheckRecord) -> Vec<(&'static str, Value)> {
 }
 
 fn record_requires_human_review(record: &CheckRecord) -> bool {
+    if record.error.is_some() {
+        return true;
+    }
     record
         .expected_text()
         .map(|expected| {

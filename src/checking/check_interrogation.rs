@@ -17,6 +17,7 @@ use std::collections::BTreeSet;
 
 #[derive(Clone, Copy)]
 pub(crate) struct ThreadTurnRequest<'a> {
+    pub(crate) agent: &'a AgentConfig,
     pub(crate) enforced_scope: &'a [String],
     pub(crate) model: Option<&'a str>,
     pub(crate) thinking: &'a str,
@@ -31,8 +32,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
     state: &mut InterrogationState,
     request: ThreadTurnRequest<'_>,
 ) -> Result<ParsedTurnResponse, EvaluatorError> {
-    let config = runtime.config;
-    let session_key = evaluator_session_key(request.enforced_scope);
+    let session_key = evaluator_session_key(request.enforced_scope, request.model);
     // Threads are reused only to preserve the same enforced scope and rendered
     // developer instructions. Each turn still sends the current expectation
     // prompt as the only active task input.
@@ -50,14 +50,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         request.model,
         request.thinking,
     )?;
-    let response = match ask_current_session(
-        runner,
-        &session_id,
-        &config.agent,
-        state,
-        diagnostic_log,
-        request,
-    ) {
+    let response = match ask_current_session(runner, &session_id, state, diagnostic_log, request) {
         Ok(response) => response,
         Err(err) if had_existing_session && is_context_window_failure(&err) => {
             clear_thread_sessions_after_failure(state);
@@ -87,14 +80,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
                 request.model,
                 request.thinking,
             )?;
-            match ask_current_session(
-                runner,
-                &session_id,
-                &config.agent,
-                state,
-                diagnostic_log,
-                request,
-            ) {
+            match ask_current_session(runner, &session_id, state, diagnostic_log, request) {
                 Ok(response) => response,
                 Err(err) => return fail_after_session_error(state, err),
             }
@@ -110,7 +96,6 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
 fn ask_current_session<R: EvaluatorRunner>(
     runner: &mut R,
     session_id: &str,
-    agent: &AgentConfig,
     state: &mut InterrogationState,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     request: ThreadTurnRequest<'_>,
@@ -118,7 +103,7 @@ fn ask_current_session<R: EvaluatorRunner>(
     ask_in_thread(
         runner,
         session_id,
-        agent,
+        request.agent,
         &mut state.parse_cache,
         diagnostic_log,
         request,
@@ -156,12 +141,11 @@ fn start_thread_session<R: EvaluatorRunner>(
     session_key: &str,
     request: ThreadTurnRequest<'_>,
 ) -> Result<ThreadLifecycleLog, EvaluatorError> {
-    let config = runtime.config;
     let developer_instructions = developer_instructions(request.enforced_scope);
     let created = match runner.start_session(
         runtime.snapshot_root,
         &developer_instructions,
-        &config.agent,
+        request.agent,
         request.model,
         request.thinking,
         request.enforced_scope,
@@ -244,20 +228,20 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
     enforced_scope: &[String],
     model: Option<&str>,
 ) -> Result<InterrogationResult, EvaluatorError> {
-    let config = runtime.config;
     // Expectation mode may start from a history-derived restricted scope, but
     // after sanitization this path shares query mode's first-turn construction:
     // developer instructions are determined by agent config plus enforced
     // scope, and the task prompt is exactly the expectation question.
-    let enforced_scope = sanitize_scope(enforced_scope, &config.agent)?;
+    let enforced_scope = sanitize_scope(enforced_scope, &expectation.agent)?;
     let prompt = expectation.q.clone();
-    let thinking = effective_thinking(&config.agent, expectation);
+    let thinking = effective_thinking(&expectation.agent, expectation);
     let response = ask_with_reused_thread(
         runtime,
         runner,
         diagnostic_log,
         state,
         ThreadTurnRequest {
+            agent: &expectation.agent,
             enforced_scope: &enforced_scope,
             model,
             thinking,

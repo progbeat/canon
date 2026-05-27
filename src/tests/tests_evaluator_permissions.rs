@@ -3,14 +3,19 @@ use super::*;
 #[test]
 fn evaluator_permissions_always_deny_canon_and_agent_ignores() {
     let agent = AgentConfig {
-        model: ModelConfig::default(),
+        models: Vec::new(),
         thinking: "low".to_string(),
         instructions: Some("Answer from files only.".to_string()),
         ignore: vec!["target/**".to_string()],
         plugins: Vec::new(),
     };
-    let config = evaluator_thread_config(&agent, &full_scope(), None, &agent.thinking);
+    let session_root = Path::new("/tmp/canon-check-snapshot");
+    let config =
+        evaluator_thread_config(&agent, &full_scope(), None, &agent.thinking, session_root);
     let root_permissions = config["permissions"]["canon_check"]["filesystem"][":workspace_roots"]
+        .as_object()
+        .unwrap();
+    let filesystem = config["permissions"]["canon_check"]["filesystem"]
         .as_object()
         .unwrap();
     assert_eq!(root_permissions["."], "read");
@@ -24,8 +29,29 @@ fn evaluator_permissions_always_deny_canon_and_agent_ignores() {
     assert_eq!(root_permissions["target/**"], "deny");
     assert_eq!(
         config["permissions"]["canon_check"]["filesystem"][":root"],
+        "deny"
+    );
+    assert_eq!(
+        config["permissions"]["canon_check"]["filesystem"][":minimal"],
         "read"
     );
+    assert_eq!(filesystem["/tmp/canon-check-snapshot"], "read");
+    assert_eq!(filesystem["/tmp/canon-check-snapshot/**"], "read");
+    assert_eq!(filesystem["/tmp/canon-check-snapshot/.canon"], "deny");
+    assert_eq!(filesystem["/tmp/canon-check-snapshot/.canon/**"], "deny");
+    assert_eq!(filesystem["/tmp/canon-check-snapshot/.git/canon"], "deny");
+    assert_eq!(
+        filesystem["/tmp/canon-check-snapshot/.git/canon/**"],
+        "deny"
+    );
+    assert_eq!(filesystem["/tmp/canon-check-snapshot/target"], "deny");
+    assert_eq!(filesystem["/tmp/canon-check-snapshot/target/**"], "deny");
+    assert_eq!(filesystem["/etc/**"], "read");
+    assert_eq!(filesystem["/private/etc/**"], "read");
+    assert_eq!(filesystem["/usr/share/**"], "read");
+    assert_eq!(filesystem["~"], "read");
+    assert_eq!(filesystem["~/.zshenv"], "read");
+    assert!(filesystem.get("~/**").is_none());
     assert_eq!(config["model_reasoning_effort"], "low");
     assert!(config["permissions"]["canon_check"]["filesystem"]
         .get("~/.codex/tmp/**")
@@ -81,7 +107,7 @@ fn evaluator_permissions_always_deny_canon_and_agent_ignores() {
 #[test]
 fn restricted_evaluator_scope_is_enforced_by_filesystem_permissions() {
     let agent = AgentConfig {
-        model: ModelConfig::default(),
+        models: Vec::new(),
         thinking: "low".to_string(),
         instructions: Some("Answer from files only.".to_string()),
         ignore: vec!["target/**".to_string()],
@@ -106,19 +132,57 @@ fn restricted_evaluator_scope_is_enforced_by_filesystem_permissions() {
     assert_eq!(file_scope_permissions["src/bin/main.rs/**"], "read");
     assert!(!file_scope_permissions.contains_key("src/**"));
     assert!(!file_scope_permissions.contains_key("src/bin/**"));
+
+    let file_session_permissions = evaluator_session_root_permissions(
+        &agent,
+        &["src/bin/main.rs".to_string()],
+        Path::new("/tmp/canon-check-snapshot"),
+    );
+    assert_eq!(
+        file_session_permissions["/tmp/canon-check-snapshot"],
+        "deny"
+    );
+    assert_eq!(
+        file_session_permissions["/tmp/canon-check-snapshot/**"],
+        "deny"
+    );
+    assert_eq!(
+        file_session_permissions["/tmp/canon-check-snapshot/src"],
+        "read"
+    );
+    assert_eq!(
+        file_session_permissions["/tmp/canon-check-snapshot/src/bin"],
+        "read"
+    );
+    assert_eq!(
+        file_session_permissions["/tmp/canon-check-snapshot/src/bin/main.rs"],
+        "read"
+    );
+    assert_eq!(
+        file_session_permissions["/tmp/canon-check-snapshot/src/bin/main.rs/**"],
+        "read"
+    );
+    assert!(!file_session_permissions.contains_key("/tmp/canon-check-snapshot/src/**"));
+    assert!(!file_session_permissions.contains_key("/tmp/canon-check-snapshot/src/bin/**"));
 }
 
 #[test]
 fn evaluator_model_is_configured_when_present() {
     let config = parse_check_config(check_config_yaml()).unwrap();
-    let thread_config =
-        evaluator_thread_config(&config.agent, &full_scope(), None, &config.agent.thinking);
+    let thread_config = evaluator_thread_config(
+        &config.agent,
+        &full_scope(),
+        None,
+        &config.agent.thinking,
+        Path::new("/tmp/canon-check-snapshot"),
+    );
     assert_eq!(thread_config["model"], "gpt-5.4-mini");
     let fallback_config = evaluator_thread_config(
         &config.agent,
         &full_scope(),
         Some("gpt-5.3-codex-spark"),
         &config.agent.thinking,
+        Path::new("/tmp/canon-check-snapshot"),
     );
     assert_eq!(fallback_config["model"], "gpt-5.3-codex-spark");
 }
@@ -140,8 +204,13 @@ expectations:
     )
     .unwrap();
     assert!(check_config_loads_plugins(&config));
-    let thread_config =
-        evaluator_thread_config(&config.agent, &full_scope(), None, &config.agent.thinking);
+    let thread_config = evaluator_thread_config(
+        &config.agent,
+        &full_scope(),
+        None,
+        &config.agent.thinking,
+        Path::new("/tmp/canon-check-snapshot"),
+    );
     assert_eq!(
         thread_config["plugins"]["canon@codex-plugins"]["enabled"],
         json!(true)
@@ -250,6 +319,7 @@ fn app_server_starts_with_plugins_disabled_by_default() {
     assert!(filesystem_arg.contains(r#""target"="deny""#));
     assert!(filesystem_arg.contains(r#""target/**"="deny""#));
     assert!(filesystem_arg.contains(r#"":root"="read""#));
+    assert!(filesystem_arg.contains(r#"":minimal"="read""#));
     assert!(!filesystem_arg.contains(r#"":tmpdir""#));
     assert!(!filesystem_arg.contains(r#"":slash_tmp""#));
     assert!(!filesystem_arg.contains(r#""/private/tmp/**""#));
@@ -457,7 +527,7 @@ fn app_server_environment_does_not_inherit_parent_secrets() {
 #[test]
 fn app_server_startup_config_escapes_toml_control_characters() {
     let agent = AgentConfig {
-        model: ModelConfig::default(),
+        models: Vec::new(),
         thinking: "low".to_string(),
         instructions: Some("Answer from files only.".to_string()),
         ignore: vec![

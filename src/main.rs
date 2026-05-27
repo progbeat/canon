@@ -26,10 +26,9 @@ const PRE_COMMIT_HOOK_PATH: &str = ".git/canon/hooks/pre-commit";
 const DEFAULT_PRE_COMMIT_HOOK: &str = include_str!("../resources/git-hooks/pre-commit");
 const RESULT_PASS: &str = "pass";
 const RESULT_FAIL: &str = "fail";
-const OBSERVED_IDK: &str = "idk";
-const OBSERVED_MALFORMED: &str = "malformed";
-const UNPARSEABLE_OBSERVED: &str = "unparseable";
-const EMPTY_EVIDENCE_OBSERVED: &str = "empty-evidence";
+const ERROR_INSUFFICIENT_EVIDENCE: &str = "insufficient-evidence";
+const ERROR_INVALID_QUESTION: &str = "invalid-question";
+const ERROR_UNPARSABLE: &str = "unparsable";
 
 pub(crate) struct DiagnosticLogConfig {
     pub(crate) max_bytes: u64,
@@ -106,8 +105,6 @@ mod config_types;
 mod evaluator;
 #[path = "evaluator_runtime/evaluator_config.rs"]
 mod evaluator_config;
-#[path = "evaluator_runtime/evaluator_json.rs"]
-mod evaluator_json;
 #[path = "evaluator_runtime/evaluator_prompt.rs"]
 mod evaluator_prompt;
 #[path = "evaluator_runtime/evaluator_response.rs"]

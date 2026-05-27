@@ -2,9 +2,7 @@ use crate::app_server::{AppServerRunner, LazyAppServerRunner};
 use crate::app_server_transport::AppServerTurnRequest;
 use crate::check_validation::codex_reasoning_effort;
 use crate::config_types::AgentConfig;
-use crate::evaluator::{
-    evaluator_response_output_schema, evaluator_turn_input, render_evaluator_turn_input,
-};
+use crate::evaluator::{evaluator_turn_input, render_evaluator_turn_input};
 use crate::evaluator_config::evaluator_thread_config;
 use crate::evaluator_prompt::EVALUATOR_BASE_INSTRUCTIONS;
 use crate::evaluator_turn::is_model_technical_failure;
@@ -12,7 +10,7 @@ use crate::evaluator_types::{EvaluatorError, EvaluatorRunner};
 use crate::token_usage_types::{EvaluatorTurnUsage, TokenUsage};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const EVALUATOR_SESSION_START_SOURCE: &str = "clear";
 
@@ -138,7 +136,7 @@ impl EvaluatorRunner for AppServerRunner {
             base_instructions: EVALUATOR_BASE_INSTRUCTIONS,
             developer_instructions: instructions,
             approval_policy: "never",
-            config: evaluator_thread_config(agent, scope, model, thinking),
+            config: evaluator_thread_config(agent, scope, model, thinking, session_cwd),
             // Evaluator threads are invocation-local and ephemeral. Canon still
             // reuses live thread IDs by scope within this `canon check`, but
             // oversized carryover is handled by retiring the local session ID
@@ -154,6 +152,8 @@ impl EvaluatorRunner for AppServerRunner {
         let result = self.send_request("thread/start", params)?;
         let response: ThreadStartResponse = serde_json::from_value(result)
             .map_err(|err| format!("thread/start response missing thread.id: {}", err))?;
+        self.session_cwds
+            .insert(response.thread.id.clone(), session_cwd.to_path_buf());
         Ok(response.thread.id)
     }
 
@@ -164,24 +164,13 @@ impl EvaluatorRunner for AppServerRunner {
         model: Option<&str>,
         thinking: &str,
     ) -> Result<String, EvaluatorError> {
-        let input = evaluator_turn_input(prompt)?;
-        let input_text = render_evaluator_turn_input(&input)?;
-        let mut request = json!({
-            "threadId": session_id,
-            "input": [
-                {
-                    "type": "text",
-                    "text": input_text
-                }
-            ]
-        });
-        if let Some(model) = model {
-            request["model"] = Value::String(model.to_string());
-        }
-        if let Some(effort) = codex_reasoning_effort(thinking) {
-            request["effort"] = Value::String(effort.to_string());
-        }
-        request["outputSchema"] = evaluator_response_output_schema();
+        let request = turn_start_request(
+            session_id,
+            prompt,
+            model,
+            thinking,
+            self.session_cwds.get(session_id).map(PathBuf::as_path),
+        )?;
         self.send_turn_request("turn/start", AppServerTurnRequest::new(session_id, request))
     }
 
@@ -192,6 +181,40 @@ impl EvaluatorRunner for AppServerRunner {
     fn take_retired_sessions(&mut self) -> Vec<String> {
         self.drain_retired_sessions()
     }
+}
+
+pub(crate) fn turn_start_request(
+    session_id: &str,
+    prompt: &str,
+    model: Option<&str>,
+    thinking: &str,
+    cwd: Option<&Path>,
+) -> Result<Value, EvaluatorError> {
+    let input = evaluator_turn_input(prompt)?;
+    let input_text = render_evaluator_turn_input(&input)?;
+    let mut request = json!({
+        "threadId": session_id,
+        "input": [
+            {
+                "type": "text",
+                "text": input_text
+            }
+        ]
+    });
+    if let Some(cwd) = cwd {
+        request["cwd"] = Value::String(cwd.display().to_string());
+    }
+    if let Some(model) = model {
+        request["model"] = Value::String(model.to_string());
+    }
+    if let Some(effort) = codex_reasoning_effort(thinking) {
+        request["effort"] = Value::String(effort.to_string());
+    }
+    // The app-server structured-output subset requires every property to be
+    // listed in `required`, which cannot represent canon's answer/error one-of
+    // without introducing non-canon null fields. Developer instructions and
+    // `parse_evaluator_response` enforce the exact canon response contract.
+    Ok(request)
 }
 
 #[derive(Serialize)]

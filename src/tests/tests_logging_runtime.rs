@@ -53,7 +53,7 @@ fn runtime_log_result_keeps_raw_review_diagnostics() {
     let mut wrong_record = sample_record(1, "fail");
     wrong_record.observed = "no".to_string();
     let mut review_record = sample_record(2, "fail");
-    review_record.observed = UNPARSEABLE_OBSERVED.to_string();
+    review_record.observed = ERROR_UNPARSABLE.to_string();
     let path = write_diagnostic_log(&root, &[wrong_record, review_record]).unwrap();
 
     let events = fs::read_to_string(&path)
@@ -67,10 +67,10 @@ fn runtime_log_result_keeps_raw_review_diagnostics() {
     assert_eq!(events[0]["observed"], "no");
     assert_eq!(events[1]["result"], "fail");
     assert_eq!(events[1]["expected"], "yes");
-    assert_eq!(events[1]["observed"], UNPARSEABLE_OBSERVED);
+    assert_eq!(events[1]["observed"], ERROR_UNPARSABLE);
     assert_eq!(events[1]["evidence"], "README.md has evidence");
     assert_eq!(events[2]["event"], "expectation.review_required");
-    assert_eq!(events[2]["observed"], UNPARSEABLE_OBSERVED);
+    assert_eq!(events[2]["observed"], ERROR_UNPARSABLE);
     let _ = fs::remove_dir_all(root);
 }
 

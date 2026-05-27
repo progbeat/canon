@@ -45,20 +45,104 @@ pub(crate) fn evaluator_thread_config(
     scope: &[String],
     model: Option<&str>,
     thinking: &str,
+    session_root: &Path,
 ) -> Value {
     let root_permissions = evaluator_thread_root_permissions(agent, scope);
     let mut config = evaluator_base_config(
         permission_map_value(&root_permissions),
-        "read",
+        FILESYSTEM_DENY,
         codex_reasoning_effort(thinking),
     );
-    if let Some(model) = model.or(agent.model.primary.as_deref()) {
+    add_evaluator_session_root_permissions(&mut config, agent, scope, session_root);
+    if let Some(model) = model.or_else(|| agent.models.first().map(String::as_str)) {
         config["model"] = Value::String(model.to_string());
     }
     if !agent.plugins.is_empty() {
         config["plugins"] = enabled_plugins_config(agent);
     }
     config
+}
+
+fn add_evaluator_session_root_permissions(
+    config: &mut Value,
+    agent: &AgentConfig,
+    scope: &[String],
+    session_root: &Path,
+) {
+    let Some(filesystem) = config["permissions"]["canon_check"]["filesystem"].as_object_mut()
+    else {
+        return;
+    };
+    for (path, permission) in evaluator_session_root_permissions(agent, scope, session_root) {
+        filesystem.insert(path, Value::String(permission));
+    }
+}
+
+pub(crate) fn evaluator_session_root_permissions(
+    agent: &AgentConfig,
+    scope: &[String],
+    session_root: &Path,
+) -> BTreeMap<String, String> {
+    let mut permissions = BTreeMap::new();
+    if scope == full_scope() {
+        permissions.insert(absolute_session_path(session_root, "."), "read".to_string());
+        permissions.insert(
+            absolute_session_glob(session_root, "**"),
+            "read".to_string(),
+        );
+    } else {
+        permissions.insert(
+            absolute_session_path(session_root, "."),
+            FILESYSTEM_DENY.to_string(),
+        );
+        permissions.insert(
+            absolute_session_glob(session_root, "**"),
+            FILESYSTEM_DENY.to_string(),
+        );
+        for path in scope {
+            allow_absolute_scope_ancestor_directories(&mut permissions, session_root, path);
+            permissions.insert(
+                absolute_session_path(session_root, path),
+                "read".to_string(),
+            );
+            permissions.insert(
+                absolute_session_glob(session_root, &format!("{path}/**")),
+                "read".to_string(),
+            );
+        }
+    }
+    for pattern in evaluator_deny_permission_patterns(agent) {
+        permissions.insert(
+            absolute_session_glob(session_root, &pattern),
+            FILESYSTEM_DENY.to_string(),
+        );
+    }
+    permissions
+}
+
+fn allow_absolute_scope_ancestor_directories(
+    permissions: &mut BTreeMap<String, String>,
+    session_root: &Path,
+    path: &str,
+) {
+    let mut current = path;
+    while let Some((parent, _)) = current.rsplit_once('/') {
+        permissions
+            .entry(absolute_session_path(session_root, parent))
+            .or_insert_with(|| "read".to_string());
+        current = parent;
+    }
+}
+
+fn absolute_session_path(session_root: &Path, path: &str) -> String {
+    if path == "." {
+        return session_root.display().to_string();
+    }
+    session_root.join(path).display().to_string()
+}
+
+fn absolute_session_glob(session_root: &Path, pattern: &str) -> String {
+    session_root.join(pattern).display().to_string()
 }
 
 pub(crate) fn evaluator_thread_root_permissions(
@@ -145,6 +229,7 @@ pub(crate) fn evaluator_base_config(
 ) -> Value {
     let mut filesystem = Map::new();
     filesystem.insert(":root".to_string(), Value::String(root_access.to_string()));
+    filesystem.insert(":minimal".to_string(), Value::String("read".to_string()));
     filesystem.insert(":workspace_roots".to_string(), root_permissions);
     for (path, permission) in evaluator_runtime_permissions() {
         filesystem.insert(path, Value::String(permission));
@@ -190,10 +275,19 @@ fn insert_evaluator_context_isolation_config(config: &mut Map<String, Value>) {
 
 pub(crate) fn evaluator_runtime_permissions() -> Vec<(String, String)> {
     let mut permissions = [
+        "~",
+        "~/.zlogin",
+        "~/.zlogout",
+        "~/.zprofile",
+        "~/.zshenv",
+        "~/.zshrc",
+        "/etc/**",
+        "/private/etc/**",
         "/bin/**",
         "/usr/bin/**",
         "/usr/lib/**",
         "/usr/libexec/**",
+        "/usr/share/**",
         "/System/**",
         "/Library/**",
         "/opt/homebrew/**",
@@ -294,10 +388,7 @@ pub(crate) fn evaluator_model_catalog_config_arg(
 
 fn evaluator_model_catalog_slugs(agent: &AgentConfig) -> Vec<String> {
     let mut models = Vec::new();
-    if let Some(model) = agent.model.primary.as_deref() {
-        push_unique_model_slug(&mut models, model);
-    }
-    for model in &agent.model.fallbacks {
+    for model in &agent.models {
         push_unique_model_slug(&mut models, model);
     }
     models
@@ -413,6 +504,7 @@ pub(crate) fn app_server_model_key(model: Option<&str>) -> String {
 pub(crate) fn app_server_startup_filesystem_arg(agent: &AgentConfig) -> String {
     let mut entries = Vec::new();
     entries.push(toml_assignment(":root", &toml_string("read")));
+    entries.push(toml_assignment(":minimal", &toml_string("read")));
     let mut project_root_entries = Vec::new();
     for (path, permission) in evaluator_startup_root_permissions(agent) {
         project_root_entries.push(toml_assignment(&path, &toml_string(&permission)));

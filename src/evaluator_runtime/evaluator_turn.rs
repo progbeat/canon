@@ -1,29 +1,28 @@
 use crate::check_types::{
-    CheckRecord, CheckRecordOutcome, CheckResult, ObservedAnswerState, ParsedAnswer,
-    SelectedExpectation,
+    CheckRecord, CheckRecordOutcome, CheckResult, ParsedAnswer, SelectedExpectation,
 };
 use crate::config_types::AgentConfig;
 use crate::evaluator_prompt::EVALUATOR_BASE_INSTRUCTIONS;
 use crate::evaluator_response_cache::{response_excerpt, EvaluatorResponseParseCache};
 use crate::evaluator_types::{EvaluatorError, EvaluatorRunner};
-use crate::hash::full_scope;
 use crate::logging::DiagnosticLogWriter;
 use crate::token_usage_types::{EvaluatorTurnUsage, TokenUsage};
-use crate::UNPARSEABLE_OBSERVED;
+use crate::ERROR_UNPARSABLE;
 use serde::Serialize;
 use serde_json::{json, Value};
 
 pub(crate) fn evaluator_models(agent: &AgentConfig) -> Vec<Option<String>> {
-    let mut models = vec![agent.model.primary.clone()];
-    models.extend(agent.model.fallbacks.iter().cloned().map(Some));
-    models
+    if agent.models.is_empty() {
+        return vec![None];
+    }
+    agent.models.iter().cloned().map(Some).collect()
 }
 
 pub(crate) fn effective_thinking<'a>(
-    agent: &'a AgentConfig,
+    _agent: &'a AgentConfig,
     expectation: &'a SelectedExpectation,
 ) -> &'a str {
-    expectation.thinking.as_deref().unwrap_or(&agent.thinking)
+    &expectation.agent.thinking
 }
 
 pub(crate) fn model_label(model: Option<&str>) -> &str {
@@ -79,25 +78,23 @@ pub(crate) fn record_from_response(
     enforced_scope: Vec<String>,
     visible_tree_oid: String,
 ) -> Result<CheckRecord, String> {
-    // This is the expectation-specific answer vocabulary gate: yes/no and
-    // option expectations reject prose, while free-form exact-string
-    // expectations remain valid single-line answers.
-    let requires_human_review =
-        ObservedAnswerState::from_expected_and_observed(&expectation.a, &response.answer)
-            .requires_human_review();
-    let result = if !requires_human_review && response.answer == expectation.a {
+    let result = if response.error.is_none() && response.answer == expectation.a {
         CheckResult::Pass
     } else {
         CheckResult::Fail
     };
+    let error = response.error.clone();
+    let suggested_q_scope = response.q_scope_suggestion.clone();
     CheckRecord::current_from_expectation(
         agent,
         expectation,
         CheckRecordOutcome {
             result,
             observed: response.answer,
+            error,
             evidence: response.evidence,
             scope: enforced_scope,
+            suggested_q_scope,
             visible_tree_oid,
         },
     )
@@ -149,7 +146,7 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
     )?;
     let parsed = match parser_cache.parse(&response.text, agent) {
         Ok(answer) => answer,
-        Err(err) => unparseable_response_answer(&err, &response.text),
+        Err(err) => unparsable_response_answer(&err, &response.text),
     };
 
     Ok(ParsedTurnResponse {
@@ -159,16 +156,15 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
     })
 }
 
-fn unparseable_response_answer(err: &str, response: &str) -> ParsedAnswer {
-    ParsedAnswer {
-        answer: UNPARSEABLE_OBSERVED.to_string(),
-        evidence: format!(
+fn unparsable_response_answer(err: &str, response: &str) -> ParsedAnswer {
+    ParsedAnswer::error(
+        ERROR_UNPARSABLE.to_string(),
+        format!(
             "evaluator response could not be parsed: {}\nresponse: {}",
             err,
             response_excerpt(response)
         ),
-        scope: full_scope(),
-    }
+    )
 }
 
 pub(crate) fn ask_and_log<R: EvaluatorRunner>(

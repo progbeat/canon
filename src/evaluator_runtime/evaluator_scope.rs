@@ -21,6 +21,7 @@ pub(crate) fn parse_scope_json(text: &str, agent: &AgentConfig) -> Result<Vec<St
     parse_scope_strings(&scope, agent)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn parse_scope_strings(
     scope: &[String],
     agent: &AgentConfig,

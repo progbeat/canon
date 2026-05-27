@@ -1,6 +1,7 @@
 use crate::check_errors::error_record_from_interrogation_error;
 use crate::check_interrogation_state::{
-    should_retry_full_scope_after_restricted_idk, CheckRuntime, InterrogationState,
+    should_retry_full_scope_after_restricted_insufficient_evidence, CheckRuntime,
+    InterrogationState,
 };
 use crate::check_model_fallback::interrogate_expectation_with_model_fallbacks;
 use crate::check_narrowing::scope_narrowing_log_fields;
@@ -55,11 +56,12 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
     let should_stop_after_current_expectation =
         turn_exceeds_break_after_tokens(&interrogation, break_after_tokens)
             || turn_has_context_compaction(&interrogation);
-    if should_retry_full_scope_after_restricted_idk(&interrogation.record, call.enforced_scope) {
-        // `idk` is a non-answer, not a cache-spec "same answer" that can prove
-        // a narrower scope. The interrogation policy requires a separate
-        // full-scope retry, and that final record replaces the restricted
-        // non-answer.
+    if should_retry_full_scope_after_restricted_insufficient_evidence(
+        &interrogation.record,
+        call.enforced_scope,
+    ) {
+        // Restricted insufficient-evidence is not final. Retry once with full
+        // project scope and let that response become the record.
         *call.enforced_scope = full_scope();
         interrogation = interrogate_or_error_record(
             call.call(),
@@ -94,7 +96,7 @@ pub(crate) fn interrogate_or_error_record<R: EvaluatorRunner>(
         Err(err) => Ok(InterrogationResult {
             record: error_record_from_interrogation_error(
                 call.root,
-                &call.runtime.config.agent,
+                &call.expectation.agent,
                 call.expectation,
                 call.scope,
                 &err,
@@ -122,11 +124,10 @@ pub(crate) fn turn_has_context_compaction(interrogation: &InterrogationResult) -
 }
 
 pub(crate) fn narrowed_scope_is_accepted(wide: &CheckRecord, narrowed: &CheckRecord) -> bool {
-    // Canon trusts a strict narrowing only after an independent interrogation
-    // under that narrower scope returns a reusable answer that is either
-    // unchanged or still incorrect.
+    // Canon trusts a q-scope suggestion only after an independent
+    // interrogation under that scope returns a schema-valid answer.
+    let _ = wide;
     is_reusable_history_record(narrowed)
-        && (narrowed.observed == wide.observed || !narrowed.passed())
 }
 
 pub(crate) fn restore_record_to_enforced_scope(

@@ -112,8 +112,8 @@ fn scope_containment_normalizes_repo_paths_before_comparing() {
 #[test]
 fn evaluator_session_key_is_not_newline_ambiguous() {
     assert_ne!(
-        evaluator_session_key(&["a\nb".to_string(), "c".to_string()]),
-        evaluator_session_key(&["a".to_string(), "b\nc".to_string()])
+        evaluator_session_key(&["a\nb".to_string(), "c".to_string()], None),
+        evaluator_session_key(&["a".to_string(), "b\nc".to_string()], None)
     );
 }
 
@@ -170,7 +170,7 @@ expectations:
 #[test]
 fn runtime_ignore_pattern_normalization_fails_closed_for_invalid_patterns() {
     let agent = AgentConfig {
-        model: ModelConfig::default(),
+        models: Vec::new(),
         thinking: "low".to_string(),
         instructions: Some("x".to_string()),
         ignore: vec!["../secrets/**".to_string()],
@@ -306,6 +306,6 @@ expectations:
     .unwrap();
 
     assert!(result.record.passed());
-    assert_eq!(result.record.scope, vec!["src"]);
+    assert_eq!(result.record.scope, full_scope());
     let _ = fs::remove_dir_all(root);
 }

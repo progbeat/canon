@@ -18,8 +18,10 @@ fn reusable_history_record_uses_current_expectation_metadata() {
             prompt: Some("old prompt text".to_string()),
             expected: Some("old expected".to_string()),
             observed: "yes".to_string(),
+            error: None,
             evidence: "cached answer".to_string(),
             scope: full_scope(),
+            suggested_q_scope: None,
             visible_tree_oid: staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
@@ -148,9 +150,11 @@ fn reusable_history_record_skips_non_answer_history_before_visible_tree_oid_matc
         &config.agent,
         &expectation,
         RESULT_FAIL,
-        "Yes: concrete bug",
+        ERROR_INSUFFICIENT_EVIDENCE,
         visible_tree_oid,
     );
+    let mut newer = newer;
+    newer.error = Some(ERROR_INSUFFICIENT_EVIDENCE.to_string());
     append_history_record(&root, &expectation, &newer).unwrap();
 
     let record = same_tree_history_record(&root, &config.agent, &expectation)
@@ -201,9 +205,9 @@ fn free_form_observed_history_answers_are_reusable() {
     assert!(!record_requires_human_review(&record));
     assert!(is_reusable_history_record(&record));
 
-    record.observed = "malformed".to_string();
-    assert!(record_requires_human_review(&record));
-    assert!(!is_reusable_history_record(&record));
+    record.observed = "Go".to_string();
+    assert!(!record_requires_human_review(&record));
+    assert!(is_reusable_history_record(&record));
 
     record.observed = "yes\nno".to_string();
     assert!(record_requires_human_review(&record));
@@ -215,13 +219,13 @@ fn free_form_observed_history_answers_are_reusable() {
 }
 
 #[test]
-fn yes_no_history_answers_reject_free_form_answer_shape() {
+fn yes_no_history_answers_reuse_any_single_line_answer() {
     let mut record = sample_record(1, RESULT_FAIL);
     record.expected = Some("no".to_string());
     record.observed = "Yes: concrete bug".to_string();
 
-    assert!(record_requires_human_review(&record));
-    assert!(!is_reusable_history_record(&record));
+    assert!(!record_requires_human_review(&record));
+    assert!(is_reusable_history_record(&record));
 
     record.observed = "yes".to_string();
     assert!(!record_requires_human_review(&record));
@@ -233,8 +237,8 @@ fn yes_no_history_answers_reject_free_form_answer_shape() {
     assert!(is_reusable_history_record(&record));
 
     record.observed = "Rust".to_string();
-    assert!(record_requires_human_review(&record));
-    assert!(!is_reusable_history_record(&record));
+    assert!(!record_requires_human_review(&record));
+    assert!(is_reusable_history_record(&record));
 }
 
 #[test]
@@ -330,8 +334,10 @@ expectations:
             prompt: Some(old_expectation.q.clone()),
             expected: Some(old_expectation.a.clone()),
             observed: "yes".to_string(),
+            error: None,
             evidence: "README.md answers it".to_string(),
             scope: vec!["README.md".to_string()],
+            suggested_q_scope: None,
             visible_tree_oid: staged_visible_tree_oid(
                 &root,
                 &base_config.agent,

@@ -4,7 +4,6 @@ use crate::evaluator_config::app_server_args;
 use crate::evaluator_types::EvaluatorError;
 use crate::fs_util::ensure_dir_without_symlinks;
 use crate::git::resolve_git_path;
-use crate::output::write_stderr_bytes;
 use crate::platform;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -59,7 +58,7 @@ pub(crate) fn spawn_app_server_reader(
 pub(crate) fn spawn_app_server_stderr_reader(
     stderr: std::process::ChildStderr,
 ) -> (Receiver<String>, JoinHandle<()>) {
-    spawn_app_server_stderr_reader_with_forwarder(stderr, write_stderr_bytes)
+    spawn_app_server_stderr_reader_with_forwarder(stderr, |_| Ok(()))
 }
 
 pub(crate) fn spawn_app_server_stderr_reader_with_forwarder<R, F>(
@@ -140,6 +139,7 @@ impl AppServerRunner {
             context_compaction_events_by_turn: BTreeMap::new(),
             last_turn_usage: None,
             retired_sessions: Default::default(),
+            session_cwds: BTreeMap::new(),
         };
         runner.send_request(
             "initialize",

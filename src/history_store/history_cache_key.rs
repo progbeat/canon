@@ -21,17 +21,10 @@ pub(crate) fn history_cache_key(agent: &AgentConfig, expectation: &SelectedExpec
     for plugin in plugins {
         push_history_cache_key_part(&mut input, "plugin", &plugin);
     }
-    if let Some(primary) = &agent.model.primary {
-        push_history_cache_key_part(&mut input, "model.primary", primary);
+    for model in &agent.models {
+        push_history_cache_key_part(&mut input, "model", model);
     }
-    for fallback in &agent.model.fallbacks {
-        push_history_cache_key_part(&mut input, "model.fallback", fallback);
-    }
-    let thinking = expectation
-        .thinking
-        .as_deref()
-        .unwrap_or(agent.thinking.as_str());
-    push_history_cache_key_part(&mut input, "thinking", thinking);
+    push_history_cache_key_part(&mut input, "thinking", &expectation.agent.thinking);
     let cooldown = expectation
         .cooldown
         .map(|cooldown| cooldown.seconds.to_string())

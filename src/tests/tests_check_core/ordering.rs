@@ -12,7 +12,7 @@ use crate::tests::{
     git_project, parse_check_config, FakeRunner,
 };
 use crate::visible_tree_oid::staged_visible_tree_oid;
-use crate::{RESULT_FAIL, UNPARSEABLE_OBSERVED};
+use crate::{ERROR_UNPARSABLE, RESULT_FAIL};
 use serde_json::json;
 use std::fs;
 use std::io::{self, Write};
@@ -156,7 +156,7 @@ fn selected_expectations_use_recorded_errors_for_order() {
         &config.agent,
         &second,
         "fail",
-        UNPARSEABLE_OBSERVED,
+        ERROR_UNPARSABLE,
         staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap(),
     );
     record.timestamp = "2026-01-01T00:00:00Z".to_string();
@@ -228,8 +228,8 @@ fn selected_expectations_ignore_runtime_log_errors_for_order() {
         &[
             ("id", json!(second.id.clone())),
             ("result", json!(RESULT_FAIL)),
-            ("observed", json!(UNPARSEABLE_OBSERVED)),
-            ("evidence", json!("unparseable")),
+            ("observed", json!(ERROR_UNPARSABLE)),
+            ("evidence", json!("unparsable")),
             ("scope", json!(full_scope())),
             ("prompt", json!(second.q.clone())),
             ("expected", json!(second.a.clone())),

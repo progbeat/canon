@@ -3,8 +3,7 @@ use crate::history_cache_key::history_cache_key;
 use crate::time::{format_record_timestamp, unix_timestamp};
 use crate::token_usage_types::TokenUsage;
 use crate::{
-    EMPTY_EVIDENCE_OBSERVED, OBSERVED_IDK, OBSERVED_MALFORMED, RESULT_FAIL, RESULT_PASS,
-    UNPARSEABLE_OBSERVED,
+    ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION, ERROR_UNPARSABLE, RESULT_FAIL, RESULT_PASS,
 };
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
@@ -32,7 +31,9 @@ pub(crate) struct SelectedExpectation {
     pub(crate) a: String,
     #[allow(dead_code)]
     pub(crate) prompt_scope: Vec<String>,
+    pub(crate) agent: AgentConfig,
     pub(crate) cooldown: Option<Cooldown>,
+    #[allow(dead_code)]
     pub(crate) thinking: Option<String>,
 }
 
@@ -44,60 +45,63 @@ pub(crate) struct Cooldown {
 #[derive(Debug, Clone)]
 pub(crate) struct ParsedAnswer {
     pub(crate) answer: String,
+    pub(crate) error: Option<String>,
     pub(crate) evidence: String,
     pub(crate) scope: Vec<String>,
+    pub(crate) q_scope_suggestion: Option<Vec<String>>,
+}
+
+impl ParsedAnswer {
+    pub(crate) fn answer(
+        answer: String,
+        evidence: String,
+        q_scope_suggestion: Option<Vec<String>>,
+    ) -> ParsedAnswer {
+        ParsedAnswer {
+            answer,
+            error: None,
+            evidence,
+            scope: Vec::new(),
+            q_scope_suggestion,
+        }
+    }
+
+    pub(crate) fn error(error: String, evidence: String) -> ParsedAnswer {
+        ParsedAnswer {
+            answer: error.clone(),
+            error: Some(error),
+            evidence,
+            scope: Vec::new(),
+            q_scope_suggestion: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ObservedAnswerState {
     Answer,
-    Idk,
-    Malformed,
-    Unparseable,
-    EmptyEvidence,
+    InsufficientEvidence,
+    InvalidQuestion,
+    Unparsable,
     Unknown,
 }
 
 impl ObservedAnswerState {
     pub(crate) fn from_observed(observed: &str) -> ObservedAnswerState {
         match observed {
-            OBSERVED_IDK => ObservedAnswerState::Idk,
-            OBSERVED_MALFORMED => ObservedAnswerState::Malformed,
-            UNPARSEABLE_OBSERVED => ObservedAnswerState::Unparseable,
-            EMPTY_EVIDENCE_OBSERVED => ObservedAnswerState::EmptyEvidence,
+            ERROR_INSUFFICIENT_EVIDENCE => ObservedAnswerState::InsufficientEvidence,
+            ERROR_INVALID_QUESTION => ObservedAnswerState::InvalidQuestion,
+            ERROR_UNPARSABLE => ObservedAnswerState::Unparsable,
             _ if contains_line_break(observed) => ObservedAnswerState::Unknown,
             _ => ObservedAnswerState::Answer,
         }
     }
 
     pub(crate) fn from_expected_and_observed(
-        expected: &str,
+        _expected: &str,
         observed: &str,
     ) -> ObservedAnswerState {
-        let state = ObservedAnswerState::from_observed(observed);
-        if state != ObservedAnswerState::Answer {
-            return state;
-        }
-        // Reserved non-answer tokens are classified above before considering the
-        // expectation shape, so even free-form exact-string expectations never
-        // reuse `idk`, `malformed`, unparseable, or empty-evidence responses as
-        // ordinary exact answers. The expectation only decides which remaining
-        // single-line answer vocabulary is valid for pass/fail comparison.
-        if is_yes_no_token(expected) {
-            if is_yes_no_token(observed) {
-                ObservedAnswerState::Answer
-            } else {
-                ObservedAnswerState::Unknown
-            }
-        } else if is_option_token(expected) {
-            if is_option_token(observed) {
-                ObservedAnswerState::Answer
-            } else {
-                ObservedAnswerState::Unknown
-            }
-        } else {
-            ObservedAnswerState::Answer
-        }
+        ObservedAnswerState::from_observed(observed)
     }
 
     pub(crate) fn requires_human_review(self) -> bool {
@@ -109,20 +113,16 @@ impl ObservedAnswerState {
     }
 }
 
-fn is_yes_no_token(value: &str) -> bool {
-    matches!(value, "yes" | "no")
-}
-
-fn is_option_token(value: &str) -> bool {
-    value.len() == 1 && value.bytes().all(|byte| byte.is_ascii_lowercase())
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EvaluatorResponseJson {
-    pub(crate) answer: String,
+    #[serde(default)]
+    pub(crate) answer: Option<String>,
+    #[serde(default)]
+    pub(crate) error: Option<String>,
     pub(crate) evidence: String,
-    pub(crate) scope: Vec<String>,
+    #[serde(default, rename = "qScopeSuggestion")]
+    pub(crate) q_scope_suggestion: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -166,8 +166,12 @@ pub(crate) struct CheckRecord {
     #[serde(default)]
     pub(crate) expected: Option<String>,
     pub(crate) observed: String,
+    #[serde(default)]
+    pub(crate) error: Option<String>,
     pub(crate) evidence: String,
     pub(crate) scope: Vec<String>,
+    #[serde(default, rename = "suggestedQScope")]
+    pub(crate) suggested_q_scope: Option<Vec<String>>,
     #[serde(rename = "visibleTreeOid", alias = "scopeTreeOid", alias = "scopeHash")]
     pub(crate) visible_tree_oid: String,
     #[serde(default)]
@@ -181,8 +185,10 @@ pub(crate) struct CheckRecord {
 pub(crate) struct CheckRecordOutcome {
     pub(crate) result: CheckResult,
     pub(crate) observed: String,
+    pub(crate) error: Option<String>,
     pub(crate) evidence: String,
     pub(crate) scope: Vec<String>,
+    pub(crate) suggested_q_scope: Option<Vec<String>>,
     pub(crate) visible_tree_oid: String,
 }
 
@@ -219,8 +225,10 @@ impl CheckRecord {
             prompt: Some(expectation.q.clone()),
             expected: Some(expectation.a.clone()),
             observed: outcome.observed,
+            error: outcome.error,
             evidence: outcome.evidence,
             scope: outcome.scope,
+            suggested_q_scope: outcome.suggested_q_scope,
             visible_tree_oid: outcome.visible_tree_oid,
             cache_key,
         }

@@ -2,9 +2,10 @@ use crate::check_generator_paths::expand_generator_paths;
 use crate::check_validation::normalize_agent_ignore_pattern_for_config;
 use crate::config_types::{
     AgentConfig, CheckConfig, Expectation, RawCheckConfig, RawExpectationItem,
-    RawGeneratorExpectation, RawIncludeExpectation,
+    RawExpectationSettings, RawGeneratorExpectation, RawIncludeExpectation, RawPresetConfig,
 };
 use crate::repo_inspection::RepoInspectionCache;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 #[cfg(test)]
@@ -17,19 +18,64 @@ pub(crate) fn expand_raw_check_config(
     cache: Option<&mut RepoInspectionCache>,
     source: CheckConfigSource,
 ) -> Result<CheckConfig, String> {
-    let mut expansion = RawExpectationExpansion {
-        root,
-        cache,
-        source,
-        include_stack: Vec::new(),
-        expectations: Vec::new(),
+    let raw_presets = raw_presets_from_config(raw.presets, raw.agent)?;
+    let presets = resolve_presets(raw_presets)?;
+    let default_agent = presets
+        .get("default")
+        .cloned()
+        .ok_or_else(|| "check.yml presets must contain default".to_string())?;
+    let expectations = {
+        let mut expansion = RawExpectationExpansion {
+            root,
+            cache,
+            source,
+            presets: &presets,
+            include_stack: Vec::new(),
+            expectations: Vec::new(),
+        };
+        expansion.expand_items(config_path, raw.expectations)?;
+        expansion.expectations
     };
-    expansion.expand_items(config_path, raw.expectations)?;
     Ok(CheckConfig {
         version: raw.version,
-        agent: normalize_agent_config(raw.agent)?,
-        expectations: expansion.expectations,
+        presets,
+        agent: default_agent,
+        expectations,
     })
+}
+
+fn raw_presets_from_config(
+    presets: Option<BTreeMap<String, RawPresetConfig>>,
+    legacy_agent: Option<crate::config_types::RawLegacyAgentConfig>,
+) -> Result<BTreeMap<String, RawPresetConfig>, String> {
+    match (presets, legacy_agent) {
+        (Some(presets), None) => Ok(presets),
+        (None, Some(agent)) => {
+            let mut presets = BTreeMap::new();
+            presets.insert("default".to_string(), raw_preset_from_legacy_agent(agent));
+            Ok(presets)
+        }
+        (Some(_), Some(_)) => Err("check.yml must not contain both presets and agent".to_string()),
+        (None, None) => Err("check.yml presets must contain default".to_string()),
+    }
+}
+
+fn raw_preset_from_legacy_agent(
+    agent: crate::config_types::RawLegacyAgentConfig,
+) -> RawPresetConfig {
+    let mut models = Vec::new();
+    if let Some(primary) = agent.model.primary {
+        models.push(primary);
+    }
+    models.extend(agent.model.fallbacks);
+    RawPresetConfig {
+        extends: None,
+        models: (!models.is_empty()).then_some(models),
+        thinking: agent.thinking,
+        instructions: agent.instructions,
+        ignore: agent.ignore,
+        plugins: agent.plugins,
+    }
 }
 
 fn normalize_agent_config(mut agent: AgentConfig) -> Result<AgentConfig, String> {
@@ -37,6 +83,88 @@ fn normalize_agent_config(mut agent: AgentConfig) -> Result<AgentConfig, String>
         *pattern = normalize_agent_ignore_pattern_for_config(pattern)?;
     }
     Ok(agent)
+}
+
+fn resolve_presets(
+    raw_presets: BTreeMap<String, RawPresetConfig>,
+) -> Result<BTreeMap<String, AgentConfig>, String> {
+    if !raw_presets.contains_key("default") {
+        return Err("check.yml presets must contain default".to_string());
+    }
+    let mut resolved = BTreeMap::new();
+    for name in raw_presets.keys() {
+        let mut resolving = BTreeSet::new();
+        let agent = resolve_preset(name, &raw_presets, &mut resolved, &mut resolving)?;
+        resolved.insert(name.clone(), agent);
+    }
+    Ok(resolved)
+}
+
+fn resolve_preset(
+    name: &str,
+    raw_presets: &BTreeMap<String, RawPresetConfig>,
+    resolved: &mut BTreeMap<String, AgentConfig>,
+    resolving: &mut BTreeSet<String>,
+) -> Result<AgentConfig, String> {
+    if let Some(agent) = resolved.get(name) {
+        return Ok(agent.clone());
+    }
+    if !resolving.insert(name.to_string()) {
+        return Err(format!("preset inheritance cycle includes {}", name));
+    }
+    let raw = raw_presets
+        .get(name)
+        .ok_or_else(|| format!("unknown preset: {}", name))?;
+    let mut agent = if let Some(parent) = raw.extends.as_deref() {
+        resolve_preset(parent, raw_presets, resolved, resolving)?
+    } else {
+        AgentConfig::implementation_default()
+    };
+    apply_raw_preset(&mut agent, raw);
+    let agent = normalize_agent_config(agent)?;
+    resolving.remove(name);
+    resolved.insert(name.to_string(), agent.clone());
+    Ok(agent)
+}
+
+fn apply_raw_preset(agent: &mut AgentConfig, raw: &RawPresetConfig) {
+    if let Some(models) = &raw.models {
+        agent.models = models.clone();
+    }
+    if let Some(thinking) = &raw.thinking {
+        agent.thinking = thinking.clone();
+    }
+    if let Some(instructions) = &raw.instructions {
+        agent.instructions = Some(instructions.clone());
+    }
+    if let Some(ignore) = &raw.ignore {
+        agent.ignore = ignore.clone();
+    }
+    if let Some(plugins) = &raw.plugins {
+        agent.plugins = plugins.clone();
+    }
+}
+
+fn apply_expectation_settings(
+    agent: &mut AgentConfig,
+    settings: &RawExpectationSettings,
+) -> Result<(), String> {
+    if let Some(models) = &settings.models {
+        agent.models = models.clone();
+    }
+    if let Some(thinking) = &settings.thinking {
+        agent.thinking = thinking.clone();
+    }
+    if let Some(instructions) = &settings.instructions {
+        agent.instructions = Some(instructions.clone());
+    }
+    if let Some(ignore) = &settings.ignore {
+        agent.ignore = ignore.clone();
+    }
+    if let Some(plugins) = &settings.plugins {
+        agent.plugins = plugins.clone();
+    }
+    normalize_agent_config(agent.clone()).map(|normalized| *agent = normalized)
 }
 
 #[derive(Clone, Copy)]
@@ -60,6 +188,7 @@ struct RawExpectationExpansion<'a> {
     root: Option<&'a Path>,
     cache: Option<&'a mut RepoInspectionCache>,
     source: CheckConfigSource,
+    presets: &'a BTreeMap<String, AgentConfig>,
     include_stack: Vec<String>,
     expectations: Vec<Expectation>,
 }
@@ -72,13 +201,17 @@ impl RawExpectationExpansion<'_> {
     ) -> Result<(), String> {
         for (index, item) in items.into_iter().enumerate() {
             match item {
-                RawExpectationItem::Explicit(item) => self.expectations.push(Expectation {
-                    q: item.q,
-                    a: item.a,
-                    prompt_scope: Vec::new(),
-                    cooldown: item.cooldown,
-                    thinking: item.thinking,
-                }),
+                RawExpectationItem::Explicit(item) => {
+                    let agent = self.resolve_expectation_agent(&item.settings)?;
+                    self.expectations.push(Expectation {
+                        q: item.q,
+                        a: item.a,
+                        prompt_scope: Vec::new(),
+                        agent,
+                        cooldown: item.cooldown,
+                        thinking: item.settings.thinking,
+                    })
+                }
                 RawExpectationItem::Generator(item) => {
                     self.expand_path_generator(config_path, index, item)?
                 }
@@ -109,8 +242,9 @@ impl RawExpectationExpansion<'_> {
                 q: render_generator_question(&item.q_template, &content),
                 a: item.a.clone(),
                 prompt_scope: if uses_content { vec![file] } else { Vec::new() },
+                agent: self.resolve_expectation_agent(&item.settings)?,
                 cooldown: item.cooldown.clone(),
-                thinking: item.thinking.clone(),
+                thinking: item.settings.thinking.clone(),
             });
         }
         Ok(())
@@ -191,6 +325,20 @@ impl RawExpectationExpansion<'_> {
             None => serde_saphyr::from_str(content)
                 .map_err(|err| format!("failed to parse {}: {}", file, err)),
         }
+    }
+
+    fn resolve_expectation_agent(
+        &self,
+        settings: &RawExpectationSettings,
+    ) -> Result<AgentConfig, String> {
+        let preset = settings.preset.as_deref().unwrap_or("default");
+        let mut agent = self
+            .presets
+            .get(preset)
+            .cloned()
+            .ok_or_else(|| format!("unknown preset: {}", preset))?;
+        apply_expectation_settings(&mut agent, settings)?;
+        Ok(agent)
     }
 }
 

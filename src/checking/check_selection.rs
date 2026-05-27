@@ -240,6 +240,7 @@ pub(crate) fn selected_expectation_at(
         q: expectation.q.clone(),
         a: expectation.a.clone(),
         prompt_scope: expectation.prompt_scope.clone(),
+        agent: expectation.agent.clone(),
         cooldown,
         thinking: expectation.thinking.clone(),
     })
