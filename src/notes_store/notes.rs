@@ -15,9 +15,15 @@ use crate::project_types::{Config, Note};
 use crate::time::unix_timestamp;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
 
 const NOTE_LOG_MARKER: &str = "<!-- canon log v1 -->";
+const NOTE_LOCK_STALE_AFTER_SECS: u64 = 300;
+const NOTE_LOCK_WAIT_RETRIES: usize = 200;
+const NOTE_LOCK_WAIT_SLEEP: Duration = Duration::from_millis(10);
 pub(crate) const NOTE_LOG_COMPACT_MIN_BYTES: u64 = 64 * 1024;
 
 #[derive(Deserialize, Serialize)]
@@ -35,7 +41,7 @@ enum NoteTextOperation {
 }
 
 pub(crate) fn ensure_note(config: &Config, key: &str) -> Result<Note, String> {
-    let (note, existed) = writable_note_state(config, key)?;
+    let (note, existed, _lock) = locked_note_state(config, key)?;
     if existed {
         return Ok(note);
     } else {
@@ -95,7 +101,7 @@ fn record_note_text(
 }
 
 fn append_note_record(config: &Config, key: &str, record: NoteRecord) -> Result<(), String> {
-    let (note, existed) = writable_note_state(config, key)?;
+    let (note, existed, _lock) = locked_note_state(config, key)?;
     match record {
         NoteRecord::Append { timestamp, text } if existed => {
             let previous_size =
@@ -124,7 +130,7 @@ fn upsert_note_index_after_create(config: &Config, key: &str, note: &Note) -> Re
     Ok(())
 }
 
-fn append_note_log_record(path: &std::path::Path, record: &NoteRecord) -> Result<u64, String> {
+fn append_note_log_record(path: &Path, record: &NoteRecord) -> Result<u64, String> {
     let mut file = open_file_for_append_without_following_symlink(path)?;
     let previous_size = file
         .metadata()
@@ -138,10 +144,14 @@ fn append_note_log_record(path: &std::path::Path, record: &NoteRecord) -> Result
         )
     })?;
     line.push('\n');
-    file.write_all(b"\n")
-        .and_then(|()| file.write_all(NOTE_LOG_MARKER.as_bytes()))
-        .and_then(|()| file.write_all(b"\n"))
-        .and_then(|()| file.write_all(line.as_bytes()))
+    // The caller holds NoteLock. Assemble one logical entry before appending
+    // so canon's own writes never split a marker from its JSON record.
+    let mut entry = String::new();
+    entry.push('\n');
+    entry.push_str(NOTE_LOG_MARKER);
+    entry.push('\n');
+    entry.push_str(&line);
+    file.write_all(entry.as_bytes())
         .and_then(|()| file.flush())
         .map_err(|err| format!("failed to append {}: {}", path.display(), err))?;
     Ok(previous_size)
@@ -434,7 +444,7 @@ fn parse_note_log_records(note: &Note, text: &str) -> Result<Option<Vec<NoteReco
 }
 
 pub(crate) fn delete_note(config: &Config, key: &str) -> Result<(), String> {
-    let (note, existed) = note_existing_state(config, key)?;
+    let (note, existed, _lock) = locked_note_state(config, key)?;
     if existed {
         let original = read_note_data(&note, |path| fs::read(path))?;
         fs::remove_file(&note.path)
@@ -451,24 +461,83 @@ pub(crate) fn delete_note(config: &Config, key: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn writable_note_state(config: &Config, key: &str) -> Result<(Note, bool), String> {
+// Note compaction replaces the note file, so same-note mutations use a sidecar
+// lock that stays stable across append-log writes, compaction, and delete.
+struct NoteLock {
+    path: PathBuf,
+}
+
+impl Drop for NoteLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn lock_note(note: &Note) -> Result<NoteLock, String> {
+    let path = note.path.with_extension("md.lock");
+    for attempt in 0..=NOTE_LOCK_WAIT_RETRIES {
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(_) => return Ok(NoteLock { path }),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+                if note_lock_is_stale(&path)? {
+                    remove_note_lock(&path)?;
+                    continue;
+                }
+                if attempt == NOTE_LOCK_WAIT_RETRIES {
+                    return Err(format!(
+                        "failed to lock {}: lock is already held",
+                        path.display()
+                    ));
+                }
+                thread::sleep(NOTE_LOCK_WAIT_SLEEP);
+            }
+            Err(err) => return Err(format!("failed to lock {}: {}", path.display(), err)),
+        }
+    }
+    Err(format!("failed to lock {}", path.display()))
+}
+
+fn note_lock_is_stale(path: &Path) -> Result<bool, String> {
+    reject_symlink(path)?;
+    let metadata = fs::metadata(path)
+        .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
+    let modified = metadata
+        .modified()
+        .map_err(|err| format!("failed to inspect mtime for {}: {}", path.display(), err))?;
+    let age = modified
+        .elapsed()
+        .map_err(|err| format!("failed to inspect age for {}: {}", path.display(), err))?;
+    Ok(age >= Duration::from_secs(NOTE_LOCK_STALE_AFTER_SECS))
+}
+
+fn remove_note_lock(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(format!(
+            "failed to remove stale lock {}: {}",
+            path.display(),
+            err
+        )),
+    }
+}
+
+fn locked_note_state(config: &Config, key: &str) -> Result<(Note, bool, NoteLock), String> {
     ensure_dir_without_symlinks(&config.root)?;
-    note_existing_state(config, key)
-}
-
-fn read_note_data<T>(
-    note: &Note,
-    read: impl FnOnce(&std::path::Path) -> std::io::Result<T>,
-) -> Result<T, String> {
-    reject_symlink(&note.path)?;
-    read(&note.path).map_err(|err| format!("failed to read {}: {}", note.path.display(), err))
-}
-
-fn note_existing_state(config: &Config, key: &str) -> Result<(Note, bool), String> {
     let note = note_for_key(config, key)?;
+    let lock = lock_note(&note)?;
     let existed = note.path.exists();
     if existed {
         verify_note_key(&note.path, key)?;
     }
-    Ok((note, existed))
+    Ok((note, existed, lock))
+}
+
+fn read_note_data<T>(note: &Note, read: impl FnOnce(&Path) -> io::Result<T>) -> Result<T, String> {
+    reject_symlink(&note.path)?;
+    read(&note.path).map_err(|err| format!("failed to read {}: {}", note.path.display(), err))
 }

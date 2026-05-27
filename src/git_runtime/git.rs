@@ -1,9 +1,9 @@
 use crate::platform::path_from_git_stdout;
 use crate::project::command_output_trimmed;
 use std::ffi::OsStr;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 #[derive(Clone)]
 pub(crate) struct StagedTrackedFile {
@@ -95,6 +95,137 @@ fn parse_staged_tracked_file(entry: &[u8]) -> Result<Option<StagedTrackedFile>, 
 
 pub(crate) fn read_git_blobs(root: &Path, object_ids: &[String]) -> Result<Vec<Vec<u8>>, String> {
     read_git_blobs_with_git_program_inner(root, object_ids, OsStr::new("git"))
+}
+
+pub(crate) struct GitBlobReader {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+}
+
+impl GitBlobReader {
+    pub(crate) fn new(root: &Path) -> Result<GitBlobReader, String> {
+        GitBlobReader::new_with_git_program(root, OsStr::new("git"))
+    }
+
+    #[cfg(all(test, unix))]
+    pub(crate) fn new_with_test_git_program(
+        root: &Path,
+        git_program: &OsStr,
+    ) -> Result<GitBlobReader, String> {
+        GitBlobReader::new_with_git_program(root, git_program)
+    }
+
+    fn new_with_git_program(root: &Path, git_program: &OsStr) -> Result<GitBlobReader, String> {
+        let mut child = Command::new(git_program)
+            .arg("-C")
+            .arg(root)
+            .args(["cat-file", "--batch"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|err| format!("failed to run git cat-file: {}", err))?;
+        let stdin = match child.stdin.take() {
+            Some(stdin) => stdin,
+            None => {
+                return Err(cleanup_git_cat_file_child(
+                    child,
+                    "failed to open git cat-file stdin".to_string(),
+                ))
+            }
+        };
+        let stdout = match child.stdout.take() {
+            Some(stdout) => stdout,
+            None => {
+                drop(stdin);
+                return Err(cleanup_git_cat_file_child(
+                    child,
+                    "failed to open git cat-file stdout".to_string(),
+                ));
+            }
+        };
+        Ok(GitBlobReader {
+            child,
+            stdin,
+            stdout: BufReader::new(stdout),
+        })
+    }
+
+    pub(crate) fn read_blobs(&mut self, object_ids: &[String]) -> Result<Vec<Vec<u8>>, String> {
+        let mut blobs = Vec::with_capacity(object_ids.len());
+        for object_id in object_ids {
+            blobs.push(self.read_blob(object_id)?);
+        }
+        Ok(blobs)
+    }
+
+    fn read_blob(&mut self, object_id: &str) -> Result<Vec<u8>, String> {
+        writeln!(self.stdin, "{}", object_id)
+            .map_err(|err| format!("failed to write git cat-file input: {}", err))?;
+        self.stdin
+            .flush()
+            .map_err(|err| format!("failed to write git cat-file input: {}", err))?;
+
+        let mut header = String::new();
+        let bytes_read = self
+            .stdout
+            .read_line(&mut header)
+            .map_err(|err| format!("failed to read git cat-file output: {}", err))?;
+        if bytes_read == 0 {
+            return Err(format!(
+                "git cat-file output missing header for {}",
+                object_id
+            ));
+        }
+        let header = header.trim_end_matches('\n');
+        let mut fields = header.split_whitespace();
+        let actual_id = fields
+            .next()
+            .ok_or_else(|| "git cat-file header missing object id".to_string())?;
+        let object_type = fields
+            .next()
+            .ok_or_else(|| format!("git cat-file header missing type for {}", actual_id))?;
+        if object_type == "missing" {
+            return Err(format!("staged blob {} is missing", actual_id));
+        }
+        if object_type != "blob" {
+            return Err(format!(
+                "staged object {} is {}, not blob",
+                actual_id, object_type
+            ));
+        }
+        let size = fields
+            .next()
+            .ok_or_else(|| format!("git cat-file header missing size for {}", actual_id))?
+            .parse::<usize>()
+            .map_err(|_| format!("git cat-file header has invalid size for {}", actual_id))?;
+        let mut blob = vec![0; size];
+        self.stdout
+            .read_exact(&mut blob)
+            .map_err(|_| format!("git cat-file output truncated for {}", actual_id))?;
+        let mut delimiter = [0u8; 1];
+        self.stdout.read_exact(&mut delimiter).map_err(|_| {
+            format!(
+                "git cat-file output missing object delimiter for {}",
+                actual_id
+            )
+        })?;
+        if delimiter != [b'\n'] {
+            return Err(format!(
+                "git cat-file output missing object delimiter for {}",
+                actual_id
+            ));
+        }
+        Ok(blob)
+    }
+}
+
+impl Drop for GitBlobReader {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 #[cfg(all(test, unix))]

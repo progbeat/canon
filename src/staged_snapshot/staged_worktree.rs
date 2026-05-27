@@ -1,5 +1,5 @@
 use crate::config_types::AgentConfig;
-use crate::git::{read_git_blobs, staged_tracked_files, StagedTrackedFile};
+use crate::git::{staged_tracked_files, GitBlobReader, StagedTrackedFile};
 use crate::hash::full_scope;
 use crate::platform;
 use crate::scope::{effective_ignore_patterns, path_matches_pattern_bytes, sanitize_scope};
@@ -27,6 +27,7 @@ pub(crate) struct StagedWorktreeView {
     lazy_trees_by_deny: RefCell<BTreeMap<Vec<String>, PathBuf>>,
     unpacked_paths_by_deny: RefCell<BTreeMap<Vec<String>, BTreeSet<Vec<u8>>>>,
     materialized_roots: RefCell<BTreeMap<ScopeMaterializationKey, PathBuf>>,
+    blob_reader: RefCell<Option<GitBlobReader>>,
     next_lazy_id: Cell<u64>,
     next_scope_id: Cell<u64>,
 }
@@ -69,6 +70,7 @@ impl StagedWorktreeView {
             lazy_trees_by_deny: RefCell::new(BTreeMap::new()),
             unpacked_paths_by_deny: RefCell::new(BTreeMap::new()),
             materialized_roots: RefCell::new(BTreeMap::new()),
+            blob_reader: RefCell::new(None),
             next_lazy_id: Cell::new(0),
             next_scope_id: Cell::new(0),
         })
@@ -164,7 +166,7 @@ impl StagedWorktreeView {
             .iter()
             .map(|file| file.object_id.clone())
             .collect::<Vec<_>>();
-        let blobs = read_git_blobs(&self.source_root, &object_ids)?;
+        let blobs = self.read_missing_blobs(&object_ids)?;
         for (file, blob) in missing.iter().zip(blobs) {
             write_materialized_file(lazy_tree, file, &blob)?;
         }
@@ -174,6 +176,17 @@ impl StagedWorktreeView {
             unpacked.insert(file.path);
         }
         Ok(())
+    }
+
+    fn read_missing_blobs(&self, object_ids: &[String]) -> Result<Vec<Vec<u8>>, String> {
+        let mut reader = self.blob_reader.borrow_mut();
+        if reader.is_none() {
+            *reader = Some(GitBlobReader::new(&self.source_root)?);
+        }
+        reader
+            .as_mut()
+            .expect("git blob reader was initialized")
+            .read_blobs(object_ids)
     }
 
     fn hardlink_scope_root(

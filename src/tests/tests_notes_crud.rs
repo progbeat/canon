@@ -75,6 +75,36 @@ fn append_persists_log_record_without_rewriting_note() {
 }
 
 #[test]
+fn concurrent_appends_keep_note_log_records_materializable() {
+    with_env("append-log-concurrent", |_| {
+        let config = Config::from_env().unwrap();
+        write_note(&config, "src/main.rs", "body").unwrap();
+        let root = config.root.clone();
+
+        let handles = (0..16)
+            .map(|index| {
+                let root = root.clone();
+                std::thread::spawn(move || {
+                    let config = Config { root };
+                    append_note(&config, "src/main.rs", &format!("decision-{index:02}")).unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let note = note_for_key(&config, "src/main.rs").unwrap();
+        let raw = fs::read_to_string(&note.path).unwrap();
+        let content = materialize_note_content(&note, &raw).unwrap();
+        assert!(content.contains("\nbody\n"));
+        for index in 0..16 {
+            assert!(content.contains(&format!("decision-{index:02}")));
+        }
+    });
+}
+
+#[test]
 fn append_compacts_note_log_after_threshold() {
     with_env("append-log-compact", |_| {
         let config = Config::from_env().unwrap();

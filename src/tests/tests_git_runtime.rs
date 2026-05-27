@@ -401,6 +401,36 @@ fn read_git_blobs_reaps_git_cat_file_after_stdin_write_failure() {
     assert!(err.contains("failed to write git cat-file input"), "{err}");
 }
 
+#[cfg(unix)]
+#[test]
+fn git_blob_reader_reuses_one_cat_file_process_across_reads() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fake_git_dir = TestDir::new("fake-git-batch-reader");
+    let fake_git = fake_git_dir.path().join("git");
+    let spawn_count = fake_git_dir.path().join("spawn-count");
+    fs::write(
+        &fake_git,
+        "#!/bin/sh\ncounter=\"$(dirname \"$0\")/spawn-count\"\necho spawn >> \"$counter\"\nwhile IFS= read -r oid; do\n  printf '%s blob 1\\nx\\n' \"$oid\"\ndone\n",
+    )
+    .unwrap();
+    fs::set_permissions(&fake_git, fs::Permissions::from_mode(0o755)).unwrap();
+    let mut reader =
+        GitBlobReader::new_with_test_git_program(Path::new("/"), fake_git.as_os_str()).unwrap();
+
+    let first = reader
+        .read_blobs(&["0123456789012345678901234567890123456789".to_string()])
+        .unwrap();
+    let second = reader
+        .read_blobs(&["abcdefabcdefabcdefabcdefabcdefabcdefabcd".to_string()])
+        .unwrap();
+    drop(reader);
+
+    assert_eq!(first, vec![b"x".to_vec()]);
+    assert_eq!(second, vec![b"x".to_vec()]);
+    assert_eq!(fs::read_to_string(spawn_count).unwrap().lines().count(), 1);
+}
+
 #[test]
 fn staged_snapshot_parent_must_be_outside_project_root() {
     let root = git_project("staged-snapshot-parent-outside");

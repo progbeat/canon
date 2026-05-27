@@ -102,9 +102,9 @@ use crate::evaluator_turn::{
 use crate::evaluator_types::{EvaluatorError, EvaluatorRunner};
 use crate::fs_util::{ensure_dir, for_each_nonempty_line, replace_file_with_temp};
 use crate::gate::*;
-#[cfg(unix)]
-use crate::git::read_git_blobs_with_git_program;
 use crate::git::resolve_git_path;
+#[cfg(unix)]
+use crate::git::{read_git_blobs_with_git_program, GitBlobReader};
 use crate::hash::{expectation_id, fnv64_with_seed, full_scope, hash_120, hash_key};
 use crate::history::{
     history_file_name, history_path, parse_history_record_line, read_history_records,
