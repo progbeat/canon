@@ -1,70 +1,68 @@
 # Interrogation Policy
 
-An interrogation is a `canon check` evaluator turn for one expectation under one
-enforced scope.
+**interrogation** is a `canon check` evaluator turn for one expectation question.
 
-The enforced scope is supplied in evaluator thread developer instructions.
+Each evaluator task input is exactly the question string.
 
-Each evaluator task input is exactly the expectation question string.
+An evaluator response must be a single JSON object matching this JSON Schema:
 
-Expected answers are not included in evaluator task inputs.
-
-An evaluator response must be a single JSON object. Its top-level keys must be
-exactly these keys in this order, with no extra keys:
-
-```text
-answer
-evidence
-scope
+```json
+{
+  "type": "object",
+  "properties": {
+    "answer": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^\\r\\n]*$"
+    },
+    "error": {
+      "type": "string",
+      "enum": ["idk", "malformed"]
+    },
+    "evidence": {
+      "type": "string"
+    },
+    "qScopeSuggestion": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "pattern": "^[^\\r\\n]*$"
+      }
+    }
+  },
+  "required": ["evidence"],
+  "oneOf": [
+    {"required": ["answer"], "not": { "required": ["error"] }},
+    {"required": ["error"], "not": { "required": ["answer"] }}
+  ],
+  "additionalProperties": false
+}
 ```
 
-`answer` is a single-line string.
+An **unparseable** evaluator response is invalid JSON or does not match the evaluator response schema. The contents of schema-valid fields do not make a response unparseable.
 
-`evidence` is a string citing supporting files or code. Evidence citations are
-separate from scope.
+A fresh interrogation uses the stored q-scope for that expectation, or full project scope if no q-scope is stored.
 
-`scope` is an array of strings.
+When an interrogation returns `error: "idk"`, `canon check` retries with full project scope and does not treat the restricted `idk` as final when evidence from full project scope can answer.
 
-An **unparseable** evaluator response is invalid JSON or does not match the
-evaluator response schema. The contents of schema-valid fields do not make a
-response unparseable.
+When an interrogation using full project scope returns `error: "idk"`, human review is required.
 
-For a schema-valid response, the observed answer is the `answer` field.
+When the response has `error`, human review is required.
 
-Evaluator Codex threads are ephemeral to one `canon check` invocation.
+If the evaluator returns an answer and a `qScopeSuggestion`, `canon check`
+verifies the suggestion with an independent interrogation only when the visible
+tree induced by that suggestion contains at least 25% fewer files than the
+current visible tree.
+The narrowed scope is accepted and stored only when the observed answer is unchanged or incorrect.
 
-Within one invocation, the same Codex thread can be reused for interrogations
-with the same enforced scope to improve context retention and reduce token usage.
+If the evaluator returns an invalid `qScopeSuggestion`, `canon check` does not attempt narrowing from it.
 
-A fresh interrogation starts from the latest accepted scope for that
-expectation, or `["."]` if there is no accepted scope yet.
+If the evaluator omits `qScopeSuggestion`, `canon check` does not attempt narrowing from that response.
 
-When an interrogation returns `idk`, `canon check` retries with `["."]` scope and
-does not treat the restricted `idk` as final when full-scope evidence can answer.
+The expectation's `models` setting configures evaluator models in retry order.
+`canon check` starts with the first model and tries later models in order only after technical evaluator failures.
 
-When an interrogation with a full scope returns `idk`, human review is required.
-
-When the observed answer is `idk` or `malformed`, or when the response has empty
-evidence, human review is required.
-
-For schema-valid responses that do not require human review, correctness is
-determined only by whether the observed answer equals the expected answer.
-
-If the evaluator returns a correct or incorrect answer and a strictly narrower
-valid scope, `canon check` verifies that strict-subset scope with an independent
-interrogation on that narrower scope. The narrowed scope is accepted only when
-the observed answer is unchanged or incorrect.
-
-If the evaluator returns an invalid scope, `canon check` does not attempt
-narrowing from that scope.
-
-`canon check` uses `agent.model.primary` as the primary evaluator model.
-Configured `agent.model.fallbacks` are tried in order only after technical
-app-server or model failures such as `usageLimitExceeded`.
-
-`agent.thinking` configures the default evaluator thinking effort. An explicit
-expectation item may include a `thinking` value to override `agent.thinking` for
-that expectation. Generated expectations inherit the generator item's `thinking`
-when present, otherwise they use `agent.thinking`. The effective thinking effort
-is applied to the evaluator interrogation, but it does not require a separate
-evaluator thread when the enforced scope is the same.
+The expectation's `thinking` setting configures evaluator thinking effort and is applied to each evaluator interrogation.
+`thinking` does not affect evaluator thread reuse.

@@ -10,7 +10,7 @@ For each passing evaluated expectation, stdout contains exactly one line:
 P. OK
 ```
 
-For each failed expectation, evaluated or cached, stdout contains exactly six lines:
+For each failed expectation, evaluated or cached, stdout contains exactly one block. The block has these required lines:
 
 ```
 P. FAILED
@@ -18,24 +18,32 @@ P. FAILED
 Expected: <escaped expected>
 Observed: <escaped observed>
 Evidence: <escaped evidence>
-Scope: <compact JSON array>
 ```
 
-For each errored expectation, stdout contains exactly five lines:
+If a q-scope suggestion is available, the block appends this final line:
+
+```
+Suggested q-scope: <compact JSON array>
+```
+
+The line is omitted when no q-scope suggestion is available.
+
+For each errored expectation, stdout contains exactly one block of lines:
 
 ```
 P. ERROR
 <escaped question>
-Expected: <escaped expected>
-Observed: <escaped observed>
+Error: <escaped error>
 Evidence: <escaped evidence>
 ```
 
 `P` is the shortest prefix of the expectation's `ID` that uniquely identifies that expectation among the collected expectations.
 
-Embedded control characters in the question, expected answer, observed answer, and evidence are escaped before writing to stdout. Escaping prevents evaluator-provided text from injecting additional stdout lines.
+Embedded control characters in the question, expected answer, observed answer,
+error, and evidence are escaped before writing to stdout. Escaping prevents
+evaluator-provided text from injecting additional stdout lines.
 
-`Scope` is rendered as a compact JSON array on one line.
+`Suggested q-scope` is rendered as a compact JSON array on one line.
 
 ## Token Usage Line
 
