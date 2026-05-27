@@ -2,6 +2,7 @@ use crate::check_types::{CheckRecord, SelectedExpectation};
 use crate::fs_util::{ensure_dir_without_symlinks, reject_symlink};
 use crate::history::{read_history_records_from_path, HistoryCache};
 use crate::history_compaction::{compact_history, should_compact_history};
+use crate::history_reuse::is_reusable_history_record;
 use crate::logging::{render_check_log_record, DiagnosticLogError};
 use crate::path_io_error::PathIoError;
 use std::error::Error;
@@ -39,6 +40,11 @@ fn append_history_record_with_cache_inner(
     record: &CheckRecord,
     history_cache: &mut HistoryCache,
 ) -> Result<(), HistoryAppendError> {
+    if record.error.is_some() || !is_reusable_history_record(record) {
+        return Err(HistoryAppendError::Message(
+            "answer history records must be schema-valid responses with answer".to_string(),
+        ));
+    }
     let path = history_cache.path(root, expectation)?;
     if let Some(parent) = path.parent() {
         ensure_dir_without_symlinks(parent)?;

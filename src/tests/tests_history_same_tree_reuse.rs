@@ -209,7 +209,7 @@ fn reusable_history_record_skips_non_answer_history_before_visible_tree_oid_matc
     );
     let mut newer = newer;
     newer.error = Some(ERROR_INSUFFICIENT_EVIDENCE.to_string());
-    append_history_record(&root, &expectation, &newer).unwrap();
+    append_legacy_history_record(&root, &expectation, &newer);
 
     let record = same_tree_history_record(&root, &config.agent, &expectation)
         .unwrap()

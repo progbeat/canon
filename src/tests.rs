@@ -217,6 +217,23 @@ pub(crate) fn enable_diagnostic_logs(root: &Path) {
     );
 }
 
+pub(crate) fn append_legacy_history_record(
+    root: &Path,
+    expectation: &SelectedExpectation,
+    record: &CheckRecord,
+) {
+    let path = history_path(root, expectation).unwrap();
+    ensure_dir(path.parent().unwrap()).unwrap();
+    let line = render_check_log_record(record).unwrap();
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .unwrap();
+    file.write_all(line.as_bytes()).unwrap();
+    file.flush().unwrap();
+}
+
 mod tests_app_server_process;
 mod tests_app_server_protocol;
 mod tests_check_command_args;

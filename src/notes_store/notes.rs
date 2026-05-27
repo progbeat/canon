@@ -103,7 +103,11 @@ fn append_note_record(config: &Config, key: &str, record: NoteRecord) -> Result<
         NoteRecord::Append { timestamp, text } if existed => {
             let previous_size =
                 append_note_log_record(&note.path, &NoteRecord::Append { timestamp, text })?;
-            maybe_compact_note_log(&note, previous_size)?;
+            // The append is durable once the log record is flushed and synced.
+            // Compaction is opportunistic; reporting its failure would invite
+            // retrying an already-persisted append and duplicating visible
+            // note content.
+            let _ = maybe_compact_note_log(&note, previous_size);
         }
         record => {
             // Replacement writes and first appends both persist the complete
@@ -148,7 +152,10 @@ fn append_note_log_record(path: &Path, record: &NoteRecord) -> Result<u64, Strin
     entry.push_str(NOTE_LOG_MARKER);
     entry.push('\n');
     entry.push_str(&line);
-    if let Err(err) = file.write_all(entry.as_bytes()).and_then(|()| file.flush()) {
+    if let Err(err) = file
+        .write_all(entry.as_bytes())
+        .and_then(|()| flush_and_sync_file(&mut file))
+    {
         return Err(error_with_restore_context(
             format!("failed to append {}: {}", path.display(), err),
             rollback_note_log_append(path, &mut file, previous_size),
@@ -157,13 +164,18 @@ fn append_note_log_record(path: &Path, record: &NoteRecord) -> Result<u64, Strin
     Ok(previous_size)
 }
 
+fn flush_and_sync_file(file: &mut fs::File) -> io::Result<()> {
+    file.flush()?;
+    file.sync_data()
+}
+
 fn rollback_note_log_append(
     path: &Path,
     file: &mut fs::File,
     previous_size: u64,
 ) -> Result<(), String> {
     file.set_len(previous_size)
-        .and_then(|()| file.flush())
+        .and_then(|()| flush_and_sync_file(file))
         .map_err(|err| {
             format!(
                 "failed to roll back {} to {} bytes after append failure: {}",

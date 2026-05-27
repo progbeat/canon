@@ -131,7 +131,7 @@ expectations:
         },
     )
     .unwrap();
-    append_history_record(
+    append_legacy_history_record(
         &root,
         &expectation,
         &CheckRecord {
@@ -150,8 +150,7 @@ expectations:
             visible_tree_oid,
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
-    )
-    .unwrap();
+    );
 
     let mut history_cache = HistoryCache::new();
     let record =

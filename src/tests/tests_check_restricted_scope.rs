@@ -110,7 +110,7 @@ fn check_runner_replaces_restricted_insufficient_evidence_with_full_scope_answer
         },
     )
     .unwrap();
-    append_history_record(
+    append_legacy_history_record(
         &root,
         &expectation,
         &CheckRecord {
@@ -129,8 +129,7 @@ fn check_runner_replaces_restricted_insufficient_evidence_with_full_scope_answer
             visible_tree_oid: "old".to_string(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
-    )
-    .unwrap();
+    );
     let mut runner = FakeRunner::new(&[
         &error_response(ERROR_INSUFFICIENT_EVIDENCE, "src/main.rs was not enough"),
         &answer("yes", "README.md and src/main.rs answer it", &["."]),
@@ -449,7 +448,7 @@ fn check_runner_scope_seed_ignores_non_reusable_history_answer() {
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
     let expectation = options.selected[0].clone();
-    append_history_record(
+    append_legacy_history_record(
         &root,
         &expectation,
         &CheckRecord {
@@ -468,8 +467,7 @@ fn check_runner_scope_seed_ignores_non_reusable_history_answer() {
             visible_tree_oid: "old".to_string(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
-    )
-    .unwrap();
+    );
     let mut runner = FakeRunner::new(&[&answer("yes", "full project answers it", &["."])]);
 
     let records =
@@ -548,7 +546,7 @@ fn check_runner_verifies_narrower_scope_after_restricted_insufficient_evidence_r
         },
     )
     .unwrap();
-    append_history_record(
+    append_legacy_history_record(
         &root,
         &expectation,
         &CheckRecord {
@@ -567,8 +565,7 @@ fn check_runner_verifies_narrower_scope_after_restricted_insufficient_evidence_r
             visible_tree_oid: "old".to_string(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
-    )
-    .unwrap();
+    );
     let mut runner = FakeRunner::new(&[
         &error_response(ERROR_INSUFFICIENT_EVIDENCE, "src/main.rs was not enough"),
         &answer("yes", "src is enough", &["src"]),
@@ -752,7 +749,7 @@ fn check_runner_does_not_widen_restricted_unparsable_response() {
         },
     )
     .unwrap();
-    append_history_record(
+    append_legacy_history_record(
         &root,
         &expectation,
         &CheckRecord {
@@ -771,8 +768,7 @@ fn check_runner_does_not_widen_restricted_unparsable_response() {
             visible_tree_oid: "old".to_string(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
-    )
-    .unwrap();
+    );
     let mut runner = FakeRunner::new(&["", ""]);
 
     let records =

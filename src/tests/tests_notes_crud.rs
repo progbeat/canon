@@ -150,6 +150,33 @@ fn append_compacts_note_log_after_threshold() {
 }
 
 #[test]
+fn append_succeeds_when_followup_compaction_rewrite_fails() {
+    with_env("append-log-compact-fails", |_| {
+        let config = Config::from_env().unwrap();
+        write_note(&config, "src/main.rs", "body").unwrap();
+        let note = note_for_key(&config, "src/main.rs").unwrap();
+        let file_name = note.path.file_name().unwrap().to_str().unwrap();
+        let temp_path = note
+            .path
+            .with_file_name(format!(".{}.{}.tmp", file_name, process::id()));
+        fs::write(&temp_path, "block compaction temp create").unwrap();
+
+        append_note(
+            &config,
+            "src/main.rs",
+            &"decision".repeat((NOTE_LOG_COMPACT_MIN_BYTES / 8) as usize + 1),
+        )
+        .unwrap();
+
+        let raw = fs::read_to_string(&note.path).unwrap();
+        let content = materialize_note_content(&note, &raw).unwrap();
+        assert!(raw.contains("<!-- canon log v1 -->"));
+        assert!(content.contains("decision"));
+        let _ = fs::remove_file(temp_path);
+    });
+}
+
+#[test]
 fn materialize_note_content_ignores_marker_like_body_text() {
     let note = Note {
         key: "src/main.rs".to_string(),

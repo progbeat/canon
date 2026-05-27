@@ -197,6 +197,27 @@ fn append_history_record_updates_in_memory_cache() {
     let _ = fs::remove_dir_all(root);
 }
 
+#[test]
+fn append_history_record_rejects_non_answer_records() {
+    let root = git_project("history-append-non-answer");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
+    let mut record = expectation_record(
+        &config.agent,
+        &expectation,
+        "pass",
+        "yes",
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap(),
+    );
+    record.error = Some(ERROR_INSUFFICIENT_EVIDENCE.to_string());
+
+    let err = append_history_record(&root, &expectation, &record).unwrap_err();
+
+    assert!(err.contains("schema-valid responses with answer"), "{err}");
+    assert!(!history_path(&root, &expectation).unwrap().exists());
+    let _ = fs::remove_dir_all(root);
+}
+
 #[cfg(unix)]
 #[test]
 fn append_history_record_refuses_symlinked_history_file() {
