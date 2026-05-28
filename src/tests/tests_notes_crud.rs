@@ -141,6 +141,69 @@ fn failed_append_rollback_removes_partial_note_log_record() {
 }
 
 #[test]
+fn truncated_authenticated_append_log_does_not_become_visible_text() {
+    let note = Note {
+        key: "src/main.rs".to_string(),
+        hash: hash_key("src/main.rs"),
+        path: PathBuf::from("note.md"),
+    };
+    let base = format!("{}body\n", initial_content(&note.key, &note.hash));
+    let mut raw = base.clone();
+    raw.push('\n');
+    let marker_offset = raw.len();
+    raw.push_str(&test_note_log_marker(&note, marker_offset as u64));
+    raw.push('\n');
+    raw.push_str(r#"{"op":"append""#);
+
+    let content = materialize_note_content(&note, &raw).unwrap();
+    let mut rendered = String::new();
+    stream_note_content(&note, io::Cursor::new(raw.as_bytes()), |chunk| {
+        rendered.push_str(chunk);
+        Ok(())
+    })
+    .unwrap();
+
+    assert_eq!(content, base);
+    assert!(rendered.contains("body"));
+    assert!(!rendered.contains("canon log v1"));
+    assert!(!rendered.contains(r#"{"op":"append""#));
+}
+
+#[test]
+fn truncated_later_append_log_keeps_prior_valid_log_records() {
+    let note = Note {
+        key: "src/main.rs".to_string(),
+        hash: hash_key("src/main.rs"),
+        path: PathBuf::from("note.md"),
+    };
+    let mut raw = format!("{}body\n", initial_content(&note.key, &note.hash));
+    raw.push('\n');
+    let first_marker_offset = raw.len();
+    raw.push_str(&test_note_log_marker(&note, first_marker_offset as u64));
+    raw.push('\n');
+    raw.push_str(r#"{"op":"append","timestamp":1,"text":"kept"}"#);
+    raw.push('\n');
+    raw.push('\n');
+    let second_marker_offset = raw.len();
+    raw.push_str(&test_note_log_marker(&note, second_marker_offset as u64));
+    raw.push('\n');
+    raw.push_str(r#"{"op":"append""#);
+
+    let content = materialize_note_content(&note, &raw).unwrap();
+
+    assert!(content.contains("\n## 1\n\nkept\n"));
+    assert!(!content.contains("canon log v1"));
+    assert!(!content.contains(r#"{"op":"append""#));
+}
+
+fn test_note_log_marker(note: &Note, marker_offset: u64) -> String {
+    format!(
+        "<!-- canon log v1 hash={} offset={} -->",
+        note.hash, marker_offset
+    )
+}
+
+#[test]
 fn append_compacts_note_log_after_threshold() {
     with_env("append-log-compact", |_| {
         let config = Config::from_env().unwrap();

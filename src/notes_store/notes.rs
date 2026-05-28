@@ -416,16 +416,8 @@ pub(crate) fn stream_note_content(
         offset += read;
         let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
         if is_note_log_marker(note, trimmed, line_start) {
-            match stream_note_log(note, &mut reader, &mut write, &mut offset)? {
-                NoteLogStream::Applied => return Ok(()),
-                NoteLogStream::FalseMarker { first_line } => {
-                    write(&decode_note_storage_line(&line))?;
-                    if let Some(first_line) = first_line {
-                        write(&decode_note_storage_line(&first_line))?;
-                    }
-                }
-            }
-            continue;
+            stream_note_log(note, &mut reader, &mut write, &mut offset)?;
+            return Ok(());
         }
         if trimmed == LEGACY_NOTE_LOG_MARKER {
             let mut rest = String::new();
@@ -444,31 +436,29 @@ pub(crate) fn stream_note_content(
     }
 }
 
-enum NoteLogStream {
-    Applied,
-    FalseMarker { first_line: Option<String> },
-}
-
 fn stream_note_log(
     note: &Note,
     reader: &mut impl BufRead,
     write: &mut impl FnMut(&str) -> Result<(), String>,
     offset: &mut usize,
-) -> Result<NoteLogStream, String> {
+) -> Result<(), String> {
     let mut first_line = String::new();
     let read = reader
         .read_line(&mut first_line)
         .map_err(|err| format!("failed to read {}: {}", note.path.display(), err))?;
     if read == 0 {
-        return Ok(NoteLogStream::FalseMarker { first_line: None });
+        return Ok(());
     }
     *offset += read;
     match serde_json::from_str::<NoteRecord>(&first_line) {
         Ok(record) => stream_note_record(note, record, write, true)?,
-        Err(_) => {
-            return Ok(NoteLogStream::FalseMarker {
-                first_line: Some(first_line),
-            })
+        Err(err) if note_log_line_is_truncated(&first_line, &err) => return Ok(()),
+        Err(err) => {
+            return Err(format!(
+                "malformed note log record in {}: {}",
+                note.path.display(),
+                err
+            ));
         }
     }
 
@@ -479,20 +469,24 @@ fn stream_note_log(
             .read_line(&mut line)
             .map_err(|err| format!("failed to read {}: {}", note.path.display(), err))?;
         if read == 0 {
-            return Ok(NoteLogStream::Applied);
+            return Ok(());
         }
         *offset += read;
         let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
         if is_note_log_marker(note, trimmed, line_start) || trimmed.trim().is_empty() {
             continue;
         }
-        let record = serde_json::from_str::<NoteRecord>(&line).map_err(|err| {
-            format!(
-                "malformed note log record in {}: {}",
-                note.path.display(),
-                err
-            )
-        })?;
+        let record = match serde_json::from_str::<NoteRecord>(&line) {
+            Ok(record) => record,
+            Err(err) if note_log_line_is_truncated(&line, &err) => return Ok(()),
+            Err(err) => {
+                return Err(format!(
+                    "malformed note log record in {}: {}",
+                    note.path.display(),
+                    err
+                ));
+            }
+        };
         stream_note_record(note, record, write, false)?;
     }
 }
@@ -574,7 +568,7 @@ fn parse_note_log_records(
         }
         match serde_json::from_str(trimmed) {
             Ok(record) => records.push(record),
-            Err(_) if records.is_empty() => return Ok(None),
+            Err(err) if note_log_line_is_truncated(line, &err) => break,
             Err(err) => {
                 return Err(format!(
                     "malformed note log record in {}: {}",
@@ -584,7 +578,11 @@ fn parse_note_log_records(
             }
         }
     }
-    Ok((!records.is_empty()).then_some(records))
+    Ok(Some(records))
+}
+
+fn note_log_line_is_truncated(line: &str, err: &serde_json::Error) -> bool {
+    err.is_eof() || !line.ends_with('\n')
 }
 
 fn parse_legacy_note_log_records(text: &str) -> Option<Vec<NoteRecord>> {
