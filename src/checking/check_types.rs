@@ -165,7 +165,7 @@ impl std::fmt::Display for CheckResult {
 // The type deliberately does not implement `Serialize`; persisted history and
 // runtime-log records must go through dedicated render structs, which write the
 // full expectation ID and never the human display/selector prefix.
-// Deserialization keeps result/prompt/expected metadata optional so older or
+// Deserialization keeps result/prompt/expected metadata optional so
 // spec-minimal history records that contain only the cache-required prefix do
 // not get confused with real empty strings. Cache readers recompute current
 // result from observed vs the current expected answer.

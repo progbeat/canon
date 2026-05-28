@@ -45,10 +45,9 @@ pub(crate) fn latest_history_record_matching_visible_tree_oid(
     history_cache: &mut HistoryCache,
     mut current_visible_tree_oid_for_scope: impl FnMut(&[String]) -> Result<Option<String>, String>,
 ) -> Result<Option<CheckRecord>, String> {
-    // Cache lookup follows the Cache spec's answer-history contract:
-    // schema-valid error records are not answer history, so any legacy
-    // non-answer rows are skipped before applying the newest-to-oldest
-    // visibleTreeOid match.
+    // Cache lookup follows the Cache spec's answer-history contract: only
+    // schema-valid answer records loaded by the history reader can reach this
+    // newest-to-oldest visibleTreeOid match.
     let matched_record =
         scan_latest_history_records(root, expectation, history_cache, |mut record| {
             if !is_reusable_history_record_for_expected(&record, &expectation.a) {

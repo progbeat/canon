@@ -148,6 +148,24 @@ fn history_parser_accepts_required_prefix_records() {
 }
 
 #[test]
+fn history_parser_rejects_observed_values_outside_evaluator_answer_schema() {
+    for observed in ["", "yes\nno", "yes\rno"] {
+        let line = serde_json::to_string(&json!({
+            "timestamp": "1970-01-01T00:00:00Z",
+            "observed": observed,
+            "evidence": "cached answer",
+            "qScope": ["."],
+            "visibleTreeOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }))
+        .unwrap();
+
+        let err = parse_history_record_line(Path::new("history.jsonl"), 1, &line).unwrap_err();
+
+        assert!(err.contains("evaluator response answer schema"), "{err}");
+    }
+}
+
+#[test]
 fn history_cache_reader_skips_non_native_visible_tree_oid_records() {
     let root = git_project("history-read-non-native-visible-tree-oid");
     let config = parse_check_config(check_config_yaml()).unwrap();
@@ -177,11 +195,11 @@ fn history_parser_rejects_error_records_as_answer_history() {
 
     let err = parse_history_record_line(Path::new("history.jsonl"), 1, &line).unwrap_err();
 
-    assert!(err.contains("records must be schema-valid responses with answer"));
+    assert!(err.contains("invalid history JSON"));
 }
 
 #[test]
-fn history_parser_accepts_legacy_scope_records() {
+fn history_parser_rejects_legacy_scope_records() {
     let line = serde_json::to_string(&json!({
         "timestamp": "1970-01-01T00:00:00Z",
         "result": "pass",
@@ -192,13 +210,13 @@ fn history_parser_accepts_legacy_scope_records() {
     }))
     .unwrap();
 
-    let record = parse_history_record_line(Path::new("history.jsonl"), 1, &line).unwrap();
+    let err = parse_history_record_line(Path::new("history.jsonl"), 1, &line).unwrap_err();
 
-    assert_eq!(record.scope, full_scope());
+    assert!(err.contains("invalid history JSON"));
 }
 
 #[test]
-fn history_parser_accepts_legacy_scope_tree_oid_records() {
+fn history_parser_rejects_legacy_scope_tree_oid_records() {
     let line = serde_json::to_string(&json!({
         "timestamp": "1970-01-01T00:00:00Z",
         "result": "pass",
@@ -209,16 +227,13 @@ fn history_parser_accepts_legacy_scope_tree_oid_records() {
     }))
     .unwrap();
 
-    let record = parse_history_record_line(Path::new("history.jsonl"), 1, &line).unwrap();
+    let err = parse_history_record_line(Path::new("history.jsonl"), 1, &line).unwrap_err();
 
-    assert_eq!(
-        record.visible_tree_oid,
-        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-    );
+    assert!(err.contains("invalid history JSON"));
 }
 
 #[test]
-fn history_parser_accepts_legacy_scope_hash_records() {
+fn history_parser_rejects_legacy_scope_hash_records() {
     let line = serde_json::to_string(&json!({
         "timestamp": "1970-01-01T00:00:00Z",
         "result": "pass",
@@ -229,12 +244,9 @@ fn history_parser_accepts_legacy_scope_hash_records() {
     }))
     .unwrap();
 
-    let record = parse_history_record_line(Path::new("history.jsonl"), 1, &line).unwrap();
+    let err = parse_history_record_line(Path::new("history.jsonl"), 1, &line).unwrap_err();
 
-    assert_eq!(
-        record.visible_tree_oid,
-        "cccccccccccccccccccccccccccccccccccccccc"
-    );
+    assert!(err.contains("invalid history JSON"));
 }
 
 #[test]
@@ -281,6 +293,27 @@ fn append_history_record_rejects_non_answer_records() {
     let err = append_history_record(&root, &expectation, &record).unwrap_err();
 
     assert!(err.contains("schema-valid responses with answer"), "{err}");
+    assert!(!history_path(&root, &expectation).unwrap().exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn append_history_record_rejects_non_schema_answer_values() {
+    let root = git_project("history-append-invalid-answer-value");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
+    let mut record = expectation_record(
+        &config.agent,
+        &expectation,
+        "pass",
+        "yes",
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap(),
+    );
+    record.observed.clear();
+
+    let err = append_history_record(&root, &expectation, &record).unwrap_err();
+
+    assert!(err.contains("evaluator response answer schema"), "{err}");
     assert!(!history_path(&root, &expectation).unwrap().exists());
     let _ = fs::remove_dir_all(root);
 }

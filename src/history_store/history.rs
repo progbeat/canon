@@ -1,4 +1,4 @@
-use crate::check_types::{contains_line_break, CheckRecord, SelectedExpectation};
+use crate::check_types::{CheckRecord, CheckResult, SelectedExpectation};
 use crate::fs_util::{
     ensure_dir_without_symlinks, for_each_nonempty_line, reject_symlink,
     write_temp_file_then_replace,
@@ -14,7 +14,7 @@ use crate::visible_tree_oid::{
 use crate::{
     CANON_CACHE_DIR_GIT_PATH, HISTORY_COMPACT_CHANCE_DENOMINATOR, HISTORY_COMPACT_KEEP_RECORDS,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
@@ -117,7 +117,7 @@ pub(crate) fn parse_history_record_line(
     line_number: usize,
     line: &str,
 ) -> Result<CheckRecord, String> {
-    let record = serde_json::from_str::<CheckRecord>(line).map_err(|err| {
+    let record = serde_json::from_str::<HistoryReadRecord>(line).map_err(|err| {
         format!(
             "invalid history JSON in {} line {}: {}",
             path.display(),
@@ -125,31 +125,62 @@ pub(crate) fn parse_history_record_line(
             err
         )
     })?;
-    if !record_has_schema_valid_answer(&record) {
-        return Err(format!(
-            "invalid answer history record in {} line {}: records must be schema-valid responses with answer",
+    let record = record.into_check_record();
+    validate_schema_valid_answer_history_record(&record).map_err(|message| {
+        format!(
+            "invalid answer history record in {} line {}: records must be schema-valid responses with answer: {}",
             path.display(),
-            line_number
-        ));
-    }
+            line_number,
+            message
+        )
+    })?;
     Ok(record)
 }
 
-fn record_has_schema_valid_answer(record: &CheckRecord) -> bool {
-    validate_schema_valid_answer_history_record(record).is_ok()
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HistoryReadRecord {
+    timestamp: String,
+    observed: String,
+    evidence: String,
+    #[serde(rename = "qScope")]
+    q_scope: Vec<String>,
+    #[serde(rename = "visibleTreeOid")]
+    visible_tree_oid: String,
+}
+
+impl HistoryReadRecord {
+    fn into_check_record(self) -> CheckRecord {
+        CheckRecord {
+            timestamp: self.timestamp,
+            number: 0,
+            result: CheckResult::Fail,
+            prompt: None,
+            expected: None,
+            observed: self.observed,
+            error: None,
+            evidence: self.evidence,
+            scope: self.q_scope,
+            suggested_q_scope: None,
+            visible_tree_oid: self.visible_tree_oid,
+            id: String::new(),
+            display_id: String::new(),
+            cache_key: None,
+        }
+    }
 }
 
 fn validate_schema_valid_answer_history_record(record: &CheckRecord) -> Result<(), String> {
-    // `serde_json::<CheckRecord>` has already required the Cache spec prefix
+    // `HistoryReadRecord` has already required the Cache spec prefix
     // fields with no defaults: observed, evidence, qScope, and visibleTreeOid.
     // The history layer enforces the parts that are not expressible by the
-    // struct shape: answer/error one-of, single-line answer text, UTC
+    // struct shape: answer/error one-of, evaluator `answer` schema, UTC
     // timestamp, and Git object-ID syntax for visibleTreeOid.
     if record.error.is_some() {
         return Err("error responses are not answer history records".to_string());
     }
-    if record.observed.trim().is_empty() || contains_line_break(&record.observed) {
-        return Err("observed answer must be a non-empty single-line string".to_string());
+    if !observed_matches_evaluator_answer_schema(&record.observed) {
+        return Err("observed must match the evaluator response answer schema".to_string());
     }
     if parse_record_timestamp(&record.timestamp).is_none() {
         return Err("timestamp must be UTC in YYYY-MM-DDTHH:MM:SSZ form".to_string());
@@ -158,6 +189,14 @@ fn validate_schema_valid_answer_history_record(record: &CheckRecord) -> Result<(
         return Err("visibleTreeOid must be a Git object ID hex string".to_string());
     }
     Ok(())
+}
+
+fn observed_matches_evaluator_answer_schema(observed: &str) -> bool {
+    !observed.is_empty()
+        && !observed
+            .as_bytes()
+            .iter()
+            .any(|byte| matches!(byte, b'\r' | b'\n'))
 }
 
 fn validate_appendable_answer_history_record(
@@ -241,8 +280,7 @@ impl HistoryCache {
 pub(crate) fn render_answer_history_record(record: &CheckRecord) -> DiagnosticLogResult<String> {
     validate_schema_valid_answer_history_record(record)
         .map_err(|message| external_log_error("render answer history record", message))?;
-    // Keep newly written answer-history rows to the Cache spec fields. Readers
-    // still accept legacy rows with extra metadata, but current result must be
+    // Keep answer-history rows to the Cache spec fields. Current result is
     // derived from observed vs the current expectation rather than persisted.
     let history = HistoryLogRecord {
         timestamp: &record.timestamp,
