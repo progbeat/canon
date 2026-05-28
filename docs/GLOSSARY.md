@@ -90,8 +90,9 @@ expectations are evaluated.
 ## `canon gate`
 
 The command used by the pre-commit hook. It checks the staged project state
-against existing canon history and fails quickly when a commit needs a fresh
-`canon check` or contains a new regression.
+against existing canon history and fails quickly when staged changes regress a
+cached pass. Missing cached results are non-blocking; run `canon check` when
+fresh confirmation is needed.
 
 ## Scope
 

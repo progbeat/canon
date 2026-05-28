@@ -96,14 +96,16 @@ expectations:
     assert!(instructions.contains("Response format:"));
     assert!(instructions.contains("Prefer `rg` and `rg --files`"));
     assert!(instructions.contains("project-relative refs enclosed in backticks"));
-    assert!(instructions.contains("For self-contained questions"));
-    assert!(instructions.contains("Proxy evidence is prohibited"));
+    assert!(instructions.contains("question text itself contains all facts"));
+    assert!(instructions.contains("Do not cite \"proxy evidence\""));
     assert!(instructions.contains("qScopeSuggestion"));
-    assert!(instructions.contains("narrowest scope"));
+    assert!(instructions.contains("smallest repo-relative path list"));
     assert!(instructions.contains("answer and justify the whole question"));
-    assert!(instructions.contains("missing files in the enforced scope"));
-    assert!(instructions.contains("direct evidence from the relevant implementation files"));
-    assert!(instructions.contains("Enforced scope: [\".\"]"));
+    assert!(instructions.contains("files missing from the visible project paths"));
+    assert!(instructions.contains("whether you can read a specific path"));
+    assert!(instructions.contains("whether docs match code"));
+    assert!(instructions.contains("direct evidence from the relevant files"));
+    assert!(instructions.contains("Visible project paths: [\".\"]"));
     assert!(instructions.contains("Answer-selection policy:"));
     assert!(!instructions.contains("Instruction-boundary policy"));
 }

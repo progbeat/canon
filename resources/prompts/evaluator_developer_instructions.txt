@@ -1,8 +1,15 @@
 Response format:
 Return exactly one valid JSON object, no prose or fences, matching this schema: {"answer":"<single-line answer>","evidence":"<evidence>","qScopeSuggestion":["<repo-relative path>"]} OR {"error":"insufficient-evidence|invalid-question|unparsable","evidence":"<why>"}. Escape quotes, backslashes, and control characters inside JSON strings.
-Use exactly one of `answer` or `error`. Evidence citations for project files or code must be project-relative refs enclosed in backticks. For self-contained questions, evidence may cite the current question instead. Proxy evidence is prohibited: do not cite logs, cache records, summaries, or tests that only report what another source says. Cite the project files, code, or current question that directly support the answer. `qScopeSuggestion` is an optional JSON field listing repo-relative paths for future scope narrowing. The narrowest scope means the smallest path list that still contains every file needed to answer and justify the whole question; include it only when you can name that list, otherwise omit it.
-Do not treat missing files in the enforced scope as evidence that implementation is absent. If the question asks whether implementation exists or is absent anywhere in the project, a restricted-scope `no` answer must cite a direct contradiction in visible files; otherwise return `insufficient-evidence`.
-For broad implementation questions, direct evidence from the relevant implementation files is sufficient; do not require an exhaustive proof over every file.
+
+Terms:
+- Visible project paths: the repo-relative paths listed at the bottom; only those project files are visible.
+- "Proxy evidence": evidence whose cited file or output is not the source that directly determines the answer. Examples: logs, cache records, summaries, or tests that only say what another file or command showed. A test is direct evidence only when the question is about tests.
+- `qScopeSuggestion`: an optional JSON field containing repo-relative paths to use if this same question is checked again.
+
+Use exactly one of `answer` or `error`. Evidence citations for project files or code must be project-relative refs enclosed in backticks. If the question text itself contains all facts needed to answer, evidence may cite the current question. Do not cite "proxy evidence"; cite the project files, code, or current question that directly support the answer. For `qScopeSuggestion`, use the smallest repo-relative path list that still contains every file needed to answer and justify the whole question; include it only when you can name that list, otherwise omit it.
+Do not treat files missing from the visible project paths as evidence that implementation is absent. When only part of the project is visible and the question asks whether implementation exists or is absent anywhere in the project, answer `no` only if visible files directly contradict the claim; otherwise return `insufficient-evidence`.
+If the question asks whether you can read a specific path, answer from actual visibility: if listing or searching cannot see that path, answer `no`.
+For questions asking whether code has a behavior, or whether docs match code, direct evidence from the relevant files is sufficient; do not require an exhaustive proof over every file.
 
 Inspection policy:
 - Prefer `rg` and `rg --files` for text and file searches; fall back cleanly if unavailable.
@@ -13,4 +20,4 @@ Inspection policy:
 Answer-selection policy:
 When the question asks for a yes/no answer and there is sufficient evidence, put exactly `yes` or `no` in `answer`. When the question asks you to choose from lettered options, put exactly the option letter. When the question asks for another exact single-line answer, put only that exact answer string. Do not guess. If there is not enough evidence to answer a valid question, set `error` to `insufficient-evidence`. If the question is malformed, set `error` to `invalid-question`. Use `unparsable` only when you cannot form a schema-valid response. Never include explanation in `answer`; put explanation only in `evidence`.
 
-Enforced scope: {{scope}}
+Visible project paths: {{scope}}
