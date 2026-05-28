@@ -22,7 +22,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 // Cache-spec answer history storage is owned end-to-end in this file: path
 // resolution, JSONL parsing, answer-only append, required field-order
@@ -37,6 +38,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 static HISTORY_COMPACT_CHANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static HISTORY_COMPACT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+const HISTORY_LOCK_RETRY_COUNT: usize = 100;
+const HISTORY_LOCK_RETRY_SLEEP: Duration = Duration::from_millis(10);
+const HISTORY_LOCK_STALE_AFTER: Duration = Duration::from_secs(60);
 
 #[cfg(test)]
 pub(crate) fn history_path(
@@ -371,6 +375,7 @@ fn append_history_record_with_cache_inner(
     if let Some(parent) = path.parent() {
         ensure_dir_without_symlinks(parent)?;
     }
+    let _lock = lock_history_file(&path)?;
     let mut file = open_history_append_file(&path)?;
     let line = render_answer_history_record(record)?;
     write_history_line(&mut file, &path, &line)?;
@@ -381,7 +386,7 @@ fn append_history_record_with_cache_inner(
     // Once the line is flushed, the append has succeeded. Compaction and cache
     // refresh are maintenance steps, so failures there must not invite callers
     // to retry the append and duplicate the durable history record.
-    let compacted = should_compact && compact_history(&path).is_ok();
+    let compacted = should_compact && compact_history_locked(&path).is_ok();
     if had_cached_records {
         if compacted {
             match read_history_records_from_path(&path) {
@@ -479,7 +484,13 @@ fn compaction_chance_seed() -> u64 {
     nanos ^ counter.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ process::id() as u64
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn compact_history(path: &Path) -> Result<(), String> {
+    let _lock = lock_history_file(path).map_err(|err| err.to_string())?;
+    compact_history_locked(path)
+}
+
+fn compact_history_locked(path: &Path) -> Result<(), String> {
     let mut valid_lines = 0usize;
     let mut invalid_lines = 0usize;
     let mut lines = std::collections::VecDeque::new();
@@ -508,6 +519,77 @@ pub(crate) fn compact_history(path: &Path) -> Result<(), String> {
         }
         Ok(())
     })
+}
+
+struct HistoryFileLock {
+    path: PathBuf,
+}
+
+impl Drop for HistoryFileLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn lock_history_file(path: &Path) -> Result<HistoryFileLock, HistoryAppendError> {
+    let lock_path = history_lock_path(path)?;
+    if let Some(parent) = lock_path.parent() {
+        ensure_dir_without_symlinks(parent)?;
+    }
+    for _ in 0..HISTORY_LOCK_RETRY_COUNT {
+        match create_history_lock(&lock_path) {
+            Ok(()) => return Ok(HistoryFileLock { path: lock_path }),
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                if history_lock_is_stale(&lock_path)? {
+                    let _ = fs::remove_file(&lock_path);
+                    continue;
+                }
+                thread::sleep(HISTORY_LOCK_RETRY_SLEEP);
+            }
+            Err(err) => {
+                return Err(HistoryAppendError::Message(format!(
+                    "failed to lock {}: {}",
+                    lock_path.display(),
+                    err
+                )));
+            }
+        }
+    }
+    Err(HistoryAppendError::Message(format!(
+        "failed to lock {}: lock is already held",
+        lock_path.display()
+    )))
+}
+
+fn create_history_lock(path: &Path) -> Result<(), std::io::Error> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    writeln!(file, "{}", process::id())?;
+    file.flush()
+}
+
+fn history_lock_is_stale(path: &Path) -> Result<bool, HistoryAppendError> {
+    let metadata = fs::metadata(path).map_err(|err| {
+        HistoryAppendError::Message(format!("failed to inspect {}: {}", path.display(), err))
+    })?;
+    let modified = metadata.modified().map_err(|err| {
+        HistoryAppendError::Message(format!("failed to inspect {}: {}", path.display(), err))
+    })?;
+    let age = SystemTime::now()
+        .duration_since(modified)
+        .unwrap_or(Duration::ZERO);
+    Ok(age >= HISTORY_LOCK_STALE_AFTER)
+}
+
+fn history_lock_path(path: &Path) -> Result<PathBuf, HistoryAppendError> {
+    let file_name = path.file_name().ok_or_else(|| {
+        HistoryAppendError::Message(format!("history path has no file name: {}", path.display()))
+    })?;
+    let mut lock_name = file_name.to_os_string();
+    lock_name.push(".lock");
+    Ok(path.with_file_name(lock_name))
 }
 
 fn valid_history_record_line(path: &Path, line_number: usize, line: &str) -> bool {

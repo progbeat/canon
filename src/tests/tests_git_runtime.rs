@@ -225,6 +225,63 @@ fn staged_worktree_view_full_scope_writes_do_not_poison_restricted_materializati
     let _ = fs::remove_dir_all(root);
 }
 
+#[cfg(unix)]
+#[test]
+fn staged_worktree_view_snapshot_directories_are_private() {
+    let root = git_project("staged-snapshot-private-dirs");
+    fs::create_dir_all(root.join("dir")).unwrap();
+    fs::write(root.join("dir/secret.txt"), "secret\n").unwrap();
+    Command::new("git")
+        .args(["add", "dir/secret.txt"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let staged_view = StagedWorktreeView::apply(&root).unwrap();
+    let materialization_root = staged_view.materialization_root().to_path_buf();
+    let scope_root = staged_view
+        .materialize_scope(&empty_test_agent(), &full_scope())
+        .unwrap();
+
+    assert_private_dir(&materialization_root);
+    assert_private_dir(&materialization_root.join("lazy"));
+    assert_private_dir(&materialization_root.join("lazy/0"));
+    assert_private_dir(&materialization_root.join("lazy/0/dir"));
+    assert_private_dir(&materialization_root.join("scopes"));
+    assert_private_dir(&scope_root);
+    assert_private_dir(&scope_root.join("dir"));
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn staged_worktree_view_ignores_gitlinks_during_materialization() {
+    let root = git_project("staged-snapshot-gitlink");
+    let output = Command::new("git")
+        .args([
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "160000,1111111111111111111111111111111111111111,vendor/submodule",
+        ])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let staged_view = StagedWorktreeView::apply(&root).unwrap();
+    let scope_root = staged_view
+        .materialize_scope(&empty_test_agent(), &full_scope())
+        .unwrap();
+
+    assert!(scope_root.join("README.md").exists());
+    assert!(!scope_root.join("vendor/submodule").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
 #[test]
 fn staged_worktree_view_removes_git_metadata_when_git_is_denied() {
     let root = git_project("staged-snapshot-deny-git");
@@ -655,6 +712,14 @@ fn empty_test_agent() -> AgentConfig {
         ignore: Vec::new(),
         plugins: Vec::new(),
     }
+}
+
+#[cfg(unix)]
+fn assert_private_dir(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o700, "{} mode is {:o}", path.display(), mode);
 }
 
 #[cfg(unix)]

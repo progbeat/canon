@@ -33,24 +33,35 @@ pub(crate) fn same_tree_history_record_with_cache(
     history_cache: &mut HistoryCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<Option<CheckRecord>, String> {
-    // This is the answer-cache lookup described by the Cache spec: scan answer
-    // history newest-to-oldest and accept only the first record whose stored
-    // visibleTreeOid still matches the current staged contents for that scope.
-    latest_history_record_matching_visible_tree_oid(root, expectation, history_cache, |scope| {
-        visible_tree_oid_cache
-            .staged_visible_tree_oid(root, agent, scope)
-            .map(Some)
-    })
+    let current_scope = latest_history_scope_with_cache(root, agent, expectation, history_cache)?;
+    latest_history_record_matching_visible_tree_oid(
+        root,
+        expectation,
+        history_cache,
+        current_scope.as_deref(),
+        |scope| {
+            visible_tree_oid_cache
+                .staged_visible_tree_oid(root, agent, scope)
+                .map(Some)
+        },
+    )
 }
 
 pub(crate) fn latest_history_record_matching_visible_tree_oid(
     root: &Path,
     expectation: &SelectedExpectation,
     history_cache: &mut HistoryCache,
+    current_scope: Option<&[String]>,
     mut current_visible_tree_oid_for_scope: impl FnMut(&[String]) -> Result<Option<String>, String>,
 ) -> Result<Option<CheckRecord>, String> {
     let force_full_scope =
         full_scope_reset_marker_exists_with_cache(root, expectation, history_cache)?;
+    let Some(current_scope) = current_scope else {
+        return Ok(None);
+    };
+    let Some(current_visible_tree_oid) = current_visible_tree_oid_for_scope(current_scope)? else {
+        return Ok(None);
+    };
     // Cache lookup follows the Cache spec's answer-history contract:
     // schema-valid error records are not answer history, so any legacy
     // non-answer rows are skipped before applying the newest-to-oldest
@@ -66,9 +77,6 @@ pub(crate) fn latest_history_record_matching_visible_tree_oid(
             if force_full_scope && scope != full_scope() {
                 return Ok(HistoryRecordScan::Continue);
             }
-            let Some(current_visible_tree_oid) = current_visible_tree_oid_for_scope(&scope)? else {
-                return Ok(HistoryRecordScan::Continue);
-            };
             if current_visible_tree_oid == record.visible_tree_oid {
                 record.scope = scope;
                 return Ok(HistoryRecordScan::Done(Some(record)));
@@ -90,18 +98,20 @@ pub(crate) fn cooldown_history_record(
     };
     let force_full_scope =
         full_scope_reset_marker_exists_with_cache(root, expectation, history_cache)?;
-    let record = scan_latest_history_records(root, expectation, history_cache, |record| {
+    let record = scan_latest_history_records(root, expectation, history_cache, |mut record| {
         // Cooldown keys off the latest answer history record. Legacy non-answer
-        // rows are skipped here, while a newer valid fail still blocks cooldown
-        // reuse of an older pass.
+        // rows and invalid scopes are skipped here, while a newer valid fail
+        // still blocks cooldown reuse of an older pass.
         if !is_reusable_history_record_for_expected(&record, &expectation.a) {
             return Ok(HistoryRecordScan::Continue);
         }
-        if force_full_scope
-            && sanitize_scope_for_hash(&record.scope).is_ok_and(|scope| scope != full_scope())
-        {
+        let Ok(scope) = sanitize_scope_for_hash(&record.scope) else {
+            return Ok(HistoryRecordScan::Continue);
+        };
+        if force_full_scope && scope != full_scope() {
             return Ok(HistoryRecordScan::Continue);
         }
+        record.scope = scope;
         let Some(timestamp) = parse_record_timestamp(&record.timestamp) else {
             return Ok(HistoryRecordScan::Done(None));
         };

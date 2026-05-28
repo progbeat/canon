@@ -488,13 +488,25 @@ pub(crate) fn remove_moved_reusable_pre_commit_hook(
             original_path.display()
         ));
     }
-    fs::remove_file(moved_path).map_err(|err| {
-        format!(
-            "failed to remove moved managed pre-commit hook {}: {}",
-            moved_path.display(),
-            err
-        )
-    })?;
+    if let Err(err) = fs::remove_file(moved_path) {
+        return match restore_moved_hook_file(original_path, moved_path) {
+            Ok(()) => Err(format!(
+                "failed to remove moved managed pre-commit hook {}: {}; restored managed pre-commit hook to {}, moved hook left at {}",
+                moved_path.display(),
+                err,
+                original_path.display(),
+                moved_path.display()
+            )),
+            Err(restore_err) => Err(format!(
+                "failed to remove moved managed pre-commit hook {}: {}; additionally failed to restore managed pre-commit hook to {}: {}; moved hook left at {}",
+                moved_path.display(),
+                err,
+                original_path.display(),
+                restore_err,
+                moved_path.display()
+            )),
+        };
+    }
     remove_empty_uninstall_fallback_temp_dir(temp_dir)
 }
 
@@ -564,6 +576,17 @@ fn restore_moved_non_fallback_hook(
             err
         )),
     }
+}
+
+fn restore_moved_hook_file(original_path: &Path, moved_path: &Path) -> Result<(), String> {
+    fs::hard_link(moved_path, original_path).map_err(|err| {
+        format!(
+            "failed to restore moved hook from {} to {}: {}",
+            moved_path.display(),
+            original_path.display(),
+            err
+        )
+    })
 }
 
 fn remove_empty_uninstall_fallback_temp_dir(temp_dir: &Path) -> Result<(), String> {

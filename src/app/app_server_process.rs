@@ -208,7 +208,7 @@ pub(crate) fn prepare_evaluator_codex_home(root: &Path) -> Result<PathBuf, Strin
     let source_home = source_codex_home();
     write_empty_system_skills_marker(source_home.as_deref(), &codex_home)?;
     if let Some(source_home) = source_home {
-        if source_home != codex_home {
+        if !same_existing_path(&source_home, &codex_home) {
             for file_name in EVALUATOR_CODEX_HOME_AUTH_FILES {
                 mirror_codex_home_file(&source_home, &codex_home, file_name)?;
             }
@@ -280,8 +280,18 @@ fn mirror_codex_home_file(
         return Ok(());
     }
     let target = target_home.join(file_name);
+    if same_existing_path(&source, &target) {
+        return Ok(());
+    }
     remove_existing_codex_home_entry(&target)?;
     platform::mirror_evaluator_codex_home_file(&source, &target)
+}
+
+fn same_existing_path(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
 }
 
 fn remove_existing_codex_home_entry(path: &Path) -> Result<(), String> {

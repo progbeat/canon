@@ -404,6 +404,39 @@ fn hook_uninstall_managed_hook_cleanup_restores_hook_moved_after_race() {
 
 #[cfg(unix)]
 #[test]
+fn hook_uninstall_managed_hook_remove_failure_restores_moved_hook() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = git_project("hook-uninstall-managed-remove-failure-restore");
+    let hook_path = managed_pre_commit_hook_path(&root);
+    fs::create_dir_all(hook_path.parent().unwrap()).unwrap();
+    let temp_dir = hook_path
+        .parent()
+        .unwrap()
+        .join(".canon-managed-hook-remove-fails");
+    let moved_hook = temp_dir.join("pre-commit");
+    fs::create_dir_all(&temp_dir).unwrap();
+    fs::write(&moved_hook, DEFAULT_PRE_COMMIT_HOOK).unwrap();
+    let original_permissions = fs::metadata(&temp_dir).unwrap().permissions();
+    let mut readonly = original_permissions.clone();
+    readonly.set_mode(0o555);
+    fs::set_permissions(&temp_dir, readonly).unwrap();
+
+    let err =
+        remove_moved_reusable_pre_commit_hook(&hook_path, &moved_hook, &temp_dir).unwrap_err();
+
+    fs::set_permissions(&temp_dir, original_permissions).unwrap();
+    assert!(err.contains("restored managed pre-commit hook"), "{err}");
+    assert_eq!(
+        fs::read_to_string(&hook_path).unwrap(),
+        DEFAULT_PRE_COMMIT_HOOK
+    );
+    assert!(moved_hook.exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[test]
 fn hook_uninstall_restores_hooks_path_when_remove_fails() {
     use std::os::unix::fs::PermissionsExt;
 

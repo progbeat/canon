@@ -10,6 +10,7 @@ use crate::config_types::{AgentConfig, CheckConfig};
 use crate::history::HistoryCache;
 use crate::history_reuse::{
     cooldown_history_record, latest_history_record_matching_visible_tree_oid,
+    latest_history_scope_with_cache,
 };
 use crate::output::write_stderr_line;
 use crate::repo_inspection::RepoInspectionCache;
@@ -263,10 +264,12 @@ fn gate_cache_result_for_tree_at(
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
     now: u64,
 ) -> Result<GateCacheResult, String> {
+    let current_scope = latest_history_scope_with_cache(root, agent, expectation, history_cache)?;
     let same_tree = latest_history_record_matching_visible_tree_oid(
         root,
         expectation,
         history_cache,
+        current_scope.as_deref(),
         |scope| match tree {
             GateComparisonTree::StagedIndex => visible_tree_oid_cache
                 .staged_visible_tree_oid(root, agent, scope)

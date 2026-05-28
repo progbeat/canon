@@ -747,11 +747,26 @@ fn query_mode_uses_agent_and_does_not_write_history() {
     .unwrap();
 
     assert_eq!(result.answer.answer, "no");
-    assert_eq!(result.answer.scope, full_scope());
-    assert_eq!(runner.prompts, vec!["Ad-hoc question?".to_string()]);
-    assert_eq!(runner.start_scopes, vec![vec![".".to_string()]]);
-    assert_eq!(runner.start_models, vec![Some("gpt-5.4-mini".to_string())]);
-    assert_eq!(runner.start_thinking, vec!["medium".to_string()]);
+    assert_eq!(result.answer.scope, vec!["src".to_string()]);
+    assert_eq!(
+        runner.prompts,
+        vec![
+            "Ad-hoc question?".to_string(),
+            "Ad-hoc question?".to_string()
+        ]
+    );
+    assert_eq!(
+        runner.start_scopes,
+        vec![vec![".".to_string()], vec!["src".to_string()]]
+    );
+    assert_eq!(
+        runner.start_models,
+        vec![
+            Some("gpt-5.4-mini".to_string()),
+            Some("gpt-5.4-mini".to_string())
+        ]
+    );
+    assert_eq!(runner.start_thinking, vec!["medium", "medium"]);
     let cache_dir = root.join(".git/canon/cache");
     assert!(!cache_dir.exists() || fs::read_dir(&cache_dir).unwrap().next().is_none());
     let output = render_query_output(&result.answer);
@@ -808,8 +823,43 @@ fn query_mode_accepts_narrowed_incorrect_answer_when_expected_is_known() {
     let root = git_project("query-mode-known-expected-narrowing");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let mut runner = FakeRunner::new(&[
-        &answer("yes", "full scope passes", &["src"]),
+        &answer("maybe", "full scope fails it", &["src"]),
         &answer("no", "src/main.rs still fails it", &["src"]),
+    ]);
+    let runtime = CheckRuntime::fixed(&root, &root, &config);
+    let mut interrogation_run_state = InterrogationRunState::new();
+
+    let result = run_query_with_runner(
+        &runtime,
+        "Ad-hoc question?",
+        Some("yes"),
+        &full_scope(),
+        &mut runner,
+        None,
+        &mut interrogation_run_state,
+    )
+    .unwrap();
+
+    assert_eq!(result.answer.answer, "no");
+    assert_eq!(
+        result.answer.evidence,
+        "`src/main.rs`: src/main.rs still fails it"
+    );
+    assert_eq!(result.answer.scope, vec!["src".to_string()]);
+    assert_eq!(
+        runner.start_scopes,
+        vec![full_scope(), vec!["src".to_string()]]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn query_mode_rejects_changed_narrowing_when_wide_matches_known_expected() {
+    let root = git_project("query-mode-known-expected-rejected-narrowing");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let mut runner = FakeRunner::new(&[
+        &answer("yes", "full scope passes", &["src"]),
+        &answer("no", "src/main.rs changes the answer", &["src"]),
     ]);
     let runtime = CheckRuntime::fixed(&root, &root, &config);
     let mut interrogation_run_state = InterrogationRunState::new();
@@ -828,6 +878,15 @@ fn query_mode_accepts_narrowed_incorrect_answer_when_expected_is_known() {
     assert_eq!(result.answer.answer, "yes");
     assert_eq!(result.answer.evidence, "`src/main.rs`: full scope passes");
     assert_eq!(result.answer.scope, full_scope());
+    assert_eq!(result.answer.q_scope_suggestion, None);
+    assert_eq!(
+        render_query_output(&result.answer),
+        "Observed: yes\nEvidence: `src/main.rs`: full scope passes\n"
+    );
+    assert_eq!(
+        runner.start_scopes,
+        vec![full_scope(), vec!["src".to_string()]]
+    );
     let _ = fs::remove_dir_all(root);
 }
 
@@ -856,6 +915,15 @@ fn query_mode_rejects_changed_narrowing_when_expected_is_unknown() {
     assert_eq!(result.answer.answer, "yes");
     assert_eq!(result.answer.evidence, "`src/main.rs`: full scope answer");
     assert_eq!(result.answer.scope, full_scope());
+    assert_eq!(result.answer.q_scope_suggestion, None);
+    assert_eq!(
+        render_query_output(&result.answer),
+        "Observed: yes\nEvidence: `src/main.rs`: full scope answer\n"
+    );
+    assert_eq!(
+        runner.start_scopes,
+        vec![full_scope(), vec!["src".to_string()]]
+    );
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1078,6 +1146,64 @@ fn successful_narrowing_logs_stats_and_one_final_result() {
 }
 
 #[test]
+fn narrowing_skips_suggestions_outside_enforced_scope() {
+    let root = git_project("narrowing-outside-enforced-scope");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    fs::write(root.join("src/a.rs"), "a\n").unwrap();
+    fs::write(root.join("src/b.rs"), "b\n").unwrap();
+    fs::write(root.join("src/c.rs"), "c\n").unwrap();
+    fs::create_dir_all(root.join("private")).unwrap();
+    fs::write(root.join("private/a.txt"), "a\n").unwrap();
+    fs::write(root.join("private/b.txt"), "b\n").unwrap();
+    fs::write(root.join("private/c.txt"), "c\n").unwrap();
+    Command::new("git")
+        .args([
+            "add",
+            "src/a.rs",
+            "src/b.rs",
+            "src/c.rs",
+            "private/a.txt",
+            "private/b.txt",
+            "private/c.txt",
+        ])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let expectation = options.selected[0].clone();
+    let scope = vec!["src".to_string()];
+    let mut scope_seed = expectation_record(
+        &config.agent,
+        &expectation,
+        "pass",
+        "yes",
+        staged_visible_tree_oid(&root, &config.agent, &scope).unwrap(),
+    );
+    scope_seed.scope = scope.clone();
+    append_history_record(&root, &expectation, &scope_seed).unwrap();
+    let response = serde_json::to_string(&json!({
+        "answer": "yes",
+        "evidence": "`src/main.rs`: full answer",
+        "qScopeSuggestion": ["private"]
+    }))
+    .unwrap();
+    let mut runner = FakeRunner::new(&[&response]);
+
+    let report =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert_eq!(runner.starts, 1);
+    assert_eq!(runner.start_scopes, vec![scope.clone()]);
+    assert_eq!(report.narrowing.attempted, 0);
+    assert_eq!(report.records[0].scope, scope);
+    assert_eq!(
+        report.records[0].suggested_q_scope,
+        Some(vec!["private".to_string()])
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn failed_narrowing_logs_stats_and_keeps_wider_final_result() {
     let root = git_project("narrowing-fail");
     enable_diagnostic_logs(&root);
@@ -1102,22 +1228,22 @@ fn failed_narrowing_logs_stats_and_keeps_wider_final_result() {
     .unwrap();
 
     assert_eq!(report.narrowing.attempted, 1);
-    assert_eq!(report.narrowing.accepted, 1);
-    assert_eq!(report.narrowing.rejected, 0);
-    assert_eq!(report.records[0].observed, "yes");
-    assert_eq!(report.records[0].evidence, "`src/main.rs`: narrow answer");
-    assert_eq!(report.records[0].scope, vec!["src"]);
+    assert_eq!(report.narrowing.accepted, 0);
+    assert_eq!(report.narrowing.rejected, 1);
+    assert_eq!(report.records[0].observed, "no");
+    assert_eq!(report.records[0].evidence, "`src/main.rs`: full answer");
+    assert_eq!(report.records[0].scope, full_scope());
     let history = read_history_records(&root, &expectation).unwrap();
     assert_eq!(history.len(), 1);
-    assert_eq!(history[0].observed, "yes");
-    assert_eq!(history[0].evidence, "`src/main.rs`: narrow answer");
-    assert_eq!(history[0].scope, vec!["src"]);
+    assert_eq!(history[0].observed, "no");
+    assert_eq!(history[0].evidence, "`src/main.rs`: full answer");
+    assert_eq!(history[0].scope, full_scope());
     let log = fs::read_to_string(diagnostic_log.path()).unwrap();
     assert_eq!(log.matches(r#""event":"expectation.result""#).count(), 1);
     assert_eq!(log.matches(r#""event":"interrogation.result""#).count(), 2);
     assert!(log.contains(r#""event":"scope.narrowing""#));
     assert!(log.contains(r#""originalScope":["."]"#));
     assert!(log.contains(r#""proposedScope":["src"]"#));
-    assert!(log.contains(r#""accepted":true"#));
+    assert!(log.contains(r#""accepted":false"#));
     let _ = fs::remove_dir_all(root);
 }

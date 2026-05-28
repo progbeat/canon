@@ -1,4 +1,5 @@
 use std::ffi::OsString;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -47,6 +48,14 @@ pub(crate) fn make_hook_executable(path: &Path) -> Result<(), String> {
 
 pub(crate) fn set_materialized_file_permissions(path: &Path, mode: &str) -> Result<(), String> {
     imp::set_materialized_file_permissions(path, mode)
+}
+
+pub(crate) fn create_private_dir(path: &Path) -> io::Result<()> {
+    imp::create_private_dir(path)
+}
+
+pub(crate) fn create_private_dir_all(path: &Path) -> io::Result<()> {
+    imp::create_private_dir_all(path)
 }
 
 pub(crate) fn open_file_for_append_without_following_symlink(

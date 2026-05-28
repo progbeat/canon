@@ -328,6 +328,56 @@ expectations:
 }
 
 #[test]
+fn cooldown_reuse_skips_invalid_scope_after_full_scope_reset() {
+    let root = git_project("history-cooldown-reset-invalid-scope");
+    let config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: "Question?"
+    a: "yes"
+    cooldown: 1d
+"#,
+    )
+    .unwrap();
+    let expectation = check_options(&config, &["1"], false, false).selected[0].clone();
+    let visible_tree_oid = staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
+    let mut old_full_pass = expectation_record(
+        &config.agent,
+        &expectation,
+        "pass",
+        "yes",
+        visible_tree_oid.clone(),
+    );
+    old_full_pass.timestamp = "1970-01-01T00:00:10Z".to_string();
+    old_full_pass.evidence = "old full-scope pass".to_string();
+    append_history_record(&root, &expectation, &old_full_pass).unwrap();
+    let mut invalid_scope_pass =
+        expectation_record(&config.agent, &expectation, "pass", "yes", visible_tree_oid);
+    invalid_scope_pass.timestamp = "1970-01-01T00:00:20Z".to_string();
+    invalid_scope_pass.evidence = "invalid scope pass".to_string();
+    invalid_scope_pass.scope = vec!["..".to_string()];
+    append_legacy_history_record(&root, &expectation, &invalid_scope_pass);
+    write_full_scope_reset_marker_with_cache(&root, &expectation, &mut HistoryCache::new())
+        .unwrap();
+
+    let mut history_cache = HistoryCache::new();
+    let record =
+        cooldown_history_record(&root, &config.agent, &expectation, &mut history_cache, 30)
+            .unwrap()
+            .unwrap();
+
+    assert!(record.passed());
+    assert_eq!(record.evidence, "old full-scope pass");
+    assert_eq!(record.scope, full_scope());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn cooldown_reuse_skips_latest_answer_record_with_invalid_timestamp() {
     let root = git_project("history-cooldown-invalid-timestamp");
     let config = parse_check_config(

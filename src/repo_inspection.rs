@@ -132,12 +132,17 @@ impl RepoInspectionCache {
             return cached.clone();
         }
         let files = self.staged_files(root)?;
-        let object_ids = files
+        let blob_files = files
+            .iter()
+            .filter(|file| file.is_materialized_blob())
+            .cloned()
+            .collect::<Vec<_>>();
+        let object_ids = blob_files
             .iter()
             .map(|file| file.object_id.clone())
             .collect::<Vec<_>>();
         let blobs = read_git_blobs(root, &object_ids)?;
-        let contents = files
+        let contents = blob_files
             .into_iter()
             .zip(blobs)
             .map(|(file, blob)| (file.path, blob))

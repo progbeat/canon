@@ -93,7 +93,7 @@ fn create_snapshot_root_in(parent: &Path) -> Result<PathBuf, String> {
             stamp,
             attempt
         ));
-        match fs::create_dir(&path) {
+        match crate::platform::create_private_dir(&path) {
             Ok(()) => return Ok(path),
             Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
             Err(err) => {

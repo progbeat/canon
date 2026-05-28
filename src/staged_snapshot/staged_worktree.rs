@@ -37,8 +37,8 @@ impl StagedWorktreeView {
         _visible_tree_oid_cache: &mut VisibleTreeOidCache,
     ) -> Result<StagedWorktreeView, String> {
         let materialization_root = create_snapshot_root(root)?;
-        if let Err(err) = fs::create_dir_all(materialization_root.join("lazy"))
-            .and_then(|_| fs::create_dir_all(materialization_root.join("scopes")))
+        if let Err(err) = platform::create_private_dir(&materialization_root.join("lazy"))
+            .and_then(|_| platform::create_private_dir(&materialization_root.join("scopes")))
         {
             let _ = fs::remove_dir_all(&materialization_root);
             return Err(format!(
@@ -93,7 +93,8 @@ impl StagedWorktreeView {
         self.files
             .iter()
             .filter(|file| {
-                path_is_in_scope(&file.path, scope)
+                file.is_materialized_blob()
+                    && path_is_in_scope(&file.path, scope)
                     && !deny_patterns
                         .iter()
                         .any(|pattern| path_matches_pattern_bytes(&file.path, pattern.as_bytes()))
@@ -109,7 +110,7 @@ impl StagedWorktreeView {
         let id = self.next_lazy_id.get();
         self.next_lazy_id.set(id + 1);
         let root = self.lazy_root.join(id.to_string());
-        fs::create_dir(&root).map_err(|err| {
+        platform::create_private_dir(&root).map_err(|err| {
             format!(
                 "failed to create evaluator lazy tree {}: {}",
                 root.display(),
@@ -176,7 +177,7 @@ impl StagedWorktreeView {
         let id = self.next_scope_id.get();
         self.next_scope_id.set(id + 1);
         let scope_root = self.scope_roots.join(id.to_string());
-        fs::create_dir(&scope_root).map_err(|err| {
+        platform::create_private_dir(&scope_root).map_err(|err| {
             format!(
                 "failed to create evaluator scope root {}: {}",
                 scope_root.display(),
@@ -188,7 +189,7 @@ impl StagedWorktreeView {
             let source = lazy_tree.join(&relative);
             let target = scope_root.join(&relative);
             if let Some(parent) = target.parent() {
-                fs::create_dir_all(parent).map_err(|err| {
+                platform::create_private_dir_all(parent).map_err(|err| {
                     format!(
                         "failed to create evaluator scope directory {}: {}",
                         parent.display(),
@@ -250,7 +251,7 @@ fn write_materialized_file(
     let relative = relative_path_from_git_path(&file.path)?;
     let target = lazy_tree.join(relative);
     if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent).map_err(|err| {
+        platform::create_private_dir_all(parent).map_err(|err| {
             format!(
                 "failed to create evaluator lazy directory {}: {}",
                 parent.display(),

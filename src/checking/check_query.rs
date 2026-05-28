@@ -1,23 +1,26 @@
 use crate::check_interrogation::{ask_with_reused_thread, ThreadTurnRequest};
+use crate::check_interrogation_policy::q_scope_suggestion_should_get_independent_verification;
 use crate::check_interrogation_records::{
     finalize_query_answer, write_query_result_event, write_query_review_required_event,
 };
 use crate::check_interrogation_state::{CheckRuntime, InterrogationRunState};
 use crate::check_model_fallback::run_with_model_fallbacks;
-use crate::check_types::{ObservedAnswerState, QueryResult};
+use crate::check_types::{ObservedAnswerState, ParsedAnswer, QueryResult};
 use crate::evaluator_types::{EvaluatorError, EvaluatorRunner};
 use crate::logging::DiagnosticLogWriter;
+use crate::scope::sanitize_scope;
 
 #[derive(Clone, Copy)]
 pub(crate) struct QueryRequest<'a> {
     pub(crate) question: &'a str,
+    pub(crate) expected_answer: Option<&'a str>,
     pub(crate) enforced_scope: &'a [String],
 }
 
 pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
     runtime: &CheckRuntime<'_>,
     question: &str,
-    _expected_answer: Option<&str>,
+    expected_answer: Option<&str>,
     enforced_scope: &[String],
     runner: &mut R,
     diagnostic_log: Option<&mut DiagnosticLogWriter>,
@@ -34,6 +37,7 @@ pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
                 runtime,
                 QueryRequest {
                     question,
+                    expected_answer,
                     enforced_scope,
                 },
                 runner,
@@ -59,7 +63,7 @@ pub(crate) fn ask_query_with_model<R: EvaluatorRunner>(
     // same "unchanged or still incorrect" rule without adding expected text to
     // the evaluator task input. Pure ad-hoc queries have no expected answer, so
     // changed narrowed answers are not trusted as reusable narrower results.
-    let result = ask_query_once(
+    let mut result = ask_query_once(
         runtime,
         query.question,
         query.enforced_scope,
@@ -68,6 +72,38 @@ pub(crate) fn ask_query_with_model<R: EvaluatorRunner>(
         state,
         model,
     )?;
+    if query_should_verify_narrowing(runtime, state, query.enforced_scope, &result.answer)? {
+        let verification_scope = sanitize_scope(
+            result
+                .answer
+                .q_scope_suggestion
+                .as_deref()
+                .expect("suggestion was validated before verification"),
+            &runtime.config.agent,
+        )?;
+        let narrowed = ask_query_once(
+            runtime,
+            query.question,
+            &verification_scope,
+            runner,
+            diagnostic_log,
+            state,
+            model,
+        );
+        if let Ok(narrowed) = narrowed {
+            if query_narrowed_answer_is_accepted(
+                &result.answer,
+                &narrowed.answer,
+                query.expected_answer,
+            ) {
+                result = narrowed;
+            } else {
+                result.answer.q_scope_suggestion = None;
+            }
+        } else {
+            result.answer.q_scope_suggestion = None;
+        }
+    }
     if let Some(reason) = query_human_review_reason(&result) {
         write_query_review_required_event(query.question, diagnostic_log, &result.answer, reason)?;
         return Err(EvaluatorError::message(format!(
@@ -104,6 +140,48 @@ fn ask_query_once<R: EvaluatorRunner>(
         },
     )?;
     finalize_query_answer(runtime, state, enforced_scope, question, response.answer)
+}
+
+fn query_should_verify_narrowing(
+    runtime: &CheckRuntime<'_>,
+    state: &mut InterrogationRunState,
+    enforced_scope: &[String],
+    answer: &ParsedAnswer,
+) -> Result<bool, EvaluatorError> {
+    if !matches!(
+        ObservedAnswerState::from_observed(&answer.answer),
+        ObservedAnswerState::Answer
+    ) {
+        return Ok(false);
+    }
+    q_scope_suggestion_should_get_independent_verification(
+        runtime.root,
+        &runtime.config.agent,
+        answer.q_scope_suggestion.as_deref(),
+        enforced_scope,
+        &mut state.visible_tree_oid_cache,
+    )
+    .map_err(EvaluatorError::from)
+}
+
+fn query_narrowed_answer_is_accepted(
+    wide: &ParsedAnswer,
+    narrowed: &ParsedAnswer,
+    expected_answer: Option<&str>,
+) -> bool {
+    if !matches!(
+        ObservedAnswerState::from_observed(&narrowed.answer),
+        ObservedAnswerState::Answer
+    ) {
+        return false;
+    }
+    if narrowed.answer == wide.answer {
+        return true;
+    }
+    let Some(expected_answer) = expected_answer else {
+        return false;
+    };
+    wide.answer != expected_answer && narrowed.answer != expected_answer
 }
 
 fn query_human_review_reason(result: &QueryResult) -> Option<&'static str> {

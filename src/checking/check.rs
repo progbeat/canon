@@ -3,8 +3,9 @@ use crate::check_cache::{
 };
 use crate::check_interrogation_policy::{
     interrogate_or_error_record, interrogate_with_full_scope_retry, narrowed_scope_is_accepted,
-    restore_record_to_enforced_scope, turn_exceeds_break_after_tokens, turn_has_context_compaction,
-    write_scope_narrowing_event, InterrogationCall, ScopedInterrogation,
+    q_scope_suggestion_should_get_independent_verification, restore_record_to_enforced_scope,
+    turn_exceeds_break_after_tokens, turn_has_context_compaction, write_scope_narrowing_event,
+    InterrogationCall, ScopedInterrogation,
 };
 use crate::check_interrogation_state::{
     initial_visible_scope_for_expectation, CheckRuntime, InterrogationRunState,
@@ -20,7 +21,6 @@ use crate::check_types::{
     check_run_error, CachedExpectation, CheckOptions, CheckRecord, CheckRunError, CheckRunReport,
     NarrowingStats, SelectedExpectation,
 };
-use crate::config_types::AgentConfig;
 #[cfg(test)]
 use crate::config_types::CheckConfig;
 use crate::evaluator_types::EvaluatorRunner;
@@ -454,41 +454,6 @@ struct OrderedCachedSelectionHit {
     hit: CachedSelectionHit,
     latest_non_pass: u64,
     index: usize,
-}
-
-fn q_scope_suggestion_should_get_independent_verification(
-    root: &Path,
-    agent: &AgentConfig,
-    suggestion: Option<&[String]>,
-    current_scope: &[String],
-    visible_tree_oid_cache: &mut VisibleTreeOidCache,
-) -> Result<bool, String> {
-    // This is only the Interrogation Policy gate for whether to spend an
-    // independent verification turn: valid scope syntax, existing paths, and
-    // at least 25% fewer visible files. It never accepts or stores the
-    // suggestion. Acceptance happens only after that independent interrogation
-    // returns a schema-valid answer.
-    let Some(suggestion) = suggestion else {
-        return Ok(false);
-    };
-    let suggestion = match sanitize_scope(suggestion, agent) {
-        Ok(scope) => scope,
-        Err(_) => return Ok(false),
-    };
-    if !visible_tree_oid_cache
-        .missing_staged_scope_paths(root, &suggestion)?
-        .is_empty()
-    {
-        return Ok(false);
-    }
-    let current_count =
-        visible_tree_oid_cache.staged_visible_file_count(root, agent, current_scope)?;
-    if current_count == 0 {
-        return Ok(false);
-    }
-    let suggested_count =
-        visible_tree_oid_cache.staged_visible_file_count(root, agent, &suggestion)?;
-    Ok(suggested_count.saturating_mul(4) <= current_count.saturating_mul(3))
 }
 
 fn check_run_report(

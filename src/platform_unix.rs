@@ -3,7 +3,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::os::unix::fs::{symlink, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{symlink, DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
@@ -154,6 +154,21 @@ pub(crate) fn set_materialized_file_permissions(path: &Path, mode: &str) -> Resu
     permissions.set_mode(unix_mode);
     fs::set_permissions(path, permissions)
         .map_err(|err| format!("failed to chmod {}: {}", path.display(), err))
+}
+
+pub(crate) fn create_private_dir(path: &Path) -> io::Result<()> {
+    private_dir_builder(false).create(path)
+}
+
+pub(crate) fn create_private_dir_all(path: &Path) -> io::Result<()> {
+    private_dir_builder(true).create(path)
+}
+
+fn private_dir_builder(recursive: bool) -> fs::DirBuilder {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(recursive);
+    builder.mode(0o700);
+    builder
 }
 
 pub(crate) fn open_file_for_append_without_following_symlink(

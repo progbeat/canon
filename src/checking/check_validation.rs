@@ -226,10 +226,11 @@ pub(crate) fn codex_reasoning_effort(thinking: &str) -> Option<&str> {
 }
 
 pub(crate) fn check_config_loads_plugins(config: &CheckConfig) -> bool {
-    config
-        .expectations
-        .iter()
-        .any(|expectation| !expectation.agent.plugins.is_empty())
+    !config.agent.plugins.is_empty()
+        || config
+            .expectations
+            .iter()
+            .any(|expectation| !expectation.agent.plugins.is_empty())
         || config
             .presets
             .values()

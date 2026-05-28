@@ -36,6 +36,14 @@ pub(crate) fn set_materialized_file_permissions(_path: &Path, _mode: &str) -> Re
     Ok(())
 }
 
+pub(crate) fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    fs::create_dir(path)
+}
+
+pub(crate) fn create_private_dir_all(path: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(path)
+}
+
 pub(crate) fn open_file_for_append_without_following_symlink(
     path: &Path,
 ) -> Result<fs::File, String> {

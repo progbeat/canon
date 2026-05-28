@@ -12,6 +12,12 @@ pub(crate) struct StagedTrackedFile {
     pub(crate) object_id: String,
 }
 
+impl StagedTrackedFile {
+    pub(crate) fn is_materialized_blob(&self) -> bool {
+        matches!(self.mode.as_str(), "100644" | "100755" | "120000")
+    }
+}
+
 pub(crate) fn resolve_git_path(root: &Path, path: &str) -> Result<PathBuf, String> {
     let output = Command::new("git")
         .arg("-C")

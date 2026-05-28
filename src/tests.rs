@@ -108,7 +108,8 @@ use crate::git::{read_git_blobs_with_git_program, GitBlobReader};
 use crate::hash::{expectation_id, fnv64_with_seed, full_scope, hash_120, hash_key};
 use crate::history::{
     full_scope_reset_marker_path_with_cache, history_file_name, history_path,
-    parse_history_record_line, read_history_records, read_history_records_from_path, HistoryCache,
+    parse_history_record_line, read_history_records, read_history_records_from_path,
+    write_full_scope_reset_marker_with_cache, HistoryCache,
 };
 use crate::history_append::{append_history_record, append_history_record_with_cache};
 use crate::history_cache_key::history_cache_key;

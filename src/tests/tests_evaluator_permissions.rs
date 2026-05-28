@@ -192,6 +192,27 @@ expectations:
 }
 
 #[test]
+fn plugin_loading_uses_default_agent_plugins_directly() {
+    let mut config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins:
+    - "canon@codex-plugins"
+expectations:
+  - q: "Question?"
+    a: "yes"
+"#,
+    )
+    .unwrap();
+    config.expectations[0].agent.plugins.clear();
+
+    assert!(check_config_loads_plugins(&config));
+}
+
+#[test]
 fn app_server_starts_with_plugins_disabled_by_default() {
     let root = git_project("app-server-args-default");
     let config = parse_check_config(check_config_yaml()).unwrap();
@@ -424,6 +445,38 @@ fn evaluator_codex_home_symlinks_auth_inside_codex_sandbox() {
         );
     }
     #[cfg(not(unix))]
+    assert!(!fs::symlink_metadata(&auth_path)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    let _ = fs::remove_dir_all(evaluator_home);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+#[cfg(unix)]
+fn evaluator_codex_home_skips_auth_mirror_when_source_is_same_home_alias() {
+    use std::os::unix::fs::symlink;
+
+    let _guard = ENV_LOCK.lock().expect("lock test environment");
+    let env_snapshot = EnvSnapshot::capture(&["CODEX_HOME", "CODEX_SANDBOX"]);
+    env_snapshot.remove("CODEX_SANDBOX");
+    let root = git_project("app-server-same-codex-home-alias");
+    let canonical_root = root.canonicalize().unwrap();
+    let evaluator_home =
+        resolve_git_path(&canonical_root, "canon/evaluator-codex-home/.codex").unwrap();
+    fs::create_dir_all(&evaluator_home).unwrap();
+    let auth_path = evaluator_home.join("auth.json");
+    fs::write(&auth_path, "{}\n").unwrap();
+    let alias_root = TestDir::new("codex-home-same-target-alias");
+    let alias_path = alias_root.path().join("alias");
+    symlink(&evaluator_home, &alias_path).unwrap();
+    env_snapshot.set("CODEX_HOME", &alias_path);
+
+    let prepared_home = prepare_evaluator_codex_home(&root).unwrap();
+
+    assert_eq!(prepared_home, evaluator_home);
+    assert_eq!(fs::read_to_string(&auth_path).unwrap(), "{}\n");
     assert!(!fs::symlink_metadata(&auth_path)
         .unwrap()
         .file_type()

@@ -5,10 +5,12 @@ use crate::check_interrogation_state::{
 use crate::check_model_fallback::interrogate_expectation_with_model_fallbacks;
 use crate::check_narrowing::scope_narrowing_log_fields;
 use crate::check_types::{CheckRecord, InterrogationResult, SelectedExpectation};
+use crate::config_types::AgentConfig;
 use crate::evaluator_types::EvaluatorRunner;
 use crate::hash::full_scope;
 use crate::history_reuse::is_reusable_history_record;
 use crate::logging::DiagnosticLogWriter;
+use crate::scope::{sanitize_scope, scope_is_within};
 use crate::visible_tree_oid::VisibleTreeOidCache;
 use std::path::Path;
 
@@ -121,11 +123,49 @@ pub(crate) fn turn_has_context_compaction(interrogation: &InterrogationResult) -
     interrogation.context_compacted
 }
 
+pub(crate) fn q_scope_suggestion_should_get_independent_verification(
+    root: &Path,
+    agent: &AgentConfig,
+    suggestion: Option<&[String]>,
+    current_scope: &[String],
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
+) -> Result<bool, String> {
+    // This is only the Interrogation Policy gate for whether to spend an
+    // independent verification turn: valid scope syntax, containment within
+    // the current enforced scope, existing paths, and at least 25% fewer
+    // visible files. It never accepts or stores the suggestion. Acceptance
+    // happens only after that independent interrogation returns a schema-valid
+    // answer.
+    let Some(suggestion) = suggestion else {
+        return Ok(false);
+    };
+    let suggestion = match sanitize_scope(suggestion, agent) {
+        Ok(scope) => scope,
+        Err(_) => return Ok(false),
+    };
+    if !scope_is_within(&suggestion, current_scope) {
+        return Ok(false);
+    }
+    if !visible_tree_oid_cache
+        .missing_staged_scope_paths(root, &suggestion)?
+        .is_empty()
+    {
+        return Ok(false);
+    }
+    let current_count =
+        visible_tree_oid_cache.staged_visible_file_count(root, agent, current_scope)?;
+    if current_count == 0 {
+        return Ok(false);
+    }
+    let suggested_count =
+        visible_tree_oid_cache.staged_visible_file_count(root, agent, &suggestion)?;
+    Ok(suggested_count.saturating_mul(4) <= current_count.saturating_mul(3))
+}
+
 pub(crate) fn narrowed_scope_is_accepted(wide: &CheckRecord, narrowed: &CheckRecord) -> bool {
     // Canon trusts a q-scope suggestion only after an independent
-    // interrogation under that scope returns a schema-valid answer.
-    let _ = wide;
-    is_reusable_history_record(narrowed)
+    // interrogation under that scope returns the same schema-valid answer.
+    is_reusable_history_record(narrowed) && narrowed.observed == wide.observed
 }
 
 pub(crate) fn restore_record_to_enforced_scope(

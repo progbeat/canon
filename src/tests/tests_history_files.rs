@@ -371,6 +371,32 @@ fn compact_history_replaces_file_after_writing_latest_lines() {
 }
 
 #[test]
+fn compact_history_refuses_to_replace_while_history_lock_is_held() {
+    let root = git_project("history-compact-lock-held");
+    let path = root.join(".git/canon/cache/example/history.jsonl");
+    ensure_dir(path.parent().unwrap()).unwrap();
+    let records = (1..=10)
+        .map(|number| {
+            let mut record = sample_record(number, "pass");
+            record.evidence = format!("record {number}");
+            render_answer_history_record(&record)
+                .unwrap()
+                .trim_end()
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    fs::write(&path, format!("{}\n", records.join("\n"))).unwrap();
+    let lock_path = path.with_file_name("history.jsonl.lock");
+    fs::write(&lock_path, "held\n").unwrap();
+
+    let err = compact_history(&path).unwrap_err();
+
+    assert!(err.contains("lock is already held"), "{err}");
+    assert_eq!(read_history_records_from_path(&path).unwrap().len(), 10);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn compact_history_drops_malformed_lines_and_keeps_latest_valid_records() {
     let root = git_project("history-compact-malformed");
     let path = root.join(".git/canon/cache/example/history.jsonl");

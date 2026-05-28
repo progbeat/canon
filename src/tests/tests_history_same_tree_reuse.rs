@@ -185,6 +185,44 @@ fn reusable_history_record_with_cache_rechecks_current_visible_tree_oid() {
 }
 
 #[test]
+fn same_tree_reuse_uses_latest_q_scope_for_current_visible_tree_oid() {
+    let root = git_project("history-reuse-latest-q-scope");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let expectation = check_options(&config, &["1"], false, true)
+        .selected
+        .remove(0);
+    let narrow_scope = vec!["src/main.rs".to_string()];
+    let mut older_narrow_fail = expectation_record(
+        &config.agent,
+        &expectation,
+        RESULT_FAIL,
+        "no",
+        staged_visible_tree_oid(&root, &config.agent, &narrow_scope).unwrap(),
+    );
+    older_narrow_fail.scope = narrow_scope;
+    append_history_record(&root, &expectation, &older_narrow_fail).unwrap();
+    let newer_full_pass = expectation_record(
+        &config.agent,
+        &expectation,
+        RESULT_PASS,
+        "yes",
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap(),
+    );
+    append_history_record(&root, &expectation, &newer_full_pass).unwrap();
+    fs::write(root.join("README.md"), "changed outside old narrow scope\n").unwrap();
+    Command::new("git")
+        .args(["add", "README.md"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+
+    let record = same_tree_history_record(&root, &config.agent, &expectation).unwrap();
+
+    assert!(record.is_none());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn reusable_history_record_skips_non_answer_history_before_visible_tree_oid_match() {
     let root = git_project("history-reuse-skip-non-answer-before-oid");
     let config = parse_check_config(check_config_yaml()).unwrap();
