@@ -47,14 +47,10 @@ pub(crate) fn create_private_dir_all(path: &Path) -> std::io::Result<()> {
     fs::create_dir_all(path)
 }
 
-#[allow(clippy::ineffective_open_options)]
 pub(crate) fn open_file_for_append_without_following_symlink(
     path: &Path,
 ) -> Result<fs::File, String> {
-    // Windows needs a write-capable append handle so rollback can truncate
-    // after a failed append.
     fs::OpenOptions::new()
-        .write(true)
         .append(true)
         .open(path)
         .map_err(|err| format!("failed to open {}: {}", path.display(), err))

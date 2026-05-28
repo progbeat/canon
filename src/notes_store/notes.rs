@@ -179,13 +179,13 @@ fn append_note_log_record(note: &Note, record: &NoteRecord) -> Result<u64, Strin
     entry.push_str(&note_log_marker(note, previous_size + 1));
     entry.push('\n');
     entry.push_str(&line);
-    if let Err(err) = file
+    let append_result = file
         .write_all(entry.as_bytes())
-        .and_then(|()| flush_and_sync_file(&mut file))
-    {
+        .and_then(|()| flush_and_sync_file(&mut file));
+    if let Err(err) = append_result {
         return Err(error_with_restore_context(
             format!("failed to append {}: {}", path.display(), err),
-            rollback_note_log_append(path, &mut file, previous_size),
+            rollback_note_log_append(path, file, previous_size),
         ));
     }
     Ok(previous_size)
@@ -198,19 +198,44 @@ fn flush_and_sync_file(file: &mut fs::File) -> io::Result<()> {
 
 fn rollback_note_log_append(
     path: &Path,
-    file: &mut fs::File,
+    mut file: fs::File,
     previous_size: u64,
 ) -> Result<(), String> {
+    let err = match truncate_note_log_append(&mut file, previous_size) {
+        Ok(()) => return Ok(()),
+        Err(err) => err,
+    };
+    #[cfg(not(unix))]
+    if err.kind() == io::ErrorKind::PermissionDenied {
+        drop(file);
+        let mut file = open_note_for_rollback(path)?;
+        return truncate_note_log_append(&mut file, previous_size)
+            .map_err(|err| rollback_note_log_append_error(path, previous_size, err));
+    }
+    Err(rollback_note_log_append_error(path, previous_size, err))
+}
+
+fn truncate_note_log_append(file: &mut fs::File, previous_size: u64) -> io::Result<()> {
     file.set_len(previous_size)
         .and_then(|()| flush_and_sync_file(file))
-        .map_err(|err| {
-            format!(
-                "failed to roll back {} to {} bytes after append failure: {}",
-                path.display(),
-                previous_size,
-                err
-            )
-        })
+}
+
+fn rollback_note_log_append_error(path: &Path, previous_size: u64, err: io::Error) -> String {
+    format!(
+        "failed to roll back {} to {} bytes after append failure: {}",
+        path.display(),
+        previous_size,
+        err
+    )
+}
+
+#[cfg(not(unix))]
+fn open_note_for_rollback(path: &Path) -> Result<fs::File, String> {
+    reject_symlink(path)?;
+    fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .map_err(|err| format!("failed to open {} for rollback: {}", path.display(), err))
 }
 
 #[cfg(test)]
@@ -218,8 +243,8 @@ pub(crate) fn rollback_note_log_append_for_test(
     path: &Path,
     previous_size: u64,
 ) -> Result<(), String> {
-    let mut file = open_file_for_append_without_following_symlink(path)?;
-    rollback_note_log_append(path, &mut file, previous_size)
+    let file = open_file_for_append_without_following_symlink(path)?;
+    rollback_note_log_append(path, file, previous_size)
 }
 
 fn write_compacted_note_record(note: &Note, record: NoteRecord) -> Result<(), String> {
