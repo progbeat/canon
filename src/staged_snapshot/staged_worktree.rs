@@ -1,5 +1,6 @@
 use crate::config_types::AgentConfig;
 use crate::git::{staged_tracked_files_for_pathspecs, GitBlobReader, StagedTrackedFile};
+use crate::hash::full_scope;
 use crate::platform;
 use crate::scope::{
     effective_ignore_patterns, excluding_ignore_pathspec, sanitize_scope,
@@ -19,11 +20,9 @@ pub(crate) struct StagedWorktreeView {
     materialization_root: PathBuf,
     lazy_root: PathBuf,
     scope_roots: PathBuf,
-    lazy_trees_by_deny: RefCell<BTreeMap<Vec<String>, PathBuf>>,
     active_excludes_by_deny: RefCell<BTreeMap<Vec<String>, Vec<String>>>,
-    unpacked_paths_by_deny: RefCell<BTreeMap<Vec<String>, BTreeSet<Vec<u8>>>>,
+    unpacked_paths: RefCell<BTreeSet<Vec<u8>>>,
     blob_reader: RefCell<Option<GitBlobReader>>,
-    next_lazy_id: Cell<u64>,
     next_scope_id: Cell<u64>,
 }
 
@@ -54,11 +53,9 @@ impl StagedWorktreeView {
             lazy_root: materialization_root.join("lazy"),
             scope_roots: materialization_root.join("scopes"),
             materialization_root,
-            lazy_trees_by_deny: RefCell::new(BTreeMap::new()),
             active_excludes_by_deny: RefCell::new(BTreeMap::new()),
-            unpacked_paths_by_deny: RefCell::new(BTreeMap::new()),
+            unpacked_paths: RefCell::new(BTreeSet::new()),
             blob_reader: RefCell::new(None),
-            next_lazy_id: Cell::new(0),
             next_scope_id: Cell::new(0),
         })
     }
@@ -68,20 +65,33 @@ impl StagedWorktreeView {
         &self.materialization_root
     }
 
-    pub(crate) fn materialize_scope(
+    pub(crate) fn materialize_evaluator_scope(
         &self,
         agent: &AgentConfig,
         scope: &[String],
     ) -> Result<PathBuf, String> {
         let scope = sanitize_scope(scope, agent)?;
         let deny_patterns = sorted_effective_ignore_patterns(agent);
-        let visible_files = self.visible_files(&scope, &deny_patterns)?;
-        let lazy_tree = self.lazy_tree_for_deny_patterns(&deny_patterns)?;
-        self.unpack_missing_files(&lazy_tree, &deny_patterns, &visible_files)?;
-        self.copy_scope_root(&lazy_tree, &visible_files)
+        // Configured ignore patterns are part of evaluator-visible Git tree
+        // construction (see glossary). The lazy hardlink policy below receives
+        // the already selected `scope_paths` for that tree.
+        let scope_paths = self.scope_paths_in_evaluator_visible_git_tree(&scope, &deny_patterns)?;
+        self.materialize_scope(&scope, &scope_paths)
     }
 
-    fn visible_files(
+    fn materialize_scope(
+        &self,
+        scope: &[String],
+        scope_paths: &[StagedTrackedFile],
+    ) -> Result<PathBuf, String> {
+        self.unpack_missing_files(scope_paths)?;
+        if scope == full_scope() {
+            return Ok(self.lazy_root.clone());
+        }
+        self.hardlink_scope_root(scope_paths)
+    }
+
+    fn scope_paths_in_evaluator_visible_git_tree(
         &self,
         scope: &[String],
         deny_patterns: &[String],
@@ -120,38 +130,12 @@ impl StagedWorktreeView {
         Ok(active)
     }
 
-    fn lazy_tree_for_deny_patterns(&self, deny_patterns: &[String]) -> Result<PathBuf, String> {
-        if let Some(root) = self.lazy_trees_by_deny.borrow().get(deny_patterns) {
-            return Ok(root.clone());
-        }
-        let id = self.next_lazy_id.get();
-        self.next_lazy_id.set(id + 1);
-        let root = self.lazy_root.join(id.to_string());
-        platform::create_private_dir(&root).map_err(|err| {
-            format!(
-                "failed to create evaluator lazy tree {}: {}",
-                root.display(),
-                err
-            )
-        })?;
-        self.lazy_trees_by_deny
-            .borrow_mut()
-            .insert(deny_patterns.to_vec(), root.clone());
-        Ok(root)
-    }
-
-    fn unpack_missing_files(
-        &self,
-        lazy_tree: &Path,
-        deny_patterns: &[String],
-        files: &[StagedTrackedFile],
-    ) -> Result<(), String> {
+    fn unpack_missing_files(&self, files: &[StagedTrackedFile]) -> Result<(), String> {
         let missing = {
-            let unpacked_by_deny = self.unpacked_paths_by_deny.borrow();
-            let unpacked = unpacked_by_deny.get(deny_patterns);
+            let unpacked = self.unpacked_paths.borrow();
             files
                 .iter()
-                .filter(|file| !unpacked.is_some_and(|paths| paths.contains(&file.path)))
+                .filter(|file| !unpacked.contains(&file.path))
                 .cloned()
                 .collect::<Vec<_>>()
         };
@@ -165,10 +149,9 @@ impl StagedWorktreeView {
             .collect::<Vec<_>>();
         let blobs = self.read_missing_blobs(&object_ids)?;
         for (file, blob) in missing.iter().zip(blobs) {
-            write_materialized_file(lazy_tree, file, &blob)?;
+            write_materialized_file(&self.lazy_root, file, &blob)?;
         }
-        let mut unpacked_by_deny = self.unpacked_paths_by_deny.borrow_mut();
-        let unpacked = unpacked_by_deny.entry(deny_patterns.to_vec()).or_default();
+        let mut unpacked = self.unpacked_paths.borrow_mut();
         for file in missing {
             unpacked.insert(file.path);
         }
@@ -186,11 +169,7 @@ impl StagedWorktreeView {
             .read_blobs(object_ids)
     }
 
-    fn copy_scope_root(
-        &self,
-        lazy_tree: &Path,
-        files: &[StagedTrackedFile],
-    ) -> Result<PathBuf, String> {
+    fn hardlink_scope_root(&self, files: &[StagedTrackedFile]) -> Result<PathBuf, String> {
         let id = self.next_scope_id.get();
         self.next_scope_id.set(id + 1);
         let scope_root = self.scope_roots.join(id.to_string());
@@ -203,7 +182,7 @@ impl StagedWorktreeView {
         })?;
         for file in files {
             let relative = relative_path_from_git_path(&file.path)?;
-            let source = lazy_tree.join(&relative);
+            let source = self.lazy_root.join(&relative);
             let target = scope_root.join(&relative);
             if let Some(parent) = target.parent() {
                 platform::create_private_dir_all(parent).map_err(|err| {
@@ -214,15 +193,14 @@ impl StagedWorktreeView {
                     )
                 })?;
             }
-            fs::copy(&source, &target).map_err(|err| {
+            fs::hard_link(&source, &target).map_err(|err| {
                 format!(
-                    "failed to copy evaluator scope file {} to {}: {}",
+                    "failed to hardlink evaluator scope file {} to {}: {}",
                     source.display(),
                     target.display(),
                     err
                 )
             })?;
-            platform::set_materialized_file_permissions(&target, &file.mode)?;
         }
         Ok(scope_root)
     }

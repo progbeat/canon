@@ -182,16 +182,16 @@ pub(crate) fn open_file_for_append_without_following_symlink(
 }
 
 pub(crate) fn add_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
-    add_linux_staged_snapshot_parent(parents);
+    add_memory_backed_staged_snapshot_parent_candidates(parents);
 }
 
-#[cfg(target_os = "linux")]
-fn add_linux_staged_snapshot_parent(parents: &mut Vec<PathBuf>) {
+fn add_memory_backed_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
+    // Prefer common tmpfs-backed locations when the host exposes them. Missing
+    // candidates are harmless: snapshot creation skips paths that do not exist
+    // and later falls back to the ordinary temporary directory.
     parents.push(PathBuf::from("/dev/shm"));
+    parents.push(PathBuf::from("/run/shm"));
 }
-
-#[cfg(not(target_os = "linux"))]
-fn add_linux_staged_snapshot_parent(_parents: &mut Vec<PathBuf>) {}
 
 pub(crate) fn path_from_git_bytes(bytes: Vec<u8>) -> PathBuf {
     PathBuf::from(OsString::from_vec(bytes))

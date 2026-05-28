@@ -32,7 +32,7 @@ fn staged_worktree_view_materializes_staged_snapshot_without_touching_worktree()
         let staged_view = StagedWorktreeView::apply(&root).unwrap();
         snapshot_root = staged_view.materialization_root().to_path_buf();
         let scope_root = staged_view
-            .materialize_scope(&empty_test_agent(), &full_scope())
+            .materialize_evaluator_scope(&empty_test_agent(), &full_scope())
             .unwrap();
         assert_ne!(scope_root, root);
         assert_eq!(
@@ -102,7 +102,7 @@ fn staged_worktree_view_removes_evaluator_denied_paths_from_snapshot() {
     {
         let staged_view = StagedWorktreeView::apply(&root).unwrap();
         let scope_root = staged_view
-            .materialize_scope(&config.agent, &full_scope())
+            .materialize_evaluator_scope(&config.agent, &full_scope())
             .unwrap();
 
         assert!(!scope_root.join(".canon").exists());
@@ -146,7 +146,7 @@ fn staged_worktree_view_materializes_restricted_scope_without_non_scoped_files()
     let staged_view = StagedWorktreeView::apply(&root).unwrap();
 
     let scope_root = staged_view
-        .materialize_scope(&empty_test_agent(), &["src/bin/main.rs".to_string()])
+        .materialize_evaluator_scope(&empty_test_agent(), &["src/bin/main.rs".to_string()])
         .unwrap();
 
     assert_eq!(
@@ -176,7 +176,7 @@ fn staged_worktree_view_materializes_git_pathspec_scope() {
     let staged_view = StagedWorktreeView::apply(&root).unwrap();
 
     let scope_root = staged_view
-        .materialize_scope(&empty_test_agent(), &[":(glob)src/*.rs".to_string()])
+        .materialize_evaluator_scope(&empty_test_agent(), &[":(glob)src/*.rs".to_string()])
         .unwrap();
 
     assert!(scope_root.join("src/lib.rs").exists());
@@ -186,9 +186,12 @@ fn staged_worktree_view_materializes_git_pathspec_scope() {
     let _ = fs::remove_dir_all(root);
 }
 
+#[cfg(unix)]
 #[test]
-fn staged_worktree_view_scope_writes_do_not_poison_later_materializations() {
-    let root = git_project("staged-snapshot-scope-write-isolation");
+fn staged_worktree_view_restricted_scopes_hardlink_lazy_files() {
+    use std::os::unix::fs::MetadataExt;
+
+    let root = git_project("staged-snapshot-scope-hardlinks");
     fs::write(root.join("a.txt"), "GOOD\n").unwrap();
     fs::write(root.join("b.txt"), "B\n").unwrap();
     Command::new("git")
@@ -199,34 +202,25 @@ fn staged_worktree_view_scope_writes_do_not_poison_later_materializations() {
     let staged_view = StagedWorktreeView::apply(&root).unwrap();
 
     let first_scope = staged_view
-        .materialize_scope(&empty_test_agent(), &["a.txt".to_string()])
+        .materialize_evaluator_scope(&empty_test_agent(), &["a.txt".to_string()])
         .unwrap();
-    fs::write(first_scope.join("a.txt"), "BAD\n").unwrap();
-
     let second_scope = staged_view
-        .materialize_scope(
+        .materialize_evaluator_scope(
             &empty_test_agent(),
             &["a.txt".to_string(), "b.txt".to_string()],
         )
         .unwrap();
-    let repeated_first_scope = staged_view
-        .materialize_scope(&empty_test_agent(), &["a.txt".to_string()])
-        .unwrap();
+    let first_metadata = fs::metadata(first_scope.join("a.txt")).unwrap();
+    let second_metadata = fs::metadata(second_scope.join("a.txt")).unwrap();
 
-    assert_eq!(
-        fs::read_to_string(second_scope.join("a.txt")).unwrap(),
-        "GOOD\n"
-    );
-    assert_eq!(
-        fs::read_to_string(repeated_first_scope.join("a.txt")).unwrap(),
-        "GOOD\n"
-    );
+    assert_eq!(first_metadata.dev(), second_metadata.dev());
+    assert_eq!(first_metadata.ino(), second_metadata.ino());
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn staged_worktree_view_full_scope_writes_do_not_poison_restricted_materialization() {
-    let root = git_project("staged-snapshot-full-write-isolation");
+fn staged_worktree_view_full_scope_returns_lazy_tree() {
+    let root = git_project("staged-snapshot-full-returns-lazy");
     fs::write(root.join("a.txt"), "GOOD\n").unwrap();
     Command::new("git")
         .args(["add", "a.txt"])
@@ -236,17 +230,11 @@ fn staged_worktree_view_full_scope_writes_do_not_poison_restricted_materializati
     let staged_view = StagedWorktreeView::apply(&root).unwrap();
 
     let full = staged_view
-        .materialize_scope(&empty_test_agent(), &full_scope())
-        .unwrap();
-    fs::write(full.join("a.txt"), "BAD\n").unwrap();
-    let restricted = staged_view
-        .materialize_scope(&empty_test_agent(), &["a.txt".to_string()])
+        .materialize_evaluator_scope(&empty_test_agent(), &full_scope())
         .unwrap();
 
-    assert_eq!(
-        fs::read_to_string(restricted.join("a.txt")).unwrap(),
-        "GOOD\n"
-    );
+    assert_eq!(full, staged_view.materialization_root().join("lazy"));
+    assert_eq!(fs::read_to_string(full.join("a.txt")).unwrap(), "GOOD\n");
     let _ = fs::remove_dir_all(root);
 }
 
@@ -264,13 +252,12 @@ fn staged_worktree_view_snapshot_directories_are_private() {
     let staged_view = StagedWorktreeView::apply(&root).unwrap();
     let materialization_root = staged_view.materialization_root().to_path_buf();
     let scope_root = staged_view
-        .materialize_scope(&empty_test_agent(), &full_scope())
+        .materialize_evaluator_scope(&empty_test_agent(), &full_scope())
         .unwrap();
 
     assert_private_dir(&materialization_root);
     assert_private_dir(&materialization_root.join("lazy"));
-    assert_private_dir(&materialization_root.join("lazy/0"));
-    assert_private_dir(&materialization_root.join("lazy/0/dir"));
+    assert_private_dir(&materialization_root.join("lazy/dir"));
     assert_private_dir(&materialization_root.join("scopes"));
     assert_private_dir(&scope_root);
     assert_private_dir(&scope_root.join("dir"));
@@ -299,7 +286,7 @@ fn staged_worktree_view_ignores_gitlinks_during_materialization() {
 
     let staged_view = StagedWorktreeView::apply(&root).unwrap();
     let scope_root = staged_view
-        .materialize_scope(&empty_test_agent(), &full_scope())
+        .materialize_evaluator_scope(&empty_test_agent(), &full_scope())
         .unwrap();
 
     assert!(scope_root.join("README.md").exists());
@@ -322,7 +309,7 @@ fn staged_worktree_view_removes_git_metadata_when_git_is_denied() {
     {
         let staged_view = StagedWorktreeView::apply(&root).unwrap();
         let scope_root = staged_view
-            .materialize_scope(&config.agent, &full_scope())
+            .materialize_evaluator_scope(&config.agent, &full_scope())
             .unwrap();
 
         assert!(!scope_root.join(".git").exists());
@@ -357,7 +344,7 @@ fn staged_worktree_view_removes_git_metadata_when_git_tree_is_denied() {
     {
         let staged_view = StagedWorktreeView::apply(&root).unwrap();
         let scope_root = staged_view
-            .materialize_scope(&config.agent, &full_scope())
+            .materialize_evaluator_scope(&config.agent, &full_scope())
             .unwrap();
 
         assert!(!scope_root.join(".git").exists());
@@ -388,7 +375,7 @@ fn staged_worktree_view_removes_denied_rebuilt_git_metadata_paths() {
     {
         let staged_view = StagedWorktreeView::apply(&root).unwrap();
         let scope_root = staged_view
-            .materialize_scope(&config.agent, &full_scope())
+            .materialize_evaluator_scope(&config.agent, &full_scope())
             .unwrap();
 
         assert!(!scope_root.join(".git").exists());
@@ -444,7 +431,7 @@ fn staged_worktree_view_exposes_staged_index_without_git_history() {
     {
         let staged_view = StagedWorktreeView::apply(&root).unwrap();
         let scope_root = staged_view
-            .materialize_scope(&empty_test_agent(), &full_scope())
+            .materialize_evaluator_scope(&empty_test_agent(), &full_scope())
             .unwrap();
         assert_eq!(
             fs::read_to_string(scope_root.join("README.md")).unwrap(),
@@ -496,7 +483,7 @@ fn staged_worktree_view_excludes_local_hook_config_and_hook_file() {
     {
         let staged_view = StagedWorktreeView::apply(&root).unwrap();
         let scope_root = staged_view
-            .materialize_scope(&empty_test_agent(), &full_scope())
+            .materialize_evaluator_scope(&empty_test_agent(), &full_scope())
             .unwrap();
         let hooks_path = Command::new("git")
             .args(["config", "--local", "--get", "core.hooksPath"])
@@ -603,6 +590,15 @@ fn staged_snapshot_parent_must_be_outside_project_root() {
     let _ = fs::remove_dir_all(root);
 }
 
+#[cfg(unix)]
+#[test]
+fn staged_snapshot_parent_candidates_prefer_common_memory_backed_locations() {
+    let candidates = crate::platform::staged_snapshot_parent_candidates();
+
+    assert_eq!(candidates[0], PathBuf::from("/dev/shm"));
+    assert!(candidates.contains(&PathBuf::from("/run/shm")));
+}
+
 #[test]
 fn staged_worktree_view_leaves_ignored_worktree_files_outside_snapshot() {
     let root = git_project("staged-snapshot-ignored");
@@ -626,7 +622,7 @@ fn staged_worktree_view_leaves_ignored_worktree_files_outside_snapshot() {
     {
         let staged_view = StagedWorktreeView::apply(&root).unwrap();
         let scope_root = staged_view
-            .materialize_scope(&empty_test_agent(), &full_scope())
+            .materialize_evaluator_scope(&empty_test_agent(), &full_scope())
             .unwrap();
         assert_eq!(
             fs::read_to_string(scope_root.join("README.md")).unwrap(),
@@ -664,7 +660,7 @@ fn staged_worktree_view_materializes_literal_pathspec_names_from_index() {
     {
         let staged_view = StagedWorktreeView::apply(&root).unwrap();
         let scope_root = staged_view
-            .materialize_scope(&empty_test_agent(), &full_scope())
+            .materialize_evaluator_scope(&empty_test_agent(), &full_scope())
             .unwrap();
         assert_eq!(
             fs::read_to_string(scope_root.join(special)).unwrap(),
@@ -700,7 +696,7 @@ fn staged_worktree_view_materializes_symlinks_as_regular_files() {
     {
         let staged_view = StagedWorktreeView::apply(&root).unwrap();
         let scope_root = staged_view
-            .materialize_scope(&empty_test_agent(), &full_scope())
+            .materialize_evaluator_scope(&empty_test_agent(), &full_scope())
             .unwrap();
         let snapshot_link = scope_root.join("outside-link");
         let metadata = fs::symlink_metadata(&snapshot_link).unwrap();
@@ -790,7 +786,7 @@ fn staged_worktree_view_materializes_non_utf8_paths() {
 
     let staged_view = StagedWorktreeView::apply(&root).unwrap();
     let scope_root = staged_view
-        .materialize_scope(&empty_test_agent(), &full_scope())
+        .materialize_evaluator_scope(&empty_test_agent(), &full_scope())
         .unwrap();
 
     assert_eq!(
