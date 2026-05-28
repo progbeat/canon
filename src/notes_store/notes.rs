@@ -643,6 +643,13 @@ impl Drop for NoteLock {
     }
 }
 
+#[cfg(not(unix))]
+enum NoteLockState {
+    Missing,
+    Held,
+    Stale,
+}
+
 fn lock_note(note: &Note) -> Result<NoteLock, String> {
     let path = note.path.with_extension("md.lock");
     lock_note_at_path(&path)
@@ -666,10 +673,11 @@ fn lock_note_at_path(path: &Path) -> Result<NoteLock, String> {
     for _ in 0..NOTE_LOCK_RETRY_COUNT {
         match create_note_lock(path) {
             Ok(file) => return new_note_lock(path, file),
-            Err(err) if note_lock_is_contended(path, &err) => {
-                if note_lock_is_stale(path)? {
-                    remove_stale_note_lock(path)?;
-                    continue;
+            Err(err) if note_lock_create_error_is_retryable(&err) => {
+                if matches!(note_lock_state(path)?, NoteLockState::Stale) {
+                    if remove_stale_note_lock_for_retry(path)? {
+                        continue;
+                    }
                 }
                 thread::sleep(NOTE_LOCK_RETRY_SLEEP);
             }
@@ -691,9 +699,11 @@ fn create_note_lock(path: &Path) -> Result<fs::File, io::Error> {
 }
 
 #[cfg(not(unix))]
-fn note_lock_is_contended(path: &Path, err: &io::Error) -> bool {
-    err.kind() == io::ErrorKind::AlreadyExists
-        || (err.kind() == io::ErrorKind::PermissionDenied && path.exists())
+fn note_lock_create_error_is_retryable(err: &io::Error) -> bool {
+    matches!(
+        err.kind(),
+        io::ErrorKind::AlreadyExists | io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
+    )
 }
 
 #[cfg(not(unix))]
@@ -770,20 +780,46 @@ pub(crate) fn stale_note_lock_age(age: Duration) -> bool {
 }
 
 #[cfg(not(unix))]
-fn note_lock_is_stale(path: &Path) -> Result<bool, String> {
-    reject_symlink(path)?;
-    let metadata = match fs::metadata(path) {
+fn note_lock_state(path: &Path) -> Result<NoteLockState, String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(format!("refusing to use symlink {}", path.display()));
+        }
         Ok(metadata) => metadata,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(NoteLockState::Missing),
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+            return Ok(NoteLockState::Held)
+        }
         Err(err) => return Err(format!("failed to inspect {}: {}", path.display(), err)),
     };
-    let modified = metadata
-        .modified()
-        .map_err(|err| format!("failed to inspect mtime for {}: {}", path.display(), err))?;
-    let age = modified
-        .elapsed()
-        .map_err(|err| format!("failed to inspect age for {}: {}", path.display(), err))?;
-    Ok(stale_note_lock_age(age))
+    let modified = match metadata.modified() {
+        Ok(modified) => modified,
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+            return Ok(NoteLockState::Held)
+        }
+        Err(err) => {
+            return Err(format!(
+                "failed to inspect mtime for {}: {}",
+                path.display(),
+                err
+            ))
+        }
+    };
+    let age = match modified.elapsed() {
+        Ok(age) => age,
+        Err(err) => {
+            return Err(format!(
+                "failed to inspect age for {}: {}",
+                path.display(),
+                err
+            ))
+        }
+    };
+    Ok(if stale_note_lock_age(age) {
+        NoteLockState::Stale
+    } else {
+        NoteLockState::Held
+    })
 }
 
 #[cfg(not(unix))]
@@ -791,6 +827,20 @@ fn remove_stale_note_lock(path: &Path) -> Result<(), String> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(format!(
+            "failed to remove stale lock {}: {}",
+            path.display(),
+            err
+        )),
+    }
+}
+
+#[cfg(not(unix))]
+fn remove_stale_note_lock_for_retry(path: &Path) -> Result<bool, String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(true),
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => Ok(false),
         Err(err) => Err(format!(
             "failed to remove stale lock {}: {}",
             path.display(),

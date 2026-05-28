@@ -129,6 +129,7 @@ fn failed_append_rollback_removes_partial_note_log_record() {
             .unwrap();
         file.write_all(partial).unwrap();
         file.flush().unwrap();
+        drop(file);
 
         rollback_note_log_append_for_test(&note.path, previous_size).unwrap();
 
