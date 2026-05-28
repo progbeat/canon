@@ -75,6 +75,31 @@ fn runtime_log_result_keeps_raw_review_diagnostics() {
 }
 
 #[test]
+fn git_config_get_uses_exit_status_for_missing_keys() {
+    let root = git_project("git-config-missing-key");
+
+    assert_eq!(git_config_get(&root, "canon.missing.key").unwrap(), None);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn git_config_get_reports_status_for_failed_reads() {
+    let root = git_project("git-config-invalid-key");
+
+    let err = git_config_get(&root, "bad key").unwrap_err();
+
+    match err {
+        GitConfigGetError::ReadFailed { status, stderr, .. } => {
+            assert!(status.contains("exit status 1"), "{status}");
+            assert!(stderr.contains("key"), "{stderr}");
+        }
+        other => panic!("unexpected git config error: {other:?}"),
+    }
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn diagnostic_log_rotates_at_start_when_active_file_is_large() {
     let root = git_project("check-log-rotate");
     let output = Command::new("git")

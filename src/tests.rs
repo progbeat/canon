@@ -105,6 +105,7 @@ use crate::gate::*;
 use crate::git::resolve_git_path;
 #[cfg(unix)]
 use crate::git::{read_git_blobs_with_git_program, GitBlobReader};
+use crate::git_config::{git_config_get, GitConfigGetError};
 use crate::hash::{expectation_id, fnv64_with_seed, full_scope, hash_120, hash_key};
 use crate::history::{
     history_file_name, history_path, parse_history_record_line, read_history_records,

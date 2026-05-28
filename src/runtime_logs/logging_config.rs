@@ -39,9 +39,9 @@ fn log_config_get_error(err: GitConfigGetError) -> DiagnosticLogError {
             };
             external_log_error(action, message)
         }
-        GitConfigGetError::ReadFailed { stderr, .. } => DiagnosticLogError::InvalidConfig {
+        GitConfigGetError::ReadFailed { status, stderr, .. } => DiagnosticLogError::InvalidConfig {
             key: LOG_MAX_SIZE_CONFIG_KEY,
-            reason: format!("could not be read: {}", stderr),
+            reason: format!("could not be read ({}): {}", status, stderr),
         },
     }
 }
@@ -140,8 +140,12 @@ fn thread_reuse_git_config_error(err: GitConfigGetError) -> String {
     match err {
         GitConfigGetError::Command(err) => format!("failed to run git config: {}", err),
         GitConfigGetError::InvalidOutput { message, .. } => message,
-        GitConfigGetError::ReadFailed { key, stderr } => {
-            format!("{} could not be read: {}", key, stderr)
+        GitConfigGetError::ReadFailed {
+            key,
+            status,
+            stderr,
+        } => {
+            format!("{} could not be read ({}): {}", key, status, stderr)
         }
     }
 }

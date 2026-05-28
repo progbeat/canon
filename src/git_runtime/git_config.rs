@@ -1,8 +1,9 @@
 use crate::project::command_output_trimmed;
 use std::io;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 
+#[derive(Debug)]
 pub(crate) enum GitConfigGetError {
     Command(io::Error),
     InvalidOutput {
@@ -11,6 +12,7 @@ pub(crate) enum GitConfigGetError {
     },
     ReadFailed {
         key: String,
+        status: String,
         stderr: String,
     },
 }
@@ -24,14 +26,14 @@ pub(crate) fn git_config_get(root: &Path, key: &str) -> Result<Option<String>, G
         .arg(key)
         .output()
         .map_err(GitConfigGetError::Command)?;
-    let stdout =
-        command_output_trimmed(&output.stdout, "git config stdout").map_err(|message| {
-            GitConfigGetError::InvalidOutput {
-                stream: "stdout",
-                message,
-            }
-        })?;
     if output.status.success() {
+        let stdout =
+            command_output_trimmed(&output.stdout, "git config stdout").map_err(|message| {
+                GitConfigGetError::InvalidOutput {
+                    stream: "stdout",
+                    message,
+                }
+            })?;
         return Ok(Some(stdout.to_string()));
     }
     let stderr =
@@ -41,13 +43,21 @@ pub(crate) fn git_config_get(root: &Path, key: &str) -> Result<Option<String>, G
                 message,
             }
         })?;
-    if stdout.is_empty() && stderr.is_empty() {
+    if output.status.code() == Some(1) && stderr.is_empty() {
         return Ok(None);
     }
     Err(GitConfigGetError::ReadFailed {
         key: key.to_string(),
+        status: exit_status_text(&output.status),
         stderr: stderr.to_string(),
     })
+}
+
+fn exit_status_text(status: &ExitStatus) -> String {
+    status
+        .code()
+        .map(|code| format!("exit status {}", code))
+        .unwrap_or_else(|| "terminated by signal".to_string())
 }
 
 pub(crate) fn git_config_get_or_else<T, E>(
