@@ -88,7 +88,7 @@ fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
     }
 }
 
-pub(crate) fn path_from_git_stdout(mut bytes: Vec<u8>) -> PathBuf {
+pub(crate) fn path_from_git_stdout(mut bytes: Vec<u8>) -> Result<PathBuf, String> {
     while matches!(bytes.last(), Some(b'\n' | b'\r')) {
         bytes.pop();
     }

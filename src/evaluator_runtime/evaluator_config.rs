@@ -1,16 +1,16 @@
 use crate::check_validation::codex_reasoning_effort;
 use crate::config_types::AgentConfig;
 use crate::fs_util::write_temp_file_then_replace;
-use crate::git::resolve_git_path;
 use crate::logging_config::{thread_reuse_config, ThreadReuseConfig};
+use crate::platform;
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 use std::env;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const EVALUATOR_MODEL_CATALOG_DIR: &str = "canon/evaluator-model-catalogs";
+const EVALUATOR_MODEL_CATALOG_TEMP_DIR: &str = "canon-evaluator-model-catalogs";
 const FILESYSTEM_DENY: &str = "deny";
 // Evaluators should see only Canon's own instructions plus the essential
 // shell-command read/exec path governed by the read-only permission profile.
@@ -229,7 +229,7 @@ pub(crate) fn app_server_startup_config_args(
             &format!("model_reasoning_effort={}", toml_string(reasoning_effort)),
         );
     }
-    if let Some(model_catalog_arg) = evaluator_model_catalog_config_arg(root, agent)? {
+    if let Some(model_catalog_arg) = evaluator_model_catalog_config_arg(agent)? {
         push_config_arg(&mut args, &model_catalog_arg);
     }
     push_config_arg(&mut args, "permissions.canon_check.network.enabled=false");
@@ -243,14 +243,13 @@ pub(crate) fn app_server_startup_config_args(
 }
 
 pub(crate) fn evaluator_model_catalog_config_arg(
-    root: &Path,
     agent: &AgentConfig,
 ) -> Result<Option<String>, String> {
     let models = evaluator_model_catalog_slugs(agent);
     if models.is_empty() {
         return Ok(None);
     }
-    let path = write_evaluator_model_catalog(root, &models)?;
+    let path = write_evaluator_model_catalog(&models)?;
     Ok(Some(format!(
         "model_catalog_json={}",
         toml_string(&path.to_string_lossy())
@@ -271,14 +270,8 @@ fn push_unique_model_slug(models: &mut Vec<String>, model: &str) {
     }
 }
 
-fn write_evaluator_model_catalog(
-    root: &Path,
-    models: &[String],
-) -> Result<std::path::PathBuf, String> {
-    let root = root
-        .canonicalize()
-        .map_err(|err| format!("failed to canonicalize evaluator root: {}", err))?;
-    let dir = resolve_git_path(&root, EVALUATOR_MODEL_CATALOG_DIR)?;
+fn write_evaluator_model_catalog(models: &[String]) -> Result<PathBuf, String> {
+    let dir = evaluator_model_catalog_dir()?;
     let path = dir.join(format!("{}.json", std::process::id()));
     let temp_path = dir.join(format!(
         "{}.{}.tmp",
@@ -294,6 +287,21 @@ fn write_evaluator_model_catalog(
             .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))
     })?;
     Ok(path)
+}
+
+fn evaluator_model_catalog_dir() -> Result<PathBuf, String> {
+    let temp_root = env::temp_dir()
+        .canonicalize()
+        .map_err(|err| format!("failed to canonicalize temp dir: {}", err))?;
+    let dir = temp_root.join(EVALUATOR_MODEL_CATALOG_TEMP_DIR);
+    platform::create_private_dir_all(&dir).map_err(|err| {
+        format!(
+            "failed to create evaluator model catalog dir {}: {}",
+            dir.display(),
+            err
+        )
+    })?;
+    Ok(dir)
 }
 
 pub(crate) fn evaluator_model_catalog_json(models: &[String]) -> Result<String, String> {

@@ -90,5 +90,5 @@ pub(crate) fn git_project_root(start: &Path) -> Result<PathBuf, String> {
             command_output_trimmed(&output.stderr, "git rev-parse stderr")?
         ));
     }
-    Ok(path_from_git_stdout(output.stdout))
+    path_from_git_stdout(output.stdout)
 }

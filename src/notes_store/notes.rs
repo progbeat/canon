@@ -42,6 +42,10 @@ const NOTE_LOG_MARKER_SUFFIX: &str = " -->";
 pub(crate) const NOTE_LOG_COMPACT_MIN_BYTES: u64 = 64 * 1024;
 #[cfg(not(unix))]
 const NOTE_LOCK_HEARTBEAT_SECS: u64 = 60;
+#[cfg(not(unix))]
+const NOTE_LOCK_RETRY_COUNT: usize = 1000;
+#[cfg(not(unix))]
+const NOTE_LOCK_RETRY_SLEEP: Duration = Duration::from_millis(10);
 
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "op")]
@@ -618,7 +622,7 @@ struct NoteLock {
 
 #[cfg(not(unix))]
 struct NoteLock {
-    _file: fs::File,
+    file: Option<fs::File>,
     path: PathBuf,
     token: String,
     stop_heartbeat: Arc<AtomicBool>,
@@ -632,6 +636,7 @@ impl Drop for NoteLock {
         if let Some(heartbeat) = self.heartbeat.take() {
             let _ = heartbeat.join();
         }
+        drop(self.file.take());
         let _ = remove_note_lock_if_owned(&self.path, &self.token);
     }
 }
@@ -656,22 +661,23 @@ fn lock_note_at_path(path: &Path) -> Result<NoteLock, String> {
 
 #[cfg(not(unix))]
 fn lock_note_at_path(path: &Path) -> Result<NoteLock, String> {
-    match create_note_lock(path) {
-        Ok(file) => new_note_lock(path, file),
-        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-            if !note_lock_is_stale(path)? {
-                return Err(format!(
-                    "failed to lock {}: lock is already held",
-                    path.display()
-                ));
+    for _ in 0..NOTE_LOCK_RETRY_COUNT {
+        match create_note_lock(path) {
+            Ok(file) => return new_note_lock(path, file),
+            Err(err) if note_lock_is_contended(path, &err) => {
+                if note_lock_is_stale(path)? {
+                    remove_stale_note_lock(path)?;
+                    continue;
+                }
+                thread::sleep(NOTE_LOCK_RETRY_SLEEP);
             }
-            remove_stale_note_lock(path)?;
-            let file = create_note_lock(path)
-                .map_err(|err| format!("failed to lock {}: {}", path.display(), err))?;
-            new_note_lock(path, file)
+            Err(err) => return Err(format!("failed to lock {}: {}", path.display(), err)),
         }
-        Err(err) => Err(format!("failed to lock {}: {}", path.display(), err)),
     }
+    Err(format!(
+        "failed to lock {}: lock is already held",
+        path.display()
+    ))
 }
 
 #[cfg(not(unix))]
@@ -680,6 +686,12 @@ fn create_note_lock(path: &Path) -> Result<fs::File, io::Error> {
         .write(true)
         .create_new(true)
         .open(path)
+}
+
+#[cfg(not(unix))]
+fn note_lock_is_contended(path: &Path, err: &io::Error) -> bool {
+    err.kind() == io::ErrorKind::AlreadyExists
+        || (err.kind() == io::ErrorKind::PermissionDenied && path.exists())
 }
 
 #[cfg(not(unix))]
@@ -697,7 +709,7 @@ fn new_note_lock(path: &Path, mut file: fs::File) -> Result<NoteLock, String> {
         Arc::clone(&stop_heartbeat),
     );
     Ok(NoteLock {
-        _file: file,
+        file: Some(file),
         path: path.to_path_buf(),
         token,
         stop_heartbeat,
@@ -753,8 +765,11 @@ pub(crate) fn stale_note_lock_age(age: Duration) -> bool {
 #[cfg(not(unix))]
 fn note_lock_is_stale(path: &Path) -> Result<bool, String> {
     reject_symlink(path)?;
-    let metadata = fs::metadata(path)
-        .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(format!("failed to inspect {}: {}", path.display(), err)),
+    };
     let modified = metadata
         .modified()
         .map_err(|err| format!("failed to inspect mtime for {}: {}", path.display(), err))?;

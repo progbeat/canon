@@ -7,7 +7,7 @@ fn init_creates_template_and_fails_when_existing() {
     let check_path = root.join(CHECK_PATH);
     assert_eq!(
         fs::read_to_string(&check_path).unwrap(),
-        DEFAULT_CHECK_TEMPLATE
+        DEFAULT_CHECK_CONFIG_SOURCE
     );
     assert!(!root.join(".gitignore").exists());
     assert!(!root.join(PRE_COMMIT_HOOK_PATH).exists());

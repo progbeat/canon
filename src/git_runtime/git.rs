@@ -38,7 +38,7 @@ pub(crate) fn resolve_git_path(root: &Path, path: &str) -> Result<PathBuf, Strin
             command_output_trimmed(&output.stderr, "git rev-parse stderr")?
         ));
     }
-    Ok(root.join(path_from_git_stdout(output.stdout)))
+    Ok(root.join(path_from_git_stdout(output.stdout)?))
 }
 
 pub(crate) fn git_head_tree_exists(root: &Path) -> Result<bool, String> {

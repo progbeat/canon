@@ -794,7 +794,7 @@ fn assert_private_dir(path: &Path) {
 fn git_stdout_path_preserves_non_utf8_bytes() {
     use std::os::unix::ffi::OsStrExt;
 
-    let path = path_from_git_stdout(vec![b'/', b't', 0xff, b'\n']);
+    let path = path_from_git_stdout(vec![b'/', b't', 0xff, b'\n']).unwrap();
 
     assert_eq!(path.as_os_str().as_bytes(), &[b'/', b't', 0xff]);
 }

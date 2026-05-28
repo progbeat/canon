@@ -1,5 +1,8 @@
 use super::wait_for_app_server_child;
+use std::ffi::OsString;
 use std::fs;
+#[cfg(windows)]
+use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 
@@ -78,13 +81,8 @@ fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
     }
 }
 
-pub(crate) fn path_from_git_bytes(bytes: Vec<u8>) -> PathBuf {
-    // Non-Unix Rust paths do not expose a portable raw-byte representation.
-    // Preserve valid UTF-8 exactly and use the same replacement mapping for
-    // invalid bytes everywhere this fallback platform converts Git bytes, so
-    // materialization does not reject Git tree entries solely at the platform
-    // boundary.
-    PathBuf::from(String::from_utf8_lossy(&bytes).to_string())
+pub(crate) fn path_from_git_bytes(bytes: Vec<u8>) -> Result<PathBuf, String> {
+    git_bytes_os_string(bytes).map(PathBuf::from)
 }
 
 pub(crate) fn git_path_bytes(path: &Path) -> Result<Vec<u8>, String> {
@@ -95,6 +93,50 @@ pub(crate) fn git_path_bytes(path: &Path) -> Result<Vec<u8>, String> {
         .to_vec())
 }
 
-pub(crate) fn os_string_from_bytes(bytes: Vec<u8>) -> Result<std::ffi::OsString, String> {
-    Ok(path_from_git_bytes(bytes).into_os_string())
+pub(crate) fn os_string_from_bytes(bytes: Vec<u8>) -> Result<OsString, String> {
+    git_bytes_os_string(bytes)
+}
+
+#[cfg(windows)]
+fn git_bytes_os_string(bytes: Vec<u8>) -> Result<OsString, String> {
+    if bytes.contains(&0) {
+        return Err("Git paths must not contain NUL bytes".to_string());
+    }
+    match String::from_utf8(bytes) {
+        Ok(path) => Ok(OsString::from(path)),
+        Err(err) => Ok(OsString::from_wide(&surrogate_escaped_git_path(
+            &err.into_bytes(),
+        ))),
+    }
+}
+
+#[cfg(windows)]
+fn surrogate_escaped_git_path(bytes: &[u8]) -> Vec<u16> {
+    bytes
+        .iter()
+        .map(|byte| match *byte {
+            b'/' => std::path::MAIN_SEPARATOR as u16,
+            b'.' | b'-' | b'_' | b' ' | b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z' => u16::from(*byte),
+            byte => 0xDC00 | u16::from(byte),
+        })
+        .collect()
+}
+
+#[cfg(not(windows))]
+fn git_bytes_os_string(bytes: Vec<u8>) -> Result<OsString, String> {
+    String::from_utf8(bytes).map(OsString::from).map_err(|err| {
+        format!(
+            "Git path bytes are not UTF-8: 0x{}",
+            hex_bytes(err.as_bytes())
+        )
+    })
+}
+
+#[cfg(not(windows))]
+fn hex_bytes(bytes: &[u8]) -> String {
+    bytes.iter().fold(String::new(), |mut hex, byte| {
+        use std::fmt::Write as _;
+        let _ = write!(hex, "{byte:02x}");
+        hex
+    })
 }

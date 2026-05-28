@@ -5,7 +5,7 @@ use crate::output::write_stdout_line;
 use crate::platform;
 use crate::project::command_output_trimmed;
 use crate::{
-    CHECK_PATH, DEFAULT_CHECK_TEMPLATE, DEFAULT_PRE_COMMIT_HOOK, GIT_HOOKS_PATH,
+    CHECK_PATH, DEFAULT_CHECK_CONFIG_SOURCE, DEFAULT_PRE_COMMIT_HOOK, GIT_HOOKS_PATH,
     PRE_COMMIT_HOOK_PATH,
 };
 use std::ffi::OsString;
@@ -37,7 +37,7 @@ pub(crate) fn run_init(root: &Path) -> Result<(), String> {
     if let Some(parent) = check_path.parent() {
         ensure_project_dir_without_symlinks(root, parent)?;
     }
-    write_new_file(&check_path, DEFAULT_CHECK_TEMPLATE)?;
+    write_new_file(&check_path, DEFAULT_CHECK_CONFIG_SOURCE)?;
     write_stdout_line(&format!("Created {}", CHECK_PATH))?;
     Ok(())
 }
@@ -840,7 +840,7 @@ fn git_common_dir_path(root: &Path) -> Result<PathBuf, String> {
             command_output_trimmed(&output.stderr, "git rev-parse stderr")?
         ));
     }
-    Ok(root.join(platform::path_from_git_stdout(output.stdout)))
+    Ok(root.join(platform::path_from_git_stdout(output.stdout)?))
 }
 
 fn git_hooks_path_matches(root: &Path, expected: &Path, existing: &str) -> bool {

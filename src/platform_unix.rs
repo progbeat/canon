@@ -272,8 +272,8 @@ fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
     }
 }
 
-pub(crate) fn path_from_git_bytes(bytes: Vec<u8>) -> PathBuf {
-    PathBuf::from(OsString::from_vec(bytes))
+pub(crate) fn path_from_git_bytes(bytes: Vec<u8>) -> Result<PathBuf, String> {
+    Ok(PathBuf::from(OsString::from_vec(bytes)))
 }
 
 pub(crate) fn git_path_bytes(path: &Path) -> Result<Vec<u8>, String> {

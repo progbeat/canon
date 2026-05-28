@@ -20,7 +20,10 @@ const DEFAULT_DIAGNOSTIC_LOG_CONFIG: DiagnosticLogConfig = DiagnosticLogConfig {
 const HISTORY_COMPACT_KEEP_RECORDS: usize = 8;
 const HISTORY_COMPACT_CHANCE_DENOMINATOR: u64 = 16;
 const APP_SERVER_TURN_TIMEOUT_SECS: u64 = 300;
-const DEFAULT_CHECK_TEMPLATE: &str = include_str!("../resources/prompts/default_check.yml");
+// The `canon init` seed is a check-config source file, not an evaluator
+// interrogation prompt/instruction. Interrogation texts live under
+// `resources/prompts/`.
+const DEFAULT_CHECK_CONFIG_SOURCE: &str = include_str!("../.canon/templates/default/check.yml");
 // `${CANON_STATE_DIR}/hooks`, resolved through `git rev-parse --git-path`.
 const GIT_HOOKS_PATH: &str = "canon/hooks";
 // `${CANON_STATE_DIR}/hooks/pre-commit`, resolved through `git rev-parse --git-path`.

@@ -23,20 +23,24 @@ fn evaluator_permissions_allow_only_materialized_working_tree_without_scope_filt
         config["permissions"]["canon_check"]["filesystem"][":minimal"],
         "read"
     );
-    assert_eq!(filesystem["/tmp/canon-check-snapshot"], "read");
-    assert_eq!(filesystem["/tmp/canon-check-snapshot/**"], "read");
+    assert_eq!(filesystem[&session_path(session_root, ".")], "read");
+    assert_eq!(filesystem[&session_glob(session_root, "**")], "read");
     assert!(filesystem.get(":workspace_roots").is_none());
     assert!(filesystem.get(".canon").is_none());
     assert!(filesystem.get(".canon/**").is_none());
     assert!(filesystem.get("target").is_none());
     assert!(filesystem.get("target/**").is_none());
-    assert!(filesystem.get("/tmp/canon-check-snapshot/.canon").is_none());
     assert!(filesystem
-        .get("/tmp/canon-check-snapshot/.canon/**")
+        .get(&session_path(session_root, ".canon"))
         .is_none());
-    assert!(filesystem.get("/tmp/canon-check-snapshot/target").is_none());
     assert!(filesystem
-        .get("/tmp/canon-check-snapshot/target/**")
+        .get(&session_glob(session_root, ".canon/**"))
+        .is_none());
+    assert!(filesystem
+        .get(&session_path(session_root, "target"))
+        .is_none());
+    assert!(filesystem
+        .get(&session_glob(session_root, "target/**"))
         .is_none());
     assert_eq!(filesystem["/etc/**"], "read");
     assert_eq!(filesystem["/private/etc/**"], "read");
@@ -120,39 +124,49 @@ fn evaluator_working_tree_permissions_do_not_encode_restricted_scope() {
         ignore: vec!["target/**".to_string()],
         plugins: Vec::new(),
     };
+    let session_root = Path::new("/tmp/canon-check-snapshot/scopes/0");
     let config = evaluator_thread_config(
         &agent,
         &["src/bin/main.rs".to_string()],
         None,
         &agent.thinking,
-        Path::new("/tmp/canon-check-snapshot/scopes/0"),
+        session_root,
     );
     let filesystem = config["permissions"]["canon_check"]["filesystem"]
         .as_object()
         .unwrap();
 
-    assert_eq!(filesystem["/tmp/canon-check-snapshot/scopes/0"], "read");
-    assert_eq!(filesystem["/tmp/canon-check-snapshot/scopes/0/**"], "read");
+    assert_eq!(filesystem[&session_path(session_root, ".")], "read");
+    assert_eq!(filesystem[&session_glob(session_root, "**")], "read");
+    assert!(filesystem.get(&session_path(session_root, "src")).is_none());
     assert!(filesystem
-        .get("/tmp/canon-check-snapshot/scopes/0/src")
-        .is_none());
-    assert!(filesystem
-        .get("/tmp/canon-check-snapshot/scopes/0/src/bin/main.rs")
+        .get(&session_path(session_root, "src/bin/main.rs"))
         .is_none());
     assert!(filesystem.get("src").is_none());
     assert!(filesystem.get("src/**").is_none());
     assert!(filesystem.get("target/**").is_none());
 
-    let working_tree_permissions =
-        evaluator_working_tree_permissions(Path::new("/tmp/canon-check-snapshot/scopes/0"));
+    let working_tree_permissions = evaluator_working_tree_permissions(session_root);
     assert_eq!(
-        working_tree_permissions["/tmp/canon-check-snapshot/scopes/0"],
+        working_tree_permissions[&session_path(session_root, ".")],
         "read"
     );
     assert_eq!(
-        working_tree_permissions["/tmp/canon-check-snapshot/scopes/0/**"],
+        working_tree_permissions[&session_glob(session_root, "**")],
         "read"
     );
+}
+
+fn session_path(root: &Path, path: &str) -> String {
+    if path == "." {
+        root.display().to_string()
+    } else {
+        root.join(path).display().to_string()
+    }
+}
+
+fn session_glob(root: &Path, pattern: &str) -> String {
+    root.join(pattern).display().to_string()
 }
 
 #[test]
@@ -263,9 +277,10 @@ fn app_server_starts_with_plugins_disabled_by_default() {
         })
         .unwrap();
     assert!(model_catalog_arg.starts_with("model_catalog_json=\""));
-    let canonical_root = root.canonicalize().unwrap();
-    let model_catalog_path = resolve_git_path(&canonical_root, "canon/evaluator-model-catalogs")
+    let model_catalog_path = std::env::temp_dir()
+        .canonicalize()
         .unwrap()
+        .join("canon-evaluator-model-catalogs")
         .join(format!("{}.json", process::id()));
     assert_eq!(
         model_catalog_arg,
