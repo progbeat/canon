@@ -639,6 +639,27 @@ fn staged_worktree_view_leaves_ignored_worktree_files_outside_snapshot() {
 }
 
 #[test]
+fn visible_tree_oid_cache_reuses_staged_entries_between_count_and_hash() {
+    let root = git_project("visible-tree-cache-entries");
+    let agent = empty_test_agent();
+    let mut cache = VisibleTreeOidCache::new();
+
+    let file_count = cache
+        .staged_visible_file_count(&root, &agent, &full_scope())
+        .unwrap();
+
+    assert_eq!(file_count, 2);
+    assert_eq!(cache.staged_entries_cache_len(), 1);
+
+    let _oid = cache
+        .staged_visible_tree_oid(&root, &agent, &full_scope())
+        .unwrap();
+
+    assert_eq!(cache.staged_entries_cache_len(), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 #[cfg(unix)]
 fn staged_worktree_view_materializes_literal_pathspec_names_from_index() {
     let root = git_project("staged-snapshot-literal-pathspec");

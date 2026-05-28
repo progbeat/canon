@@ -32,7 +32,8 @@ static HEAD_INDEX_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Default)]
 pub(crate) struct VisibleTreeOidCache {
-    values: BTreeMap<ScopeCacheKey, Option<String>>,
+    staged_tree_oids: BTreeMap<ScopeCacheKey, Option<String>>,
+    staged_entries: BTreeMap<ScopeCacheKey, Vec<String>>,
     gate_head_values: BTreeMap<ScopeCacheKey, Option<String>>,
     object_hash_algorithms: BTreeMap<PathBuf, GitObjectHashAlgorithm>,
 }
@@ -59,7 +60,7 @@ impl VisibleTreeOidCache {
         scope: &[String],
     ) -> Result<usize, String> {
         let scope = sanitize_scope_for_hash(scope)?;
-        let entries = staged_visible_scope_entries(root, agent, &scope)?;
+        let entries = self.staged_visible_scope_entries(root, agent, &scope)?;
         Ok(entries
             .iter()
             .filter(|entry| !scope_entry_is_tree(entry))
@@ -74,16 +75,36 @@ impl VisibleTreeOidCache {
     ) -> Result<Option<String>, String> {
         let scope = sanitize_scope_for_hash(scope)?;
         let key = scope_cache_key(root, agent, &scope);
-        if let Some(hash) = self.values.get(&key) {
+        if let Some(hash) = self.staged_tree_oids.get(&key) {
             return Ok(hash.clone());
         }
-        let visible_entries = staged_visible_scope_entries(root, agent, &scope)?;
+        let visible_entries = self.staged_visible_scope_entries(root, agent, &scope)?;
         let hash = Some(visible_tree_oid_from_entries(
             &visible_entries,
             self.object_hash_algorithm(root)?,
         )?);
-        self.values.insert(key, hash.clone());
+        self.staged_tree_oids.insert(key, hash.clone());
         Ok(hash)
+    }
+
+    fn staged_visible_scope_entries(
+        &mut self,
+        root: &Path,
+        agent: &AgentConfig,
+        scope: &[String],
+    ) -> Result<Vec<String>, String> {
+        let key = scope_cache_key(root, agent, scope);
+        if let Some(entries) = self.staged_entries.get(&key) {
+            return Ok(entries.clone());
+        }
+        let entries = staged_visible_scope_entries(root, agent, scope)?;
+        self.staged_entries.insert(key, entries.clone());
+        Ok(entries)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn staged_entries_cache_len(&self) -> usize {
+        self.staged_entries.len()
     }
 
     #[cfg(all(test, unix))]
