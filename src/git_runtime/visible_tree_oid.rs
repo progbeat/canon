@@ -649,10 +649,11 @@ fn filter_visible_scope_entries(
     agent: &AgentConfig,
     scope: &[String],
 ) -> Vec<String> {
-    // `visibleTreeOid` fingerprints the scoped evaluator-visible tree. Tracked
-    // entries outside the enforced scope or denied to the evaluator cannot
-    // support that evaluator answer, so they are outside the cache-reuse
-    // fingerprint.
+    // `visibleTreeOid` fingerprints the glossary visible tree. The base scope
+    // is the latest verified q-scope or full project scope; normalized agent
+    // ignore patterns are then applied last as exclusions. Tracked entries
+    // outside either part cannot support that evaluator answer, so they are
+    // outside the cache-reuse fingerprint.
     let deny_patterns = effective_ignore_patterns(agent);
     let visible_entries = entries
         .iter()

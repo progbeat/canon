@@ -15,15 +15,14 @@ use crate::{DiagnosticLogConfig, CANON_LOG_DIR_GIT_PATH};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
+pub(crate) use crate::history::render_answer_history_record;
 pub(crate) use crate::logging_config::diagnostic_log_config;
 pub(crate) use crate::logging_error::DiagnosticLogError;
 #[cfg(test)]
 pub(crate) use crate::logging_lock::{
     stale_diagnostic_log_lock_age, write_diagnostic_log_lock_token,
 };
-pub(crate) use crate::logging_render::{
-    push_json_control_escape, render_check_log_record, render_runtime_log_event,
-};
+pub(crate) use crate::logging_render::{push_json_control_escape, render_runtime_log_event};
 
 #[cfg(test)]
 pub(crate) fn write_diagnostic_log(

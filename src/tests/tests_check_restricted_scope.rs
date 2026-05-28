@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn check_runner_ignores_latest_scope_seed_when_paths_are_absent() {
+fn check_runner_starts_from_latest_scope_seed_when_paths_are_absent() {
     let root = git_project("check-stale-scope-seed");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
@@ -15,11 +15,20 @@ fn check_runner_ignores_latest_scope_seed_when_paths_are_absent() {
     );
     record.scope = vec!["src/old-location.rs".to_string()];
     append_history_record(&root, &expectation, &record).unwrap();
-    let mut runner = FakeRunner::new(&[&answer("yes", "full scope after stale seed", &["."])]);
+    let mut runner = FakeRunner::new(&[
+        &error_response(
+            ERROR_INSUFFICIENT_EVIDENCE,
+            "`src/old-location.rs`: not present",
+        ),
+        &answer("yes", "full scope after stale seed", &["."]),
+    ]);
 
     run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert_eq!(runner.start_scopes, vec![full_scope()]);
+    assert_eq!(
+        runner.start_scopes,
+        vec![vec!["src/old-location.rs".to_string()], full_scope()]
+    );
     let _ = fs::remove_dir_all(root);
 }
 

@@ -197,10 +197,15 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         }
 
         // Fresh interrogation starts from the stored q-scope, or full project
-        // scope when none is stored. Stored scopes come from answer-history
-        // records that were accepted after the independent q-scope
-        // verification below; missing paths make that stored visible scope
-        // unavailable, so this run falls back to full project scope.
+        // scope when none is stored. This `enforced_scope` is the inclusion
+        // side of the glossary visible scope; the exclusion side is the
+        // expectation agent's normalized ignore patterns, applied last by both
+        // visibleTreeOid hashing and evaluator working-tree materialization.
+        // Stored scopes come from answer-history records that were accepted
+        // after the independent q-scope verification below. Even when a stored
+        // q-scope's paths are absent in the current tree, the first
+        // interrogation still uses that q-scope; a restricted
+        // insufficient-evidence response is what widens to full project scope.
         let mut enforced_scope = run_expectation_try!(latest_history_scope_with_cache(
             root,
             &expectation.agent,
@@ -208,13 +213,6 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             &mut caches.history
         ))
         .unwrap_or_else(full_scope);
-        if !run_expectation_try!(caches
-            .visible_tree_oid
-            .missing_staged_scope_paths(root, &enforced_scope))
-        .is_empty()
-        {
-            enforced_scope = full_scope();
-        }
         // Response-format problems and evaluator runner/model failures are
         // handled inside this call: they become non-pass review records that
         // are written through `write_latest_non_pass_record_with_cache` below.

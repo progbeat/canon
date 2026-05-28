@@ -19,7 +19,7 @@ fn history_path_uses_expectation_id_directory() {
 #[test]
 fn history_record_required_fields_are_written_first() {
     let record = sample_record(1, "pass");
-    let line = render_check_log_record(&record).unwrap();
+    let line = render_answer_history_record(&record).unwrap();
     let json: Value = serde_json::from_str(&line).unwrap();
     assert_eq!(json["id"], expectation_id("Question?"));
     assert!(json.get("display_id").is_none());
@@ -85,7 +85,7 @@ fn history_reader_skips_malformed_lines() {
         &path,
         format!(
             "{{not json}}\n{}\n",
-            render_check_log_record(&sample_record(1, "pass"))
+            render_answer_history_record(&sample_record(1, "pass"))
                 .unwrap()
                 .trim_end()
         ),
@@ -117,6 +117,15 @@ fn history_parser_accepts_required_prefix_records() {
     assert_eq!(record.expected, None);
     assert_eq!(record.observed, "yes");
     assert_eq!(record.visible_tree_oid, "AAAAAAAAAAAAAAAAAAAA");
+}
+
+#[test]
+fn history_parser_rejects_error_records_as_answer_history() {
+    let line = error_history_record_line();
+
+    let err = parse_history_record_line(Path::new("history.jsonl"), 1, &line).unwrap_err();
+
+    assert!(err.contains("records must be schema-valid responses with answer"));
 }
 
 #[test]
@@ -293,7 +302,7 @@ fn compact_history_replaces_file_after_writing_latest_lines() {
         .map(|number| {
             let mut record = sample_record(number, "pass");
             record.evidence = format!("record {number}");
-            render_check_log_record(&record)
+            render_answer_history_record(&record)
                 .unwrap()
                 .trim_end()
                 .to_string()
@@ -334,7 +343,7 @@ fn compact_history_drops_malformed_lines_and_keeps_latest_valid_records() {
     lines.extend((1..=7).map(|number| {
         let mut record = sample_record(number, "pass");
         record.evidence = format!("record {number}");
-        render_check_log_record(&record)
+        render_answer_history_record(&record)
             .unwrap()
             .trim_end()
             .to_string()
@@ -364,7 +373,7 @@ fn compact_history_drops_non_history_json_objects() {
         .map(|number| {
             let mut record = sample_record(number, "pass");
             record.evidence = format!("record {number}");
-            render_check_log_record(&record)
+            render_answer_history_record(&record)
                 .unwrap()
                 .trim_end()
                 .to_string()
@@ -391,6 +400,85 @@ fn compact_history_drops_non_history_json_objects() {
         vec!["record 1", "record 2", "record 3", "record 4", "record 5"]
     );
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn compact_history_drops_error_records() {
+    let root = git_project("history-compact-error-record");
+    let path = root.join(".git/canon/cache/example/history.jsonl");
+    ensure_dir(path.parent().unwrap()).unwrap();
+    let mut lines = (1..=5)
+        .map(|number| {
+            let mut record = sample_record(number, "pass");
+            record.evidence = format!("record {number}");
+            render_answer_history_record(&record)
+                .unwrap()
+                .trim_end()
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    lines.push(error_history_record_line());
+    fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
+
+    compact_history(&path).unwrap();
+
+    let lines = fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(lines.len(), 5);
+    let compacted = read_history_records_from_path(&path).unwrap();
+    assert_eq!(compacted.len(), 5);
+    assert!(compacted.iter().all(|record| record.error.is_none()));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn history_reader_skips_error_records() {
+    let root = git_project("history-read-error-record");
+    let path = root.join(".git/canon/cache/example/history.jsonl");
+    ensure_dir(path.parent().unwrap()).unwrap();
+    let mut first = sample_record(1, "pass");
+    first.evidence = "first".to_string();
+    let mut second = sample_record(2, "pass");
+    second.evidence = "second".to_string();
+    let lines = [
+        render_answer_history_record(&first)
+            .unwrap()
+            .trim_end()
+            .to_string(),
+        error_history_record_line(),
+        render_answer_history_record(&second)
+            .unwrap()
+            .trim_end()
+            .to_string(),
+    ];
+    fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
+
+    let records = read_history_records_from_path(&path).unwrap();
+
+    assert_eq!(
+        records
+            .iter()
+            .map(|record| record.evidence.clone())
+            .collect::<Vec<_>>(),
+        vec!["first", "second"]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+fn error_history_record_line() -> String {
+    serde_json::to_string(&json!({
+        "timestamp": "1970-01-01T00:00:00Z",
+        "result": "fail",
+        "observed": ERROR_INVALID_QUESTION,
+        "error": ERROR_INVALID_QUESTION,
+        "evidence": "invalid question",
+        "qScope": ["."],
+        "visibleTreeOid": "EEEEEEEEEEEEEEEEEEEE"
+    }))
+    .unwrap()
 }
 
 #[cfg(unix)]

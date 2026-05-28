@@ -1,4 +1,3 @@
-use crate::check_types::{CheckRecord, CheckResult};
 use crate::logging_error::{external_log_error, DiagnosticLogError, DiagnosticLogResult};
 use crate::time::{format_record_timestamp, unix_timestamp};
 use serde::ser::SerializeMap;
@@ -22,26 +21,6 @@ pub(crate) fn render_runtime_log_event(
         extra: fields,
     };
     json_line(&event, "runtime log event")
-}
-
-pub(crate) fn render_check_log_record(record: &CheckRecord) -> DiagnosticLogResult<String> {
-    // History records intentionally start with the Cache spec's required
-    // answer-history fields. Extra persisted metadata follows that prefix;
-    // expectation references use the resolved full ID, never the
-    // display/selector prefix.
-    let history = HistoryLogRecord {
-        timestamp: &record.timestamp,
-        observed: &record.observed,
-        evidence: &record.evidence,
-        q_scope: &record.scope,
-        visible_tree_oid: &record.visible_tree_oid,
-        result: record.result,
-        id: &record.id,
-        prompt: record.prompt_text(),
-        expected: record.expected_text(),
-        cache_key: record.cache_key.as_deref(),
-    };
-    json_line(&history, "history log record")
 }
 
 fn validate_runtime_log_event_schema(
@@ -243,25 +222,6 @@ impl Serialize for RuntimeLogEvent<'_> {
         }
         map.end()
     }
-}
-
-#[derive(Serialize)]
-struct HistoryLogRecord<'a> {
-    timestamp: &'a str,
-    observed: &'a str,
-    evidence: &'a str,
-    #[serde(rename = "qScope")]
-    q_scope: &'a [String],
-    #[serde(rename = "visibleTreeOid")]
-    visible_tree_oid: &'a str,
-    result: CheckResult,
-    id: &'a str,
-    #[serde(skip_serializing_if = "str::is_empty")]
-    prompt: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    expected: Option<&'a str>,
-    #[serde(rename = "cacheKey", skip_serializing_if = "Option::is_none")]
-    cache_key: Option<&'a str>,
 }
 
 pub(crate) fn push_json_control_escape(output: &mut String, byte: u8) {

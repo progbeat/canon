@@ -1,9 +1,33 @@
-use crate::check_types::{CheckRecord, SelectedExpectation};
-use crate::fs_util::for_each_nonempty_line;
+use crate::check_types::{CheckRecord, CheckResult, SelectedExpectation};
+use crate::fs_util::{
+    ensure_dir_without_symlinks, for_each_nonempty_line, reject_symlink,
+    write_temp_file_then_replace,
+};
 use crate::git::resolve_git_path;
-use crate::CANON_CACHE_DIR_GIT_PATH;
+use crate::logging_error::{DiagnosticLogError, DiagnosticLogResult};
+use crate::path_io_error::PathIoError;
+use crate::{
+    CANON_CACHE_DIR_GIT_PATH, HISTORY_COMPACT_CHANCE_DENOMINATOR, HISTORY_COMPACT_KEEP_RECORDS,
+};
+use serde::Serialize;
 use std::collections::BTreeMap;
+use std::error::Error;
+use std::fmt;
+use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+// Cache-spec answer history is owned end-to-end in this file: path resolution,
+// JSONL parsing, answer-only append, required field-order rendering, and
+// probabilistic compaction. `history_append.rs`, `history_compaction.rs`, and
+// `logging::render_answer_history_record` are thin import-compatibility
+// wrappers around these functions.
+
+static HISTORY_COMPACT_CHANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
+static HISTORY_COMPACT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(test)]
 pub(crate) fn history_path(
@@ -50,14 +74,30 @@ pub(crate) fn parse_history_record_line(
     line_number: usize,
     line: &str,
 ) -> Result<CheckRecord, String> {
-    serde_json::from_str::<CheckRecord>(line).map_err(|err| {
+    let record = serde_json::from_str::<CheckRecord>(line).map_err(|err| {
         format!(
             "invalid history JSON in {} line {}: {}",
             path.display(),
             line_number,
             err
         )
-    })
+    })?;
+    if !record_has_schema_valid_answer(&record) {
+        return Err(format!(
+            "invalid answer history record in {} line {}: records must be schema-valid responses with answer",
+            path.display(),
+            line_number
+        ));
+    }
+    Ok(record)
+}
+
+fn record_has_schema_valid_answer(record: &CheckRecord) -> bool {
+    // `serde_json::<CheckRecord>` has already required the history fields with
+    // no defaults in the Cache spec prefix: observed, evidence, qScope, and
+    // visibleTreeOid. At the history-file layer, the Cache spec adds only the
+    // response one-of rule: records with `error` are not answer records.
+    record.error.is_none()
 }
 
 #[derive(Default)]
@@ -113,4 +153,248 @@ impl HistoryCache {
         self.cache_dirs.insert(key, path.clone());
         Ok(path)
     }
+}
+
+pub(crate) fn render_answer_history_record(record: &CheckRecord) -> DiagnosticLogResult<String> {
+    // History records intentionally start with the Cache spec's required
+    // answer-history fields. Extra persisted metadata follows that prefix;
+    // expectation references use the resolved full ID, never the
+    // display/selector prefix.
+    let history = HistoryLogRecord {
+        timestamp: &record.timestamp,
+        observed: &record.observed,
+        evidence: &record.evidence,
+        q_scope: &record.scope,
+        visible_tree_oid: &record.visible_tree_oid,
+        result: record.result,
+        id: &record.id,
+        prompt: record.prompt_text(),
+        expected: record.expected_text(),
+        cache_key: record.cache_key.as_deref(),
+    };
+    answer_history_json_line(&history)
+}
+
+fn answer_history_json_line(value: &impl Serialize) -> DiagnosticLogResult<String> {
+    let mut output = serde_json::to_string(value).map_err(|source| DiagnosticLogError::Json {
+        description: "history log record",
+        source,
+    })?;
+    output.push('\n');
+    Ok(output)
+}
+
+#[derive(Serialize)]
+struct HistoryLogRecord<'a> {
+    timestamp: &'a str,
+    observed: &'a str,
+    evidence: &'a str,
+    #[serde(rename = "qScope")]
+    q_scope: &'a [String],
+    #[serde(rename = "visibleTreeOid")]
+    visible_tree_oid: &'a str,
+    result: CheckResult,
+    id: &'a str,
+    #[serde(skip_serializing_if = "str::is_empty")]
+    prompt: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expected: Option<&'a str>,
+    #[serde(rename = "cacheKey", skip_serializing_if = "Option::is_none")]
+    cache_key: Option<&'a str>,
+}
+
+#[cfg(test)]
+pub(crate) fn append_history_record(
+    root: &Path,
+    expectation: &SelectedExpectation,
+    record: &CheckRecord,
+) -> Result<(), String> {
+    let mut cache = HistoryCache::new();
+    append_history_record_with_cache(root, expectation, record, &mut cache)
+}
+
+pub(crate) fn append_history_record_with_cache(
+    root: &Path,
+    expectation: &SelectedExpectation,
+    record: &CheckRecord,
+    history_cache: &mut HistoryCache,
+) -> Result<(), String> {
+    // The check pipeline exposes human-readable String errors, but this module
+    // keeps I/O failures structured until the boundary so action, path, kind,
+    // and source error stay tied together while the append is assembled.
+    append_history_record_with_cache_inner(root, expectation, record, history_cache)
+        .map_err(|err| err.to_string())
+}
+
+fn append_history_record_with_cache_inner(
+    root: &Path,
+    expectation: &SelectedExpectation,
+    record: &CheckRecord,
+    history_cache: &mut HistoryCache,
+) -> Result<(), HistoryAppendError> {
+    // Cache spec answer history is JSON Lines containing only schema-valid
+    // evaluator responses with `answer`. `render_answer_history_record` writes
+    // the required field prefix in order: timestamp, observed, evidence,
+    // qScope, visibleTreeOid. `should_compact_history` implements the
+    // approximate 1-in-16 trigger, and `compact_history` retains the latest 8
+    // valid JSON object records.
+    if !record_has_schema_valid_answer(record) {
+        return Err(HistoryAppendError::Message(
+            "answer history records must be schema-valid responses with answer".to_string(),
+        ));
+    }
+    let path = history_cache.path(root, expectation)?;
+    if let Some(parent) = path.parent() {
+        ensure_dir_without_symlinks(parent)?;
+    }
+    let mut file = open_history_append_file(&path)?;
+    let line = render_answer_history_record(record)?;
+    write_history_line(&mut file, &path, &line)?;
+    flush_history_file(&mut file, &path)?;
+    drop(file);
+    let had_cached_records = history_cache.records.contains_key(&path);
+    let should_compact = should_compact_history();
+    // Once the line is flushed, the append has succeeded. Compaction and cache
+    // refresh are maintenance steps, so failures there must not invite callers
+    // to retry the append and duplicate the durable history record.
+    let compacted = should_compact && compact_history(&path).is_ok();
+    if had_cached_records {
+        if compacted {
+            match read_history_records_from_path(&path) {
+                Ok(records) => {
+                    history_cache.records.insert(path, records);
+                }
+                Err(_) => {
+                    history_cache.records.remove(&path);
+                }
+            }
+        } else if let Some(records) = history_cache.records.get_mut(&path) {
+            records.push(record.clone());
+        }
+    }
+    Ok(())
+}
+
+fn open_history_append_file(path: &Path) -> Result<fs::File, PathIoError> {
+    reject_symlink(path)
+        .map_err(|message| PathIoError::new("inspect", path, std::io::Error::other(message)))?;
+    fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|source| PathIoError::new("open", path, source))
+}
+
+fn write_history_line(file: &mut fs::File, path: &Path, line: &str) -> Result<(), PathIoError> {
+    file.write_all(line.as_bytes())
+        .map_err(|source| PathIoError::new("write", path, source))
+}
+
+fn flush_history_file(file: &mut fs::File, path: &Path) -> Result<(), PathIoError> {
+    file.flush()
+        .map_err(|source| PathIoError::new("flush", path, source))
+}
+
+#[derive(Debug)]
+enum HistoryAppendError {
+    Message(String),
+    Io(PathIoError),
+}
+
+impl fmt::Display for HistoryAppendError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            HistoryAppendError::Message(message) => formatter.write_str(message),
+            HistoryAppendError::Io(err) => err.fmt(formatter),
+        }
+    }
+}
+
+impl Error for HistoryAppendError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            HistoryAppendError::Message(_) => None,
+            HistoryAppendError::Io(err) => Some(err),
+        }
+    }
+}
+
+impl From<String> for HistoryAppendError {
+    fn from(message: String) -> HistoryAppendError {
+        HistoryAppendError::Message(message)
+    }
+}
+
+impl From<DiagnosticLogError> for HistoryAppendError {
+    fn from(err: DiagnosticLogError) -> HistoryAppendError {
+        HistoryAppendError::Message(err.to_string())
+    }
+}
+
+impl From<PathIoError> for HistoryAppendError {
+    fn from(err: PathIoError) -> HistoryAppendError {
+        HistoryAppendError::Io(err)
+    }
+}
+
+pub(crate) fn should_compact_history() -> bool {
+    should_compact_history_for_seed(compaction_chance_seed())
+}
+
+pub(crate) fn should_compact_history_for_seed(seed: u64) -> bool {
+    seed.is_multiple_of(HISTORY_COMPACT_CHANCE_DENOMINATOR)
+}
+
+fn compaction_chance_seed() -> u64 {
+    let counter = HISTORY_COMPACT_CHANCE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0);
+    nanos ^ counter.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ process::id() as u64
+}
+
+pub(crate) fn compact_history(path: &Path) -> Result<(), String> {
+    let mut valid_lines = 0usize;
+    let mut invalid_lines = 0usize;
+    let mut lines = std::collections::VecDeque::new();
+    for_each_nonempty_line(path, |line_number, line| {
+        if valid_history_record_line(path, line_number, &line) {
+            valid_lines += 1;
+            lines.push_back(line);
+            if lines.len() > HISTORY_COMPACT_KEEP_RECORDS {
+                lines.pop_front();
+            }
+        } else {
+            invalid_lines += 1;
+        }
+        Ok(())
+    })?;
+    if valid_lines <= HISTORY_COMPACT_KEEP_RECORDS && invalid_lines == 0 {
+        return Ok(());
+    }
+    let temp_path = compact_history_temp_path(path)?;
+    write_temp_file_then_replace(&temp_path, path, |file| {
+        for line in lines {
+            file.write_all(line.as_bytes())
+                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
+            file.write_all(b"\n")
+                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
+        }
+        Ok(())
+    })
+}
+
+fn valid_history_record_line(path: &Path, line_number: usize, line: &str) -> bool {
+    parse_history_record_line(path, line_number, line).is_ok()
+}
+
+pub(crate) fn compact_history_temp_path(path: &Path) -> Result<PathBuf, String> {
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| format!("history path has no file name: {}", path.display()))?;
+    let mut temp_name = file_name.to_os_string();
+    let sequence = HISTORY_COMPACT_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    temp_name.push(format!(".tmp.{}.{}", process::id(), sequence));
+    Ok(path.with_file_name(temp_name))
 }

@@ -124,7 +124,7 @@ use crate::history_reuse::{
 use crate::hooks::*;
 use crate::logging::{
     append_runtime_log_event, diagnostic_log_config, push_json_control_escape,
-    render_check_log_record, render_runtime_log_event, stale_diagnostic_log_lock_age,
+    render_answer_history_record, render_runtime_log_event, stale_diagnostic_log_lock_age,
     write_diagnostic_log, write_diagnostic_log_lock_token, DiagnosticLogWriter,
 };
 use crate::logging_config::{
@@ -224,7 +224,7 @@ pub(crate) fn append_legacy_history_record(
 ) {
     let path = history_path(root, expectation).unwrap();
     ensure_dir(path.parent().unwrap()).unwrap();
-    let line = render_check_log_record(record).unwrap();
+    let line = render_answer_history_record(record).unwrap();
     let mut file = fs::OpenOptions::new()
         .create(true)
         .append(true)

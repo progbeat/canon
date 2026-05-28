@@ -19,10 +19,7 @@ fn hook_install_creates_reusable_pre_commit_hook() {
     assert!(!DEFAULT_PRE_COMMIT_HOOK.contains("target/debug/canon"));
     assert!(!DEFAULT_PRE_COMMIT_HOOK.contains(".codex-plugin"));
     assert!(!DEFAULT_PRE_COMMIT_HOOK.contains("run canon check before committing"));
-    assert_eq!(
-        PathBuf::from(current_git_hooks_path_for_worktree(&root).unwrap().unwrap()),
-        managed_git_hooks_path(&root)
-    );
+    assert_hooks_path_resolves_to_managed(&root);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -34,6 +31,27 @@ fn hook_install_creates_reusable_pre_commit_hook() {
 
     run_hook_install(&root).unwrap();
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn hook_install_uses_relative_hooks_path_that_survives_repo_move() {
+    let root = git_project("hook-install-repo-move");
+    run_hook_install(&root).unwrap();
+    assert_eq!(
+        PathBuf::from(current_git_hooks_path_for_worktree(&root).unwrap().unwrap()),
+        PathBuf::from(".git/canon/hooks")
+    );
+    let moved = temp_home("hook-install-repo-moved");
+    fs::rename(&root, &moved).unwrap();
+
+    run_hook_install(&moved).unwrap();
+
+    assert_hooks_path_resolves_to_managed(&moved);
+    assert_eq!(
+        fs::read_to_string(managed_pre_commit_hook_path(&moved)).unwrap(),
+        DEFAULT_PRE_COMMIT_HOOK
+    );
+    let _ = fs::remove_dir_all(moved);
 }
 
 #[test]
@@ -105,6 +123,21 @@ fn hook_install_refuses_existing_default_pre_commit_hook() {
 }
 
 #[test]
+fn hook_install_refuses_other_existing_default_git_hooks() {
+    let root = git_project("hook-install-default-commit-msg-existing");
+    let default_hook = root.join(".git/hooks/commit-msg");
+    fs::create_dir_all(default_hook.parent().unwrap()).unwrap();
+    fs::write(&default_hook, "custom commit-msg hook").unwrap();
+
+    let err = run_hook_install(&root).unwrap_err();
+
+    assert!(err.contains("Can't safely install pre-commit hook"));
+    assert!(!managed_pre_commit_hook_path(&root).exists());
+    assert_eq!(current_git_hooks_path_for_worktree(&root).unwrap(), None);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn hook_install_refuses_different_existing_pre_commit_hook() {
     let root = git_project("hook-install-existing");
     let hook_path = managed_pre_commit_hook_path(&root);
@@ -127,7 +160,54 @@ fn hook_uninstall_removes_reusable_hook_and_unsets_hooks_path() {
     run_hook_uninstall(&root).unwrap();
 
     assert!(!hook_path.exists());
+    assert!(!root.join(".git/hooks/pre-commit").exists());
     assert_eq!(current_git_hooks_path_for_worktree(&root).unwrap(), None);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn hook_uninstall_recognizes_normalized_canon_hooks_path() {
+    let root = git_project("hook-uninstall-normalized-hooks-path");
+    run_hook_install(&root).unwrap();
+    let hook_path = managed_pre_commit_hook_path(&root);
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args([
+            "config",
+            "--local",
+            "core.hooksPath",
+            ".git/../.git/canon/hooks",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    run_hook_uninstall(&root).unwrap();
+
+    assert!(!hook_path.exists());
+    assert_eq!(current_git_hooks_path_for_worktree(&root).unwrap(), None);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn hook_uninstall_refuses_to_activate_default_pre_commit_hook() {
+    let root = git_project("hook-uninstall-default-existing");
+    run_hook_install(&root).unwrap();
+    let hook_path = managed_pre_commit_hook_path(&root);
+    let default_hook = root.join(".git/hooks/pre-commit");
+    fs::create_dir_all(default_hook.parent().unwrap()).unwrap();
+    fs::write(&default_hook, "custom default hook").unwrap();
+
+    let err = run_hook_uninstall(&root).unwrap_err();
+
+    assert!(err.contains("Can't safely install pre-commit hook"));
+    assert!(hook_path.exists());
+    assert_hooks_path_resolves_to_managed(&root);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -150,10 +230,50 @@ fn hook_uninstall_keeps_hook_when_unset_fails() {
     fs::set_permissions(&git_dir, original_permissions).unwrap();
     assert!(err.contains("failed to unset git core.hooksPath"));
     assert!(hook_path.exists());
-    assert_eq!(
-        PathBuf::from(current_git_hooks_path_for_worktree(&root).unwrap().unwrap()),
-        managed_git_hooks_path(&root)
-    );
+    assert_hooks_path_resolves_to_managed(&root);
+    assert!(!root.join(".git/hooks/pre-commit").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn hook_uninstall_removes_interrupted_temporary_default_fallback() {
+    let root = git_project("hook-uninstall-interrupted-fallback");
+    run_hook_install(&root).unwrap();
+    let hook_path = managed_pre_commit_hook_path(&root);
+    let default_hook = root.join(".git/hooks/pre-commit");
+    fs::create_dir_all(default_hook.parent().unwrap()).unwrap();
+    fs::write(&default_hook, uninstall_fallback_pre_commit_hook_content()).unwrap();
+    unset_git_hooks_path(&root).unwrap();
+    fs::remove_file(&hook_path).unwrap();
+
+    run_hook_uninstall(&root).unwrap();
+
+    assert!(!default_hook.exists());
+    assert_eq!(current_git_hooks_path_for_worktree(&root).unwrap(), None);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[test]
+fn hook_uninstall_restores_hooks_path_when_remove_fails() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = git_project("hook-uninstall-remove-fails");
+    run_hook_install(&root).unwrap();
+    let hook_path = managed_pre_commit_hook_path(&root);
+    let hook_dir = hook_path.parent().unwrap();
+    let original_permissions = fs::metadata(hook_dir).unwrap().permissions();
+    let mut readonly = original_permissions.clone();
+    readonly.set_mode(0o555);
+    fs::set_permissions(hook_dir, readonly).unwrap();
+
+    let err = run_hook_uninstall(&root).unwrap_err();
+
+    fs::set_permissions(hook_dir, original_permissions).unwrap();
+    assert!(err.contains("failed to remove"));
+    assert!(hook_path.exists());
+    assert_hooks_path_resolves_to_managed(&root);
+    assert!(!root.join(".git/hooks/pre-commit").exists());
     let _ = fs::remove_dir_all(root);
 }
 
@@ -211,15 +331,45 @@ fn hook_install_uses_git_path_in_linked_worktree() {
         fs::read_to_string(&hook_path).unwrap(),
         DEFAULT_PRE_COMMIT_HOOK
     );
-    assert_eq!(
-        PathBuf::from(
-            current_git_hooks_path_for_worktree(&linked)
-                .unwrap()
-                .unwrap()
-        ),
-        managed_git_hooks_path(&linked)
-    );
+    assert_hooks_path_resolves_to_managed(&linked);
     assert!(!linked.join(".git/canon/hooks/pre-commit").exists());
+    let _ = Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["worktree", "remove", "--force"])
+        .arg(&linked)
+        .output();
+    let _ = fs::remove_dir_all(root);
+    let _ = fs::remove_dir_all(linked);
+}
+
+#[test]
+fn hook_install_refuses_default_hook_in_linked_worktree_git_dir() {
+    let root = git_project("hook-install-linked-default-main");
+    commit_all(&root, "initial");
+    let linked = temp_home("hook-install-linked-default-worktree");
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["worktree", "add", "--detach"])
+        .arg(&linked)
+        .arg("HEAD")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let default_hook = resolve_git_path(&linked, "hooks/pre-commit").unwrap();
+    fs::create_dir_all(default_hook.parent().unwrap()).unwrap();
+    fs::write(&default_hook, "custom linked worktree hook").unwrap();
+
+    let err = run_hook_install(&linked).unwrap_err();
+
+    assert!(err.contains("Can't safely install pre-commit hook"));
+    assert!(!managed_pre_commit_hook_path(&linked).exists());
+    assert_eq!(current_git_hooks_path_for_worktree(&linked).unwrap(), None);
     let _ = Command::new("git")
         .arg("-C")
         .arg(&root)
@@ -236,4 +386,14 @@ fn managed_pre_commit_hook_path(root: &Path) -> PathBuf {
 
 fn managed_git_hooks_path(root: &Path) -> PathBuf {
     resolve_git_path(root, GIT_HOOKS_PATH).unwrap()
+}
+
+fn assert_hooks_path_resolves_to_managed(root: &Path) {
+    let configured = PathBuf::from(current_git_hooks_path_for_worktree(root).unwrap().unwrap());
+    let resolved = if configured.is_absolute() {
+        configured
+    } else {
+        root.join(configured)
+    };
+    assert_eq!(resolved, managed_git_hooks_path(root));
 }

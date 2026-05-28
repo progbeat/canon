@@ -132,6 +132,10 @@ mod git_config;
 mod hash;
 #[path = "history_store/history.rs"]
 mod history;
+// Cache answer history is implemented end-to-end in `history`: path/read
+// cache, answer-only durable JSONL writes, required field order, and
+// probabilistic retention. The append/compaction modules below are thin import
+// wrappers; `history_reuse` owns same-tree/cooldown lookup.
 #[path = "history_store/history_append.rs"]
 mod history_append;
 #[path = "history_store/history_cache_key.rs"]

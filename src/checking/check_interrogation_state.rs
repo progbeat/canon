@@ -100,6 +100,9 @@ impl<'a> CheckRuntime<'a> {
             #[cfg(test)]
             CheckSessionRoots::Fixed(path) => Ok(path.to_path_buf()),
             CheckSessionRoots::Materialized(staged_view) => {
+                // `materialize_scope` receives both the q-scope/full-scope
+                // base and the agent so it can apply configured ignore
+                // patterns last when building the evaluator visible tree.
                 staged_view.materialize_scope(agent, scope)
             }
         }

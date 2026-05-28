@@ -111,6 +111,9 @@ impl StagedWorktreeView {
     }
 
     fn visible_files(&self, scope: &[String], deny_patterns: &[String]) -> Vec<StagedTrackedFile> {
+        // Materialization uses the same glossary visible-scope order as
+        // visibleTreeOid hashing: include files from the stored q-scope/full
+        // scope first, then apply normalized ignore patterns as exclusions.
         self.files
             .iter()
             .filter(|file| {

@@ -8,7 +8,7 @@ use crate::git::resolve_git_path;
 use crate::hash::full_scope;
 use crate::history::{read_history_records_from_path, HistoryCache};
 use crate::history_compaction::compact_history_temp_path;
-use crate::logging::render_check_log_record;
+use crate::logging::render_answer_history_record;
 use crate::logging::DiagnosticLogWriter;
 use crate::scope::sanitize_scope_for_hash;
 use serde_json::json;
@@ -288,7 +288,7 @@ fn set_expectation_scope_to_full_for_next_check(
     let temp_path = compact_history_temp_path(&path)?;
     write_temp_file_then_replace(&temp_path, &path, |file| {
         for record in records {
-            let line = render_check_log_record(&record).map_err(|err| err.to_string())?;
+            let line = render_answer_history_record(&record).map_err(|err| err.to_string())?;
             file.write_all(line.as_bytes())
                 .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
         }
