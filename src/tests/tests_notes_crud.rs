@@ -79,7 +79,7 @@ fn append_persists_log_record_without_rewriting_note() {
         let content = materialize_note_content(&note, &raw).unwrap();
         assert!(content.contains("\nbody\n"));
         assert!(content.contains("decision"));
-        assert!(raw.contains("<!-- canon log v1 -->"));
+        assert!(raw.contains("<!-- canon log v1 "));
         assert!(raw.contains(r#""op":"append""#));
     });
 }
@@ -180,7 +180,7 @@ fn append_succeeds_when_followup_compaction_rewrite_fails() {
 
         let raw = fs::read_to_string(&note.path).unwrap();
         let content = materialize_note_content(&note, &raw).unwrap();
-        assert!(raw.contains("<!-- canon log v1 -->"));
+        assert!(raw.contains("<!-- canon log v1 "));
         assert!(content.contains("decision"));
         let _ = fs::remove_file(temp_path);
     });
@@ -201,6 +201,30 @@ fn materialize_note_content_ignores_marker_like_body_text() {
     let content = materialize_note_content(&note, &raw).unwrap();
 
     assert_eq!(content, raw);
+}
+
+#[test]
+fn read_ignores_literal_marker_and_json_body_text() {
+    let note = Note {
+        key: "src/main.rs".to_string(),
+        hash: hash_key("src/main.rs"),
+        path: PathBuf::from("note.md"),
+    };
+    let raw = format!(
+        "{}body\n<!-- canon log v1 -->\n{{\"op\":\"append\",\"timestamp\":1,\"text\":\"example\"}}\nordinary text\n",
+        initial_content(&note.key, &note.hash)
+    );
+
+    let content = materialize_note_content(&note, &raw).unwrap();
+    let mut rendered = String::new();
+    stream_note_content(&note, io::Cursor::new(raw.as_bytes()), |chunk| {
+        rendered.push_str(chunk);
+        Ok(())
+    })
+    .unwrap();
+
+    assert_eq!(content, raw);
+    assert_eq!(rendered, raw);
 }
 
 #[test]

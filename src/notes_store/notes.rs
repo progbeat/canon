@@ -24,7 +24,9 @@ use std::path::PathBuf;
 #[cfg(any(test, not(unix)))]
 use std::time::Duration;
 
-const NOTE_LOG_MARKER: &str = "<!-- canon log v1 -->";
+const LEGACY_NOTE_LOG_MARKER: &str = "<!-- canon log v1 -->";
+const NOTE_LOG_MARKER_PREFIX: &str = "<!-- canon log v1 ";
+const NOTE_LOG_MARKER_SUFFIX: &str = " -->";
 pub(crate) const NOTE_LOG_COMPACT_MIN_BYTES: u64 = 64 * 1024;
 
 #[derive(Deserialize, Serialize)]
@@ -106,7 +108,7 @@ fn append_note_record(config: &Config, key: &str, record: NoteRecord) -> Result<
     match record {
         NoteRecord::Append { timestamp, text } if existed => {
             let previous_size =
-                append_note_log_record(&note.path, &NoteRecord::Append { timestamp, text })?;
+                append_note_log_record(&note, &NoteRecord::Append { timestamp, text })?;
             // The append is durable once the log record is flushed and synced.
             // Compaction is opportunistic; reporting its failure would invite
             // retrying an already-persisted append and duplicating visible
@@ -135,7 +137,8 @@ fn upsert_note_index_after_create(config: &Config, key: &str, note: &Note) -> Re
     Ok(())
 }
 
-fn append_note_log_record(path: &Path, record: &NoteRecord) -> Result<u64, String> {
+fn append_note_log_record(note: &Note, record: &NoteRecord) -> Result<u64, String> {
+    let path = &note.path;
     let mut file = open_file_for_append_without_following_symlink(path)?;
     let previous_size = file
         .metadata()
@@ -153,7 +156,7 @@ fn append_note_log_record(path: &Path, record: &NoteRecord) -> Result<u64, Strin
     // so canon's own writes never split a marker from its JSON record.
     let mut entry = String::new();
     entry.push('\n');
-    entry.push_str(NOTE_LOG_MARKER);
+    entry.push_str(&note_log_marker(note, previous_size + 1));
     entry.push('\n');
     entry.push_str(&line);
     if let Err(err) = file
@@ -322,7 +325,41 @@ fn decode_note_storage_line(line: &str) -> String {
 }
 
 fn is_log_marker_family(line: &str) -> bool {
-    line.trim_start_matches('\\') == NOTE_LOG_MARKER
+    let line = line.trim_start_matches('\\');
+    line == LEGACY_NOTE_LOG_MARKER
+        || (line.starts_with(NOTE_LOG_MARKER_PREFIX) && line.ends_with(NOTE_LOG_MARKER_SUFFIX))
+}
+
+fn note_log_marker(note: &Note, marker_offset: u64) -> String {
+    format!(
+        "{}hash={} offset={}{}",
+        NOTE_LOG_MARKER_PREFIX, note.hash, marker_offset, NOTE_LOG_MARKER_SUFFIX
+    )
+}
+
+fn is_note_log_marker(note: &Note, line: &str, line_start: usize) -> bool {
+    let Some((hash, offset)) = parse_note_log_marker(line) else {
+        return false;
+    };
+    hash == note.hash && offset == line_start as u64
+}
+
+fn parse_note_log_marker(line: &str) -> Option<(&str, u64)> {
+    let content = line
+        .strip_prefix(NOTE_LOG_MARKER_PREFIX)?
+        .strip_suffix(NOTE_LOG_MARKER_SUFFIX)?;
+    let mut hash = None;
+    let mut offset = None;
+    for part in content.split_ascii_whitespace() {
+        if let Some(value) = part.strip_prefix("hash=") {
+            hash = Some(value);
+        } else if let Some(value) = part.strip_prefix("offset=") {
+            offset = value.parse::<u64>().ok();
+        } else {
+            return None;
+        }
+    }
+    Some((hash?, offset?))
 }
 
 fn open_note_reader(note: &Note) -> Result<BufReader<fs::File>, String> {
@@ -351,18 +388,21 @@ pub(crate) fn stream_note_content(
         &note.key,
     )?;
     write(&first_line)?;
+    let mut offset = first_line.len();
 
     loop {
         let mut line = String::new();
+        let line_start = offset;
         let read = reader
             .read_line(&mut line)
             .map_err(|err| format!("failed to read {}: {}", note.path.display(), err))?;
         if read == 0 {
             return Ok(());
         }
+        offset += read;
         let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
-        if trimmed == NOTE_LOG_MARKER {
-            match stream_note_log(note, &mut reader, &mut write)? {
+        if is_note_log_marker(note, trimmed, line_start) {
+            match stream_note_log(note, &mut reader, &mut write, &mut offset)? {
                 NoteLogStream::Applied => return Ok(()),
                 NoteLogStream::FalseMarker { first_line } => {
                     write(&decode_note_storage_line(&line))?;
@@ -386,6 +426,7 @@ fn stream_note_log(
     note: &Note,
     reader: &mut impl BufRead,
     write: &mut impl FnMut(&str) -> Result<(), String>,
+    offset: &mut usize,
 ) -> Result<NoteLogStream, String> {
     let mut first_line = String::new();
     let read = reader
@@ -394,6 +435,7 @@ fn stream_note_log(
     if read == 0 {
         return Ok(NoteLogStream::FalseMarker { first_line: None });
     }
+    *offset += read;
     match serde_json::from_str::<NoteRecord>(&first_line) {
         Ok(record) => stream_note_record(note, record, write, true)?,
         Err(_) => {
@@ -405,14 +447,16 @@ fn stream_note_log(
 
     loop {
         let mut line = String::new();
+        let line_start = *offset;
         let read = reader
             .read_line(&mut line)
             .map_err(|err| format!("failed to read {}: {}", note.path.display(), err))?;
         if read == 0 {
             return Ok(NoteLogStream::Applied);
         }
+        *offset += read;
         let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
-        if trimmed == NOTE_LOG_MARKER || trimmed.trim().is_empty() {
+        if is_note_log_marker(note, trimmed, line_start) || trimmed.trim().is_empty() {
             continue;
         }
         let record = serde_json::from_str::<NoteRecord>(&line).map_err(|err| {
@@ -451,26 +495,31 @@ fn stream_note_record(
 }
 
 fn find_note_log(note: &Note, content: &str) -> Result<Option<(usize, Vec<NoteRecord>)>, String> {
-    let separator = format!("\n{}\n", NOTE_LOG_MARKER);
-    let mut offset = 0;
-    while let Some(relative_start) = content[offset..].find(&separator) {
-        let separator_start = offset + relative_start;
-        let log_start = separator_start + separator.len();
-        if let Some(records) = parse_note_log_records(note, &content[log_start..])? {
-            return Ok(Some((separator_start, records)));
+    for (line_start, line) in lines_with_starts(content) {
+        let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
+        if is_note_log_marker(note, trimmed, line_start) {
+            let log_start = line_start + line.len();
+            if let Some(records) = parse_note_log_records(note, &content[log_start..], log_start)? {
+                return Ok(Some((line_start.saturating_sub(1), records)));
+            }
         }
-        offset = log_start;
     }
     Ok(None)
 }
 
-fn parse_note_log_records(note: &Note, text: &str) -> Result<Option<Vec<NoteRecord>>, String> {
+fn parse_note_log_records(
+    note: &Note,
+    text: &str,
+    base_offset: usize,
+) -> Result<Option<Vec<NoteRecord>>, String> {
     let mut records = Vec::new();
-    for line in text.lines() {
-        if line == NOTE_LOG_MARKER || line.trim().is_empty() {
+    for (relative_start, line) in lines_with_starts(text) {
+        let line_start = base_offset + relative_start;
+        let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
+        if is_note_log_marker(note, trimmed, line_start) || trimmed.trim().is_empty() {
             continue;
         }
-        match serde_json::from_str(line) {
+        match serde_json::from_str(trimmed) {
             Ok(record) => records.push(record),
             Err(_) if records.is_empty() => return Ok(None),
             Err(err) => {
@@ -483,6 +532,15 @@ fn parse_note_log_records(note: &Note, text: &str) -> Result<Option<Vec<NoteReco
         }
     }
     Ok((!records.is_empty()).then_some(records))
+}
+
+fn lines_with_starts(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    let mut offset = 0;
+    text.split_inclusive('\n').map(move |line| {
+        let start = offset;
+        offset += line.len();
+        (start, line)
+    })
 }
 
 pub(crate) fn delete_note(config: &Config, key: &str) -> Result<(), String> {
