@@ -20,9 +20,13 @@ use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-// Cache-spec answer history is owned end-to-end in this file: path resolution,
-// JSONL parsing, answer-only append, required field-order rendering, and
-// probabilistic compaction. `history_append.rs`, `history_compaction.rs`, and
+// Cache-spec answer history storage is owned end-to-end in this file: path
+// resolution, JSONL parsing, answer-only append, required field-order
+// rendering, and probabilistic compaction. Runtime `CheckRecord` construction
+// computes `visibleTreeOid` before append through
+// `VisibleTreeOidCache::staged_visible_tree_oid`; this layer preserves that
+// native Git tree OID instead of deriving a second fingerprint while writing
+// JSONL. `history_append.rs`, `history_compaction.rs`, and
 // `logging::render_answer_history_record` are thin import-compatibility
 // wrappers around these functions.
 
@@ -156,9 +160,9 @@ impl HistoryCache {
 }
 
 pub(crate) fn render_answer_history_record(record: &CheckRecord) -> DiagnosticLogResult<String> {
-    // History records intentionally start with the Cache spec's required
-    // answer-history fields. Extra persisted metadata follows that prefix;
-    // expectation references use the resolved full ID, never the
+    // History records intentionally start with the Cache spec's "at least"
+    // answer-history field prefix. Extra persisted metadata follows that
+    // prefix; expectation references use the resolved full ID, never the
     // display/selector prefix.
     let history = HistoryLogRecord {
         timestamp: &record.timestamp,

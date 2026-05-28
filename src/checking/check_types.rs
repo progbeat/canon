@@ -156,10 +156,11 @@ impl std::fmt::Display for CheckResult {
 }
 
 // In-memory check record used by history reuse, runtime logs, gate diagnostics,
-// and check output. It deliberately does not implement `Serialize`; persisted
-// history and runtime-log records must go through the dedicated render structs
-// in `logging_render.rs`, which write the full expectation ID and never the
-// human display/selector prefix.
+// and check output. Runtime records created from evaluator responses receive a
+// repository-native `visibleTreeOid` before they reach answer-history append.
+// The type deliberately does not implement `Serialize`; persisted history and
+// runtime-log records must go through dedicated render structs, which write the
+// full expectation ID and never the human display/selector prefix.
 // Deserialization keeps prompt/expected metadata optional so older history
 // records that contain only the cache-required prefix do not get confused with
 // real empty strings.

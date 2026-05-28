@@ -90,11 +90,19 @@ impl VisibleTreeOidCache {
         if let Some(hash) = self.values.get(&key) {
             return Ok(hash.clone());
         }
-        let object_hash_algorithm = self.object_hash_algorithm(root)?;
-        let hash = Some(visible_tree_oid_from_entries(
-            &self.staged_scope_entries_from_full_listing(root, agent, &scope)?,
-            object_hash_algorithm,
-        )?);
+        let root_tree_oid = self.staged_root_tree_oid(root)?;
+        let entries = self.staged_all_scope_entries(root)?.clone();
+        let visible_entries = filter_visible_scope_entries(&entries, agent, &scope);
+        let hash = Some(
+            if scope == full_scope() && visible_entries.len() == entries.len() {
+                // The visible tree is exactly the staged root tree. Git has already
+                // materialized the required object ID, so preserve that native OID
+                // instead of serializing and hashing an equivalent synthetic tree.
+                root_tree_oid
+            } else {
+                visible_tree_oid_from_entries(&visible_entries, self.object_hash_algorithm(root)?)?
+            },
+        );
         self.values.insert(key, hash.clone());
         Ok(hash)
     }

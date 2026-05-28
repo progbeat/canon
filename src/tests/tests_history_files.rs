@@ -52,6 +52,33 @@ fn history_record_required_fields_are_written_first() {
 }
 
 #[test]
+fn check_runner_history_record_uses_native_visible_tree_oid() {
+    let root = git_project("history-visible-tree-oid-from-runner");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let expectation = options.selected[0].clone();
+    let mut runner = FakeRunner::new(&[&answer("yes", "Full scope supports yes.", &["."])]);
+
+    run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    let output = Command::new("git")
+        .args(["write-tree"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let git_tree = command_output_trimmed(&output.stdout, "git write-tree stdout").unwrap();
+    let records = read_history_records(&root, &expectation).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].visible_tree_oid, git_tree);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn stale_cache_cleanup_removes_inactive_expectation_entries() {
     let root = git_project("history-cleanup-stale-cache");
     let config = parse_check_config(check_config_yaml()).unwrap();

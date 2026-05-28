@@ -107,10 +107,14 @@ pub(crate) fn run_hook_uninstall(root: &Path) -> Result<(), String> {
         }
     }
     let uses_canon_hooks_path = uses_canon_git_hooks_path(&preflight);
-    if !uses_canon_hooks_path
-        && preflight.pre_commit_hook.is_none()
-        && default_hook_is_uninstall_fallback(&preflight)
-    {
+    if !uses_canon_hooks_path && has_canon_git_hooks_path(&preflight) {
+        return Err(pre_commit_hook_manual_advice());
+    }
+    if !uses_canon_hooks_path && default_hook_is_uninstall_fallback(&preflight) {
+        if preflight.pre_commit_hook.is_some() {
+            fs::remove_file(&hook_path)
+                .map_err(|err| format!("failed to remove {}: {}", hook_path.display(), err))?;
+        }
         remove_uninstall_fallback_pre_commit_hook(&preflight.default_pre_commit_hook_path)?;
         return write_stdout_line(&format!("Uninstalled {}", DEFAULT_GIT_PRE_COMMIT_HOOK_PATH));
     }
@@ -134,16 +138,24 @@ pub(crate) fn run_hook_uninstall(root: &Path) -> Result<(), String> {
     }
     if preflight.pre_commit_hook.is_some() {
         if let Err(remove_err) = fs::remove_file(&hook_path) {
-            let mut remove_message =
+            let remove_message =
                 format!("failed to remove {}: {}", hook_path.display(), remove_err);
             if uses_canon_hooks_path {
-                if let Err(restore_err) =
-                    restore_git_hooks_path_after_uninstall_failure(root, &preflight)
-                {
-                    remove_message = format!(
-                        "{}; additionally failed to restore git core.hooksPath: {}",
-                        remove_message, restore_err
-                    );
+                match restore_git_hooks_path_after_uninstall_failure(root, &preflight) {
+                    Ok(()) => {
+                        return Err(clean_up_created_uninstall_fallback_after_error(
+                            &preflight,
+                            fallback_created,
+                            remove_message,
+                        ));
+                    }
+                    Err(restore_err) => {
+                        return Err(uninstall_remove_and_restore_failed_message(
+                            &preflight,
+                            remove_message,
+                            restore_err,
+                        ));
+                    }
                 }
             }
             return Err(clean_up_created_uninstall_fallback_after_error(
@@ -164,6 +176,19 @@ fn restore_git_hooks_path_after_uninstall_failure(
     preflight: &HookInstallPreflight,
 ) -> Result<(), String> {
     set_git_hooks_path(root, preflight)
+}
+
+fn uninstall_remove_and_restore_failed_message(
+    preflight: &HookInstallPreflight,
+    remove_message: String,
+    restore_err: String,
+) -> String {
+    format!(
+        "{}; additionally failed to restore git core.hooksPath: {}; temporary uninstall fallback left installed at {} to keep canon gate active",
+        remove_message,
+        restore_err,
+        preflight.default_pre_commit_hook_path.display()
+    )
 }
 
 fn pre_commit_hook_manual_advice() -> String {
@@ -235,9 +260,12 @@ pub(crate) fn preflight_git_hooks_path(preflight: &HookInstallPreflight) -> Resu
     // Canon owns the hook directory only when Git has no custom hook manager or
     // already points at Canon's hook directory. Any other `core.hooksPath`
     // belongs to existing project Git integration and needs manual handling.
-    preflight_optional_hook_owner(preflight.current_git_hooks_path.as_deref(), |existing| {
-        git_hooks_path_matches(&preflight.root, &preflight.git_hooks_path, existing)
-    })
+    for existing in &preflight.current_git_hooks_paths {
+        if !git_hooks_path_matches(&preflight.root, &preflight.git_hooks_path, existing) {
+            return Err(pre_commit_hook_manual_advice());
+        }
+    }
+    Ok(())
 }
 
 fn preflight_optional_hook_owner(
@@ -351,19 +379,39 @@ pub(crate) fn make_executable(path: &Path) -> Result<(), String> {
     platform::make_hook_executable(path)
 }
 
+#[cfg(test)]
 pub(crate) fn current_git_hooks_path_for_worktree(root: &Path) -> Result<Option<String>, String> {
+    Ok(current_git_hooks_paths_for_worktree(root)?
+        .into_iter()
+        .next())
+}
+
+fn current_git_hooks_paths_for_worktree(root: &Path) -> Result<Vec<String>, String> {
     let output = run_git_config_with_status(
         root,
-        &["--local", "--get", "core.hooksPath"],
+        &["--local", "--get-all", "core.hooksPath"],
         "failed to read git core.hooksPath",
         |status| status.success() || status.code() == Some(1),
     )?;
     if output.status.success() {
-        return Ok(Some(
-            command_output_trimmed(&output.stdout, "git config stdout")?.to_string(),
-        ));
+        return command_output_lines(&output.stdout, "git config stdout");
     }
-    Ok(None)
+    Ok(Vec::new())
+}
+
+fn command_output_lines(output: &[u8], description: &str) -> Result<Vec<String>, String> {
+    let mut text = String::from_utf8(output.to_vec())
+        .map_err(|err| format!("{} was not valid UTF-8: {}", description, err))?;
+    if text.is_empty() {
+        return Ok(Vec::new());
+    }
+    if text.ends_with('\n') {
+        text.pop();
+    }
+    Ok(text
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
+        .collect())
 }
 
 pub(crate) fn configure_git_hooks_path(
@@ -386,12 +434,16 @@ pub(crate) fn configure_git_hooks_path(
 }
 
 fn uses_canon_git_hooks_path(preflight: &HookInstallPreflight) -> bool {
-    preflight
-        .current_git_hooks_path
-        .as_deref()
-        .is_some_and(|existing| {
+    !preflight.current_git_hooks_paths.is_empty()
+        && preflight.current_git_hooks_paths.iter().all(|existing| {
             git_hooks_path_matches(&preflight.root, &preflight.git_hooks_path, existing)
         })
+}
+
+fn has_canon_git_hooks_path(preflight: &HookInstallPreflight) -> bool {
+    preflight.current_git_hooks_paths.iter().any(|existing| {
+        git_hooks_path_matches(&preflight.root, &preflight.git_hooks_path, existing)
+    })
 }
 
 pub(crate) fn set_git_hooks_path(
@@ -421,7 +473,7 @@ fn git_hooks_path_config_value(root: &Path, path: &Path) -> Result<String, Strin
 pub(crate) fn unset_git_hooks_path(root: &Path) -> Result<(), String> {
     run_git_config_with_status(
         root,
-        &["--local", "--unset", "core.hooksPath"],
+        &["--local", "--unset-all", "core.hooksPath"],
         "failed to unset git core.hooksPath",
         |status| status.success() || status.code() == Some(5),
     )
@@ -473,7 +525,7 @@ pub(crate) fn is_git_worktree(root: &Path) -> Result<bool, String> {
 
 pub(crate) struct HookInstallPreflight {
     pre_commit_hook: Option<String>,
-    current_git_hooks_path: Option<String>,
+    current_git_hooks_paths: Vec<String>,
     default_pre_commit_hook: Option<String>,
     is_git_worktree: bool,
     root: PathBuf,
@@ -488,13 +540,14 @@ impl HookInstallPreflight {
         let git_hooks_path = canon_git_hooks_path(root, is_git_worktree)?;
         let pre_commit_hook_path = canon_pre_commit_hook_path(root, is_git_worktree)?;
         let default_pre_commit_hook_path = default_git_pre_commit_hook_path(root, is_git_worktree)?;
+        let current_git_hooks_paths = if is_git_worktree {
+            current_git_hooks_paths_for_worktree(root)?
+        } else {
+            Vec::new()
+        };
         Ok(HookInstallPreflight {
             pre_commit_hook: read_optional_file(&pre_commit_hook_path)?,
-            current_git_hooks_path: if is_git_worktree {
-                current_git_hooks_path_for_worktree(root)?
-            } else {
-                None
-            },
+            current_git_hooks_paths,
             default_pre_commit_hook: read_optional_file(&default_pre_commit_hook_path)?,
             is_git_worktree,
             root: root.to_path_buf(),
