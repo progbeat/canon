@@ -648,9 +648,9 @@ fn lock_note_at_path(path: &Path) -> Result<NoteLock, String> {
     use std::os::unix::fs::OpenOptionsExt;
     options.custom_flags(libc::O_NOFOLLOW);
     let file = options
-        .open(&path)
+        .open(path)
         .map_err(|err| format!("failed to open lock {}: {}", path.display(), err))?;
-    lock_note_file(&file, &path)?;
+    lock_note_file(&file, path)?;
     Ok(NoteLock { _file: file })
 }
 

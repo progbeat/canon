@@ -99,7 +99,7 @@ pub(crate) fn git_path_bytes(path: &Path) -> Result<Vec<u8>, String> {
     imp::git_path_bytes(path)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn checkout_index_prefix_arg(path: &Path) -> Result<OsString, String> {
     let mut prefix = git_path_bytes(path)?;
     let separator = std::path::MAIN_SEPARATOR as u8;

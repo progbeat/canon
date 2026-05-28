@@ -163,8 +163,6 @@ use crate::scope::{
     normalize_repo_path, path_bytes_in_scope, sanitize_scope, sanitize_scope_for_hash,
     scope_contains, scope_is_within,
 };
-#[cfg(all(unix, not(target_os = "macos")))]
-use crate::staged_worktree::initialize_snapshot_git_repo_for_test;
 use crate::staged_worktree::snapshot_parent_outside_worktree;
 use crate::staged_worktree::StagedWorktreeView;
 use crate::time::{format_record_timestamp, parse_record_timestamp, unix_timestamp};

@@ -220,9 +220,7 @@ pub(crate) fn validate_thinking(value: &str) -> Result<(), String> {
 }
 
 pub(crate) fn codex_reasoning_effort(thinking: &str) -> Option<&str> {
-    match thinking {
-        value => Some(value),
-    }
+    Some(thinking)
 }
 
 pub(crate) fn check_config_loads_plugins(config: &CheckConfig) -> bool {

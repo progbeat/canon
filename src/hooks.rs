@@ -606,15 +606,15 @@ pub(crate) fn install_pre_commit_hook(
     // The hook script is canon-owned persistent state, so it lives under the
     // repository's git-path state area. The local `core.hooksPath` value is Git
     // configuration: it points Git at that hook directory.
-    let hook_path = &preflight.pre_commit_hook_path;
+    let hook_path = preflight.pre_commit_hook_path.as_path();
     if let Some(parent) = hook_path.parent() {
         ensure_dir_without_symlinks(parent)?;
     }
     if preflight.pre_commit_hook.as_deref() != Some(DEFAULT_PRE_COMMIT_HOOK) {
-        write_new_file(&hook_path, DEFAULT_PRE_COMMIT_HOOK)?;
+        write_new_file(hook_path, DEFAULT_PRE_COMMIT_HOOK)?;
         write_stdout_line(&format!("Installed {}", DEFAULT_GIT_PRE_COMMIT_HOOK_PATH))?;
     }
-    make_executable(&hook_path)?;
+    make_executable(hook_path)?;
     configure_git_hooks_path(root, preflight)?;
     Ok(())
 }
