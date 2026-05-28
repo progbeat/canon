@@ -94,18 +94,20 @@ expectations:
     assert!(!instructions.contains("Project-specific evaluator policy loaded from check.yml"));
     assert!(!instructions.contains("Answer from files only."));
     assert!(instructions.contains("Response format:"));
+    assert!(instructions.contains("no restarted JSON"));
+    assert!(instructions.contains("Do not escape ordinary punctuation"));
     assert!(instructions.contains("Prefer `rg` and `rg --files`"));
     assert!(instructions.contains("project-relative refs enclosed in backticks"));
     assert!(instructions.contains("question text itself contains all facts"));
-    assert!(instructions.contains("Do not cite \"proxy evidence\""));
+    assert!(instructions.contains("proxy evidence is prohibited"));
     assert!(instructions.contains("qScopeSuggestion"));
-    assert!(instructions.contains("smallest repo-relative path list"));
+    assert!(instructions.contains("prefer specific files over directories"));
     assert!(instructions.contains("answer and justify the whole question"));
-    assert!(instructions.contains("files missing from the visible project paths"));
+    assert!(instructions.contains("files missing from the bottom path list"));
     assert!(instructions.contains("whether you can read a specific path"));
     assert!(instructions.contains("whether docs match code"));
     assert!(instructions.contains("direct evidence from the relevant files"));
-    assert!(instructions.contains("Visible project paths: [\".\"]"));
+    assert!(instructions.contains("Project path list: [\".\"]"));
     assert!(instructions.contains("Answer-selection policy:"));
     assert!(!instructions.contains("Instruction-boundary policy"));
 }

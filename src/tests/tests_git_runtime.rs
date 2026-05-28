@@ -491,7 +491,7 @@ fn staged_worktree_view_excludes_local_hook_config_and_hook_file() {
     let root = git_project("staged-snapshot-hooks");
     commit_all(&root, "initial");
     let hook_path = resolve_git_path(&root, PRE_COMMIT_HOOK_PATH).unwrap();
-    let hooks_path = resolve_git_path(&root, GIT_HOOKS_PATH).unwrap();
+    let expected_hooks_path = resolve_git_path(&root, GIT_HOOKS_PATH).unwrap();
     fs::create_dir_all(hook_path.parent().unwrap()).unwrap();
     fs::write(&hook_path, "local hook content\n").unwrap();
     Command::new("git")
@@ -499,7 +499,7 @@ fn staged_worktree_view_excludes_local_hook_config_and_hook_file() {
             "config",
             "--local",
             "core.hooksPath",
-            hooks_path.to_str().unwrap(),
+            expected_hooks_path.to_str().unwrap(),
         ])
         .current_dir(&root)
         .output()

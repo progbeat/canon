@@ -173,6 +173,10 @@ pub(crate) fn select_expectations_with_identities(
         }
     }
 
+    // `display_id` is intentionally computed from `identities`, which cover
+    // all collected expectations in the expanded config. Command-line
+    // selectors only choose which collected expectations are processed; they do
+    // not narrow the prefix namespace used by check output.
     selected_indexes
         .into_iter()
         .map(|index| selected_expectation_at(config, identities, index, true))

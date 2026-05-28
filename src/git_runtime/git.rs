@@ -55,6 +55,13 @@ pub(crate) fn staged_tracked_files(root: &Path) -> Result<Vec<StagedTrackedFile>
     tracked_files_for_pathspecs(root, None, &[])
 }
 
+pub(crate) fn staged_tracked_files_for_pathspecs(
+    root: &Path,
+    pathspecs: &[String],
+) -> Result<Vec<StagedTrackedFile>, String> {
+    tracked_files_for_pathspecs(root, None, pathspecs)
+}
+
 pub(crate) fn head_tracked_files(root: &Path) -> Result<Option<Vec<StagedTrackedFile>>, String> {
     if !git_head_tree_exists(root)? {
         return Ok(None);

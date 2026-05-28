@@ -1,10 +1,12 @@
 use crate::config_types::AgentConfig;
-use crate::git::{head_tracked_files, staged_tracked_files, StagedTrackedFile};
-#[cfg(test)]
+use crate::git::{
+    head_tracked_files, staged_tracked_files, staged_tracked_files_for_pathspecs, StagedTrackedFile,
+};
 use crate::hash::full_scope;
 use crate::project::command_output_trimmed;
 use crate::scope::{
-    effective_ignore_patterns, is_denied_path_bytes, path_bytes_in_scope, sanitize_scope_for_hash,
+    effective_ignore_patterns, git_pathspecs_for_visible_scope, is_denied_path_bytes,
+    path_bytes_in_scope, sanitize_scope_for_hash,
 };
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
@@ -26,6 +28,7 @@ pub(crate) struct VisibleTreeOidCache {
     staged_tree_oids: BTreeMap<ScopeCacheKey, Option<String>>,
     staged_entries: BTreeMap<ScopeCacheKey, Vec<String>>,
     staged_files: BTreeMap<PathBuf, Result<Vec<StagedTrackedFile>, String>>,
+    staged_index_tree_oids: BTreeMap<PathBuf, Result<String, String>>,
     gate_head_values: BTreeMap<ScopeCacheKey, Option<String>>,
     head_files: BTreeMap<PathBuf, Result<Option<Vec<StagedTrackedFile>>, String>>,
     object_hash_algorithms: BTreeMap<PathBuf, GitObjectHashAlgorithm>,
@@ -71,6 +74,11 @@ impl VisibleTreeOidCache {
         if let Some(hash) = self.staged_tree_oids.get(&key) {
             return Ok(hash.clone());
         }
+        if let Some(hash) = self.reusable_staged_visible_tree_oid(root, agent, &scope)? {
+            let hash = Some(hash);
+            self.staged_tree_oids.insert(key, hash.clone());
+            return Ok(hash);
+        }
         let visible_entries = self.staged_visible_scope_entries(root, agent, &scope)?;
         let hash = Some(visible_tree_oid_from_entries(
             &visible_entries,
@@ -90,8 +98,17 @@ impl VisibleTreeOidCache {
         if let Some(entries) = self.staged_entries.get(&key) {
             return Ok(entries.clone());
         }
-        let files = self.staged_files(root)?;
-        let entries = visible_scope_entries_from_files(&files, agent, scope);
+        let pathspecs = git_pathspecs_for_visible_scope(agent, scope);
+        let mut files = staged_tracked_files_for_pathspecs(root, &pathspecs)?;
+        if files.is_empty() && scope != full_scope() {
+            files = staged_tracked_files_for_pathspecs(root, scope)?;
+        }
+        let visible_files = files
+            .iter()
+            .filter(|file| file.is_file_entry_with_blob_contents())
+            .filter(|file| !is_denied_path_bytes(agent, &file.path))
+            .collect::<Vec<_>>();
+        let entries = tracked_files_scope_entries(&visible_files);
         self.staged_entries.insert(key, entries.clone());
         Ok(entries)
     }
@@ -103,6 +120,48 @@ impl VisibleTreeOidCache {
         let files = staged_tracked_files(root);
         self.staged_files.insert(root.to_path_buf(), files.clone());
         files
+    }
+
+    fn staged_index_tree_oid(&mut self, root: &Path) -> Result<String, String> {
+        if let Some(tree_oid) = self.staged_index_tree_oids.get(root) {
+            return tree_oid.clone();
+        }
+        let tree_oid = staged_index_tree_oid(root);
+        self.staged_index_tree_oids
+            .insert(root.to_path_buf(), tree_oid.clone());
+        tree_oid
+    }
+
+    fn reusable_staged_visible_tree_oid(
+        &mut self,
+        root: &Path,
+        agent: &AgentConfig,
+        scope: &[String],
+    ) -> Result<Option<String>, String> {
+        let all_files = self.staged_files(root)?;
+        let pathspecs = git_pathspecs_for_visible_scope(agent, scope);
+        let mut visible_files = staged_tracked_files_for_pathspecs(root, &pathspecs)?;
+        if visible_files.is_empty() && scope != full_scope() {
+            visible_files = staged_tracked_files_for_pathspecs(root, scope)?;
+        }
+        let visible_files = visible_files
+            .into_iter()
+            .filter(|file| !is_denied_path_bytes(agent, &file.path))
+            .collect::<Vec<_>>();
+        if visible_files.len() != files_in_scope_count(&all_files, scope) {
+            return Ok(None);
+        }
+        let tree_oid = self.staged_index_tree_oid(root)?;
+        if scope == full_scope() {
+            return Ok(Some(tree_oid));
+        }
+        let Some(path) = reusable_single_directory_scope(scope) else {
+            return Ok(None);
+        };
+        let Some(entry) = staged_tree_directory_entry(root, &tree_oid, path)? else {
+            return Ok(None);
+        };
+        visible_tree_oid_from_entries(&[entry], self.object_hash_algorithm(root)?).map(Some)
     }
 
     #[cfg(test)]
@@ -170,6 +229,22 @@ impl VisibleTreeOidCache {
             .insert(root.to_path_buf(), algorithm);
         Ok(algorithm)
     }
+}
+
+fn staged_index_tree_oid(root: &Path) -> Result<String, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("write-tree")
+        .output()
+        .map_err(|err| format!("failed to run git write-tree: {}", err))?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed to hash staged tree with git write-tree: {}",
+            command_output_trimmed(&output.stderr, "git write-tree stderr")?
+        ));
+    }
+    Ok(command_output_trimmed(&output.stdout, "git write-tree stdout")?.to_string())
 }
 
 fn scope_cache_key(root: &Path, agent: &AgentConfig, scope: &[String]) -> ScopeCacheKey {
@@ -519,6 +594,67 @@ fn visible_scope_entries_from_files(
         .filter(|file| !is_denied_path_bytes(agent, &file.path))
         .collect::<Vec<_>>();
     tracked_files_scope_entries(&visible_files)
+}
+
+fn files_in_scope_count(files: &[StagedTrackedFile], scope: &[String]) -> usize {
+    files
+        .iter()
+        .filter(|file| path_bytes_in_scope(&file.path, scope))
+        .count()
+}
+
+fn reusable_single_directory_scope(scope: &[String]) -> Option<&str> {
+    let [path] = scope else {
+        return None;
+    };
+    if path == "." || path.contains(['*', '?', ':']) {
+        return None;
+    }
+    Some(path)
+}
+
+fn staged_tree_directory_entry(
+    root: &Path,
+    tree_oid: &str,
+    path: &str,
+) -> Result<Option<String>, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("ls-tree")
+        .arg(tree_oid)
+        .arg("--")
+        .arg(path)
+        .output()
+        .map_err(|err| format!("failed to run git ls-tree: {}", err))?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed to inspect staged tree path {}: {}",
+            path,
+            command_output_trimmed(&output.stderr, "git ls-tree stderr")?
+        ));
+    }
+    let stdout = command_output_trimmed(&output.stdout, "git ls-tree stdout")?;
+    let Some((metadata, listed_path)) = stdout.split_once('\t') else {
+        return Ok(None);
+    };
+    if listed_path != path {
+        return Ok(None);
+    }
+    let mut fields = metadata.split_whitespace();
+    let Some(mode) = fields.next() else {
+        return Ok(None);
+    };
+    let Some(kind) = fields.next() else {
+        return Ok(None);
+    };
+    let Some(object_id) = fields.next() else {
+        return Ok(None);
+    };
+    if kind != "tree" || !is_git_tree_mode(mode) {
+        return Ok(None);
+    }
+    Ok(Some(format!("40000 {}\t{}", object_id, path)))
 }
 
 #[cfg(all(test, unix))]

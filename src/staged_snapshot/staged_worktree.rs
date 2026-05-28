@@ -1,16 +1,16 @@
 use crate::config_types::AgentConfig;
-use crate::git::{staged_tracked_files, GitBlobReader, StagedTrackedFile};
+use crate::git::{
+    staged_tracked_files, staged_tracked_files_for_pathspecs, GitBlobReader, StagedTrackedFile,
+};
 use crate::hash::full_scope;
 use crate::platform;
-use crate::scope::{
-    effective_ignore_patterns, path_bytes_in_scope, path_matches_pattern_bytes, sanitize_scope,
-};
+use crate::scope::{git_pathspecs_for_visible_scope, sanitize_scope};
 use crate::staged_worktree_paths::create_snapshot_root;
 #[cfg(test)]
 pub(crate) use crate::staged_worktree_paths::snapshot_parent_outside_worktree;
 use crate::visible_tree_oid::VisibleTreeOidCache;
 use std::cell::{Cell, RefCell};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -19,7 +19,6 @@ pub(crate) struct StagedWorktreeView {
     materialization_root: PathBuf,
     lazy_root: PathBuf,
     scope_roots: PathBuf,
-    staged_files: Vec<StagedTrackedFile>,
     unpacked_paths: RefCell<BTreeSet<Vec<u8>>>,
     blob_reader: RefCell<Option<GitBlobReader>>,
     next_scope_id: Cell<u64>,
@@ -36,7 +35,7 @@ impl StagedWorktreeView {
         root: &Path,
         _visible_tree_oid_cache: &mut VisibleTreeOidCache,
     ) -> Result<StagedWorktreeView, String> {
-        let staged_files = staged_tracked_files(root)?;
+        let _staged_files = staged_tracked_files(root)?;
         let materialization_root = create_snapshot_root(root)?;
         if let Err(err) = platform::create_private_dir(&materialization_root.join("lazy"))
             .and_then(|_| platform::create_private_dir(&materialization_root.join("scopes")))
@@ -53,7 +52,6 @@ impl StagedWorktreeView {
             lazy_root: materialization_root.join("lazy"),
             scope_roots: materialization_root.join("scopes"),
             materialization_root,
-            staged_files,
             unpacked_paths: RefCell::new(BTreeSet::new()),
             blob_reader: RefCell::new(None),
             next_scope_id: Cell::new(0),
@@ -71,8 +69,7 @@ impl StagedWorktreeView {
         scope: &[String],
     ) -> Result<PathBuf, String> {
         let scope = sanitize_scope(scope, agent)?;
-        let git_tree = self.evaluator_visible_git_tree(agent);
-        let scope_paths = scope_paths_in_git_tree(&git_tree, &scope);
+        let scope_paths = self.evaluator_visible_git_tree(agent, &scope)?;
         self.materialize_scope(&scope, &scope_paths)
     }
 
@@ -88,23 +85,49 @@ impl StagedWorktreeView {
         self.hardlink_scope_root(scope_paths)
     }
 
-    fn evaluator_visible_git_tree(&self, agent: &AgentConfig) -> Vec<StagedTrackedFile> {
-        let deny_patterns = sorted_effective_ignore_patterns(agent);
-        // This is the Git tree handed to the lazy hardlink materializer:
-        // mandatory/configured ignore patterns are already removed from the
-        // evaluator-visible tree, and Gitlinks are not file entries with blob
-        // contents. Symlink entries are retained because Git stores their link
-        // target as blob contents.
-        self.staged_files
-            .iter()
+    fn evaluator_visible_git_tree(
+        &self,
+        agent: &AgentConfig,
+        scope: &[String],
+    ) -> Result<Vec<StagedTrackedFile>, String> {
+        let files = self.staged_files_in_visible_scope(agent, scope)?;
+        // The lazy spec iterates file_entries(git_tree). For evaluator
+        // materialization, those are Git entries whose object can be read as
+        // blob contents: regular files, executable files, and symlinks.
+        // Gitlinks point at commits, not blobs, so they are outside that set.
+        Ok(files
+            .into_iter()
             .filter(|file| file.is_file_entry_with_blob_contents())
-            .filter(|file| {
-                !deny_patterns
-                    .iter()
-                    .any(|pattern| path_matches_pattern_bytes(&file.path, pattern.as_bytes()))
-            })
-            .cloned()
-            .collect()
+            .collect())
+    }
+
+    fn staged_files_in_visible_scope(
+        &self,
+        agent: &AgentConfig,
+        scope: &[String],
+    ) -> Result<Vec<StagedTrackedFile>, String> {
+        if scope == full_scope() {
+            let pathspecs = git_pathspecs_for_visible_scope(agent, scope);
+            return staged_tracked_files_for_pathspecs(&self.source_root, &pathspecs);
+        }
+
+        let scoped_files = staged_tracked_files_for_pathspecs(&self.source_root, scope)?;
+        let full_visible_pathspecs = git_pathspecs_for_visible_scope(agent, &full_scope());
+        let full_visible_paths =
+            staged_tracked_files_for_pathspecs(&self.source_root, &full_visible_pathspecs)?
+                .into_iter()
+                .map(|file| file.path)
+                .collect::<HashSet<_>>();
+
+        // Glossary defines visible scope as the q-scope with configured ignore
+        // patterns applied last. Intersecting the Git-selected q-scope with the
+        // full visible tree keeps both halves as Git pathspec operations and
+        // avoids relying on `git ls-files <exact-file> :(exclude)<path>`, which
+        // can return an empty listing for exact file scopes.
+        Ok(scoped_files
+            .into_iter()
+            .filter(|file| full_visible_paths.contains(&file.path))
+            .collect())
     }
 
     fn unpack_missing_files(&self, files: &[StagedTrackedFile]) -> Result<(), String> {
@@ -187,24 +210,6 @@ impl Drop for StagedWorktreeView {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.materialization_root);
     }
-}
-
-fn sorted_effective_ignore_patterns(agent: &AgentConfig) -> Vec<String> {
-    let mut patterns = effective_ignore_patterns(agent);
-    patterns.sort();
-    patterns.dedup();
-    patterns
-}
-
-fn scope_paths_in_git_tree(
-    git_tree: &[StagedTrackedFile],
-    scope: &[String],
-) -> Vec<StagedTrackedFile> {
-    git_tree
-        .iter()
-        .filter(|file| path_bytes_in_scope(&file.path, scope))
-        .cloned()
-        .collect()
 }
 
 fn write_materialized_file(

@@ -12,7 +12,6 @@ fn scope_is_canonicalized() {
     let many_paths = parse_scope_json(r#"["a", "b", "c", "d", "e"]"#, &config.agent).unwrap();
     assert_eq!(many_paths, vec!["a", "b", "c", "d", "e"]);
     assert!(parse_scope_json(r#"[]"#, &config.agent).is_err());
-    assert!(parse_scope_json(r#"["target/output.txt"]"#, &config.agent).is_err());
 }
 
 #[test]
@@ -135,19 +134,56 @@ fn evaluator_thread_reuse_key_is_not_newline_ambiguous() {
 }
 
 #[test]
-fn evaluator_response_scope_rejects_denied_paths() {
+fn evaluator_response_scope_keeps_ignored_paths_as_valid_scope_entries() {
     let config = parse_check_config(check_config_yaml()).unwrap();
-    assert!(parse_scope_strings(&[".canon/check.yml".to_string()], &config.agent).is_err());
-    assert!(parse_scope_strings(
+    assert_eq!(
+        parse_scope_strings(&[".canon/check.yml".to_string()], &config.agent).unwrap(),
+        vec![".canon/check.yml".to_string()]
+    );
+    assert_eq!(
+        parse_scope_strings(
+            &["src/main.rs".to_string(), "target/output.txt".to_string()],
+            &config.agent,
+        )
+        .unwrap(),
+        vec!["src/main.rs".to_string(), "target/output.txt".to_string()]
+    );
+    assert_eq!(
+        parse_scope_strings(
+            &[".".to_string(), "target/output.txt".to_string()],
+            &config.agent,
+        )
+        .unwrap(),
+        full_scope()
+    );
+}
+
+#[test]
+fn ignored_scope_paths_are_excluded_from_materialized_visible_tree() {
+    let root = git_project("ignored-scope-materialized-visible-tree");
+    fs::create_dir_all(root.join("target")).unwrap();
+    fs::write(root.join("target/output.txt"), "ignored\n").unwrap();
+    fs::write(root.join("src/main.rs"), "main\n").unwrap();
+    Command::new("git")
+        .args(["add", "target/output.txt", "src/main.rs"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let scope = parse_scope_strings(
         &["src/main.rs".to_string(), "target/output.txt".to_string()],
         &config.agent,
     )
-    .is_err());
-    assert!(parse_scope_strings(
-        &[".".to_string(), "target/output.txt".to_string()],
-        &config.agent,
-    )
-    .is_err());
+    .unwrap();
+
+    let staged_view = StagedWorktreeView::apply(&root).unwrap();
+    let scope_root = staged_view
+        .materialize_evaluator_scope(&config.agent, &scope)
+        .unwrap();
+
+    assert!(scope_root.join("src/main.rs").exists());
+    assert!(!scope_root.join("target/output.txt").exists());
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -181,7 +217,10 @@ expectations:
     .unwrap();
 
     assert_eq!(config.agent.ignore, vec!["foo/bar/**"]);
-    assert!(parse_scope_strings(&["foo/bar/baz.rs".to_string()], &config.agent).is_err());
+    assert_eq!(
+        parse_scope_strings(&["foo/bar/baz.rs".to_string()], &config.agent).unwrap(),
+        vec!["foo/bar/baz.rs".to_string()]
+    );
 }
 
 #[test]

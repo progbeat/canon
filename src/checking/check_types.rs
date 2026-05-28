@@ -5,7 +5,8 @@ use crate::token_usage_types::TokenUsage;
 use crate::{
     ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION, ERROR_UNPARSABLE, RESULT_FAIL, RESULT_PASS,
 };
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Serialize};
+use serde_json::Value;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -116,12 +117,16 @@ impl ObservedAnswerState {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EvaluatorResponseJson {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_answer")]
     pub(crate) answer: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_optional_error")]
     pub(crate) error: Option<String>,
     pub(crate) evidence: String,
-    #[serde(default, rename = "qScopeSuggestion")]
+    #[serde(
+        default,
+        rename = "qScopeSuggestion",
+        deserialize_with = "deserialize_optional_q_scope_suggestion"
+    )]
     pub(crate) q_scope_suggestion: Option<Vec<String>>,
 }
 
@@ -130,7 +135,9 @@ impl EvaluatorResponseJson {
         let has_answer = self.answer.is_some();
         let has_error = self.error.is_some();
         if has_answer == has_error {
-            return Err("evaluator response must contain exactly one of answer or error".to_string());
+            return Err(
+                "evaluator response must contain exactly one of answer or error".to_string(),
+            );
         }
         if let Some(answer) = self.answer.as_deref() {
             if answer.is_empty() || contains_schema_line_break(answer) {
@@ -166,6 +173,54 @@ fn contains_schema_line_break(value: &str) -> bool {
         .as_bytes()
         .iter()
         .any(|byte| matches!(byte, b'\r' | b'\n'))
+}
+
+fn deserialize_optional_answer<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    deserialize_optional_string_field(deserializer, "answer")
+}
+
+fn deserialize_optional_error<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    deserialize_optional_string_field(deserializer, "error")
+}
+
+fn deserialize_optional_string_field<'de, D>(
+    deserializer: D,
+    field_name: &'static str,
+) -> Result<Option<String>, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    if value.is_null() {
+        return Err(de::Error::custom(format!(
+            "{} must not be null",
+            field_name
+        )));
+    }
+    String::deserialize(value)
+        .map(Some)
+        .map_err(de::Error::custom)
+}
+
+fn deserialize_optional_q_scope_suggestion<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    if value.is_null() {
+        return Err(de::Error::custom("qScopeSuggestion must not be null"));
+    }
+    Vec::<String>::deserialize(value)
+        .map(Some)
+        .map_err(de::Error::custom)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
