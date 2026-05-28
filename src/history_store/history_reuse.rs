@@ -46,8 +46,6 @@ pub(crate) fn latest_history_record_matching_visible_tree_oid(
     history_cache: &mut HistoryCache,
     mut current_visible_tree_oid_for_scope: impl FnMut(&[String]) -> Result<Option<String>, String>,
 ) -> Result<Option<CheckRecord>, String> {
-    let force_full_scope =
-        full_scope_reset_marker_exists_with_cache(root, expectation, history_cache)?;
     // Cache lookup follows the Cache spec's answer-history contract:
     // schema-valid error records are not answer history, so any legacy
     // non-answer rows are skipped before applying the newest-to-oldest
@@ -60,9 +58,6 @@ pub(crate) fn latest_history_record_matching_visible_tree_oid(
             let Ok(scope) = sanitize_scope_for_hash(&record.scope) else {
                 return Ok(HistoryRecordScan::Continue);
             };
-            if force_full_scope && scope != full_scope() {
-                return Ok(HistoryRecordScan::Continue);
-            }
             let Some(current_visible_tree_oid) = current_visible_tree_oid_for_scope(&scope)? else {
                 return Ok(HistoryRecordScan::Done(None));
             };
@@ -85,8 +80,6 @@ pub(crate) fn cooldown_history_record(
     let Some(cooldown) = expectation.cooldown else {
         return Ok(None);
     };
-    let force_full_scope =
-        full_scope_reset_marker_exists_with_cache(root, expectation, history_cache)?;
     let record = scan_latest_history_records(root, expectation, history_cache, |mut record| {
         // Cooldown keys off the latest answer history record. Legacy non-answer
         // rows and invalid scopes are skipped here, while a newer valid fail
@@ -97,9 +90,6 @@ pub(crate) fn cooldown_history_record(
         let Ok(scope) = sanitize_scope_for_hash(&record.scope) else {
             return Ok(HistoryRecordScan::Continue);
         };
-        if force_full_scope && scope != full_scope() {
-            return Ok(HistoryRecordScan::Continue);
-        }
         record.scope = scope;
         let Some(timestamp) = parse_record_timestamp(&record.timestamp) else {
             return Ok(HistoryRecordScan::Done(None));
@@ -144,7 +134,7 @@ pub(crate) fn newer_cached_history_record(
     }
 }
 
-pub(crate) fn latest_history_scope_with_cache(
+pub(crate) fn latest_stored_q_scope_with_cache(
     root: &Path,
     _agent: &AgentConfig,
     expectation: &SelectedExpectation,
@@ -154,17 +144,14 @@ pub(crate) fn latest_history_scope_with_cache(
         return Ok(Some(full_scope()));
     }
     // Expectation-mode `canon check` calls this before each fresh interrogation.
-    // This returns only an enforced-scope seed; it is not a cached check result
-    // and does not let callers skip evaluator work.
-    // The Interrogation Policy's "latest accepted scope" means the latest
-    // reusable answer-history scope, not the latest passing scope. Verified
-    // correct and incorrect answers both have accepted scopes; error and
-    // unparsable responses do not.
-    // This is only the starting scope for a fresh interrogation, regardless of
-    // whether that old answer still matches the current staged tree for cache
-    // reuse.
+    // It returns only the latest stored q-scope from answer history; it is not a
+    // cached check result and does not let callers skip evaluator work. Cache
+    // specifies that answer-history records contain schema-valid `answer`
+    // responses only, and each record's `qScope` is the q-scope used to form
+    // that record's visible tree. Error and unparsable records are not answer
+    // history records and cannot seed a fresh interrogation.
     scan_latest_history_records(root, expectation, history_cache, |record| {
-        let Some(scope) = sanitized_reusable_history_scope(&record, &expectation.a) else {
+        let Some(scope) = sanitized_answer_history_q_scope(&record, &expectation.a) else {
             return Ok(HistoryRecordScan::Continue);
         };
         Ok(HistoryRecordScan::Done(Some(scope)))
@@ -192,7 +179,7 @@ fn scan_latest_history_records<T>(
     Ok(None)
 }
 
-fn sanitized_reusable_history_scope(record: &CheckRecord, expected: &str) -> Option<Vec<String>> {
+fn sanitized_answer_history_q_scope(record: &CheckRecord, expected: &str) -> Option<Vec<String>> {
     if !is_reusable_history_record_for_expected(record, expected) {
         return None;
     }

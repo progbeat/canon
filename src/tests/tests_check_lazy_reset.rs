@@ -39,14 +39,15 @@ fn lazy_full_scope_reset_sets_only_sampled_narrowed_history_to_full_scope() {
     assert_eq!(reset_records.len(), 1);
     assert_eq!(reset_records[0].scope, vec!["README.md".to_string()]);
     assert!(reset_marker_path.exists());
-    assert!(
+    assert_eq!(
         same_tree_history_record(&root, &config.agent, &expectations[1])
             .unwrap()
-            .is_none()
+            .map(|record| record.scope),
+        Some(vec!["README.md".to_string()])
     );
     let mut history_cache = HistoryCache::new();
     assert_eq!(
-        latest_history_scope_with_cache(
+        latest_stored_q_scope_with_cache(
             &root,
             &config.agent,
             &expectations[1],
@@ -56,7 +57,7 @@ fn lazy_full_scope_reset_sets_only_sampled_narrowed_history_to_full_scope() {
         Some(full_scope())
     );
     assert_eq!(
-        latest_history_scope_with_cache(
+        latest_stored_q_scope_with_cache(
             &root,
             &config.agent,
             &expectations[1],
@@ -83,7 +84,7 @@ fn lazy_full_scope_reset_schedule_applies_on_next_check_start() {
         "no",
         staged_visible_tree_oid(&root, &config.agent, &narrowed_scope).unwrap(),
     );
-    narrowed_record.scope = narrowed_scope;
+    narrowed_record.scope = narrowed_scope.clone();
     append_history_record(&root, &expectations[1], &narrowed_record).unwrap();
     let reset_history_path = history_path(&root, &expectations[1]).unwrap();
     let reset_marker_path =
@@ -127,7 +128,7 @@ fn lazy_full_scope_reset_marker_clears_after_new_answer_history_append() {
         "no",
         staged_visible_tree_oid(&root, &config.agent, &narrowed_scope).unwrap(),
     );
-    narrowed_record.scope = narrowed_scope;
+    narrowed_record.scope = narrowed_scope.clone();
     append_history_record(&root, &expectations[1], &narrowed_record).unwrap();
     let marker_path =
         full_scope_reset_marker_path_with_cache(&root, &expectations[1], &mut HistoryCache::new())
@@ -163,7 +164,7 @@ fn finish_check_report_logs_finish_after_lazy_reset_failure() {
         "no",
         staged_visible_tree_oid(&root, &config.agent, &narrowed_scope).unwrap(),
     );
-    narrowed_record.scope = narrowed_scope;
+    narrowed_record.scope = narrowed_scope.clone();
     append_history_record(&root, &expectations[1], &narrowed_record).unwrap();
     let reset_path = resolve_git_path(&root, "canon/lazy-full-scope-reset").unwrap();
     fs::create_dir_all(&reset_path).unwrap();
@@ -281,7 +282,7 @@ fn lazy_full_scope_reset_preserves_existing_full_scope_pass_when_resetting_narro
         "yes",
         staged_visible_tree_oid(&root, &config.agent, &narrowed_scope).unwrap(),
     );
-    narrowed_record.scope = narrowed_scope;
+    narrowed_record.scope = narrowed_scope.clone();
     append_history_record(&root, &expectation, &narrowed_record).unwrap();
 
     set_non_selected_expectation_scopes_to_full(&root, std::slice::from_ref(&expectation)).unwrap();
@@ -293,11 +294,11 @@ fn lazy_full_scope_reset_preserves_existing_full_scope_pass_when_resetting_narro
         same_tree_history_record(&root, &config.agent, &expectation)
             .unwrap()
             .map(|record| record.scope),
-        Some(full_scope())
+        Some(narrowed_scope)
     );
     let mut history_cache = HistoryCache::new();
     assert_eq!(
-        latest_history_scope_with_cache(&root, &config.agent, &expectation, &mut history_cache,)
+        latest_stored_q_scope_with_cache(&root, &config.agent, &expectation, &mut history_cache,)
             .unwrap(),
         Some(full_scope())
     );

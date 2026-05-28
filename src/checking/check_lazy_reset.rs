@@ -261,10 +261,11 @@ fn set_expectation_scope_to_full_for_next_check(
     history_cache: &mut HistoryCache,
 ) -> Result<(), String> {
     // Canon's reset_to_full_project_q_scope is represented as explicit cache
-    // state, not by rewriting answer history. While the marker exists, history
-    // reuse treats narrowed records as ineligible and uses full project scope as
-    // the next interrogation seed. A later schema-valid answer append clears the
-    // marker because that new answer has its own verified q-scope.
+    // state, not by rewriting answer history. While the marker exists, fresh
+    // interrogations use full project scope as their seed. Cached-result lookup
+    // remains governed by the Cached Result spec's visibleTreeOid/timestamp
+    // rules. A later schema-valid answer append clears the marker because that
+    // new answer has its own stored q-scope.
     let path = history_cache.path(root, expectation)?;
     if !path.exists() {
         return Ok(());

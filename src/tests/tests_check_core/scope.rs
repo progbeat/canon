@@ -56,7 +56,7 @@ fn check_runner_verifies_narrowed_scope_before_history_reuse() {
     );
     let _ = fs::remove_dir_all(root);
 
-    let root = git_project("check-narrowing-accepted-changed-incorrect");
+    let root = git_project("check-narrowing-rejected-changed-incorrect");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
     let mut runner = FakeRunner::new(&[
@@ -69,26 +69,23 @@ fn check_runner_verifies_narrowed_scope_before_history_reuse() {
     ]);
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
-    assert!(!records.records[0].passed());
-    assert_eq!(records.records[0].observed, "no");
+    assert!(records.records[0].passed());
+    assert_eq!(records.records[0].observed, "yes");
     assert_eq!(
         records.records[0].evidence,
-        "`src/main.rs`: src/main.rs changes to a failing answer"
+        "`src/main.rs`: full scope supports it"
     );
-    assert_eq!(records.records[0].scope, vec!["src/main.rs".to_string()]);
-    assert_eq!(records.narrowing.accepted, 1);
-    assert_eq!(records.narrowing.rejected, 0);
+    assert_eq!(records.records[0].scope, vec![".".to_string()]);
+    assert_eq!(records.narrowing.accepted, 0);
+    assert_eq!(records.narrowing.rejected, 1);
     let history = read_history_records(&root, &options.selected[0]).unwrap();
     assert_eq!(history.len(), 1);
-    assert_eq!(history[0].observed, "no");
-    assert_eq!(
-        history[0].evidence,
-        "`src/main.rs`: src/main.rs changes to a failing answer"
-    );
-    assert_eq!(history[0].scope, vec!["src/main.rs".to_string()]);
+    assert_eq!(history[0].observed, "yes");
+    assert_eq!(history[0].evidence, "`src/main.rs`: full scope supports it");
+    assert_eq!(history[0].scope, vec![".".to_string()]);
     let _ = fs::remove_dir_all(root);
 
-    let root = git_project("check-narrowing-accepted-changed-correct");
+    let root = git_project("check-narrowing-rejected-changed-correct");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
     let mut runner = FakeRunner::new(&[
@@ -101,23 +98,20 @@ fn check_runner_verifies_narrowed_scope_before_history_reuse() {
     ]);
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
-    assert!(records.records[0].passed());
-    assert_eq!(records.records[0].observed, "yes");
+    assert!(!records.records[0].passed());
+    assert_eq!(records.records[0].observed, "no");
     assert_eq!(
         records.records[0].evidence,
-        "`src/main.rs`: src/main.rs changes to a passing answer"
+        "`src/main.rs`: full scope fails it"
     );
-    assert_eq!(records.records[0].scope, vec!["src/main.rs".to_string()]);
-    assert_eq!(records.narrowing.accepted, 1);
-    assert_eq!(records.narrowing.rejected, 0);
+    assert_eq!(records.records[0].scope, vec![".".to_string()]);
+    assert_eq!(records.narrowing.accepted, 0);
+    assert_eq!(records.narrowing.rejected, 1);
     let history = read_history_records(&root, &options.selected[0]).unwrap();
     assert_eq!(history.len(), 1);
-    assert_eq!(history[0].observed, "yes");
-    assert_eq!(
-        history[0].evidence,
-        "`src/main.rs`: src/main.rs changes to a passing answer"
-    );
-    assert_eq!(history[0].scope, vec!["src/main.rs".to_string()]);
+    assert_eq!(history[0].observed, "no");
+    assert_eq!(history[0].evidence, "`src/main.rs`: full scope fails it");
+    assert_eq!(history[0].scope, vec![".".to_string()]);
     let _ = fs::remove_dir_all(root);
 }
 

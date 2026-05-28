@@ -5,7 +5,7 @@ use crate::evaluator_response_cache::EvaluatorResponseParseCache;
 use crate::evaluator_turn::evaluator_models;
 use crate::hash::full_scope;
 use crate::history::HistoryCache;
-use crate::history_reuse::latest_history_scope_with_cache;
+use crate::history_reuse::latest_stored_q_scope_with_cache;
 use crate::scope::effective_ignore_patterns;
 use crate::staged_worktree::StagedWorktreeView;
 use crate::visible_tree_oid::VisibleTreeOidCache;
@@ -55,7 +55,7 @@ pub(crate) fn initial_visible_scope_for_expectation(
     // current tree, the first interrogation still uses that q-scope; restricted
     // insufficient-evidence is the only policy that widens it to full scope.
     Ok(
-        latest_history_scope_with_cache(root, &expectation.agent, expectation, history_cache)?
+        latest_stored_q_scope_with_cache(root, &expectation.agent, expectation, history_cache)?
             .unwrap_or_else(full_scope),
     )
 }

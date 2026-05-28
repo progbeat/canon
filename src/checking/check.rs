@@ -3,9 +3,9 @@ use crate::check_cache::{
 };
 use crate::check_interrogation_policy::{
     interrogate_or_error_record, interrogate_with_full_scope_retry, narrowed_scope_is_accepted,
-    q_scope_suggestion_should_get_independent_verification, restore_record_to_enforced_scope,
-    turn_exceeds_break_after_tokens, turn_has_context_compaction, write_scope_narrowing_event,
-    InterrogationCall, ScopedInterrogation,
+    q_scope_suggestion_should_get_independent_verification, turn_exceeds_break_after_tokens,
+    turn_has_context_compaction, write_scope_narrowing_event, InterrogationCall,
+    ScopedInterrogation,
 };
 use crate::check_interrogation_state::{
     initial_visible_scope_for_expectation, CheckRuntime, InterrogationRunState,
@@ -197,7 +197,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             return_expectation_error!("interrupted");
         }
 
-        let mut enforced_scope = run_expectation_try!(initial_visible_scope_for_expectation(
+        let mut verified_q_scope = run_expectation_try!(initial_visible_scope_for_expectation(
             root,
             expectation,
             &mut caches.history
@@ -212,7 +212,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 root,
                 runtime: &runtime,
                 expectation,
-                enforced_scope: &mut enforced_scope,
+                enforced_scope: &mut verified_q_scope,
             },
             runner,
             &mut diagnostic_log,
@@ -230,7 +230,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         // Interrogation finalization records the enforced scope before this
         // point. A restricted insufficient-evidence error has already had its
         // full-scope retry; final errors remain review records.
-        debug_assert!(scope_is_within(&record_scope, &enforced_scope));
+        debug_assert!(scope_is_within(&record_scope, &verified_q_scope));
         // Cache-spec narrowing verification applies only to verified answers.
         // Error and unparsable states are never reusable cache records and are
         // handled by the review-required policy above.
@@ -243,7 +243,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 root,
                 &expectation.agent,
                 interrogation.record.suggested_q_scope.as_deref(),
-                &enforced_scope,
+                &verified_q_scope,
                 &mut caches.visible_tree_oid,
             ))
         {
@@ -274,7 +274,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 turn_exceeds_break_after_tokens(&narrowed, options.break_after_tokens);
             context_compaction_hit |= turn_has_context_compaction(&narrowed);
             stop_after_current_expectation |= narrowed.stop_after_current_expectation;
-            let accepted = narrowed_scope_is_accepted(&narrowed.record);
+            let accepted = narrowed_scope_is_accepted(&interrogation.record, &narrowed.record);
             if accepted {
                 narrowing.accepted += 1;
             } else {
@@ -283,7 +283,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             run_expectation_try!(write_scope_narrowing_event(
                 &mut diagnostic_log,
                 &expectation.id,
-                &enforced_scope,
+                &verified_q_scope,
                 &verification_scope,
                 accepted,
                 &initial_record,
@@ -292,20 +292,11 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             if accepted {
                 interrogation = narrowed;
             } else {
-                let enforced_visible_tree_oid = run_expectation_try!(caches
-                    .visible_tree_oid
-                    .staged_visible_tree_oid(root, &expectation.agent, &enforced_scope));
-                // A rejected narrowing invalidates only the evaluator's
-                // proposed reusable cache scope. The original answer/evidence
-                // came from the wider enforced scope, so keep that wide
-                // interrogation result and restore its wide cache identity
-                // instead of keeping anything from the narrowed verification
-                // turn.
-                interrogation.record = restore_record_to_enforced_scope(
-                    initial_record,
-                    &enforced_scope,
-                    enforced_visible_tree_oid,
-                );
+                // A rejected suggestion does not create a new stored q-scope.
+                // Keep the original wide interrogation record, whose scope is
+                // the current verified q-scope that seeded this turn, or full
+                // project scope after policy widening.
+                debug_assert_eq!(interrogation.record.scope, verified_q_scope);
             }
         }
         // Correct and incorrect parsed answers are reusable for every

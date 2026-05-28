@@ -95,14 +95,30 @@ against existing canon history and fails quickly when a commit needs a fresh
 
 ## Scope
 
-The smallest set of repository paths that is sufficient for the evaluator to
-answer a question correctly. Full project scope is written as `.`.
+A Git pathspec list that defines a subset of tracked repository files. Full
+project scope is written as `.`.
+
+## Q-scope
+
+A question scope: a scope complete for a question. If files outside the q-scope
+change while files inside it stay the same, the correct answer to the question
+should not change.
+
+## Q-scope suggestion
+
+An evaluator-provided scope claiming to be narrow enough to answer the current
+question. `canon check` only attempts to verify a suggestion when it is valid,
+inside the current visible scope, and reduces the visible tree by at least 25%.
 
 ## Scope narrowing
 
-The process of checking whether an expectation can be answered from a smaller
-scope than the full project. Narrower scopes make same-tree results more
-reusable when unrelated files change.
+The runtime process for trying to store a narrower q-scope. When an evaluator
+returns an answer with a q-scope suggestion, `canon check` may run an independent
+interrogation under that suggested scope. The suggestion is stored only when
+that verification preserves the answer from the current visible scope. Files
+outside the current visible scope are already covered by the stored q-scope, and
+the independent narrowed interrogation checks the remaining files excluded by
+the suggestion.
 
 ## Same-tree result
 
@@ -126,3 +142,13 @@ the snapshot.
 
 The Git-compatible object ID of the tracked tree entries visible to the
 evaluator after enforced scope and ignore rules are applied.
+
+## Visible scope
+
+The scope applied to a staged tracked tree for an evaluator interrogation. It is
+the latest stored q-scope for the expectation, or full project scope when no
+q-scope is stored, with configured ignore patterns applied last.
+
+## Visible tree
+
+The scoped tree induced by a visible scope.

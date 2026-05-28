@@ -119,7 +119,7 @@ use crate::history_compaction::{
     should_compact_history_for_seed,
 };
 use crate::history_reuse::{
-    cooldown_history_record, is_reusable_history_record, latest_history_scope_with_cache,
+    cooldown_history_record, is_reusable_history_record, latest_stored_q_scope_with_cache,
     same_tree_history_record, same_tree_history_record_with_cache,
 };
 use crate::hooks::*;
