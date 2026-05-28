@@ -674,10 +674,10 @@ fn lock_note_at_path(path: &Path) -> Result<NoteLock, String> {
         match create_note_lock(path) {
             Ok(file) => return new_note_lock(path, file),
             Err(err) if note_lock_create_error_is_retryable(&err) => {
-                if matches!(note_lock_state(path)?, NoteLockState::Stale) {
-                    if remove_stale_note_lock_for_retry(path)? {
-                        continue;
-                    }
+                if matches!(note_lock_state(path)?, NoteLockState::Stale)
+                    && remove_stale_note_lock_for_retry(path)?
+                {
+                    continue;
                 }
                 thread::sleep(NOTE_LOCK_RETRY_SLEEP);
             }
