@@ -34,8 +34,8 @@ use crate::check_interrogation::{
 };
 use crate::check_interrogation_records::finalize_interrogation_response;
 use crate::check_interrogation_state::{
-    evaluator_thread_reuse_key, should_retry_full_scope_after_restricted_insufficient_evidence,
-    CheckRuntime, InterrogationRunState,
+    evaluator_thread_reuse_key, should_retry_full_scope_after_restricted_response, CheckRuntime,
+    InterrogationRunState,
 };
 use crate::check_lazy_reset::{
     apply_scheduled_lazy_full_scope_resets, lazy_full_scope_reset_count,
@@ -107,8 +107,8 @@ use crate::git::resolve_git_path;
 use crate::git::{read_git_blobs_with_git_program, GitBlobReader};
 use crate::hash::{expectation_id, fnv64_with_seed, full_scope, hash_120, hash_key};
 use crate::history::{
-    history_file_name, history_path, parse_history_record_line, read_history_records,
-    read_history_records_from_path, HistoryCache,
+    full_scope_reset_marker_path_with_cache, history_file_name, history_path,
+    parse_history_record_line, read_history_records, read_history_records_from_path, HistoryCache,
 };
 use crate::history_append::{append_history_record, append_history_record_with_cache};
 use crate::history_cache_key::history_cache_key;
@@ -217,6 +217,10 @@ pub(crate) fn enable_diagnostic_logs(root: &Path) {
     );
 }
 
+pub(crate) fn stale_visible_tree_oid() -> String {
+    "0000000000000000000000000000000000000000".to_string()
+}
+
 pub(crate) fn append_legacy_history_record(
     root: &Path,
     expectation: &SelectedExpectation,
@@ -224,13 +228,34 @@ pub(crate) fn append_legacy_history_record(
 ) {
     let path = history_path(root, expectation).unwrap();
     ensure_dir(path.parent().unwrap()).unwrap();
-    let line = render_answer_history_record(record).unwrap();
+    let mut value = serde_json::Map::new();
+    value.insert("timestamp".to_string(), json!(record.timestamp));
+    value.insert("observed".to_string(), json!(record.observed));
+    if let Some(error) = &record.error {
+        value.insert("error".to_string(), json!(error));
+    }
+    value.insert("evidence".to_string(), json!(record.evidence));
+    value.insert("qScope".to_string(), json!(record.scope));
+    value.insert("visibleTreeOid".to_string(), json!(record.visible_tree_oid));
+    value.insert("result".to_string(), json!(record.result));
+    value.insert("id".to_string(), json!(record.id));
+    if let Some(prompt) = &record.prompt {
+        value.insert("prompt".to_string(), json!(prompt));
+    }
+    if let Some(expected) = &record.expected {
+        value.insert("expected".to_string(), json!(expected));
+    }
+    if let Some(cache_key) = &record.cache_key {
+        value.insert("cacheKey".to_string(), json!(cache_key));
+    }
+    let line = serde_json::to_string(&Value::Object(value)).unwrap();
     let mut file = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
         .unwrap();
     file.write_all(line.as_bytes()).unwrap();
+    file.write_all(b"\n").unwrap();
     file.flush().unwrap();
 }
 

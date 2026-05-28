@@ -1,11 +1,15 @@
-use crate::check_types::{CheckRecord, CheckResult, SelectedExpectation};
+use crate::check_types::{contains_line_break, CheckRecord, CheckResult, SelectedExpectation};
 use crate::fs_util::{
     ensure_dir_without_symlinks, for_each_nonempty_line, reject_symlink,
     write_temp_file_then_replace,
 };
 use crate::git::resolve_git_path;
-use crate::logging_error::{DiagnosticLogError, DiagnosticLogResult};
+use crate::logging_error::{external_log_error, DiagnosticLogError, DiagnosticLogResult};
 use crate::path_io_error::PathIoError;
+use crate::time::parse_record_timestamp;
+use crate::visible_tree_oid::{
+    git_object_oid_has_known_shape, repository_native_object_oid_is_valid,
+};
 use crate::{
     CANON_CACHE_DIR_GIT_PATH, HISTORY_COMPACT_CHANCE_DENOMINATOR, HISTORY_COMPACT_KEEP_RECORDS,
 };
@@ -23,12 +27,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // Cache-spec answer history storage is owned end-to-end in this file: path
 // resolution, JSONL parsing, answer-only append, required field-order
 // rendering, and probabilistic compaction. Runtime `CheckRecord` construction
-// computes `visibleTreeOid` before append through
-// `VisibleTreeOidCache::staged_visible_tree_oid`; this layer preserves that
-// native Git tree OID instead of deriving a second fingerprint while writing
-// JSONL. `history_append.rs`, `history_compaction.rs`, and
-// `logging::render_answer_history_record` are thin import-compatibility
-// wrappers around these functions.
+// computes the actual `visibleTreeOid` before append in
+// `check_interrogation_records::finalize_parsed_answer`, using
+// `VisibleTreeOidCache::staged_visible_tree_oid` for the enforced q-scope; this
+// layer preserves that native Git tree OID instead of deriving a second
+// fingerprint while writing JSONL. `history_append.rs`,
+// `history_compaction.rs`, and `logging::render_answer_history_record` are thin
+// import-compatibility wrappers around these functions.
 
 static HISTORY_COMPACT_CHANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static HISTORY_COMPACT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -45,6 +50,10 @@ pub(crate) fn history_path(
 
 pub(crate) fn history_file_name() -> &'static str {
     "history.jsonl"
+}
+
+pub(crate) fn full_scope_reset_marker_file_name() -> &'static str {
+    "full-scope-reset"
 }
 
 #[cfg(test)]
@@ -97,11 +106,47 @@ pub(crate) fn parse_history_record_line(
 }
 
 fn record_has_schema_valid_answer(record: &CheckRecord) -> bool {
-    // `serde_json::<CheckRecord>` has already required the history fields with
-    // no defaults in the Cache spec prefix: observed, evidence, qScope, and
-    // visibleTreeOid. At the history-file layer, the Cache spec adds only the
-    // response one-of rule: records with `error` are not answer records.
-    record.error.is_none()
+    validate_schema_valid_answer_history_record(record).is_ok()
+}
+
+fn validate_schema_valid_answer_history_record(record: &CheckRecord) -> Result<(), String> {
+    // `serde_json::<CheckRecord>` has already required the Cache spec prefix
+    // fields with no defaults: observed, evidence, qScope, and visibleTreeOid.
+    // The history layer enforces the parts that are not expressible by the
+    // struct shape: answer/error one-of, single-line answer text, UTC
+    // timestamp, and Git object-ID syntax for visibleTreeOid.
+    if record.error.is_some() {
+        return Err("error responses are not answer history records".to_string());
+    }
+    if record.observed.trim().is_empty() || contains_line_break(&record.observed) {
+        return Err("observed answer must be a non-empty single-line string".to_string());
+    }
+    if parse_record_timestamp(&record.timestamp).is_none() {
+        return Err("timestamp must be UTC in YYYY-MM-DDTHH:MM:SSZ form".to_string());
+    }
+    if !git_object_oid_has_known_shape(&record.visible_tree_oid) {
+        return Err("visibleTreeOid must be a Git object ID hex string".to_string());
+    }
+    Ok(())
+}
+
+fn validate_appendable_answer_history_record(
+    root: &Path,
+    record: &CheckRecord,
+) -> Result<(), String> {
+    // Append-time validation checks that a runtime-produced record is a valid
+    // answer-history row and that its `visibleTreeOid` uses the repository's
+    // native object format. It intentionally does not recompute the q-scope's
+    // current visible tree here: history rows are later read when their stored
+    // qScope may describe an older Git state, and cache reuse is the layer that
+    // compares stored OIDs with freshly computed current OIDs.
+    validate_schema_valid_answer_history_record(record)?;
+    if !repository_native_object_oid_is_valid(root, &record.visible_tree_oid)? {
+        return Err(
+            "visibleTreeOid must match this repository's Git object hash algorithm".to_string(),
+        );
+    }
+    Ok(())
 }
 
 #[derive(Default)]
@@ -159,10 +204,80 @@ impl HistoryCache {
     }
 }
 
+pub(crate) fn full_scope_reset_marker_path_with_cache(
+    root: &Path,
+    expectation: &SelectedExpectation,
+    history_cache: &mut HistoryCache,
+) -> Result<PathBuf, String> {
+    Ok(history_cache
+        .path(root, expectation)?
+        .with_file_name(full_scope_reset_marker_file_name()))
+}
+
+pub(crate) fn write_full_scope_reset_marker_with_cache(
+    root: &Path,
+    expectation: &SelectedExpectation,
+    history_cache: &mut HistoryCache,
+) -> Result<(), String> {
+    let path = full_scope_reset_marker_path_with_cache(root, expectation, history_cache)?;
+    if let Some(parent) = path.parent() {
+        ensure_dir_without_symlinks(parent)?;
+    }
+    let temp_path = compact_history_temp_path(&path)?;
+    write_temp_file_then_replace(&temp_path, &path, |file| {
+        file.write_all(b"full\n")
+            .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))
+    })
+}
+
+pub(crate) fn full_scope_reset_marker_exists_with_cache(
+    root: &Path,
+    expectation: &SelectedExpectation,
+    history_cache: &mut HistoryCache,
+) -> Result<bool, String> {
+    let path = full_scope_reset_marker_path_with_cache(root, expectation, history_cache)?;
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(format!(
+                    "refusing to use symlinked full-scope reset marker {}",
+                    path.display()
+                ));
+            }
+            Ok(true)
+        }
+        Err(err)
+            if matches!(
+                err.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Ok(false)
+        }
+        Err(err) => Err(format!("failed to inspect {}: {}", path.display(), err)),
+    }
+}
+
+pub(crate) fn remove_full_scope_reset_marker_with_cache(
+    root: &Path,
+    expectation: &SelectedExpectation,
+    history_cache: &mut HistoryCache,
+) -> Result<(), String> {
+    let path = full_scope_reset_marker_path_with_cache(root, expectation, history_cache)?;
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(format!("failed to delete {}: {}", path.display(), err)),
+    }
+}
+
 pub(crate) fn render_answer_history_record(record: &CheckRecord) -> DiagnosticLogResult<String> {
-    // History records intentionally start with the Cache spec's "at least"
-    // answer-history field prefix. Extra persisted metadata follows that
-    // prefix; expectation references use the resolved full ID, never the
+    validate_schema_valid_answer_history_record(record)
+        .map_err(|message| external_log_error("render answer history record", message))?;
+    // History records intentionally start with the Cache spec's required
+    // "at least" answer-history field prefix. The spec is not a closed schema:
+    // extra persisted metadata is allowed as long as it follows that prefix.
+    // Expectation references use the resolved full ID, never the
     // display/selector prefix.
     let history = HistoryLogRecord {
         timestamp: &record.timestamp,
@@ -190,6 +305,8 @@ fn answer_history_json_line(value: &impl Serialize) -> DiagnosticLogResult<Strin
 
 #[derive(Serialize)]
 struct HistoryLogRecord<'a> {
+    // Required Cache spec prefix. Keep these fields first and in this order:
+    // timestamp, observed, evidence, qScope, visibleTreeOid.
     timestamp: &'a str,
     observed: &'a str,
     evidence: &'a str,
@@ -197,6 +314,9 @@ struct HistoryLogRecord<'a> {
     q_scope: &'a [String],
     #[serde(rename = "visibleTreeOid")]
     visible_tree_oid: &'a str,
+    // Optional cache/debug metadata. These fields are deliberately after the
+    // required prefix so they do not change the answer-history format promised
+    // by the Cache spec.
     result: CheckResult,
     id: &'a str,
     #[serde(skip_serializing_if = "str::is_empty")]
@@ -242,11 +362,11 @@ fn append_history_record_with_cache_inner(
     // qScope, visibleTreeOid. `should_compact_history` implements the
     // approximate 1-in-16 trigger, and `compact_history` retains the latest 8
     // valid JSON object records.
-    if !record_has_schema_valid_answer(record) {
-        return Err(HistoryAppendError::Message(
-            "answer history records must be schema-valid responses with answer".to_string(),
-        ));
-    }
+    validate_appendable_answer_history_record(root, record).map_err(|message| {
+        HistoryAppendError::Message(format!(
+            "answer history records must be schema-valid responses with answer: {message}"
+        ))
+    })?;
     let path = history_cache.path(root, expectation)?;
     if let Some(parent) = path.parent() {
         ensure_dir_without_symlinks(parent)?;
@@ -276,6 +396,7 @@ fn append_history_record_with_cache_inner(
             records.push(record.clone());
         }
     }
+    let _ = remove_full_scope_reset_marker_with_cache(root, expectation, history_cache);
     Ok(())
 }
 

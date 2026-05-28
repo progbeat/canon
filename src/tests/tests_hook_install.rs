@@ -108,6 +108,28 @@ fn hook_install_refuses_nonstandard_git_hooks_path() {
 }
 
 #[test]
+fn hook_install_refuses_bare_git_repository() {
+    let root = temp_home("hook-install-bare");
+    let output = Command::new("git")
+        .arg("init")
+        .arg("--bare")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let err = run_hook_install(&root).unwrap_err();
+
+    assert!(err.contains("requires a Git worktree"));
+    assert!(!root.join(".git/canon/hooks/pre-commit").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn hook_install_refuses_existing_default_pre_commit_hook() {
     let root = git_project("hook-install-default-existing");
     let default_hook = root.join(".git/hooks/pre-commit");
@@ -327,6 +349,59 @@ fn hook_uninstall_removes_interrupted_fallback_with_managed_hook_remaining() {
     let _ = fs::remove_dir_all(root);
 }
 
+#[test]
+fn hook_uninstall_fallback_cleanup_refuses_changed_hook() {
+    let root = git_project("hook-uninstall-fallback-changed");
+    let default_hook = root.join(".git/hooks/pre-commit");
+    fs::create_dir_all(default_hook.parent().unwrap()).unwrap();
+    fs::write(&default_hook, "custom hook").unwrap();
+
+    let err = remove_uninstall_fallback_pre_commit_hook(&default_hook).unwrap_err();
+
+    assert!(err.contains("content changed"));
+    assert_eq!(fs::read_to_string(&default_hook).unwrap(), "custom hook");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn hook_uninstall_fallback_cleanup_restores_hook_moved_after_race() {
+    let root = git_project("hook-uninstall-fallback-race-restore");
+    let default_hook = root.join(".git/hooks/pre-commit");
+    let temp_dir = root.join(".git/hooks/.canon-uninstall-fallback-test");
+    let moved_hook = temp_dir.join("pre-commit");
+    fs::create_dir_all(&temp_dir).unwrap();
+    fs::write(&moved_hook, "custom hook").unwrap();
+
+    let err =
+        remove_moved_uninstall_fallback_pre_commit_hook(&default_hook, &moved_hook, &temp_dir)
+            .unwrap_err();
+
+    assert!(err.contains("content changed"));
+    assert_eq!(fs::read_to_string(&default_hook).unwrap(), "custom hook");
+    assert!(!moved_hook.exists());
+    assert!(!temp_dir.exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn hook_uninstall_managed_hook_cleanup_restores_hook_moved_after_race() {
+    let root = git_project("hook-uninstall-managed-race-restore");
+    let hook_path = managed_pre_commit_hook_path(&root);
+    let temp_dir = hook_path.parent().unwrap().join(".canon-managed-hook-test");
+    let moved_hook = temp_dir.join("pre-commit");
+    fs::create_dir_all(&temp_dir).unwrap();
+    fs::write(&moved_hook, "custom hook").unwrap();
+
+    let err =
+        remove_moved_reusable_pre_commit_hook(&hook_path, &moved_hook, &temp_dir).unwrap_err();
+
+    assert!(err.contains("content changed"));
+    assert_eq!(fs::read_to_string(&hook_path).unwrap(), "custom hook");
+    assert!(!moved_hook.exists());
+    assert!(!temp_dir.exists());
+    let _ = fs::remove_dir_all(root);
+}
+
 #[cfg(unix)]
 #[test]
 fn hook_uninstall_restores_hooks_path_when_remove_fails() {
@@ -344,7 +419,7 @@ fn hook_uninstall_restores_hooks_path_when_remove_fails() {
     let err = run_hook_uninstall(&root).unwrap_err();
 
     fs::set_permissions(hook_dir, original_permissions).unwrap();
-    assert!(err.contains("failed to remove"));
+    assert!(err.contains("failed to prepare managed pre-commit hook"));
     assert!(hook_path.exists());
     assert_hooks_path_resolves_to_managed(&root);
     assert!(!root.join(".git/hooks/pre-commit").exists());
@@ -443,6 +518,47 @@ fn hook_install_refuses_default_hook_in_linked_worktree_git_dir() {
 
     assert!(err.contains("Can't safely install pre-commit hook"));
     assert!(!managed_pre_commit_hook_path(&linked).exists());
+    assert_eq!(current_git_hooks_path_for_worktree(&linked).unwrap(), None);
+    let _ = Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["worktree", "remove", "--force"])
+        .arg(&linked)
+        .output();
+    let _ = fs::remove_dir_all(root);
+    let _ = fs::remove_dir_all(linked);
+}
+
+#[test]
+fn hook_uninstall_uses_default_common_hook_path_in_linked_worktree() {
+    let root = git_project("hook-uninstall-linked-main");
+    commit_all(&root, "initial");
+    let linked = temp_home("hook-uninstall-linked-worktree");
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["worktree", "add", "--detach"])
+        .arg(&linked)
+        .arg("HEAD")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    run_hook_install(&linked).unwrap();
+    let managed_hook = managed_pre_commit_hook_path(&linked);
+    assert_eq!(
+        resolve_git_path(&linked, "hooks/pre-commit").unwrap(),
+        managed_hook
+    );
+    let default_hook = root.join(".git/hooks/pre-commit");
+
+    run_hook_uninstall(&linked).unwrap();
+
+    assert!(!managed_hook.exists());
+    assert!(!default_hook.exists());
     assert_eq!(current_git_hooks_path_for_worktree(&linked).unwrap(), None);
     let _ = Command::new("git")
         .arg("-C")

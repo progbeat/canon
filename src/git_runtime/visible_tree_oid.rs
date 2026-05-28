@@ -11,6 +11,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+// Cache-spec ownership note: this module implements only the `visibleTreeOid`
+// fingerprint. Answer-history storage, JSONL rendering, append, and compaction
+// live under `history_store`, so whole Cache-spec review must inspect those
+// modules in addition to this one.
 const HEX: &[u8; 16] = b"0123456789abcdef";
 const RAW_PATH_HEX_PREFIX: &str = "\0raw-path-hex:";
 
@@ -257,6 +261,13 @@ fn visible_tree_oid_from_entries(
     // `visibleTreeOid` is a Git-compatible tree object ID. We rebuild the scoped
     // tree from Git-reported modes/object IDs, then hash the canonical `tree
     // <len>\0<body>` bytes with the repository's object hash algorithm.
+    //
+    // The entries come from `git ls-tree -r -t`, so fully covered directories
+    // carry Git's existing tree object ID. `TreeNode::insert` preserves those as
+    // `DirectoryOid` and ignores redundant descendants, reusing Git's subtree
+    // OIDs whenever the visible tree contains a complete directory. Only the
+    // synthetic root or ancestors that Git does not already report are serialized
+    // and hashed here.
     let mut tree = TreeNode::default();
     for entry in entries {
         let parsed = parse_visible_tree_entry(entry)?;
@@ -274,6 +285,37 @@ pub(crate) fn sha1_visible_tree_oid_from_entries(entries: &[String]) -> Result<S
 enum GitObjectHashAlgorithm {
     Sha1,
     Sha256,
+}
+
+pub(crate) fn git_object_oid_has_known_shape(object_id: &str) -> bool {
+    [GitObjectHashAlgorithm::Sha1, GitObjectHashAlgorithm::Sha256]
+        .into_iter()
+        .any(|algorithm| git_object_oid_matches_algorithm(object_id, algorithm))
+}
+
+pub(crate) fn repository_native_object_oid_is_valid(
+    root: &Path,
+    object_id: &str,
+) -> Result<bool, String> {
+    Ok(git_object_oid_matches_algorithm(
+        object_id,
+        git_object_hash_algorithm(root)?,
+    ))
+}
+
+fn git_object_oid_matches_algorithm(object_id: &str, algorithm: GitObjectHashAlgorithm) -> bool {
+    object_id.len() == git_object_oid_hex_len(algorithm)
+        && object_id
+            .as_bytes()
+            .iter()
+            .all(|byte| hex_nibble(*byte).is_ok())
+}
+
+fn git_object_oid_hex_len(algorithm: GitObjectHashAlgorithm) -> usize {
+    match algorithm {
+        GitObjectHashAlgorithm::Sha1 => 40,
+        GitObjectHashAlgorithm::Sha256 => 64,
+    }
 }
 
 #[derive(Default)]

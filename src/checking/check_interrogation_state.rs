@@ -1,4 +1,4 @@
-use crate::check_types::{CheckRecord, ObservedAnswerState, SelectedExpectation};
+use crate::check_types::{CheckRecord, CheckResult, ObservedAnswerState, SelectedExpectation};
 use crate::config_types::{AgentConfig, CheckConfig};
 use crate::evaluator_config::app_server_model_key;
 use crate::evaluator_response_cache::EvaluatorResponseParseCache;
@@ -12,13 +12,31 @@ use crate::visible_tree_oid::VisibleTreeOidCache;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-pub(crate) fn should_retry_full_scope_after_restricted_insufficient_evidence(
+pub(crate) fn should_retry_full_scope_after_restricted_response(
     record: &CheckRecord,
     scope: &[String],
 ) -> bool {
-    scope != full_scope()
-        && ObservedAnswerState::from_observed(&record.observed)
-            == ObservedAnswerState::InsufficientEvidence
+    if scope == full_scope() {
+        return false;
+    }
+    if ObservedAnswerState::from_observed(&record.observed)
+        == ObservedAnswerState::InsufficientEvidence
+    {
+        return true;
+    }
+    restricted_yes_no_answer_mismatch(record)
+}
+
+fn restricted_yes_no_answer_mismatch(record: &CheckRecord) -> bool {
+    if record.result != CheckResult::Fail {
+        return false;
+    }
+    let Some(expected) = record.expected_text() else {
+        return false;
+    };
+    matches!(expected, "yes" | "no")
+        && matches!(record.observed.as_str(), "yes" | "no")
+        && record.observed != expected
 }
 
 pub(crate) fn initial_visible_scope_for_expectation(

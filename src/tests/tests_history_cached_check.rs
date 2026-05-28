@@ -251,7 +251,7 @@ expectations:
     .unwrap();
     let options = check_options(&config, &[], true, false);
     let expectation = options.selected[0].clone();
-    let old_visible_tree_oid = "old-scope".to_string();
+    let old_visible_tree_oid = stale_visible_tree_oid();
     let mut record = expectation_record(
         &config.agent,
         &expectation,
@@ -310,7 +310,7 @@ expectations:
         &expectation,
         "pass",
         "yes",
-        "old-scope".to_string(),
+        stale_visible_tree_oid(),
     );
     record.timestamp = format_record_timestamp(unix_timestamp().unwrap());
     append_history_record(&root, &expectation, &record).unwrap();
@@ -347,7 +347,7 @@ expectations:
     .unwrap();
     let options = check_options(&config, &[], true, true);
     let expectation = options.selected[0].clone();
-    let old_visible_tree_oid = "old-scope".to_string();
+    let old_visible_tree_oid = stale_visible_tree_oid();
     let mut record = expectation_record(
         &config.agent,
         &expectation,
@@ -392,7 +392,7 @@ expectations:
     let mut options = check_options(&config, &[], true, true);
     options.ignore_cooldown = true;
     let expectation = options.selected[0].clone();
-    let old_visible_tree_oid = "old-scope".to_string();
+    let old_visible_tree_oid = stale_visible_tree_oid();
     let mut record = expectation_record(
         &config.agent,
         &expectation,

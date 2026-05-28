@@ -302,7 +302,7 @@ pub(crate) fn sample_record(number: usize, result: &str) -> CheckRecord {
         evidence: "README.md has evidence".to_string(),
         scope: vec![".".to_string()],
         suggested_q_scope: None,
-        visible_tree_oid: "AAAAAAAAAAAAAAAAAAAA".to_string(),
+        visible_tree_oid: crate::tests::stale_visible_tree_oid(),
         cache_key: None,
     }
 }

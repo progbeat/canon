@@ -220,7 +220,7 @@ fn selected_expectations_use_recorded_errors_for_order() {
 }
 
 #[test]
-fn selected_expectations_use_legacy_history_errors_for_order() {
+fn selected_expectations_ignore_legacy_history_errors_for_order() {
     let root = git_project("check-order-legacy-history-errors");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1", "2"], false, true);
@@ -240,12 +240,12 @@ fn selected_expectations_use_legacy_history_errors_for_order() {
 
     let ordered = order_expectations_by_latest_non_pass(
         &root,
-        vec![first, second.clone()],
+        vec![first.clone(), second.clone()],
         &mut history_cache,
     )
     .unwrap();
 
-    assert_eq!(ordered[0].id, second.id);
+    assert_eq!(ordered[0].id, first.id);
     let _ = fs::remove_dir_all(root);
 }
 

@@ -468,7 +468,7 @@ expectations:
         &expectation,
         "pass",
         "yes",
-        "old".to_string(),
+        stale_visible_tree_oid(),
     );
     pass.timestamp = format_record_timestamp(unix_timestamp().unwrap());
     append_history_record(&root, &expectation, &pass).unwrap();

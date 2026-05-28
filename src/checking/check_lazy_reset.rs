@@ -6,9 +6,10 @@ use crate::config_types::{AgentConfig, CheckConfig};
 use crate::fs_util::{for_each_nonempty_line, write_temp_file_then_replace};
 use crate::git::resolve_git_path;
 use crate::hash::full_scope;
-use crate::history::{read_history_records_from_path, HistoryCache};
+use crate::history::{
+    read_history_records_from_path, write_full_scope_reset_marker_with_cache, HistoryCache,
+};
 use crate::history_compaction::compact_history_temp_path;
-use crate::logging::render_answer_history_record;
 use crate::logging::DiagnosticLogWriter;
 use crate::scope::sanitize_scope_for_hash;
 use serde_json::json;
@@ -259,41 +260,23 @@ fn set_expectation_scope_to_full_for_next_check(
     expectation: &SelectedExpectation,
     history_cache: &mut HistoryCache,
 ) -> Result<(), String> {
-    // `SelectedExpectation` does not store a mutable scope field. Canon's
-    // set_scope(expectation, ["."]) operation is persisted by removing newer
-    // narrowed answer records, which exposes an older full-scope seed or no
-    // reusable seed for the next `canon check`.
+    // Canon's reset_to_full_project_q_scope is represented as explicit cache
+    // state, not by rewriting answer history. While the marker exists, history
+    // reuse treats narrowed records as ineligible and uses full project scope as
+    // the next interrogation seed. A later schema-valid answer append clears the
+    // marker because that new answer has its own verified q-scope.
     let path = history_cache.path(root, expectation)?;
     if !path.exists() {
         return Ok(());
     }
-    let mut records = read_history_records_from_path(&path)?;
-    let mut removed_narrowed = false;
-    while let Some((index, scope)) = latest_reusable_record_scope(&records, expectation) {
-        if scope == full_scope() {
-            break;
-        }
-        // Lazy reset changes only the next interrogation scope seed. Removing
-        // newer narrowed answer records exposes an older full-scope seed, or no
-        // seed at all, without minting a fake full-scope cache hit. Every
-        // remaining history record keeps the visibleTreeOid that belongs to its
-        // own stored scope.
-        records.remove(index);
-        removed_narrowed = true;
-    }
-    if !removed_narrowed {
+    let records = read_history_records_from_path(&path)?;
+    let Some((_, scope)) = latest_reusable_record_scope(&records, expectation) else {
+        return Ok(());
+    };
+    if scope == full_scope() {
         return Ok(());
     }
-
-    let temp_path = compact_history_temp_path(&path)?;
-    write_temp_file_then_replace(&temp_path, &path, |file| {
-        for record in records {
-            let line = render_answer_history_record(&record).map_err(|err| err.to_string())?;
-            file.write_all(line.as_bytes())
-                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
-        }
-        Ok(())
-    })?;
+    write_full_scope_reset_marker_with_cache(root, expectation, history_cache)?;
     history_cache.records.remove(&path);
     Ok(())
 }

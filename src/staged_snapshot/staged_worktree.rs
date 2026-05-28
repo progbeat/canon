@@ -12,12 +12,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct ScopeMaterializationKey {
-    scope: Vec<String>,
-    deny_patterns: Vec<String>,
-}
-
 pub(crate) struct StagedWorktreeView {
     source_root: PathBuf,
     materialization_root: PathBuf,
@@ -26,7 +20,6 @@ pub(crate) struct StagedWorktreeView {
     files: Vec<StagedTrackedFile>,
     lazy_trees_by_deny: RefCell<BTreeMap<Vec<String>, PathBuf>>,
     unpacked_paths_by_deny: RefCell<BTreeMap<Vec<String>, BTreeSet<Vec<u8>>>>,
-    materialized_roots: RefCell<BTreeMap<ScopeMaterializationKey, PathBuf>>,
     blob_reader: RefCell<Option<GitBlobReader>>,
     next_lazy_id: Cell<u64>,
     next_scope_id: Cell<u64>,
@@ -69,7 +62,6 @@ impl StagedWorktreeView {
             files,
             lazy_trees_by_deny: RefCell::new(BTreeMap::new()),
             unpacked_paths_by_deny: RefCell::new(BTreeMap::new()),
-            materialized_roots: RefCell::new(BTreeMap::new()),
             blob_reader: RefCell::new(None),
             next_lazy_id: Cell::new(0),
             next_scope_id: Cell::new(0),
@@ -88,26 +80,10 @@ impl StagedWorktreeView {
     ) -> Result<PathBuf, String> {
         let scope = sanitize_scope(scope, agent)?;
         let deny_patterns = sorted_effective_ignore_patterns(agent);
-        let key = ScopeMaterializationKey {
-            scope,
-            deny_patterns,
-        };
-        if let Some(root) = self.materialized_roots.borrow().get(&key) {
-            return Ok(root.clone());
-        }
-
-        let visible_files = self.visible_files(&key.scope, &key.deny_patterns);
-        let lazy_tree = self.lazy_tree_for_deny_patterns(&key.deny_patterns)?;
-        self.unpack_missing_files(&lazy_tree, &key.deny_patterns, &visible_files)?;
-        let root = if key.scope == full_scope() {
-            lazy_tree
-        } else {
-            self.hardlink_scope_root(&lazy_tree, &visible_files)?
-        };
-        self.materialized_roots
-            .borrow_mut()
-            .insert(key, root.clone());
-        Ok(root)
+        let visible_files = self.visible_files(&scope, &deny_patterns);
+        let lazy_tree = self.lazy_tree_for_deny_patterns(&deny_patterns)?;
+        self.unpack_missing_files(&lazy_tree, &deny_patterns, &visible_files)?;
+        self.copy_scope_root(&lazy_tree, &visible_files)
     }
 
     fn visible_files(&self, scope: &[String], deny_patterns: &[String]) -> Vec<StagedTrackedFile> {
@@ -192,7 +168,7 @@ impl StagedWorktreeView {
             .read_blobs(object_ids)
     }
 
-    fn hardlink_scope_root(
+    fn copy_scope_root(
         &self,
         lazy_tree: &Path,
         files: &[StagedTrackedFile],
@@ -220,14 +196,15 @@ impl StagedWorktreeView {
                     )
                 })?;
             }
-            fs::hard_link(&source, &target).map_err(|err| {
+            fs::copy(&source, &target).map_err(|err| {
                 format!(
-                    "failed to hardlink evaluator scope file {} to {}: {}",
+                    "failed to copy evaluator scope file {} to {}: {}",
                     source.display(),
                     target.display(),
                     err
                 )
             })?;
+            platform::set_materialized_file_permissions(&target, &file.mode)?;
         }
         Ok(scope_root)
     }

@@ -1071,6 +1071,8 @@ fn successful_narrowing_logs_stats_and_one_final_result() {
     assert_eq!(log.matches(r#""event":"expectation.result""#).count(), 1);
     assert_eq!(log.matches(r#""event":"interrogation.result""#).count(), 2);
     assert!(log.contains(r#""event":"scope.narrowing""#));
+    assert!(log.contains(r#""originalScope":["."]"#));
+    assert!(log.contains(r#""proposedScope":["src"]"#));
     assert!(log.contains(r#""accepted":true"#));
     let _ = fs::remove_dir_all(root);
 }
@@ -1114,6 +1116,8 @@ fn failed_narrowing_logs_stats_and_keeps_wider_final_result() {
     assert_eq!(log.matches(r#""event":"expectation.result""#).count(), 1);
     assert_eq!(log.matches(r#""event":"interrogation.result""#).count(), 2);
     assert!(log.contains(r#""event":"scope.narrowing""#));
+    assert!(log.contains(r#""originalScope":["."]"#));
+    assert!(log.contains(r#""proposedScope":["src"]"#));
     assert!(log.contains(r#""accepted":true"#));
     let _ = fs::remove_dir_all(root);
 }

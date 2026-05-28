@@ -61,7 +61,7 @@ expectations:
         },
     )
     .unwrap();
-    append_history_record(
+    append_legacy_history_record(
         &root,
         &expectation,
         &CheckRecord {
@@ -77,11 +77,10 @@ expectations:
             evidence: "invalid timestamp fail".to_string(),
             scope: full_scope(),
             suggested_q_scope: None,
-            visible_tree_oid: "newer".to_string(),
+            visible_tree_oid: stale_visible_tree_oid(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
-    )
-    .unwrap();
+    );
     let mut history_cache = HistoryCache::new();
     assert!(
         cooldown_history_record(&root, &config.agent, &expectation, &mut history_cache, 30)
@@ -329,7 +328,7 @@ expectations:
 }
 
 #[test]
-fn cooldown_reuse_blocks_on_latest_answer_record_with_invalid_timestamp() {
+fn cooldown_reuse_skips_latest_answer_record_with_invalid_timestamp() {
     let root = git_project("history-cooldown-invalid-timestamp");
     let config = parse_check_config(
         r#"
@@ -368,7 +367,7 @@ expectations:
         },
     )
     .unwrap();
-    append_history_record(
+    append_legacy_history_record(
         &root,
         &expectation,
         &CheckRecord {
@@ -384,17 +383,17 @@ expectations:
             evidence: "invalid timestamp pass".to_string(),
             scope: full_scope(),
             suggested_q_scope: None,
-            visible_tree_oid: "new".to_string(),
+            visible_tree_oid: stale_visible_tree_oid(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
-    )
-    .unwrap();
+    );
     let mut history_cache = HistoryCache::new();
-    assert!(
+    let record =
         cooldown_history_record(&root, &config.agent, &expectation, &mut history_cache, 30)
             .unwrap()
-            .is_none()
-    );
+            .unwrap();
+    assert!(record.passed());
+    assert_eq!(record.evidence, "old pass");
     let _ = fs::remove_dir_all(root);
 }
 

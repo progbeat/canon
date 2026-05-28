@@ -24,6 +24,9 @@ fn lazy_full_scope_reset_sets_only_sampled_narrowed_history_to_full_scope() {
     narrowed_record.scope = second_scope;
     append_history_record(&root, &expectations[1], &narrowed_record).unwrap();
     let reset_history_path = history_path(&root, &expectations[1]).unwrap();
+    let reset_marker_path =
+        full_scope_reset_marker_path_with_cache(&root, &expectations[1], &mut HistoryCache::new())
+            .unwrap();
 
     set_non_selected_expectation_scopes_to_full(&root, &[expectations[1].clone()]).unwrap();
 
@@ -33,7 +36,9 @@ fn lazy_full_scope_reset_sets_only_sampled_narrowed_history_to_full_scope() {
     );
     assert!(reset_history_path.exists());
     let reset_records = read_history_records(&root, &expectations[1]).unwrap();
-    assert!(reset_records.is_empty());
+    assert_eq!(reset_records.len(), 1);
+    assert_eq!(reset_records[0].scope, vec!["README.md".to_string()]);
+    assert!(reset_marker_path.exists());
     assert!(
         same_tree_history_record(&root, &config.agent, &expectations[1])
             .unwrap()
@@ -48,7 +53,7 @@ fn lazy_full_scope_reset_sets_only_sampled_narrowed_history_to_full_scope() {
             &mut history_cache,
         )
         .unwrap(),
-        None
+        Some(full_scope())
     );
     assert_eq!(
         latest_history_scope_with_cache(
@@ -81,6 +86,9 @@ fn lazy_full_scope_reset_schedule_applies_on_next_check_start() {
     narrowed_record.scope = narrowed_scope;
     append_history_record(&root, &expectations[1], &narrowed_record).unwrap();
     let reset_history_path = history_path(&root, &expectations[1]).unwrap();
+    let reset_marker_path =
+        full_scope_reset_marker_path_with_cache(&root, &expectations[1], &mut HistoryCache::new())
+            .unwrap();
 
     schedule_lazy_full_scope_resets(&root, &[expectations[1].clone()]).unwrap();
 
@@ -93,13 +101,51 @@ fn lazy_full_scope_reset_schedule_applies_on_next_check_start() {
         1
     );
     assert!(reset_history_path.exists());
-    assert!(read_history_records(&root, &expectations[1])
-        .unwrap()
-        .is_empty());
+    assert_eq!(
+        read_history_records(&root, &expectations[1]).unwrap().len(),
+        1
+    );
+    assert!(reset_marker_path.exists());
     assert_eq!(
         apply_scheduled_lazy_full_scope_resets(&root, &config, &identities).unwrap(),
         0
     );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn lazy_full_scope_reset_marker_clears_after_new_answer_history_append() {
+    let root = git_project("check-lazy-reset-marker-clears");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let identities = expectation_identities(&config).unwrap();
+    let expectations = check_options(&config, &[], false, true).selected;
+    let narrowed_scope = vec!["README.md".to_string()];
+    let mut narrowed_record = expectation_record(
+        &config.agent,
+        &expectations[1],
+        "pass",
+        "no",
+        staged_visible_tree_oid(&root, &config.agent, &narrowed_scope).unwrap(),
+    );
+    narrowed_record.scope = narrowed_scope;
+    append_history_record(&root, &expectations[1], &narrowed_record).unwrap();
+    let marker_path =
+        full_scope_reset_marker_path_with_cache(&root, &expectations[1], &mut HistoryCache::new())
+            .unwrap();
+    schedule_lazy_full_scope_resets(&root, &[expectations[1].clone()]).unwrap();
+    apply_scheduled_lazy_full_scope_resets(&root, &config, &identities).unwrap();
+    assert!(marker_path.exists());
+
+    let full_record = expectation_record(
+        &config.agent,
+        &expectations[1],
+        "pass",
+        "no",
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap(),
+    );
+    append_history_record(&root, &expectations[1], &full_record).unwrap();
+
+    assert!(!marker_path.exists());
     let _ = fs::remove_dir_all(root);
 }
 
@@ -241,7 +287,7 @@ fn lazy_full_scope_reset_preserves_existing_full_scope_pass_when_resetting_narro
     set_non_selected_expectation_scopes_to_full(&root, std::slice::from_ref(&expectation)).unwrap();
 
     let records = read_history_records(&root, &expectation).unwrap();
-    assert_eq!(records.len(), 1);
+    assert_eq!(records.len(), 2);
     assert_eq!(records[0].scope, full_scope());
     assert_eq!(
         same_tree_history_record(&root, &config.agent, &expectation)

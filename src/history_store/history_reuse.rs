@@ -2,7 +2,8 @@
 // plus current visibleTreeOid matching.
 use crate::check_types::{CheckRecord, CheckResult, ObservedAnswerState, SelectedExpectation};
 use crate::config_types::AgentConfig;
-use crate::history::HistoryCache;
+use crate::hash::full_scope;
+use crate::history::{full_scope_reset_marker_exists_with_cache, HistoryCache};
 use crate::scope::sanitize_scope_for_hash;
 use crate::time::parse_record_timestamp;
 use crate::visible_tree_oid::VisibleTreeOidCache;
@@ -48,6 +49,8 @@ pub(crate) fn latest_history_record_matching_visible_tree_oid(
     history_cache: &mut HistoryCache,
     mut current_visible_tree_oid_for_scope: impl FnMut(&[String]) -> Result<Option<String>, String>,
 ) -> Result<Option<CheckRecord>, String> {
+    let force_full_scope =
+        full_scope_reset_marker_exists_with_cache(root, expectation, history_cache)?;
     // Cache lookup follows the Cache spec's answer-history contract:
     // schema-valid error records are not answer history, so any legacy
     // non-answer rows are skipped before applying the newest-to-oldest
@@ -60,6 +63,9 @@ pub(crate) fn latest_history_record_matching_visible_tree_oid(
             let Ok(scope) = sanitize_scope_for_hash(&record.scope) else {
                 return Ok(HistoryRecordScan::Continue);
             };
+            if force_full_scope && scope != full_scope() {
+                return Ok(HistoryRecordScan::Continue);
+            }
             let Some(current_visible_tree_oid) = current_visible_tree_oid_for_scope(&scope)? else {
                 return Ok(HistoryRecordScan::Continue);
             };
@@ -82,11 +88,18 @@ pub(crate) fn cooldown_history_record(
     let Some(cooldown) = expectation.cooldown else {
         return Ok(None);
     };
+    let force_full_scope =
+        full_scope_reset_marker_exists_with_cache(root, expectation, history_cache)?;
     let record = scan_latest_history_records(root, expectation, history_cache, |record| {
         // Cooldown keys off the latest answer history record. Legacy non-answer
         // rows are skipped here, while a newer valid fail still blocks cooldown
         // reuse of an older pass.
         if !is_reusable_history_record_for_expected(&record, &expectation.a) {
+            return Ok(HistoryRecordScan::Continue);
+        }
+        if force_full_scope
+            && sanitize_scope_for_hash(&record.scope).is_ok_and(|scope| scope != full_scope())
+        {
             return Ok(HistoryRecordScan::Continue);
         }
         let Some(timestamp) = parse_record_timestamp(&record.timestamp) else {
@@ -138,6 +151,9 @@ pub(crate) fn latest_history_scope_with_cache(
     expectation: &SelectedExpectation,
     history_cache: &mut HistoryCache,
 ) -> Result<Option<Vec<String>>, String> {
+    if full_scope_reset_marker_exists_with_cache(root, expectation, history_cache)? {
+        return Ok(Some(full_scope()));
+    }
     // Expectation-mode `canon check` calls this before each fresh interrogation.
     // This returns only an enforced-scope seed; it is not a cached check result
     // and does not let callers skip evaluator work.

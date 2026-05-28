@@ -284,7 +284,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 &mut diagnostic_log,
                 &expectation.id,
                 &enforced_scope,
-                &record_scope,
+                &verification_scope,
                 accepted,
                 &initial_record,
                 &narrowed.record,

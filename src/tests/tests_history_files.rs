@@ -130,11 +130,10 @@ fn history_reader_skips_malformed_lines() {
 fn history_parser_accepts_required_prefix_records() {
     let line = serde_json::to_string(&json!({
         "timestamp": "1970-01-01T00:00:00Z",
-        "result": "pass",
         "observed": "yes",
         "evidence": "cached answer",
         "qScope": ["."],
-        "visibleTreeOid": "AAAAAAAAAAAAAAAAAAAA"
+        "visibleTreeOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     }))
     .unwrap();
 
@@ -142,8 +141,12 @@ fn history_parser_accepts_required_prefix_records() {
 
     assert_eq!(record.prompt, None);
     assert_eq!(record.expected, None);
+    assert_eq!(record.result, CheckResult::Fail);
     assert_eq!(record.observed, "yes");
-    assert_eq!(record.visible_tree_oid, "AAAAAAAAAAAAAAAAAAAA");
+    assert_eq!(
+        record.visible_tree_oid,
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
 }
 
 #[test]
@@ -163,7 +166,7 @@ fn history_parser_accepts_legacy_scope_records() {
         "observed": "yes",
         "evidence": "cached answer",
         "scope": ["."],
-        "visibleTreeOid": "AAAAAAAAAAAAAAAAAAAA"
+        "visibleTreeOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     }))
     .unwrap();
 
@@ -180,13 +183,16 @@ fn history_parser_accepts_legacy_scope_tree_oid_records() {
         "observed": "yes",
         "evidence": "cached answer",
         "scope": ["."],
-        "scopeTreeOid": "BBBBBBBBBBBBBBBBBBBB"
+        "scopeTreeOid": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     }))
     .unwrap();
 
     let record = parse_history_record_line(Path::new("history.jsonl"), 1, &line).unwrap();
 
-    assert_eq!(record.visible_tree_oid, "BBBBBBBBBBBBBBBBBBBB");
+    assert_eq!(
+        record.visible_tree_oid,
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    );
 }
 
 #[test]
@@ -197,13 +203,16 @@ fn history_parser_accepts_legacy_scope_hash_records() {
         "observed": "yes",
         "evidence": "cached answer",
         "scope": ["."],
-        "scopeHash": "CCCCCCCCCCCCCCCCCCCC"
+        "scopeHash": "cccccccccccccccccccccccccccccccccccccccc"
     }))
     .unwrap();
 
     let record = parse_history_record_line(Path::new("history.jsonl"), 1, &line).unwrap();
 
-    assert_eq!(record.visible_tree_oid, "CCCCCCCCCCCCCCCCCCCC");
+    assert_eq!(
+        record.visible_tree_oid,
+        "cccccccccccccccccccccccccccccccccccccccc"
+    );
 }
 
 #[test]
@@ -503,7 +512,7 @@ fn error_history_record_line() -> String {
         "error": ERROR_INVALID_QUESTION,
         "evidence": "invalid question",
         "qScope": ["."],
-        "visibleTreeOid": "EEEEEEEEEEEEEEEEEEEE"
+        "visibleTreeOid": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
     }))
     .unwrap()
 }

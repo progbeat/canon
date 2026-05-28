@@ -162,6 +162,70 @@ fn staged_worktree_view_materializes_restricted_scope_without_non_scoped_files()
 }
 
 #[test]
+fn staged_worktree_view_scope_writes_do_not_poison_later_materializations() {
+    let root = git_project("staged-snapshot-scope-write-isolation");
+    fs::write(root.join("a.txt"), "GOOD\n").unwrap();
+    fs::write(root.join("b.txt"), "B\n").unwrap();
+    Command::new("git")
+        .args(["add", "a.txt", "b.txt"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let staged_view = StagedWorktreeView::apply(&root).unwrap();
+
+    let first_scope = staged_view
+        .materialize_scope(&empty_test_agent(), &["a.txt".to_string()])
+        .unwrap();
+    fs::write(first_scope.join("a.txt"), "BAD\n").unwrap();
+
+    let second_scope = staged_view
+        .materialize_scope(
+            &empty_test_agent(),
+            &["a.txt".to_string(), "b.txt".to_string()],
+        )
+        .unwrap();
+    let repeated_first_scope = staged_view
+        .materialize_scope(&empty_test_agent(), &["a.txt".to_string()])
+        .unwrap();
+
+    assert_eq!(
+        fs::read_to_string(second_scope.join("a.txt")).unwrap(),
+        "GOOD\n"
+    );
+    assert_eq!(
+        fs::read_to_string(repeated_first_scope.join("a.txt")).unwrap(),
+        "GOOD\n"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn staged_worktree_view_full_scope_writes_do_not_poison_restricted_materialization() {
+    let root = git_project("staged-snapshot-full-write-isolation");
+    fs::write(root.join("a.txt"), "GOOD\n").unwrap();
+    Command::new("git")
+        .args(["add", "a.txt"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let staged_view = StagedWorktreeView::apply(&root).unwrap();
+
+    let full = staged_view
+        .materialize_scope(&empty_test_agent(), &full_scope())
+        .unwrap();
+    fs::write(full.join("a.txt"), "BAD\n").unwrap();
+    let restricted = staged_view
+        .materialize_scope(&empty_test_agent(), &["a.txt".to_string()])
+        .unwrap();
+
+    assert_eq!(
+        fs::read_to_string(restricted.join("a.txt")).unwrap(),
+        "GOOD\n"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn staged_worktree_view_removes_git_metadata_when_git_is_denied() {
     let root = git_project("staged-snapshot-deny-git");
     fs::write(root.join("README.md"), "staged\n").unwrap();
