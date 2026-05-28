@@ -158,6 +158,10 @@ pub(crate) fn evaluator_runtime_permissions() -> Vec<(String, String)> {
     .into_iter()
     .map(|path| (path.to_string(), "read".to_string()))
     .collect::<Vec<_>>();
+    deny_runtime_path(&mut permissions, ":tmpdir");
+    deny_runtime_path(&mut permissions, ":slash_tmp");
+    deny_runtime_tree(&mut permissions, "/tmp");
+    deny_runtime_tree(&mut permissions, "/private/tmp");
     deny_runtime_tree(&mut permissions, "~/.codex/sessions");
     deny_runtime_tree(&mut permissions, "~/.codex/memories");
     if let Some(home) = env::var_os("HOME").and_then(|home| home.into_string().ok()) {
@@ -166,6 +170,10 @@ pub(crate) fn evaluator_runtime_permissions() -> Vec<(String, String)> {
         deny_runtime_tree(&mut permissions, &format!("{}/memories", codex_home));
     }
     permissions
+}
+
+fn deny_runtime_path(permissions: &mut Vec<(String, String)>, path: &str) {
+    permissions.push((path.to_string(), FILESYSTEM_DENY.to_string()));
 }
 
 fn deny_runtime_tree(permissions: &mut Vec<(String, String)>, path: &str) {

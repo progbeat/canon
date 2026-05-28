@@ -48,15 +48,30 @@ fn evaluator_permissions_allow_only_materialized_working_tree_without_scope_filt
     assert!(config["permissions"]["canon_check"]["filesystem"]
         .get("~/.codex/tmp/**")
         .is_none());
-    assert!(config["permissions"]["canon_check"]["filesystem"]
-        .get(":tmpdir")
-        .is_none());
-    assert!(config["permissions"]["canon_check"]["filesystem"]
-        .get(":slash_tmp")
-        .is_none());
-    assert!(config["permissions"]["canon_check"]["filesystem"]
-        .get("/private/tmp/**")
-        .is_none());
+    assert_eq!(
+        config["permissions"]["canon_check"]["filesystem"][":tmpdir"],
+        "deny"
+    );
+    assert_eq!(
+        config["permissions"]["canon_check"]["filesystem"][":slash_tmp"],
+        "deny"
+    );
+    assert_eq!(
+        config["permissions"]["canon_check"]["filesystem"]["/tmp"],
+        "deny"
+    );
+    assert_eq!(
+        config["permissions"]["canon_check"]["filesystem"]["/tmp/**"],
+        "deny"
+    );
+    assert_eq!(
+        config["permissions"]["canon_check"]["filesystem"]["/private/tmp"],
+        "deny"
+    );
+    assert_eq!(
+        config["permissions"]["canon_check"]["filesystem"]["/private/tmp/**"],
+        "deny"
+    );
     assert_eq!(
         config["permissions"]["canon_check"]["filesystem"]["~/.codex/sessions"],
         "deny"
@@ -315,9 +330,12 @@ fn app_server_starts_with_plugins_disabled_by_default() {
     assert!(!filesystem_arg.contains(r#""target/**"="deny""#));
     assert!(filesystem_arg.contains(r#"":root"="read""#));
     assert!(filesystem_arg.contains(r#"":minimal"="read""#));
-    assert!(!filesystem_arg.contains(r#"":tmpdir""#));
-    assert!(!filesystem_arg.contains(r#"":slash_tmp""#));
-    assert!(!filesystem_arg.contains(r#""/private/tmp/**""#));
+    assert!(filesystem_arg.contains(r#"":tmpdir"="deny""#));
+    assert!(filesystem_arg.contains(r#"":slash_tmp"="deny""#));
+    assert!(filesystem_arg.contains(r#""/tmp"="deny""#));
+    assert!(filesystem_arg.contains(r#""/tmp/**"="deny""#));
+    assert!(filesystem_arg.contains(r#""/private/tmp"="deny""#));
+    assert!(filesystem_arg.contains(r#""/private/tmp/**"="deny""#));
     assert!(!filesystem_arg.contains(r#""~/.codex/tmp/**""#));
     assert!(filesystem_arg.contains(r#""glob_scan_max_depth"=32"#));
     assert!(filesystem_arg.contains(r#""~/.codex/sessions"="deny""#));
