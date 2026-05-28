@@ -97,18 +97,18 @@ expectations:
     assert!(instructions.contains("no restarted JSON"));
     assert!(instructions.contains("Do not escape ordinary punctuation"));
     assert!(instructions.contains("Prefer `rg` and `rg --files`"));
-    assert!(instructions.contains("project-relative refs enclosed in backticks"));
+    assert!(instructions.contains("file paths relative to the project root"));
     assert!(instructions.contains("question text itself contains all facts"));
-    assert!(instructions.contains("proxy evidence is prohibited"));
+    assert!(instructions.contains("Do not cite proxy evidence"));
     assert!(instructions.contains("qScopeSuggestion"));
-    assert!(instructions.contains("prefer specific files over directories"));
+    assert!(instructions.contains("Prefer specific files over directories"));
     assert!(instructions.contains("answer and justify the whole question"));
     assert!(instructions.contains("files missing from the bottom path list"));
     assert!(instructions.contains("whether you can read a specific path"));
     assert!(instructions.contains("whether docs match code"));
-    assert!(instructions.contains("direct evidence from the relevant files"));
+    assert!(instructions.contains("available files and question text do not prove an answer"));
     assert!(instructions.contains("Project path list: [\".\"]"));
-    assert!(instructions.contains("Answer-selection policy:"));
+    assert!(instructions.contains("When choosing `answer` or `error`:"));
     assert!(!instructions.contains("Instruction-boundary policy"));
 }
 
