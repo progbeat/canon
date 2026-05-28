@@ -162,10 +162,12 @@ pub(crate) fn q_scope_suggestion_should_get_independent_verification(
     Ok(suggested_count.saturating_mul(4) <= current_count.saturating_mul(3))
 }
 
-pub(crate) fn narrowed_scope_is_accepted(wide: &CheckRecord, narrowed: &CheckRecord) -> bool {
-    // Canon trusts a q-scope suggestion only after an independent
-    // interrogation under that scope returns the same schema-valid answer.
-    is_reusable_history_record(narrowed) && narrowed.observed == wide.observed
+pub(crate) fn narrowed_scope_is_accepted(narrowed: &CheckRecord) -> bool {
+    // Interrogation Policy defines the runtime acceptance criterion: an
+    // independent verification under the suggested scope must return a
+    // schema-valid response with `answer`. It does not require Canon to prove
+    // that the suggestion is the smallest possible sufficient q-scope.
+    is_reusable_history_record(narrowed)
 }
 
 pub(crate) fn restore_record_to_enforced_scope(

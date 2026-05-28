@@ -13,14 +13,13 @@ use crate::scope::sanitize_scope;
 #[derive(Clone, Copy)]
 pub(crate) struct QueryRequest<'a> {
     pub(crate) question: &'a str,
-    pub(crate) expected_answer: Option<&'a str>,
     pub(crate) enforced_scope: &'a [String],
 }
 
 pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
     runtime: &CheckRuntime<'_>,
     question: &str,
-    expected_answer: Option<&str>,
+    _expected_answer: Option<&str>,
     enforced_scope: &[String],
     runner: &mut R,
     diagnostic_log: Option<&mut DiagnosticLogWriter>,
@@ -37,7 +36,6 @@ pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
                 runtime,
                 QueryRequest {
                     question,
-                    expected_answer,
                     enforced_scope,
                 },
                 runner,
@@ -91,11 +89,7 @@ pub(crate) fn ask_query_with_model<R: EvaluatorRunner>(
             model,
         );
         if let Ok(narrowed) = narrowed {
-            if query_narrowed_answer_is_accepted(
-                &result.answer,
-                &narrowed.answer,
-                query.expected_answer,
-            ) {
+            if query_narrowed_answer_is_accepted(&narrowed.answer) {
                 result = narrowed;
             } else {
                 result.answer.q_scope_suggestion = None;
@@ -164,24 +158,11 @@ fn query_should_verify_narrowing(
     .map_err(EvaluatorError::from)
 }
 
-fn query_narrowed_answer_is_accepted(
-    wide: &ParsedAnswer,
-    narrowed: &ParsedAnswer,
-    expected_answer: Option<&str>,
-) -> bool {
-    if !matches!(
+fn query_narrowed_answer_is_accepted(narrowed: &ParsedAnswer) -> bool {
+    matches!(
         ObservedAnswerState::from_observed(&narrowed.answer),
         ObservedAnswerState::Answer
-    ) {
-        return false;
-    }
-    if narrowed.answer == wide.answer {
-        return true;
-    }
-    let Some(expected_answer) = expected_answer else {
-        return false;
-    };
-    wide.answer != expected_answer && narrowed.answer != expected_answer
+    )
 }
 
 fn query_human_review_reason(result: &QueryResult) -> Option<&'static str> {

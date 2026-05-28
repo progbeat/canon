@@ -185,8 +185,8 @@ fn reusable_history_record_with_cache_rechecks_current_visible_tree_oid() {
 }
 
 #[test]
-fn same_tree_reuse_uses_latest_q_scope_for_current_visible_tree_oid() {
-    let root = git_project("history-reuse-latest-q-scope");
+fn same_tree_reuse_checks_each_record_scope_visible_tree_oid() {
+    let root = git_project("history-reuse-record-q-scope");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let expectation = check_options(&config, &["1"], false, true)
         .selected
@@ -218,7 +218,9 @@ fn same_tree_reuse_uses_latest_q_scope_for_current_visible_tree_oid() {
 
     let record = same_tree_history_record(&root, &config.agent, &expectation).unwrap();
 
-    assert!(record.is_none());
+    let record = record.unwrap();
+    assert_eq!(record.observed, "no");
+    assert_eq!(record.scope, vec!["src/main.rs".to_string()]);
     let _ = fs::remove_dir_all(root);
 }
 

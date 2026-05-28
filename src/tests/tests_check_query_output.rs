@@ -854,8 +854,8 @@ fn query_mode_accepts_narrowed_incorrect_answer_when_expected_is_known() {
 }
 
 #[test]
-fn query_mode_rejects_changed_narrowing_when_wide_matches_known_expected() {
-    let root = git_project("query-mode-known-expected-rejected-narrowing");
+fn query_mode_accepts_changed_narrowing_when_wide_matches_known_expected() {
+    let root = git_project("query-mode-known-expected-changed-narrowing");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let mut runner = FakeRunner::new(&[
         &answer("yes", "full scope passes", &["src"]),
@@ -875,14 +875,12 @@ fn query_mode_rejects_changed_narrowing_when_wide_matches_known_expected() {
     )
     .unwrap();
 
-    assert_eq!(result.answer.answer, "yes");
-    assert_eq!(result.answer.evidence, "`src/main.rs`: full scope passes");
-    assert_eq!(result.answer.scope, full_scope());
-    assert_eq!(result.answer.q_scope_suggestion, None);
+    assert_eq!(result.answer.answer, "no");
     assert_eq!(
-        render_query_output(&result.answer),
-        "Observed: yes\nEvidence: `src/main.rs`: full scope passes\n"
+        result.answer.evidence,
+        "`src/main.rs`: src/main.rs changes the answer"
     );
+    assert_eq!(result.answer.scope, vec!["src".to_string()]);
     assert_eq!(
         runner.start_scopes,
         vec![full_scope(), vec!["src".to_string()]]
@@ -891,7 +889,7 @@ fn query_mode_rejects_changed_narrowing_when_wide_matches_known_expected() {
 }
 
 #[test]
-fn query_mode_rejects_changed_narrowing_when_expected_is_unknown() {
+fn query_mode_accepts_changed_narrowing_when_expected_is_unknown() {
     let root = git_project("query-mode-unknown-expected-narrowing");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let mut runner = FakeRunner::new(&[
@@ -912,14 +910,12 @@ fn query_mode_rejects_changed_narrowing_when_expected_is_unknown() {
     )
     .unwrap();
 
-    assert_eq!(result.answer.answer, "yes");
-    assert_eq!(result.answer.evidence, "`src/main.rs`: full scope answer");
-    assert_eq!(result.answer.scope, full_scope());
-    assert_eq!(result.answer.q_scope_suggestion, None);
+    assert_eq!(result.answer.answer, "no");
     assert_eq!(
-        render_query_output(&result.answer),
-        "Observed: yes\nEvidence: `src/main.rs`: full scope answer\n"
+        result.answer.evidence,
+        "`src/main.rs`: changed narrow answer"
     );
+    assert_eq!(result.answer.scope, vec!["src".to_string()]);
     assert_eq!(
         runner.start_scopes,
         vec![full_scope(), vec!["src".to_string()]]
@@ -1204,8 +1200,8 @@ fn narrowing_skips_suggestions_outside_enforced_scope() {
 }
 
 #[test]
-fn failed_narrowing_logs_stats_and_keeps_wider_final_result() {
-    let root = git_project("narrowing-fail");
+fn changed_narrowing_logs_stats_and_uses_narrowed_final_result() {
+    let root = git_project("narrowing-changed-answer");
     enable_diagnostic_logs(&root);
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
@@ -1228,22 +1224,22 @@ fn failed_narrowing_logs_stats_and_keeps_wider_final_result() {
     .unwrap();
 
     assert_eq!(report.narrowing.attempted, 1);
-    assert_eq!(report.narrowing.accepted, 0);
-    assert_eq!(report.narrowing.rejected, 1);
-    assert_eq!(report.records[0].observed, "no");
-    assert_eq!(report.records[0].evidence, "`src/main.rs`: full answer");
-    assert_eq!(report.records[0].scope, full_scope());
+    assert_eq!(report.narrowing.accepted, 1);
+    assert_eq!(report.narrowing.rejected, 0);
+    assert_eq!(report.records[0].observed, "yes");
+    assert_eq!(report.records[0].evidence, "`src/main.rs`: narrow answer");
+    assert_eq!(report.records[0].scope, vec!["src".to_string()]);
     let history = read_history_records(&root, &expectation).unwrap();
     assert_eq!(history.len(), 1);
-    assert_eq!(history[0].observed, "no");
-    assert_eq!(history[0].evidence, "`src/main.rs`: full answer");
-    assert_eq!(history[0].scope, full_scope());
+    assert_eq!(history[0].observed, "yes");
+    assert_eq!(history[0].evidence, "`src/main.rs`: narrow answer");
+    assert_eq!(history[0].scope, vec!["src".to_string()]);
     let log = fs::read_to_string(diagnostic_log.path()).unwrap();
     assert_eq!(log.matches(r#""event":"expectation.result""#).count(), 1);
     assert_eq!(log.matches(r#""event":"interrogation.result""#).count(), 2);
     assert!(log.contains(r#""event":"scope.narrowing""#));
     assert!(log.contains(r#""originalScope":["."]"#));
     assert!(log.contains(r#""proposedScope":["src"]"#));
-    assert!(log.contains(r#""accepted":false"#));
+    assert!(log.contains(r#""accepted":true"#));
     let _ = fs::remove_dir_all(root);
 }

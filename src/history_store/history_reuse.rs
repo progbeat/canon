@@ -33,35 +33,21 @@ pub(crate) fn same_tree_history_record_with_cache(
     history_cache: &mut HistoryCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<Option<CheckRecord>, String> {
-    let current_scope = latest_history_scope_with_cache(root, agent, expectation, history_cache)?;
-    latest_history_record_matching_visible_tree_oid(
-        root,
-        expectation,
-        history_cache,
-        current_scope.as_deref(),
-        |scope| {
-            visible_tree_oid_cache
-                .staged_visible_tree_oid(root, agent, scope)
-                .map(Some)
-        },
-    )
+    latest_history_record_matching_visible_tree_oid(root, expectation, history_cache, |scope| {
+        visible_tree_oid_cache
+            .staged_visible_tree_oid(root, agent, scope)
+            .map(Some)
+    })
 }
 
 pub(crate) fn latest_history_record_matching_visible_tree_oid(
     root: &Path,
     expectation: &SelectedExpectation,
     history_cache: &mut HistoryCache,
-    current_scope: Option<&[String]>,
     mut current_visible_tree_oid_for_scope: impl FnMut(&[String]) -> Result<Option<String>, String>,
 ) -> Result<Option<CheckRecord>, String> {
     let force_full_scope =
         full_scope_reset_marker_exists_with_cache(root, expectation, history_cache)?;
-    let Some(current_scope) = current_scope else {
-        return Ok(None);
-    };
-    let Some(current_visible_tree_oid) = current_visible_tree_oid_for_scope(current_scope)? else {
-        return Ok(None);
-    };
     // Cache lookup follows the Cache spec's answer-history contract:
     // schema-valid error records are not answer history, so any legacy
     // non-answer rows are skipped before applying the newest-to-oldest
@@ -77,6 +63,9 @@ pub(crate) fn latest_history_record_matching_visible_tree_oid(
             if force_full_scope && scope != full_scope() {
                 return Ok(HistoryRecordScan::Continue);
             }
+            let Some(current_visible_tree_oid) = current_visible_tree_oid_for_scope(&scope)? else {
+                return Ok(HistoryRecordScan::Done(None));
+            };
             if current_visible_tree_oid == record.visible_tree_oid {
                 record.scope = scope;
                 return Ok(HistoryRecordScan::Done(Some(record)));
