@@ -8,8 +8,8 @@ use crate::history_append::append_history_record;
 use crate::logging::render_runtime_log_event;
 use crate::logging::DiagnosticLogWriter;
 use crate::tests::{
-    answer, check_config_yaml, check_options, enable_diagnostic_logs, expectation_record,
-    git_project, parse_check_config, FakeRunner,
+    answer, append_legacy_history_record, check_config_yaml, check_options, enable_diagnostic_logs,
+    expectation_record, git_project, parse_check_config, FakeRunner,
 };
 use crate::visible_tree_oid::staged_visible_tree_oid;
 use crate::{ERROR_UNPARSABLE, RESULT_FAIL};
@@ -206,6 +206,36 @@ fn selected_expectations_use_recorded_errors_for_order() {
     );
     record.timestamp = "2026-01-01T00:00:00Z".to_string();
     write_latest_non_pass_record(&root, &second, &record).unwrap();
+    let mut history_cache = HistoryCache::new();
+
+    let ordered = order_expectations_by_latest_non_pass(
+        &root,
+        vec![first, second.clone()],
+        &mut history_cache,
+    )
+    .unwrap();
+
+    assert_eq!(ordered[0].id, second.id);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn selected_expectations_use_legacy_history_errors_for_order() {
+    let root = git_project("check-order-legacy-history-errors");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1", "2"], false, true);
+    let first = options.selected[0].clone();
+    let second = options.selected[1].clone();
+    let mut record = expectation_record(
+        &config.agent,
+        &second,
+        "fail",
+        ERROR_UNPARSABLE,
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap(),
+    );
+    record.timestamp = "2026-01-01T00:00:00Z".to_string();
+    record.error = Some(ERROR_UNPARSABLE.to_string());
+    append_legacy_history_record(&root, &second, &record);
     let mut history_cache = HistoryCache::new();
 
     let ordered = order_expectations_by_latest_non_pass(

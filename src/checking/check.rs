@@ -433,8 +433,7 @@ fn default_check_selection(
                         root,
                         &hit.expectation,
                         history_cache,
-                    )?
-                    .unwrap_or(0),
+                    )?,
                     index,
                     hit,
                 })

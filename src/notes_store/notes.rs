@@ -18,16 +18,30 @@ use crate::time::unix_timestamp;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
+#[cfg(not(unix))]
+use std::io::{Seek, SeekFrom};
 use std::path::Path;
 #[cfg(not(unix))]
 use std::path::PathBuf;
+#[cfg(not(unix))]
+use std::process;
+#[cfg(not(unix))]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(not(unix))]
+use std::sync::Arc;
+#[cfg(not(unix))]
+use std::thread::{self, JoinHandle};
 #[cfg(any(test, not(unix)))]
 use std::time::Duration;
+#[cfg(not(unix))]
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const LEGACY_NOTE_LOG_MARKER: &str = "<!-- canon log v1 -->";
 const NOTE_LOG_MARKER_PREFIX: &str = "<!-- canon log v1 ";
 const NOTE_LOG_MARKER_SUFFIX: &str = " -->";
 pub(crate) const NOTE_LOG_COMPACT_MIN_BYTES: u64 = 64 * 1024;
+#[cfg(not(unix))]
+const NOTE_LOCK_HEARTBEAT_SECS: u64 = 60;
 
 #[derive(Deserialize, Serialize)]
 #[serde(tag = "op")]
@@ -572,12 +586,19 @@ struct NoteLock {
 struct NoteLock {
     _file: fs::File,
     path: PathBuf,
+    token: String,
+    stop_heartbeat: Arc<AtomicBool>,
+    heartbeat: Option<JoinHandle<()>>,
 }
 
 #[cfg(not(unix))]
 impl Drop for NoteLock {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+        self.stop_heartbeat.store(true, Ordering::Release);
+        if let Some(heartbeat) = self.heartbeat.take() {
+            let _ = heartbeat.join();
+        }
+        let _ = remove_note_lock_if_owned(&self.path, &self.token);
     }
 }
 
@@ -602,10 +623,7 @@ fn lock_note_at_path(path: &Path) -> Result<NoteLock, String> {
 #[cfg(not(unix))]
 fn lock_note_at_path(path: &Path) -> Result<NoteLock, String> {
     match create_note_lock(path) {
-        Ok(file) => Ok(NoteLock {
-            _file: file,
-            path: path.to_path_buf(),
-        }),
+        Ok(file) => new_note_lock(path, file),
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
             if !note_lock_is_stale(path)? {
                 return Err(format!(
@@ -616,10 +634,7 @@ fn lock_note_at_path(path: &Path) -> Result<NoteLock, String> {
             remove_stale_note_lock(path)?;
             let file = create_note_lock(path)
                 .map_err(|err| format!("failed to lock {}: {}", path.display(), err))?;
-            Ok(NoteLock {
-                _file: file,
-                path: path.to_path_buf(),
-            })
+            new_note_lock(path, file)
         }
         Err(err) => Err(format!("failed to lock {}: {}", path.display(), err)),
     }
@@ -631,6 +646,69 @@ fn create_note_lock(path: &Path) -> Result<fs::File, io::Error> {
         .write(true)
         .create_new(true)
         .open(path)
+}
+
+#[cfg(not(unix))]
+fn new_note_lock(path: &Path, mut file: fs::File) -> Result<NoteLock, String> {
+    let token = note_lock_token();
+    write_note_lock_owner(&mut file, path, &token)?;
+    let heartbeat_file = file
+        .try_clone()
+        .map_err(|err| format!("failed to clone lock {}: {}", path.display(), err))?;
+    let stop_heartbeat = Arc::new(AtomicBool::new(false));
+    let heartbeat = start_note_lock_heartbeat(
+        path.to_path_buf(),
+        token.clone(),
+        heartbeat_file,
+        Arc::clone(&stop_heartbeat),
+    );
+    Ok(NoteLock {
+        _file: file,
+        path: path.to_path_buf(),
+        token,
+        stop_heartbeat,
+        heartbeat: Some(heartbeat),
+    })
+}
+
+#[cfg(not(unix))]
+fn note_lock_token() -> String {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    format!("pid={} token={}", process::id(), timestamp)
+}
+
+#[cfg(not(unix))]
+fn start_note_lock_heartbeat(
+    path: PathBuf,
+    token: String,
+    mut file: fs::File,
+    stop: Arc<AtomicBool>,
+) -> JoinHandle<()> {
+    thread::spawn(move || loop {
+        for _ in 0..NOTE_LOCK_HEARTBEAT_SECS {
+            if stop.load(Ordering::Acquire) {
+                return;
+            }
+            thread::sleep(Duration::from_secs(1));
+        }
+        if stop.load(Ordering::Acquire) {
+            return;
+        }
+        let _ = write_note_lock_owner(&mut file, &path, &token);
+    })
+}
+
+#[cfg(not(unix))]
+fn write_note_lock_owner(file: &mut fs::File, path: &Path, token: &str) -> Result<(), String> {
+    file.set_len(0)
+        .and_then(|()| file.seek(SeekFrom::Start(0)).map(|_| ()))
+        .and_then(|()| writeln!(file, "{}", token))
+        .and_then(|()| file.flush())
+        .and_then(|()| file.sync_data())
+        .map_err(|err| format!("failed to refresh lock {}: {}", path.display(), err))
 }
 
 #[cfg(any(test, not(unix)))]
@@ -659,6 +737,20 @@ fn remove_stale_note_lock(path: &Path) -> Result<(), String> {
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(format!(
             "failed to remove stale lock {}: {}",
+            path.display(),
+            err
+        )),
+    }
+}
+
+#[cfg(not(unix))]
+fn remove_note_lock_if_owned(path: &Path, token: &str) -> Result<(), String> {
+    match fs::read_to_string(path) {
+        Ok(content) if content.lines().next() == Some(token) => remove_stale_note_lock(path),
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(format!(
+            "failed to inspect lock {}: {}",
             path.display(),
             err
         )),

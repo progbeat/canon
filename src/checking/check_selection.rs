@@ -12,6 +12,8 @@ use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::Path;
 
+const UNIX_EPOCH_TIMESTAMP: u64 = 0;
+
 #[cfg(test)]
 pub(crate) fn parse_check_options(
     config: &CheckConfig,
@@ -310,13 +312,11 @@ pub(crate) fn order_expectations_by_latest_non_pass(
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
-    ordered.sort_by(|left, right| match (left.latest, right.latest) {
-        (Some(left_time), Some(right_time)) => right_time
-            .cmp(&left_time)
-            .then_with(|| left.index.cmp(&right.index)),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => left.index.cmp(&right.index),
+    ordered.sort_by(|left, right| {
+        right
+            .latest
+            .cmp(&left.latest)
+            .then_with(|| left.index.cmp(&right.index))
     });
     Ok(ordered
         .into_iter()
@@ -326,7 +326,7 @@ pub(crate) fn order_expectations_by_latest_non_pass(
 
 struct OrderedExpectation {
     expectation: SelectedExpectation,
-    latest: Option<u64>,
+    latest: u64,
     index: usize,
 }
 
@@ -343,22 +343,22 @@ fn latest_history_non_pass_timestamp(
     Ok(history_cache
         .read_records(root, expectation)?
         .into_iter()
-        .filter(|record| {
-            ObservedAnswerState::from_expected_and_observed(&expectation.a, &record.observed)
-                .is_reusable_history()
-        })
-        .filter(|record| {
-            CheckResult::from_expected_answer(&expectation.a, &record.observed) == CheckResult::Fail
-        })
+        .filter(|record| history_record_is_non_pass(record, &expectation.a))
         .filter_map(|record| parse_record_timestamp(&record.timestamp))
         .max())
+}
+
+fn history_record_is_non_pass(record: &crate::check_types::CheckRecord, expected: &str) -> bool {
+    let observed = ObservedAnswerState::from_expected_and_observed(expected, &record.observed);
+    observed.requires_human_review()
+        || CheckResult::from_expected_answer(expected, &record.observed) == CheckResult::Fail
 }
 
 pub(crate) fn latest_non_pass_timestamp_with_cache(
     root: &Path,
     expectation: &SelectedExpectation,
     history_cache: &mut HistoryCache,
-) -> Result<Option<u64>, String> {
+) -> Result<u64, String> {
     let latest = latest_history_non_pass_timestamp(root, expectation, history_cache)?
         .into_iter()
         .chain(latest_recorded_non_pass_timestamp_with_cache(
@@ -367,7 +367,7 @@ pub(crate) fn latest_non_pass_timestamp_with_cache(
             history_cache,
         )?)
         .max();
-    Ok(latest)
+    Ok(latest.unwrap_or(UNIX_EPOCH_TIMESTAMP))
 }
 
 pub(crate) fn parse_cooldown(value: &str) -> Result<Cooldown, String> {
