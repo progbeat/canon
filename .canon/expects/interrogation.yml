@@ -10,5 +10,8 @@
 - q: "Do your instructions encourage you to make `qScopeSuggestion` as narrow as possible while still enough to justify the answer?"
   a: "yes"
 
-- q: "Are there any unclear terms in your dev instructions?"
-  a: "no"
+- q: "Are all interrogation prompt and instruction texts/templates kept under `resources/prompts/`?"
+  a: "yes"
+
+# - q: "Do the dev instructions require knowing any specialized terms whose meaning is not available from the dev instructions themselves?"
+#   a: "no"
