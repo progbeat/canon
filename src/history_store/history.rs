@@ -1,4 +1,4 @@
-use crate::check_types::{CheckRecord, CheckResult, SelectedExpectation};
+use crate::check_types::{CheckRecord, CheckResult, EvaluatorResponseJson, SelectedExpectation};
 use crate::fs_util::{
     ensure_dir_without_symlinks, for_each_nonempty_line, reject_symlink,
     write_temp_file_then_replace,
@@ -178,15 +178,13 @@ impl HistoryReadRecord {
 fn validate_schema_valid_answer_history_record(record: &CheckRecord) -> Result<(), String> {
     // `HistoryReadRecord` requires the Cache spec prefix fields with no
     // defaults, while allowing extra metadata because the spec says "at least"
-    // those fields. The history layer enforces the parts that are not
-    // expressible by that shape: answer/error one-of, evaluator `answer`
-    // schema, UTC timestamp, and Git object-ID syntax for visibleTreeOid.
+    // those fields. Cache records store the evaluator response's `answer` value
+    // as `observed`, so reconstruct a minimal answer response and validate it
+    // with the same evaluator response schema used at runtime.
     if record.error.is_some() {
         return Err("error responses are not answer history records".to_string());
     }
-    if !observed_matches_evaluator_answer_schema(&record.observed) {
-        return Err("observed must match the evaluator response answer schema".to_string());
-    }
+    validate_history_answer_response_schema(record)?;
     if parse_record_timestamp(&record.timestamp).is_none() {
         return Err("timestamp must be UTC in YYYY-MM-DDTHH:MM:SSZ form".to_string());
     }
@@ -196,12 +194,16 @@ fn validate_schema_valid_answer_history_record(record: &CheckRecord) -> Result<(
     Ok(())
 }
 
-fn observed_matches_evaluator_answer_schema(observed: &str) -> bool {
-    !observed.is_empty()
-        && !observed
-            .as_bytes()
-            .iter()
-            .any(|byte| matches!(byte, b'\r' | b'\n'))
+fn validate_history_answer_response_schema(record: &CheckRecord) -> Result<(), String> {
+    let response = EvaluatorResponseJson {
+        answer: Some(record.observed.clone()),
+        error: None,
+        evidence: record.evidence.clone(),
+        q_scope_suggestion: None,
+    };
+    response.validate_schema().map_err(|message| {
+        format!("observed must match evaluator response answer schema: {message}")
+    })
 }
 
 fn validate_appendable_answer_history_record(
