@@ -13,6 +13,9 @@ pub(crate) fn parse_evaluator_response(
     if has_answer == has_error {
         return Err("evaluator response must contain exactly one of answer or error".to_string());
     }
+    if response.evidence.trim().is_empty() {
+        return Err("evidence must be a non-empty string".to_string());
+    }
     if let Some(answer) = response.answer {
         if answer.trim().is_empty() || contains_line_break(&answer) {
             return Err("answer must be a non-empty single-line string".to_string());

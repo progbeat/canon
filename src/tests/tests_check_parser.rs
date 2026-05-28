@@ -150,8 +150,8 @@ fn parser_handles_json_answer_and_free_form_evidence() {
         r#"{"answer":"yes","evidence":"  \t ","qScopeSuggestion":["."]}"#,
         &parse_check_config(check_config_yaml()).unwrap().agent,
     )
-    .unwrap();
-    assert_eq!(whitespace_evidence.evidence, "  \t ");
+    .unwrap_err();
+    assert_eq!(whitespace_evidence, "evidence must be a non-empty string");
     assert!(parse_evaluator_response(
         r#"{"answer":"yes","evidence":"ok","qScopeSuggestion":["."]} trailing prose"#,
         &parse_check_config(check_config_yaml()).unwrap().agent,

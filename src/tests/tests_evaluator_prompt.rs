@@ -41,6 +41,7 @@ fn evaluator_turn_uses_strict_json_output_schema() {
         json!(["insufficient-evidence", "invalid-question", "unparsable"])
     );
     assert_eq!(schema["properties"]["evidence"]["type"], "string");
+    assert_eq!(schema["properties"]["evidence"]["minLength"], 1);
     assert_eq!(schema["properties"]["qScopeSuggestion"]["type"], "array");
     assert_eq!(schema["properties"]["qScopeSuggestion"]["minItems"], 1);
     assert_eq!(

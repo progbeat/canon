@@ -21,7 +21,10 @@ pub(crate) fn evaluator_response_output_schema() -> Value {
                 "type": "string",
                 "enum": ["insufficient-evidence", "invalid-question", "unparsable"]
             },
-            "evidence": { "type": "string" },
+            "evidence": {
+                "type": "string",
+                "minLength": 1
+            },
             "qScopeSuggestion": {
                 "type": "array",
                 "minItems": 1,

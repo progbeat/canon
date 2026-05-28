@@ -1,4 +1,4 @@
-use crate::check_types::{contains_line_break, CheckRecord, CheckResult, SelectedExpectation};
+use crate::check_types::{contains_line_break, CheckRecord, SelectedExpectation};
 use crate::fs_util::{
     ensure_dir_without_symlinks, for_each_nonempty_line, reject_symlink,
     write_temp_file_then_replace,
@@ -278,22 +278,15 @@ pub(crate) fn remove_full_scope_reset_marker_with_cache(
 pub(crate) fn render_answer_history_record(record: &CheckRecord) -> DiagnosticLogResult<String> {
     validate_schema_valid_answer_history_record(record)
         .map_err(|message| external_log_error("render answer history record", message))?;
-    // History records intentionally start with the Cache spec's required
-    // "at least" answer-history field prefix. The spec is not a closed schema:
-    // extra persisted metadata is allowed as long as it follows that prefix.
-    // Expectation references use the resolved full ID, never the
-    // display/selector prefix.
+    // Keep newly written answer-history rows to the Cache spec fields. Readers
+    // still accept legacy rows with extra metadata, but current result must be
+    // derived from observed vs the current expectation rather than persisted.
     let history = HistoryLogRecord {
         timestamp: &record.timestamp,
         observed: &record.observed,
         evidence: &record.evidence,
         q_scope: &record.scope,
         visible_tree_oid: &record.visible_tree_oid,
-        result: record.result,
-        id: &record.id,
-        prompt: record.prompt_text(),
-        expected: record.expected_text(),
-        cache_key: record.cache_key.as_deref(),
     };
     answer_history_json_line(&history)
 }
@@ -318,17 +311,6 @@ struct HistoryLogRecord<'a> {
     q_scope: &'a [String],
     #[serde(rename = "visibleTreeOid")]
     visible_tree_oid: &'a str,
-    // Optional cache/debug metadata. These fields are deliberately after the
-    // required prefix so they do not change the answer-history format promised
-    // by the Cache spec.
-    result: CheckResult,
-    id: &'a str,
-    #[serde(skip_serializing_if = "str::is_empty")]
-    prompt: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    expected: Option<&'a str>,
-    #[serde(rename = "cacheKey", skip_serializing_if = "Option::is_none")]
-    cache_key: Option<&'a str>,
 }
 
 #[cfg(test)]

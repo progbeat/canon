@@ -21,11 +21,13 @@ fn history_record_required_fields_are_written_first() {
     let record = sample_record(1, "pass");
     let line = render_answer_history_record(&record).unwrap();
     let json: Value = serde_json::from_str(&line).unwrap();
-    assert_eq!(json["id"], expectation_id("Question?"));
+    assert!(json.get("id").is_none());
     assert!(json.get("display_id").is_none());
     assert!(json.get("displayId").is_none());
-    assert_eq!(json["prompt"], "Question?");
-    assert_eq!(json["expected"], "yes");
+    assert!(json.get("prompt").is_none());
+    assert!(json.get("expected").is_none());
+    assert!(json.get("result").is_none());
+    assert!(json.get("cacheKey").is_none());
     assert_eq!(json["qScope"], json!(["."]));
     assert!(json.get("scope").is_none());
     assert!(json.get("visibleTreeOid").is_some());
@@ -38,10 +40,6 @@ fn history_record_required_fields_are_written_first() {
         "\"evidence\"",
         "\"qScope\"",
         "\"visibleTreeOid\"",
-        "\"result\"",
-        "\"id\"",
-        "\"prompt\"",
-        "\"expected\"",
     ];
     let mut previous = 0;
     for key in expected_order {

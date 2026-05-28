@@ -157,7 +157,7 @@ fn check_runner_replaces_restricted_insufficient_evidence_with_full_scope_answer
 }
 
 #[test]
-fn check_runner_retries_full_scope_for_restricted_insufficient_evidence_with_empty_evidence() {
+fn check_runner_does_not_retry_restricted_insufficient_evidence_with_empty_evidence() {
     let root = git_project("check-restricted-insufficient-evidence-empty-evidence");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, false);
@@ -191,11 +191,12 @@ fn check_runner_retries_full_scope_for_restricted_insufficient_evidence_with_emp
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(records.records[0].passed());
-    assert_eq!(records.records[0].observed, "yes");
+    assert!(!records.records[0].passed());
+    assert!(record_requires_human_review(&records.records[0]));
+    assert_eq!(records.records[0].observed, ERROR_UNPARSABLE);
     assert_eq!(
         runner.start_scopes,
-        vec![vec!["src/main.rs".to_string()], vec![".".to_string()]]
+        vec![vec!["src/main.rs".to_string()]]
     );
     let _ = fs::remove_dir_all(root);
 }
@@ -701,9 +702,9 @@ fn check_runner_does_not_retry_restricted_widened_empty_evidence() {
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(records.records[0].passed());
-    assert!(!record_requires_human_review(&records.records[0]));
-    assert_eq!(records.records[0].observed, "yes");
+    assert!(!records.records[0].passed());
+    assert!(record_requires_human_review(&records.records[0]));
+    assert_eq!(records.records[0].observed, ERROR_UNPARSABLE);
     assert_eq!(records.records[0].scope, vec!["src/main.rs"]);
     assert_eq!(runner.start_scopes, vec![vec!["src/main.rs".to_string()]]);
     assert_eq!(runner.prompts.len(), 1);
@@ -718,7 +719,7 @@ fn check_runner_does_not_retry_restricted_widened_invalid_answer() {
     let expectation = options.selected[0].clone();
     append_src_main_pass_history(&root, &config, &expectation);
     let mut runner = FakeRunner::new(&[
-        &answer("unclear", "", &["."]),
+        &answer("unclear", "restricted response was not a valid yes/no answer", &["."]),
         &answer("yes", "late full-scope answer", &["."]),
     ]);
 

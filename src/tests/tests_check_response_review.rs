@@ -313,16 +313,16 @@ fn check_runner_requires_human_review_when_evidence_stays_empty() {
         None,
     )
     .unwrap();
-    assert!(records.records[0].passed());
-    assert!(!record_requires_human_review(&records.records[0]));
-    assert_eq!(records.records[0].observed, "yes");
-    assert_eq!(records.records[0].evidence, "");
+    assert!(!records.records[0].passed());
+    assert!(record_requires_human_review(&records.records[0]));
+    assert_eq!(records.records[0].observed, ERROR_UNPARSABLE);
+    assert!(records.records[0].evidence.contains("evidence must be"));
     assert_eq!(runner.prompts.len(), 1);
     assert_eq!(
         read_history_records(&root, &options.selected[0])
             .unwrap()
             .len(),
-        1
+        0
     );
     let _ = fs::remove_dir_all(root);
 }
@@ -478,7 +478,7 @@ fn check_runner_does_not_retry_after_mismatched_answer() {
     let root = git_project("check-mismatched-answer-no-retry");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
-    let invalid = answer("unclear", "", &["."]);
+    let invalid = answer("unclear", "question needs a clearer answer", &["."]);
     let mut runner = FakeRunner::new(&[&invalid, &invalid, &answer("yes", "late", &["."])]);
 
     let records =
@@ -502,8 +502,9 @@ fn check_runner_does_not_retry_after_empty_evidence() {
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(records.records[0].passed());
-    assert_eq!(records.records[0].observed, "yes");
+    assert!(!records.records[0].passed());
+    assert_eq!(records.records[0].observed, ERROR_UNPARSABLE);
+    assert!(record_requires_human_review(&records.records[0]));
     assert_eq!(runner.prompts.len(), 1);
     let _ = fs::remove_dir_all(root);
 }

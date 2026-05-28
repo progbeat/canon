@@ -194,6 +194,7 @@ pub(crate) struct CheckRecord {
     pub(crate) id: String,
     #[serde(default, skip)]
     pub(crate) display_id: String,
+    #[allow(dead_code)]
     #[serde(default, rename = "cacheKey")]
     pub(crate) cache_key: Option<String>,
 }
