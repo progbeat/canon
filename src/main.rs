@@ -21,8 +21,10 @@ const HISTORY_COMPACT_KEEP_RECORDS: usize = 8;
 const HISTORY_COMPACT_CHANCE_DENOMINATOR: u64 = 16;
 const APP_SERVER_TURN_TIMEOUT_SECS: u64 = 300;
 const DEFAULT_CHECK_TEMPLATE: &str = include_str!("../.canon/templates/default/check.yml");
-const GIT_HOOKS_PATH: &str = ".git/canon/hooks";
-const PRE_COMMIT_HOOK_PATH: &str = ".git/canon/hooks/pre-commit";
+// `${CANON_STATE_DIR}/hooks`, resolved through `git rev-parse --git-path`.
+const GIT_HOOKS_PATH: &str = "canon/hooks";
+// `${CANON_STATE_DIR}/hooks/pre-commit`, resolved through `git rev-parse --git-path`.
+const PRE_COMMIT_HOOK_PATH: &str = "canon/hooks/pre-commit";
 const DEFAULT_PRE_COMMIT_HOOK: &str = include_str!("../resources/git-hooks/pre-commit");
 const RESULT_PASS: &str = "pass";
 const RESULT_FAIL: &str = "fail";

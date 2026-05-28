@@ -88,9 +88,8 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     let mut narrowing = NarrowingStats::default();
     let non_selected = options.non_selected.clone();
     let root = runtime.root;
-    // Per-run state is shared so equal canonical enforced scopes can reuse one
-    // ephemeral evaluator thread; InterrogationState stores thread IDs by scope,
-    // so different enforced scopes still start separate threads within the run.
+    // Per-run state is shared so interrogations with the same evaluator model
+    // and visible-tree context can reuse one ephemeral evaluator thread.
     let mut interrogation_state = InterrogationState::new();
     macro_rules! current_error {
         ($error:expr) => {

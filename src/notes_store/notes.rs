@@ -442,26 +442,7 @@ fn stream_note_log(
     write: &mut impl FnMut(&str) -> Result<(), String>,
     offset: &mut usize,
 ) -> Result<(), String> {
-    let mut first_line = String::new();
-    let read = reader
-        .read_line(&mut first_line)
-        .map_err(|err| format!("failed to read {}: {}", note.path.display(), err))?;
-    if read == 0 {
-        return Ok(());
-    }
-    *offset += read;
-    match serde_json::from_str::<NoteRecord>(&first_line) {
-        Ok(record) => stream_note_record(note, record, write, true)?,
-        Err(err) if note_log_line_is_truncated(&first_line, &err) => return Ok(()),
-        Err(err) => {
-            return Err(format!(
-                "malformed note log record in {}: {}",
-                note.path.display(),
-                err
-            ));
-        }
-    }
-
+    let mut first_record = true;
     loop {
         let mut line = String::new();
         let line_start = *offset;
@@ -478,7 +459,8 @@ fn stream_note_log(
         }
         let record = match serde_json::from_str::<NoteRecord>(&line) {
             Ok(record) => record,
-            Err(err) if note_log_line_is_truncated(&line, &err) => return Ok(()),
+            Err(err) if err.is_eof() => continue,
+            Err(_) if note_log_line_is_unfinished(&line) => return Ok(()),
             Err(err) => {
                 return Err(format!(
                     "malformed note log record in {}: {}",
@@ -487,7 +469,8 @@ fn stream_note_log(
                 ));
             }
         };
-        stream_note_record(note, record, write, false)?;
+        stream_note_record(note, record, write, first_record)?;
+        first_record = false;
     }
 }
 
@@ -568,7 +551,8 @@ fn parse_note_log_records(
         }
         match serde_json::from_str(trimmed) {
             Ok(record) => records.push(record),
-            Err(err) if note_log_line_is_truncated(line, &err) => break,
+            Err(err) if err.is_eof() => continue,
+            Err(_) if note_log_line_is_unfinished(line) => break,
             Err(err) => {
                 return Err(format!(
                     "malformed note log record in {}: {}",
@@ -581,8 +565,8 @@ fn parse_note_log_records(
     Ok(Some(records))
 }
 
-fn note_log_line_is_truncated(line: &str, err: &serde_json::Error) -> bool {
-    err.is_eof() || !line.ends_with('\n')
+fn note_log_line_is_unfinished(line: &str) -> bool {
+    !line.ends_with('\n')
 }
 
 fn parse_legacy_note_log_records(text: &str) -> Option<Vec<NoteRecord>> {

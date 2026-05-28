@@ -104,7 +104,7 @@ impl<'a> CheckRuntime<'a> {
 }
 
 pub(crate) struct InterrogationState {
-    pub(crate) sessions_by_scope: BTreeMap<String, String>,
+    pub(crate) sessions_by_visible_context: BTreeMap<String, String>,
     pub(crate) session_instructions: BTreeMap<String, String>,
     pub(crate) unavailable_models: BTreeSet<String>,
     pub(crate) visible_tree_oid_cache: VisibleTreeOidCache,
@@ -114,7 +114,7 @@ pub(crate) struct InterrogationState {
 impl InterrogationState {
     pub(crate) fn new() -> InterrogationState {
         InterrogationState {
-            sessions_by_scope: BTreeMap::new(),
+            sessions_by_visible_context: BTreeMap::new(),
             session_instructions: BTreeMap::new(),
             unavailable_models: BTreeSet::new(),
             visible_tree_oid_cache: VisibleTreeOidCache::new(),
@@ -139,7 +139,7 @@ impl InterrogationState {
     }
 
     pub(crate) fn clear_thread_sessions(&mut self) {
-        self.sessions_by_scope.clear();
+        self.sessions_by_visible_context.clear();
         self.session_instructions.clear();
     }
 }

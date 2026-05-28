@@ -332,10 +332,17 @@ fn staged_worktree_view_exposes_staged_index_without_git_history() {
 fn staged_worktree_view_excludes_local_hook_config_and_hook_file() {
     let root = git_project("staged-snapshot-hooks");
     commit_all(&root, "initial");
-    fs::create_dir_all(root.join(PRE_COMMIT_HOOK_PATH).parent().unwrap()).unwrap();
-    fs::write(root.join(PRE_COMMIT_HOOK_PATH), "local hook content\n").unwrap();
+    let hook_path = resolve_git_path(&root, PRE_COMMIT_HOOK_PATH).unwrap();
+    let hooks_path = resolve_git_path(&root, GIT_HOOKS_PATH).unwrap();
+    fs::create_dir_all(hook_path.parent().unwrap()).unwrap();
+    fs::write(&hook_path, "local hook content\n").unwrap();
     Command::new("git")
-        .args(["config", "--local", "core.hooksPath", GIT_HOOKS_PATH])
+        .args([
+            "config",
+            "--local",
+            "core.hooksPath",
+            hooks_path.to_str().unwrap(),
+        ])
         .current_dir(&root)
         .output()
         .unwrap();
@@ -367,16 +374,23 @@ fn staged_visible_tree_oid_ignores_local_git_hook_metadata() {
     let scope = vec![".git".to_string()];
     let before = staged_visible_tree_oid(&root, &config.agent, &scope).unwrap();
 
-    fs::create_dir_all(root.join(PRE_COMMIT_HOOK_PATH).parent().unwrap()).unwrap();
-    fs::write(root.join(PRE_COMMIT_HOOK_PATH), DEFAULT_PRE_COMMIT_HOOK).unwrap();
+    let hook_path = resolve_git_path(&root, PRE_COMMIT_HOOK_PATH).unwrap();
+    let hooks_path = resolve_git_path(&root, GIT_HOOKS_PATH).unwrap();
+    fs::create_dir_all(hook_path.parent().unwrap()).unwrap();
+    fs::write(&hook_path, DEFAULT_PRE_COMMIT_HOOK).unwrap();
     Command::new("git")
-        .args(["config", "--local", "core.hooksPath", GIT_HOOKS_PATH])
+        .args([
+            "config",
+            "--local",
+            "core.hooksPath",
+            hooks_path.to_str().unwrap(),
+        ])
         .current_dir(&root)
         .output()
         .unwrap();
     let after_install = staged_visible_tree_oid(&root, &config.agent, &scope).unwrap();
 
-    fs::write(root.join(PRE_COMMIT_HOOK_PATH), "changed\n").unwrap();
+    fs::write(&hook_path, "changed\n").unwrap();
     let after_hook_change = staged_visible_tree_oid(&root, &config.agent, &scope).unwrap();
 
     assert_eq!(before, after_install);

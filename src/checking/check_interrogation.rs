@@ -33,10 +33,10 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
     request: ThreadTurnRequest<'_>,
 ) -> Result<ParsedTurnResponse, EvaluatorError> {
     let session_key = evaluator_session_key(request.agent, request.enforced_scope, request.model);
-    // Threads are reused only to preserve the same enforced scope and rendered
-    // developer instructions. Each turn still sends the current expectation
-    // prompt as the only active task input.
-    let existing_session = state.sessions_by_scope.get(&session_key).cloned();
+    // Threads are reused only for the same evaluator model and visible-tree
+    // context. Each turn still sends the current expectation prompt as the only
+    // active task input.
+    let existing_session = state.sessions_by_visible_context.get(&session_key).cloned();
     let had_existing_session = existing_session.is_some();
     let lifecycle_log = match existing_session {
         Some(existing) => thread_reuse_log(state, existing, request),
@@ -88,7 +88,9 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         Err(err) => return fail_after_session_error(state, err),
     };
     if !retire_thread_sessions_after_turn(state, runner.take_retired_sessions(), &session_id) {
-        state.sessions_by_scope.insert(session_key, session_id);
+        state
+            .sessions_by_visible_context
+            .insert(session_key, session_id);
     }
     Ok(response)
 }
@@ -160,7 +162,7 @@ fn start_thread_session<R: EvaluatorRunner>(
         .session_instructions
         .insert(created.clone(), developer_instructions.clone());
     state
-        .sessions_by_scope
+        .sessions_by_visible_context
         .insert(session_key.to_string(), created.clone());
     Ok(ThreadLifecycleLog {
         event: "thread.start",
@@ -187,10 +189,10 @@ fn thread_reuse_log(
 }
 
 fn clear_thread_sessions_after_failure(state: &mut InterrogationState) {
-    // Same-scope reuse applies to successful, still-live evaluator threads.
-    // Technical app-server failures can retire the backing process, so keeping
-    // the old session ID would point at a stale or missing thread rather than
-    // preserving the same Codex thread.
+    // Reuse applies only to successful, still-live evaluator threads for the
+    // same model and visible-tree context. Technical app-server failures can
+    // retire the backing process, so keeping the old session ID would point at
+    // a stale or missing thread rather than preserving the same Codex thread.
     state.clear_thread_sessions();
 }
 
@@ -204,7 +206,7 @@ fn retire_thread_sessions_after_turn(
     }
     let retired_sessions = retired_sessions.into_iter().collect::<BTreeSet<_>>();
     state
-        .sessions_by_scope
+        .sessions_by_visible_context
         .retain(|_, session_id| !retired_sessions.contains(session_id));
     state
         .session_instructions

@@ -196,6 +196,71 @@ fn truncated_later_append_log_keeps_prior_valid_log_records() {
     assert!(!content.contains(r#"{"op":"append""#));
 }
 
+#[test]
+fn marker_only_truncated_append_log_does_not_hide_later_valid_append() {
+    let note = Note {
+        key: "src/main.rs".to_string(),
+        hash: hash_key("src/main.rs"),
+        path: PathBuf::from("note.md"),
+    };
+    let mut raw = format!("{}body\n", initial_content(&note.key, &note.hash));
+    raw.push('\n');
+    let first_marker_offset = raw.len();
+    raw.push_str(&test_note_log_marker(&note, first_marker_offset as u64));
+    raw.push('\n');
+    raw.push('\n');
+    let second_marker_offset = raw.len();
+    raw.push_str(&test_note_log_marker(&note, second_marker_offset as u64));
+    raw.push('\n');
+    raw.push_str(r#"{"op":"append","timestamp":1,"text":"later"}"#);
+    raw.push('\n');
+
+    let content = materialize_note_content(&note, &raw).unwrap();
+    let mut rendered = String::new();
+    stream_note_content(&note, io::Cursor::new(raw.as_bytes()), |chunk| {
+        rendered.push_str(chunk);
+        Ok(())
+    })
+    .unwrap();
+
+    assert!(content.contains("\n## 1\n\nlater\n"));
+    assert!(rendered.contains("\n## 1\n\nlater\n"));
+    assert!(!rendered.contains("canon log v1"));
+}
+
+#[test]
+fn stale_partial_json_line_does_not_hide_later_valid_append() {
+    let note = Note {
+        key: "src/main.rs".to_string(),
+        hash: hash_key("src/main.rs"),
+        path: PathBuf::from("note.md"),
+    };
+    let mut raw = format!("{}body\n", initial_content(&note.key, &note.hash));
+    raw.push('\n');
+    let first_marker_offset = raw.len();
+    raw.push_str(&test_note_log_marker(&note, first_marker_offset as u64));
+    raw.push('\n');
+    raw.push_str(r#"{"op":"append","timestamp":1"#);
+    raw.push('\n');
+    let second_marker_offset = raw.len();
+    raw.push_str(&test_note_log_marker(&note, second_marker_offset as u64));
+    raw.push('\n');
+    raw.push_str(r#"{"op":"append","timestamp":2,"text":"later"}"#);
+    raw.push('\n');
+
+    let content = materialize_note_content(&note, &raw).unwrap();
+    let mut rendered = String::new();
+    stream_note_content(&note, io::Cursor::new(raw.as_bytes()), |chunk| {
+        rendered.push_str(chunk);
+        Ok(())
+    })
+    .unwrap();
+
+    assert!(content.contains("\n## 2\n\nlater\n"));
+    assert!(rendered.contains("\n## 2\n\nlater\n"));
+    assert!(!rendered.contains(r#""timestamp":1"#));
+}
+
 fn test_note_log_marker(note: &Note, marker_offset: u64) -> String {
     format!(
         "<!-- canon log v1 hash={} offset={} -->",

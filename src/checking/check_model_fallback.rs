@@ -58,9 +58,9 @@ pub(crate) fn run_with_model_fallbacks<T>(
                 let next_model = models.get(model_index + 1);
                 if next_model.is_some() {
                     // Fallback attempts are the technical-failure exception to
-                    // normal same-scope thread reuse. The failing model may
-                    // have caused the app server to retire every live thread,
-                    // so the next model must start from fresh sessions.
+                    // normal model/visible-context thread reuse. The failing
+                    // model may have caused the app server to retire every live
+                    // thread, so the next model must start from fresh sessions.
                     state.clear_thread_sessions();
                     state.mark_model_unavailable(model.as_deref());
                 }
