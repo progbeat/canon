@@ -43,6 +43,8 @@ pub(crate) const NOTE_LOG_COMPACT_MIN_BYTES: u64 = 64 * 1024;
 #[cfg(not(unix))]
 const NOTE_LOCK_HEARTBEAT_SECS: u64 = 60;
 #[cfg(not(unix))]
+const NOTE_LOCK_HEARTBEAT_POLL: Duration = Duration::from_millis(25);
+#[cfg(not(unix))]
 const NOTE_LOCK_RETRY_COUNT: usize = 1000;
 #[cfg(not(unix))]
 const NOTE_LOCK_RETRY_SLEEP: Duration = Duration::from_millis(10);
@@ -734,11 +736,16 @@ fn start_note_lock_heartbeat(
     stop: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
     thread::spawn(move || loop {
-        for _ in 0..NOTE_LOCK_HEARTBEAT_SECS {
+        let mut slept = Duration::ZERO;
+        let interval = Duration::from_secs(NOTE_LOCK_HEARTBEAT_SECS);
+        while slept < interval {
             if stop.load(Ordering::Acquire) {
                 return;
             }
-            thread::sleep(Duration::from_secs(1));
+            let remaining = interval.saturating_sub(slept);
+            let step = remaining.min(NOTE_LOCK_HEARTBEAT_POLL);
+            thread::sleep(step);
+            slept += step;
         }
         if stop.load(Ordering::Acquire) {
             return;
