@@ -10,7 +10,7 @@ use crate::evaluator_types::EvaluatorRunner;
 use crate::hash::full_scope;
 use crate::history_reuse::is_reusable_history_record;
 use crate::logging::DiagnosticLogWriter;
-use crate::scope::{sanitize_scope, scope_is_within};
+use crate::scope::sanitize_scope;
 use crate::visible_tree_oid::VisibleTreeOidCache;
 use std::path::Path;
 
@@ -59,9 +59,8 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
             || turn_has_context_compaction(&interrogation);
     if should_retry_full_scope_after_restricted_response(&interrogation.record, call.enforced_scope)
     {
-        // Restricted insufficient-evidence, and restricted yes/no mismatches,
-        // are not final. Retry once with full project scope and let that
-        // response become the record.
+        // Restricted insufficient-evidence is not final. Retry once with full
+        // project scope and let that response become the record.
         *call.enforced_scope = full_scope();
         interrogation = interrogate_or_error_record(
             call.call(),
@@ -131,8 +130,7 @@ pub(crate) fn q_scope_suggestion_should_get_independent_verification(
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<bool, String> {
     // This is only the Interrogation Policy gate for whether to spend an
-    // independent verification turn: valid scope syntax, containment within
-    // the current enforced scope, existing paths, and at least 25% fewer
+    // independent verification turn: valid scope syntax and at least 25% fewer
     // visible files. It never accepts or stores the suggestion. Acceptance
     // happens only after that independent interrogation returns a schema-valid
     // answer.
@@ -143,15 +141,6 @@ pub(crate) fn q_scope_suggestion_should_get_independent_verification(
         Ok(scope) => scope,
         Err(_) => return Ok(false),
     };
-    if !scope_is_within(&suggestion, current_scope) {
-        return Ok(false);
-    }
-    if !visible_tree_oid_cache
-        .missing_staged_scope_paths(root, &suggestion)?
-        .is_empty()
-    {
-        return Ok(false);
-    }
     let current_count =
         visible_tree_oid_cache.staged_visible_file_count(root, agent, current_scope)?;
     if current_count == 0 {
@@ -162,14 +151,10 @@ pub(crate) fn q_scope_suggestion_should_get_independent_verification(
     Ok(suggested_count.saturating_mul(4) <= current_count.saturating_mul(3))
 }
 
-pub(crate) fn narrowed_scope_is_accepted(wide: &CheckRecord, narrowed: &CheckRecord) -> bool {
-    // The wide record was produced from the current stored q-scope, or from
-    // full project scope when none exists. A contained suggestion is accepted
-    // only when an independent narrowed interrogation preserves that answer:
-    // files outside the current q-scope are already covered by the stored
-    // q-scope, and files inside the current q-scope but outside the suggestion
-    // are covered by this same-answer verification.
-    is_reusable_history_record(narrowed) && narrowed.observed == wide.observed
+pub(crate) fn narrowed_scope_is_accepted(narrowed: &CheckRecord) -> bool {
+    // A suggestion is accepted only after an independent narrowed
+    // interrogation returns a schema-valid answer.
+    is_reusable_history_record(narrowed)
 }
 
 pub(crate) fn write_scope_narrowing_event(

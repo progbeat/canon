@@ -362,8 +362,6 @@ expectations:
     invalid_scope_pass.evidence = "invalid scope pass".to_string();
     invalid_scope_pass.scope = vec!["..".to_string()];
     append_legacy_history_record(&root, &expectation, &invalid_scope_pass);
-    write_full_scope_reset_marker_with_cache(&root, &expectation, &mut HistoryCache::new())
-        .unwrap();
 
     let mut history_cache = HistoryCache::new();
     let record =

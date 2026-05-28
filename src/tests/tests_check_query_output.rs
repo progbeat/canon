@@ -854,8 +854,8 @@ fn query_mode_accepts_narrowed_incorrect_answer_when_expected_is_known() {
 }
 
 #[test]
-fn query_mode_rejects_changed_narrowing_when_wide_matches_known_expected() {
-    let root = git_project("query-mode-known-expected-rejected-narrowing");
+fn query_mode_accepts_changed_narrowing_when_wide_matches_known_expected() {
+    let root = git_project("query-mode-known-expected-accepted-narrowing");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let mut runner = FakeRunner::new(&[
         &answer("yes", "full scope passes", &["src"]),
@@ -875,10 +875,16 @@ fn query_mode_rejects_changed_narrowing_when_wide_matches_known_expected() {
     )
     .unwrap();
 
-    assert_eq!(result.answer.answer, "yes");
-    assert_eq!(result.answer.evidence, "`src/main.rs`: full scope passes");
-    assert_eq!(result.answer.scope, full_scope());
-    assert_eq!(result.answer.q_scope_suggestion, None);
+    assert_eq!(result.answer.answer, "no");
+    assert_eq!(
+        result.answer.evidence,
+        "`src/main.rs`: src/main.rs changes the answer"
+    );
+    assert_eq!(result.answer.scope, vec!["src".to_string()]);
+    assert_eq!(
+        result.answer.q_scope_suggestion,
+        Some(vec!["src".to_string()])
+    );
     assert_eq!(
         runner.start_scopes,
         vec![full_scope(), vec!["src".to_string()]]
@@ -887,8 +893,8 @@ fn query_mode_rejects_changed_narrowing_when_wide_matches_known_expected() {
 }
 
 #[test]
-fn query_mode_rejects_changed_narrowing_when_expected_is_unknown() {
-    let root = git_project("query-mode-unknown-expected-narrowing");
+fn query_mode_accepts_changed_narrowing_when_expected_is_unknown() {
+    let root = git_project("query-mode-unknown-expected-accepted-narrowing");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let mut runner = FakeRunner::new(&[
         &answer("yes", "full scope answer", &["src"]),
@@ -908,10 +914,16 @@ fn query_mode_rejects_changed_narrowing_when_expected_is_unknown() {
     )
     .unwrap();
 
-    assert_eq!(result.answer.answer, "yes");
-    assert_eq!(result.answer.evidence, "`src/main.rs`: full scope answer");
-    assert_eq!(result.answer.scope, full_scope());
-    assert_eq!(result.answer.q_scope_suggestion, None);
+    assert_eq!(result.answer.answer, "no");
+    assert_eq!(
+        result.answer.evidence,
+        "`src/main.rs`: changed narrow answer"
+    );
+    assert_eq!(result.answer.scope, vec!["src".to_string()]);
+    assert_eq!(
+        result.answer.q_scope_suggestion,
+        Some(vec!["src".to_string()])
+    );
     assert_eq!(
         runner.start_scopes,
         vec![full_scope(), vec!["src".to_string()]]
@@ -1138,26 +1150,16 @@ fn successful_narrowing_logs_stats_and_one_final_result() {
 }
 
 #[test]
-fn narrowing_skips_suggestions_outside_enforced_scope() {
-    let root = git_project("narrowing-outside-enforced-scope");
+fn narrowing_verifies_smaller_suggestions_outside_current_scope() {
+    let root = git_project("narrowing-outside-current-scope");
     let config = parse_check_config(check_config_yaml()).unwrap();
     fs::write(root.join("src/a.rs"), "a\n").unwrap();
     fs::write(root.join("src/b.rs"), "b\n").unwrap();
     fs::write(root.join("src/c.rs"), "c\n").unwrap();
     fs::create_dir_all(root.join("private")).unwrap();
     fs::write(root.join("private/a.txt"), "a\n").unwrap();
-    fs::write(root.join("private/b.txt"), "b\n").unwrap();
-    fs::write(root.join("private/c.txt"), "c\n").unwrap();
     Command::new("git")
-        .args([
-            "add",
-            "src/a.rs",
-            "src/b.rs",
-            "src/c.rs",
-            "private/a.txt",
-            "private/b.txt",
-            "private/c.txt",
-        ])
+        .args(["add", "src/a.rs", "src/b.rs", "src/c.rs", "private/a.txt"])
         .current_dir(&root)
         .output()
         .unwrap();
@@ -1179,19 +1181,25 @@ fn narrowing_skips_suggestions_outside_enforced_scope() {
         "qScopeSuggestion": ["private"]
     }))
     .unwrap();
-    let mut runner = FakeRunner::new(&[&response]);
+    let narrowed = serde_json::to_string(&json!({
+        "answer": "yes",
+        "evidence": "`private/a.txt`: narrow answer",
+        "qScopeSuggestion": ["private"]
+    }))
+    .unwrap();
+    let mut runner = FakeRunner::new(&[&response, &narrowed]);
 
     let report =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert_eq!(runner.starts, 1);
-    assert_eq!(runner.start_scopes, vec![scope.clone()]);
-    assert_eq!(report.narrowing.attempted, 0);
-    assert_eq!(report.records[0].scope, scope);
+    assert_eq!(runner.starts, 2);
     assert_eq!(
-        report.records[0].suggested_q_scope,
-        Some(vec!["private".to_string()])
+        runner.start_scopes,
+        vec![scope.clone(), vec!["private".to_string()]]
     );
+    assert_eq!(report.narrowing.attempted, 1);
+    assert_eq!(report.narrowing.accepted, 1);
+    assert_eq!(report.records[0].scope, vec!["private".to_string()]);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1204,7 +1212,7 @@ fn failed_narrowing_logs_stats_and_keeps_wider_final_result() {
     let expectation = options.selected[0].clone();
     let mut runner = FakeRunner::new(&[
         &answer("no", "full answer", &["src"]),
-        &answer("yes", "narrow answer", &["src"]),
+        &error_response(ERROR_INVALID_QUESTION, "narrowing verification failed"),
     ]);
     let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
 
@@ -1225,6 +1233,7 @@ fn failed_narrowing_logs_stats_and_keeps_wider_final_result() {
     assert_eq!(report.records[0].observed, "no");
     assert_eq!(report.records[0].evidence, "`src/main.rs`: full answer");
     assert_eq!(report.records[0].scope, full_scope());
+    assert_eq!(report.records[0].suggested_q_scope, None);
     let history = read_history_records(&root, &expectation).unwrap();
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].observed, "no");

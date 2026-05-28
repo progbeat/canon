@@ -297,7 +297,7 @@ fn check_runner_does_not_retry_unparsable_response() {
 }
 
 #[test]
-fn check_runner_requires_human_review_when_evidence_stays_empty() {
+fn check_runner_accepts_empty_evidence_answer() {
     let root = git_project("check-empty-evidence");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
@@ -313,16 +313,16 @@ fn check_runner_requires_human_review_when_evidence_stays_empty() {
         None,
     )
     .unwrap();
-    assert!(!records.records[0].passed());
-    assert!(record_requires_human_review(&records.records[0]));
-    assert_eq!(records.records[0].observed, ERROR_UNPARSABLE);
-    assert!(records.records[0].evidence.contains("evidence must be"));
+    assert!(records.records[0].passed());
+    assert!(!record_requires_human_review(&records.records[0]));
+    assert_eq!(records.records[0].observed, "yes");
+    assert_eq!(records.records[0].evidence, "");
     assert_eq!(runner.prompts.len(), 1);
     assert_eq!(
         read_history_records(&root, &options.selected[0])
             .unwrap()
             .len(),
-        0
+        1
     );
     let _ = fs::remove_dir_all(root);
 }
@@ -492,7 +492,7 @@ fn check_runner_does_not_retry_after_mismatched_answer() {
 }
 
 #[test]
-fn check_runner_does_not_retry_after_empty_evidence() {
+fn check_runner_does_not_retry_after_empty_evidence_answer() {
     let root = git_project("check-empty-evidence-no-retry");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
@@ -502,9 +502,9 @@ fn check_runner_does_not_retry_after_empty_evidence() {
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(!records.records[0].passed());
-    assert_eq!(records.records[0].observed, ERROR_UNPARSABLE);
-    assert!(record_requires_human_review(&records.records[0]));
+    assert!(records.records[0].passed());
+    assert_eq!(records.records[0].observed, "yes");
+    assert!(!record_requires_human_review(&records.records[0]));
     assert_eq!(runner.prompts.len(), 1);
     let _ = fs::remove_dir_all(root);
 }

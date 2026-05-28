@@ -2,8 +2,7 @@
 // plus current visibleTreeOid matching.
 use crate::check_types::{CheckRecord, CheckResult, ObservedAnswerState, SelectedExpectation};
 use crate::config_types::AgentConfig;
-use crate::hash::full_scope;
-use crate::history::{full_scope_reset_marker_exists_with_cache, HistoryCache};
+use crate::history::HistoryCache;
 use crate::scope::sanitize_scope_for_hash;
 use crate::time::parse_record_timestamp;
 use crate::visible_tree_oid::VisibleTreeOidCache;
@@ -140,9 +139,6 @@ pub(crate) fn latest_stored_q_scope_with_cache(
     expectation: &SelectedExpectation,
     history_cache: &mut HistoryCache,
 ) -> Result<Option<Vec<String>>, String> {
-    if full_scope_reset_marker_exists_with_cache(root, expectation, history_cache)? {
-        return Ok(Some(full_scope()));
-    }
     // Expectation-mode `canon check` calls this before each fresh interrogation.
     // It returns only the latest stored q-scope from answer history; it is not a
     // cached check result and does not let callers skip evaluator work. Cache

@@ -7,7 +7,7 @@ use crate::fs_util::{for_each_nonempty_line, write_temp_file_then_replace};
 use crate::git::resolve_git_path;
 use crate::hash::full_scope;
 use crate::history::{
-    read_history_records_from_path, write_full_scope_reset_marker_with_cache, HistoryCache,
+    read_repository_history_records_from_path, render_answer_history_record, HistoryCache,
 };
 use crate::history_compaction::compact_history_temp_path;
 use crate::logging::DiagnosticLogWriter;
@@ -260,26 +260,35 @@ fn set_expectation_scope_to_full_for_next_check(
     expectation: &SelectedExpectation,
     history_cache: &mut HistoryCache,
 ) -> Result<(), String> {
-    // Canon's reset_to_full_project_q_scope is represented as explicit cache
-    // state, not by rewriting answer history. While the marker exists, fresh
-    // interrogations use full project scope as their seed. Cached-result lookup
-    // remains governed by the Cached Result spec's visibleTreeOid/timestamp
-    // rules. A later schema-valid answer append clears the marker because that
-    // new answer has its own stored q-scope.
     let path = history_cache.path(root, expectation)?;
     if !path.exists() {
         return Ok(());
     }
-    let records = read_history_records_from_path(&path)?;
-    let Some((_, scope)) = latest_reusable_record_scope(&records, expectation) else {
+    let records = read_repository_history_records_from_path(root, &path)?;
+    let Some((index, scope)) = latest_reusable_record_scope(&records, expectation) else {
         return Ok(());
     };
     if scope == full_scope() {
         return Ok(());
     }
-    write_full_scope_reset_marker_with_cache(root, expectation, history_cache)?;
-    history_cache.records.remove(&path);
+    let retained = &records[..index];
+    rewrite_answer_history_records(&path, retained)?;
+    history_cache.records.insert(path, retained.to_vec());
     Ok(())
+}
+
+fn rewrite_answer_history_records(path: &Path, records: &[CheckRecord]) -> Result<(), String> {
+    let temp_path = compact_history_temp_path(path)?;
+    write_temp_file_then_replace(&temp_path, path, |file| {
+        for record in records {
+            let line = render_answer_history_record(record).map_err(|err| err.to_string())?;
+            file.write_all(line.as_bytes())
+                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
+            file.write_all(b"\n")
+                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
+        }
+        Ok(())
+    })
 }
 
 fn latest_reusable_record_scope(

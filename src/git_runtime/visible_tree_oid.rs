@@ -3,10 +3,13 @@ use crate::git::{
     git_head_tree_exists, staged_tracked_files_for_pathspecs, tracked_files_for_pathspecs_in_index,
     StagedTrackedFile,
 };
+#[cfg(test)]
 use crate::hash::full_scope;
 use crate::project::command_output_trimmed;
+#[cfg(all(test, unix))]
+use crate::scope::scope_pathspecs;
 use crate::scope::{
-    effective_ignore_patterns, excluding_ignore_pathspec, sanitize_scope_for_hash, scope_pathspecs,
+    effective_ignore_patterns, excluding_ignore_pathspec, sanitize_scope_for_hash,
     scope_pathspecs_with_excludes,
 };
 use sha1::{Digest, Sha1};
@@ -61,28 +64,6 @@ impl VisibleTreeOidCache {
             .iter()
             .filter(|entry| !scope_entry_is_tree(entry))
             .count())
-    }
-
-    pub(crate) fn missing_staged_scope_paths(
-        &mut self,
-        root: &Path,
-        scope: &[String],
-    ) -> Result<Vec<String>, String> {
-        let scope = sanitize_scope_for_hash(scope)?;
-        if scope == full_scope() {
-            return Ok(Vec::new());
-        }
-        Ok(scope
-            .into_iter()
-            .filter(|base| {
-                staged_scope_entries_for_pathspecs(
-                    root,
-                    &scope_pathspecs(std::slice::from_ref(base)),
-                )
-                .map(|entries| entries.is_empty())
-                .unwrap_or(true)
-            })
-            .collect())
     }
 
     fn staged_visible_tree_oid_option(
@@ -217,18 +198,26 @@ pub(crate) fn repository_native_object_oid_is_valid(
     root: &Path,
     object_id: &str,
 ) -> Result<bool, String> {
-    Ok(git_object_oid_matches_algorithm(
+    Ok(git_object_oid_has_hex_len(
         object_id,
-        git_object_hash_algorithm(root)?,
+        repository_native_object_oid_hex_len(root)?,
     ))
 }
 
-fn git_object_oid_matches_algorithm(object_id: &str, algorithm: GitObjectHashAlgorithm) -> bool {
-    object_id.len() == git_object_oid_hex_len(algorithm)
+pub(crate) fn repository_native_object_oid_hex_len(root: &Path) -> Result<usize, String> {
+    Ok(git_object_oid_hex_len(git_object_hash_algorithm(root)?))
+}
+
+pub(crate) fn git_object_oid_has_hex_len(object_id: &str, hex_len: usize) -> bool {
+    object_id.len() == hex_len
         && object_id
             .as_bytes()
             .iter()
             .all(|byte| hex_nibble(*byte).is_ok())
+}
+
+fn git_object_oid_matches_algorithm(object_id: &str, algorithm: GitObjectHashAlgorithm) -> bool {
+    git_object_oid_has_hex_len(object_id, git_object_oid_hex_len(algorithm))
 }
 
 fn git_object_oid_hex_len(algorithm: GitObjectHashAlgorithm) -> usize {

@@ -94,7 +94,8 @@ canon check -c other-check.yml
 ```
 
 Bypass same-tree cached results, bypass cooldown results, explicitly evaluate
-all configured expectations, or use another config.
+all configured expectations and continue after non-pass results, or use another
+config. By default, fresh evaluation stops after the first non-pass result.
 
 ```sh
 canon gate

@@ -157,7 +157,7 @@ fn check_runner_replaces_restricted_insufficient_evidence_with_full_scope_answer
 }
 
 #[test]
-fn check_runner_does_not_retry_restricted_insufficient_evidence_with_empty_evidence() {
+fn check_runner_retries_restricted_insufficient_evidence_with_empty_evidence() {
     let root = git_project("check-restricted-insufficient-evidence-empty-evidence");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, false);
@@ -191,12 +191,11 @@ fn check_runner_does_not_retry_restricted_insufficient_evidence_with_empty_evide
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(!records.records[0].passed());
-    assert!(record_requires_human_review(&records.records[0]));
-    assert_eq!(records.records[0].observed, ERROR_UNPARSABLE);
+    assert!(records.records[0].passed());
+    assert_eq!(records.records[0].observed, "yes");
     assert_eq!(
         runner.start_scopes,
-        vec![vec!["src/main.rs".to_string()]]
+        vec![vec!["src/main.rs".to_string()], vec![".".to_string()]]
     );
     let _ = fs::remove_dir_all(root);
 }
@@ -602,7 +601,7 @@ fn check_runner_verifies_narrower_scope_after_restricted_insufficient_evidence_r
 }
 
 #[test]
-fn check_runner_retries_full_scope_for_restricted_yes_no_mismatch() {
+fn check_runner_keeps_restricted_yes_no_mismatch_without_full_scope_retry() {
     let root = git_project("check-restricted-yes-no-mismatch");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, false);
@@ -636,17 +635,15 @@ fn check_runner_retries_full_scope_for_restricted_yes_no_mismatch() {
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(records.records[0].passed());
-    assert_eq!(records.records[0].observed, "yes");
-    assert_eq!(
-        runner.start_scopes,
-        vec![vec!["src/main.rs".to_string()], full_scope()]
-    );
+    assert!(!records.records[0].passed());
+    assert_eq!(records.records[0].observed, "no");
+    assert_eq!(records.records[0].scope, vec!["src/main.rs"]);
+    assert_eq!(runner.start_scopes, vec![vec!["src/main.rs".to_string()]]);
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn check_runner_retries_full_scope_for_restricted_answer_widening() {
+fn check_runner_does_not_widen_restricted_answer_without_insufficient_evidence() {
     let root = git_project("check-restricted-widening");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, false);
@@ -688,7 +685,7 @@ fn check_runner_retries_full_scope_for_restricted_answer_widening() {
 }
 
 #[test]
-fn check_runner_does_not_retry_restricted_widened_empty_evidence() {
+fn check_runner_accepts_restricted_answer_with_empty_evidence() {
     let root = git_project("check-restricted-widened-empty-evidence");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, false);
@@ -702,9 +699,8 @@ fn check_runner_does_not_retry_restricted_widened_empty_evidence() {
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(!records.records[0].passed());
-    assert!(record_requires_human_review(&records.records[0]));
-    assert_eq!(records.records[0].observed, ERROR_UNPARSABLE);
+    assert!(records.records[0].passed());
+    assert_eq!(records.records[0].observed, "yes");
     assert_eq!(records.records[0].scope, vec!["src/main.rs"]);
     assert_eq!(runner.start_scopes, vec![vec!["src/main.rs".to_string()]]);
     assert_eq!(runner.prompts.len(), 1);
@@ -719,7 +715,11 @@ fn check_runner_does_not_retry_restricted_widened_invalid_answer() {
     let expectation = options.selected[0].clone();
     append_src_main_pass_history(&root, &config, &expectation);
     let mut runner = FakeRunner::new(&[
-        &answer("unclear", "restricted response was not a valid yes/no answer", &["."]),
+        &answer(
+            "unclear",
+            "restricted response was not a valid yes/no answer",
+            &["."],
+        ),
         &answer("yes", "late full-scope answer", &["."]),
     ]);
 

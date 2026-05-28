@@ -148,6 +148,30 @@ fn history_parser_accepts_required_prefix_records() {
 }
 
 #[test]
+fn history_cache_reader_skips_non_native_visible_tree_oid_records() {
+    let root = git_project("history-read-non-native-visible-tree-oid");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
+    let path = history_path(&root, &expectation).unwrap();
+    ensure_dir(path.parent().unwrap()).unwrap();
+    let line = serde_json::to_string(&json!({
+        "timestamp": "1970-01-01T00:00:00Z",
+        "observed": "yes",
+        "evidence": "sha256-shaped oid in a sha1 repository",
+        "qScope": ["."],
+        "visibleTreeOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }))
+    .unwrap();
+    fs::write(&path, format!("{line}\n")).unwrap();
+
+    let mut history_cache = HistoryCache::new();
+    let records = history_cache.read_records(&root, &expectation).unwrap();
+
+    assert!(records.is_empty());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn history_parser_rejects_error_records_as_answer_history() {
     let line = error_history_record_line();
 
@@ -459,6 +483,45 @@ fn compact_history_drops_non_history_json_objects() {
             .collect::<Vec<_>>(),
         vec!["record 1", "record 2", "record 3", "record 4", "record 5"]
     );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn compact_repository_history_drops_non_native_visible_tree_oid_records() {
+    let root = git_project("history-compact-non-native-visible-tree-oid");
+    let path = root.join(".git/canon/cache/example/history.jsonl");
+    ensure_dir(path.parent().unwrap()).unwrap();
+    let mut lines = (1..=8)
+        .map(|number| {
+            let mut record = sample_record(number, "pass");
+            record.evidence = format!("native record {number}");
+            render_answer_history_record(&record)
+                .unwrap()
+                .trim_end()
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    lines.push(
+        serde_json::to_string(&json!({
+            "timestamp": "1970-01-01T00:00:09Z",
+            "observed": "yes",
+            "evidence": "sha256-shaped oid in a sha1 repository",
+            "qScope": ["."],
+            "visibleTreeOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }))
+        .unwrap(),
+    );
+    fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
+
+    compact_repository_history(&root, &path).unwrap();
+
+    let lines = fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(lines.len(), 8);
+    assert!(lines.iter().all(|line| !line.contains("sha256-shaped oid")));
     let _ = fs::remove_dir_all(root);
 }
 

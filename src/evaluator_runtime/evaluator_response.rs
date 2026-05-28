@@ -1,7 +1,8 @@
-use crate::check_types::{contains_line_break, EvaluatorResponseJson, ParsedAnswer};
+use crate::check_types::{EvaluatorResponseJson, ParsedAnswer};
 use crate::config_types::AgentConfig;
 use crate::{ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION, ERROR_UNPARSABLE};
 use serde::Deserialize;
+use serde_json::Value;
 
 pub(crate) fn parse_evaluator_response(
     text: &str,
@@ -13,14 +14,11 @@ pub(crate) fn parse_evaluator_response(
     if has_answer == has_error {
         return Err("evaluator response must contain exactly one of answer or error".to_string());
     }
-    if response.evidence.trim().is_empty() {
-        return Err("evidence must be a non-empty string".to_string());
-    }
+    validate_q_scope_suggestion(response.q_scope_suggestion.as_deref())?;
     if let Some(answer) = response.answer {
-        if answer.trim().is_empty() || contains_line_break(&answer) {
+        if answer.is_empty() || contains_schema_line_break(&answer) {
             return Err("answer must be a non-empty single-line string".to_string());
         }
-        validate_q_scope_suggestion(response.q_scope_suggestion.as_deref())?;
         // Pass/fail comparison happens after parsing against the expectation's
         // current expected answer.
         return Ok(ParsedAnswer::answer(
@@ -38,9 +36,6 @@ pub(crate) fn parse_evaluator_response(
     ) {
         return Err(format!("unsupported evaluator error: {}", error));
     }
-    if contains_line_break(&error) {
-        return Err("error must be a single-line string".to_string());
-    }
     Ok(ParsedAnswer::error(error, response.evidence))
 }
 
@@ -52,17 +47,39 @@ fn validate_q_scope_suggestion(scope: Option<&[String]>) -> Result<(), String> {
         return Err("qScopeSuggestion must contain at least one path".to_string());
     }
     for item in scope {
-        if item.trim().is_empty() || contains_line_break(item) {
+        if item.is_empty() || contains_schema_line_break(item) {
             return Err("qScopeSuggestion items must be non-empty single-line strings".to_string());
         }
     }
     Ok(())
 }
 
+fn contains_schema_line_break(value: &str) -> bool {
+    value
+        .as_bytes()
+        .iter()
+        .any(|byte| matches!(byte, b'\r' | b'\n'))
+}
+
 pub(crate) fn parse_evaluator_response_json(text: &str) -> Result<EvaluatorResponseJson, String> {
     let payload = evaluator_response_json_payload(text)?;
-    serde_json::from_str::<EvaluatorResponseJson>(payload)
+    let raw = serde_json::from_str::<Value>(payload)
+        .map_err(|err| format!("failed to parse evaluator JSON response: {}", err))?;
+    reject_explicit_null_schema_fields(&raw)?;
+    serde_json::from_value::<EvaluatorResponseJson>(raw)
         .map_err(|err| format!("failed to parse evaluator JSON response: {}", err))
+}
+
+fn reject_explicit_null_schema_fields(raw: &Value) -> Result<(), String> {
+    let Some(object) = raw.as_object() else {
+        return Err("evaluator response must be a JSON object".to_string());
+    };
+    for key in ["answer", "error", "qScopeSuggestion"] {
+        if object.get(key).is_some_and(Value::is_null) {
+            return Err(format!("{} must not be null", key));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn evaluator_response_json_payload(text: &str) -> Result<&str, String> {

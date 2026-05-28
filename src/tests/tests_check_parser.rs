@@ -50,11 +50,15 @@ fn parser_handles_json_answer_and_free_form_evidence() {
         &parse_check_config(check_config_yaml()).unwrap().agent,
     )
     .is_err());
-    assert!(parse_evaluator_response(
-        r#"{"answer":"yes\u2028no","evidence":"bad","qScopeSuggestion":["."]}"#,
-        &parse_check_config(check_config_yaml()).unwrap().agent,
-    )
-    .is_err());
+    assert_eq!(
+        parse_evaluator_response(
+            r#"{"answer":"yes\u2028no","evidence":"bad","qScopeSuggestion":["."]}"#,
+            &parse_check_config(check_config_yaml()).unwrap().agent,
+        )
+        .unwrap()
+        .answer,
+        "yes\u{2028}no"
+    );
     let empty_answer = parse_evaluator_response(
         r#"{"answer":"","evidence":"blank answer","qScopeSuggestion":["."]}"#,
         &parse_check_config(check_config_yaml()).unwrap().agent,
@@ -123,6 +127,14 @@ fn parser_handles_json_answer_and_free_form_evidence() {
     );
     assert_eq!(
         parse_evaluator_response(
+            r#"{"error":"invalid-question","evidence":"Question is invalid.","qScopeSuggestion":[]}"#,
+            &parse_check_config(check_config_yaml()).unwrap().agent,
+        )
+        .unwrap_err(),
+        "qScopeSuggestion must contain at least one path"
+    );
+    assert_eq!(
+        parse_evaluator_response(
             r#"{"answer":"yes","error":"invalid-question","evidence":"bad"}"#,
             &parse_check_config(check_config_yaml()).unwrap().agent,
         )
@@ -137,6 +149,30 @@ fn parser_handles_json_answer_and_free_form_evidence() {
         .unwrap_err(),
         "evaluator response must contain exactly one of answer or error"
     );
+    assert_eq!(
+        parse_evaluator_response(
+            r#"{"answer":"yes","error":null,"evidence":"bad"}"#,
+            &parse_check_config(check_config_yaml()).unwrap().agent,
+        )
+        .unwrap_err(),
+        "error must not be null"
+    );
+    assert_eq!(
+        parse_evaluator_response(
+            r#"{"answer":null,"evidence":"bad"}"#,
+            &parse_check_config(check_config_yaml()).unwrap().agent,
+        )
+        .unwrap_err(),
+        "answer must not be null"
+    );
+    assert_eq!(
+        parse_evaluator_response(
+            r#"{"answer":"yes","evidence":"bad","qScopeSuggestion":null}"#,
+            &parse_check_config(check_config_yaml()).unwrap().agent,
+        )
+        .unwrap_err(),
+        "qScopeSuggestion must not be null"
+    );
     let evidence_with_backticks = parse_evaluator_response(
         r#"{"answer":"yes","evidence":"`src/check.rs` handles restricted error retry","qScopeSuggestion":["src/check.rs"]}"#,
         &parse_check_config(check_config_yaml()).unwrap().agent,
@@ -150,8 +186,8 @@ fn parser_handles_json_answer_and_free_form_evidence() {
         r#"{"answer":"yes","evidence":"  \t ","qScopeSuggestion":["."]}"#,
         &parse_check_config(check_config_yaml()).unwrap().agent,
     )
-    .unwrap_err();
-    assert_eq!(whitespace_evidence, "evidence must be a non-empty string");
+    .unwrap();
+    assert_eq!(whitespace_evidence.evidence, "  \t ");
     assert!(parse_evaluator_response(
         r#"{"answer":"yes","evidence":"ok","qScopeSuggestion":["."]} trailing prose"#,
         &parse_check_config(check_config_yaml()).unwrap().agent,

@@ -107,18 +107,16 @@ should not change.
 ## Q-scope suggestion
 
 An evaluator-provided scope claiming to be narrow enough to answer the current
-question. `canon check` only attempts to verify a suggestion when it is valid,
-inside the current visible scope, and reduces the visible tree by at least 25%.
+question. It may or may not be a valid q-scope. `canon check` only attempts to
+verify a valid suggestion when its induced visible tree has at least 25% fewer
+files than the current visible tree.
 
 ## Scope narrowing
 
 The runtime process for trying to store a narrower q-scope. When an evaluator
 returns an answer with a q-scope suggestion, `canon check` may run an independent
 interrogation under that suggested scope. The suggestion is stored only when
-that verification preserves the answer from the current visible scope. Files
-outside the current visible scope are already covered by the stored q-scope, and
-the independent narrowed interrogation checks the remaining files excluded by
-the suggestion.
+that verification produces a valid evaluator response with an answer.
 
 ## Same-tree result
 

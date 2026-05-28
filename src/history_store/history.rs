@@ -8,7 +8,8 @@ use crate::logging_error::{external_log_error, DiagnosticLogError, DiagnosticLog
 use crate::path_io_error::PathIoError;
 use crate::time::parse_record_timestamp;
 use crate::visible_tree_oid::{
-    git_object_oid_has_known_shape, repository_native_object_oid_is_valid,
+    git_object_oid_has_hex_len, git_object_oid_has_known_shape,
+    repository_native_object_oid_hex_len, repository_native_object_oid_is_valid,
 };
 use crate::{
     CANON_CACHE_DIR_GIT_PATH, HISTORY_COMPACT_CHANCE_DENOMINATOR, HISTORY_COMPACT_KEEP_RECORDS,
@@ -56,17 +57,13 @@ pub(crate) fn history_file_name() -> &'static str {
     "history.jsonl"
 }
 
-pub(crate) fn full_scope_reset_marker_file_name() -> &'static str {
-    "full-scope-reset"
-}
-
 #[cfg(test)]
 pub(crate) fn read_history_records(
     root: &Path,
     expectation: &SelectedExpectation,
 ) -> Result<Vec<CheckRecord>, String> {
     let path = history_path(root, expectation)?;
-    read_history_records_from_path(&path)
+    read_repository_history_records_from_path(root, &path)
 }
 
 pub(crate) fn read_history_records_from_path(path: &Path) -> Result<Vec<CheckRecord>, String> {
@@ -74,6 +71,35 @@ pub(crate) fn read_history_records_from_path(path: &Path) -> Result<Vec<CheckRec
     for_each_nonempty_line(path, |line_number, line| {
         match parse_history_record_line(path, line_number, &line) {
             Ok(record) => records.push(record),
+            Err(_) => {
+                // History is a reusable cache, not authoritative project data.
+                // Corrupt cache lines are ignored here and dropped by the same
+                // parser during compaction, while real file I/O errors still
+                // propagate from `for_each_nonempty_line`.
+            }
+        }
+        Ok(())
+    })?;
+    Ok(records)
+}
+
+pub(crate) fn read_repository_history_records_from_path(
+    root: &Path,
+    path: &Path,
+) -> Result<Vec<CheckRecord>, String> {
+    let native_oid_hex_len = repository_native_object_oid_hex_len(root)?;
+    let mut records = Vec::new();
+    for_each_nonempty_line(path, |line_number, line| {
+        match parse_history_record_line(path, line_number, &line) {
+            Ok(record) => {
+                if git_object_oid_has_hex_len(&record.visible_tree_oid, native_oid_hex_len) {
+                    records.push(record);
+                } else {
+                    // The Cache spec defines visibleTreeOid as a repository-native
+                    // Git object ID. A valid-looking SHA-1 in a SHA-256 repo, or
+                    // vice versa, is corrupt cache data and must not be reused.
+                }
+            }
             Err(_) => {
                 // History is a reusable cache, not authoritative project data.
                 // Corrupt cache lines are ignored here and dropped by the same
@@ -175,7 +201,11 @@ impl HistoryCache {
         if let Some(records) = self.records.get(&path) {
             return Ok(records.clone());
         }
-        let records = read_history_records_from_path(&path)?;
+        // Runtime cache reads know the repository root, so this is where
+        // answer-history rows are checked against the repository-native Git
+        // object hash algorithm. The lower-level line parser only validates the
+        // portable JSONL shape used by compaction and parser tests.
+        let records = read_repository_history_records_from_path(root, &path)?;
         self.records.insert(path, records.clone());
         Ok(records)
     }
@@ -205,73 +235,6 @@ impl HistoryCache {
         let path = resolve_git_path(root, CANON_CACHE_DIR_GIT_PATH)?;
         self.cache_dirs.insert(key, path.clone());
         Ok(path)
-    }
-}
-
-pub(crate) fn full_scope_reset_marker_path_with_cache(
-    root: &Path,
-    expectation: &SelectedExpectation,
-    history_cache: &mut HistoryCache,
-) -> Result<PathBuf, String> {
-    Ok(history_cache
-        .path(root, expectation)?
-        .with_file_name(full_scope_reset_marker_file_name()))
-}
-
-pub(crate) fn write_full_scope_reset_marker_with_cache(
-    root: &Path,
-    expectation: &SelectedExpectation,
-    history_cache: &mut HistoryCache,
-) -> Result<(), String> {
-    let path = full_scope_reset_marker_path_with_cache(root, expectation, history_cache)?;
-    if let Some(parent) = path.parent() {
-        ensure_dir_without_symlinks(parent)?;
-    }
-    let temp_path = compact_history_temp_path(&path)?;
-    write_temp_file_then_replace(&temp_path, &path, |file| {
-        file.write_all(b"full\n")
-            .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))
-    })
-}
-
-pub(crate) fn full_scope_reset_marker_exists_with_cache(
-    root: &Path,
-    expectation: &SelectedExpectation,
-    history_cache: &mut HistoryCache,
-) -> Result<bool, String> {
-    let path = full_scope_reset_marker_path_with_cache(root, expectation, history_cache)?;
-    match fs::symlink_metadata(&path) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink() {
-                return Err(format!(
-                    "refusing to use symlinked full-scope reset marker {}",
-                    path.display()
-                ));
-            }
-            Ok(true)
-        }
-        Err(err)
-            if matches!(
-                err.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-            ) =>
-        {
-            Ok(false)
-        }
-        Err(err) => Err(format!("failed to inspect {}: {}", path.display(), err)),
-    }
-}
-
-pub(crate) fn remove_full_scope_reset_marker_with_cache(
-    root: &Path,
-    expectation: &SelectedExpectation,
-    history_cache: &mut HistoryCache,
-) -> Result<(), String> {
-    let path = full_scope_reset_marker_path_with_cache(root, expectation, history_cache)?;
-    match fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(format!("failed to delete {}: {}", path.display(), err)),
     }
 }
 
@@ -368,7 +331,7 @@ fn append_history_record_with_cache_inner(
     // Once the line is flushed, the append has succeeded. Compaction and cache
     // refresh are maintenance steps, so failures there must not invite callers
     // to retry the append and duplicate the durable history record.
-    let compacted = should_compact && compact_history_locked(&path).is_ok();
+    let compacted = should_compact && compact_repository_history_locked(root, &path).is_ok();
     if had_cached_records {
         if compacted {
             match read_history_records_from_path(&path) {
@@ -383,7 +346,6 @@ fn append_history_record_with_cache_inner(
             records.push(record.clone());
         }
     }
-    let _ = remove_full_scope_reset_marker_with_cache(root, expectation, history_cache);
     Ok(())
 }
 
@@ -466,18 +428,32 @@ fn compaction_chance_seed() -> u64 {
     nanos ^ counter.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ process::id() as u64
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn compact_history(path: &Path) -> Result<(), String> {
     let _lock = lock_history_file(path).map_err(|err| err.to_string())?;
-    compact_history_locked(path)
+    compact_history_locked_with_native_oid_len(path, None)
 }
 
-fn compact_history_locked(path: &Path) -> Result<(), String> {
+#[cfg(test)]
+pub(crate) fn compact_repository_history(root: &Path, path: &Path) -> Result<(), String> {
+    let _lock = lock_history_file(path).map_err(|err| err.to_string())?;
+    compact_repository_history_locked(root, path)
+}
+
+fn compact_repository_history_locked(root: &Path, path: &Path) -> Result<(), String> {
+    let native_oid_hex_len = repository_native_object_oid_hex_len(root)?;
+    compact_history_locked_with_native_oid_len(path, Some(native_oid_hex_len))
+}
+
+fn compact_history_locked_with_native_oid_len(
+    path: &Path,
+    native_oid_hex_len: Option<usize>,
+) -> Result<(), String> {
     let mut valid_lines = 0usize;
     let mut invalid_lines = 0usize;
     let mut lines = std::collections::VecDeque::new();
     for_each_nonempty_line(path, |line_number, line| {
-        if valid_history_record_line(path, line_number, &line) {
+        if valid_history_record_line(path, line_number, &line, native_oid_hex_len) {
             valid_lines += 1;
             lines.push_back(line);
             if lines.len() > HISTORY_COMPACT_KEEP_RECORDS {
@@ -574,8 +550,17 @@ fn history_lock_path(path: &Path) -> Result<PathBuf, HistoryAppendError> {
     Ok(path.with_file_name(lock_name))
 }
 
-fn valid_history_record_line(path: &Path, line_number: usize, line: &str) -> bool {
-    parse_history_record_line(path, line_number, line).is_ok()
+fn valid_history_record_line(
+    path: &Path,
+    line_number: usize,
+    line: &str,
+    native_oid_hex_len: Option<usize>,
+) -> bool {
+    let Ok(record) = parse_history_record_line(path, line_number, line) else {
+        return false;
+    };
+    native_oid_hex_len
+        .is_none_or(|hex_len| git_object_oid_has_hex_len(&record.visible_tree_oid, hex_len))
 }
 
 pub(crate) fn compact_history_temp_path(path: &Path) -> Result<PathBuf, String> {

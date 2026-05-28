@@ -283,7 +283,7 @@ pub(crate) struct CheckOptions {
     // Command-selector misses before check-only work-saving filters.
     pub(crate) skipped: usize,
     // `--all` treats the collected expectations as an explicit fresh
-    // evaluation request.
+    // evaluation request and continues after non-pass results.
     pub(crate) check_all: bool,
     pub(crate) ignore_cache: bool,
     pub(crate) ignore_cooldown: bool,

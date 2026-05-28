@@ -56,11 +56,8 @@ pub(crate) fn ask_query_with_model<R: EvaluatorRunner>(
     model: Option<&str>,
 ) -> Result<QueryResult, EvaluatorError> {
     // `canon check -q` uses the same evaluator input shape as normal checks.
-    // When the query text maps to one configured expectation, the caller can
-    // provide its hidden expected answer so post-response narrowing follows the
-    // same "unchanged or still incorrect" rule without adding expected text to
-    // the evaluator task input. Pure ad-hoc queries have no expected answer, so
-    // changed narrowed answers are not trusted as reusable narrower results.
+    // q-scope suggestions are trusted only after an independent verification
+    // turn returns a schema-valid answer under the suggested scope.
     let mut result = ask_query_once(
         runtime,
         query.question,
@@ -89,7 +86,7 @@ pub(crate) fn ask_query_with_model<R: EvaluatorRunner>(
             model,
         );
         if let Ok(narrowed) = narrowed {
-            if query_narrowed_answer_is_accepted(&result.answer, &narrowed.answer) {
+            if query_narrowed_answer_is_accepted(&narrowed.answer) {
                 result = narrowed;
             } else {
                 result.answer.q_scope_suggestion = None;
@@ -158,11 +155,11 @@ fn query_should_verify_narrowing(
     .map_err(EvaluatorError::from)
 }
 
-fn query_narrowed_answer_is_accepted(wide: &ParsedAnswer, narrowed: &ParsedAnswer) -> bool {
+fn query_narrowed_answer_is_accepted(narrowed: &ParsedAnswer) -> bool {
     matches!(
         ObservedAnswerState::from_observed(&narrowed.answer),
         ObservedAnswerState::Answer
-    ) && narrowed.answer == wide.answer
+    )
 }
 
 fn query_human_review_reason(result: &QueryResult) -> Option<&'static str> {

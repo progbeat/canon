@@ -274,7 +274,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 turn_exceeds_break_after_tokens(&narrowed, options.break_after_tokens);
             context_compaction_hit |= turn_has_context_compaction(&narrowed);
             stop_after_current_expectation |= narrowed.stop_after_current_expectation;
-            let accepted = narrowed_scope_is_accepted(&interrogation.record, &narrowed.record);
+            let accepted = narrowed_scope_is_accepted(&narrowed.record);
             if accepted {
                 narrowing.accepted += 1;
             } else {
@@ -295,7 +295,9 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 // A rejected suggestion does not create a new stored q-scope.
                 // Keep the original wide interrogation record, whose scope is
                 // the current verified q-scope that seeded this turn, or full
-                // project scope after policy widening.
+                // project scope after policy widening. The rejected candidate
+                // stays in the diagnostic narrowing event only.
+                interrogation.record.suggested_q_scope = None;
                 debug_assert_eq!(interrogation.record.scope, verified_q_scope);
             }
         }
@@ -321,7 +323,8 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         }
         let run_stop_signal_hit =
             break_after_tokens_hit || context_compaction_hit || stop_after_current_expectation;
-        let should_stop = run_stop_signal_hit && !options.check_all;
+        let should_stop =
+            !options.check_all && (!interrogation.record.passed() || run_stop_signal_hit);
         if run_stop_signal_hit {
             interrogation_run_state.clear_thread_sessions();
         }
