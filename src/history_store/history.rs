@@ -10,11 +10,13 @@ use crate::time::parse_record_timestamp;
 use crate::visible_tree_oid::{
     git_object_oid_has_hex_len, git_object_oid_has_known_shape,
     repository_native_object_oid_hex_len, repository_native_object_oid_is_valid,
+    VisibleTreeOidCache,
 };
 use crate::{
     CANON_CACHE_DIR_GIT_PATH, HISTORY_COMPACT_CHANCE_DENOMINATOR, HISTORY_COMPACT_KEEP_RECORDS,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
@@ -138,7 +140,6 @@ pub(crate) fn parse_history_record_line(
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct HistoryReadRecord {
     timestamp: String,
     observed: String,
@@ -147,10 +148,14 @@ struct HistoryReadRecord {
     q_scope: Vec<String>,
     #[serde(rename = "visibleTreeOid")]
     visible_tree_oid: String,
+    #[serde(default)]
+    #[serde(flatten)]
+    extra_fields: BTreeMap<String, Value>,
 }
 
 impl HistoryReadRecord {
     fn into_check_record(self) -> CheckRecord {
+        let has_error_field = self.extra_fields.contains_key("error");
         CheckRecord {
             timestamp: self.timestamp,
             number: 0,
@@ -158,7 +163,7 @@ impl HistoryReadRecord {
             prompt: None,
             expected: None,
             observed: self.observed,
-            error: None,
+            error: has_error_field.then(|| "error".to_string()),
             evidence: self.evidence,
             scope: self.q_scope,
             suggested_q_scope: None,
@@ -171,11 +176,11 @@ impl HistoryReadRecord {
 }
 
 fn validate_schema_valid_answer_history_record(record: &CheckRecord) -> Result<(), String> {
-    // `HistoryReadRecord` has already required the Cache spec prefix
-    // fields with no defaults: observed, evidence, qScope, and visibleTreeOid.
-    // The history layer enforces the parts that are not expressible by the
-    // struct shape: answer/error one-of, evaluator `answer` schema, UTC
-    // timestamp, and Git object-ID syntax for visibleTreeOid.
+    // `HistoryReadRecord` requires the Cache spec prefix fields with no
+    // defaults, while allowing extra metadata because the spec says "at least"
+    // those fields. The history layer enforces the parts that are not
+    // expressible by that shape: answer/error one-of, evaluator `answer`
+    // schema, UTC timestamp, and Git object-ID syntax for visibleTreeOid.
     if record.error.is_some() {
         return Err("error responses are not answer history records".to_string());
     }
@@ -335,6 +340,33 @@ pub(crate) fn append_history_record_with_cache(
     // and source error stay tied together while the append is assembled.
     append_history_record_with_cache_inner(root, expectation, record, history_cache)
         .map_err(|err| err.to_string())
+}
+
+pub(crate) fn append_current_history_record_with_cache(
+    root: &Path,
+    expectation: &SelectedExpectation,
+    record: &CheckRecord,
+    history_cache: &mut HistoryCache,
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
+) -> Result<(), String> {
+    validate_current_visible_tree_oid(root, expectation, record, visible_tree_oid_cache)?;
+    append_history_record_with_cache(root, expectation, record, history_cache)
+}
+
+fn validate_current_visible_tree_oid(
+    root: &Path,
+    expectation: &SelectedExpectation,
+    record: &CheckRecord,
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
+) -> Result<(), String> {
+    let current_visible_tree_oid =
+        visible_tree_oid_cache.staged_visible_tree_oid(root, &expectation.agent, &record.scope)?;
+    if record.visible_tree_oid != current_visible_tree_oid {
+        return Err(
+            "visibleTreeOid must match the current repository visible tree for qScope".to_string(),
+        );
+    }
+    Ok(())
 }
 
 fn append_history_record_with_cache_inner(

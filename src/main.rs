@@ -54,6 +54,22 @@ mod app_server_transport;
 mod app_server_usage;
 #[path = "checking/check.rs"]
 mod check;
+// Glossary implementation map for `canon check`:
+// - expectation collection/identity: `check_config_expansion`, `check_selection`, `hash`.
+// - scope and scoped tree semantics: `scope`, `visible_tree_oid`, `staged_worktree`.
+// - q-scope storage/reuse: `history` writes `qScope`, `history_reuse` seeds the next
+//   visible scope from the latest answer-history q-scope.
+// - q-scope suggestion lifecycle: `evaluator_response` parses the evaluator claim,
+//   `check_interrogation_policy` verifies whether it becomes a reusable q-scope,
+//   and `check` records only verified answer scopes in history.
+// - visible scope/tree formation: `check_interrogation_state` chooses the stored
+//   q-scope or full scope, `scope::effective_ignore_patterns` applies configured
+//   ignore rules, and `staged_worktree` materializes the resulting visible tree.
+// - evidence and answer/error records: `evaluator_response`,
+//   `check_interrogation_records`, `check_types`, and `check_output`.
+// - evaluator thread reuse: `check_interrogation_state::evaluator_thread_reuse_key`
+//   and `check_interrogation` keep reusable threads scoped by model, visible tree,
+//   and developer-instruction inputs.
 #[path = "checking/check_cache.rs"]
 mod check_cache;
 #[path = "checking/check_command.rs"]

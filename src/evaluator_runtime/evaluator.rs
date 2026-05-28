@@ -21,6 +21,11 @@ pub(crate) fn evaluator_response_output_schema() -> Value {
                 "type": "string",
                 "enum": ["insufficient-evidence", "invalid-question", "unparsable"]
             },
+            // Interrogation Policy intentionally keeps `evidence` as a free
+            // string in the JSON schema. The evaluator instructions carry the
+            // semantic requirement that evidence directly justify the answer
+            // and cite non-proxy project evidence when project evidence is
+            // used.
             "evidence": {
                 "type": "string"
             },

@@ -225,6 +225,57 @@ fn same_tree_reuse_checks_each_record_scope_visible_tree_oid() {
 }
 
 #[test]
+fn same_tree_reuse_skips_records_without_current_visible_tree_oid() {
+    let root = git_project("history-reuse-current-oid-missing");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let expectation = check_options(&config, &["1"], false, true)
+        .selected
+        .remove(0);
+    let matching_oid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+    let mut older_matching_record = expectation_record(
+        &config.agent,
+        &expectation,
+        RESULT_PASS,
+        "yes",
+        matching_oid,
+    );
+    older_matching_record.scope = full_scope();
+    append_history_record(&root, &expectation, &older_matching_record).unwrap();
+    let mut newer_unavailable_record = expectation_record(
+        &config.agent,
+        &expectation,
+        RESULT_PASS,
+        "yes",
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+    );
+    newer_unavailable_record.scope = vec!["src/main.rs".to_string()];
+    append_history_record(&root, &expectation, &newer_unavailable_record).unwrap();
+    let mut history_cache = HistoryCache::new();
+
+    let record = latest_history_record_matching_visible_tree_oid(
+        &root,
+        &expectation,
+        &mut history_cache,
+        |scope| {
+            if scope == full_scope() {
+                Ok(Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()))
+            } else {
+                Ok(None)
+            }
+        },
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(record.scope, full_scope());
+    assert_eq!(
+        record.visible_tree_oid,
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn reusable_history_record_skips_non_answer_history_before_visible_tree_oid_match() {
     let root = git_project("history-reuse-skip-non-answer-before-oid");
     let config = parse_check_config(check_config_yaml()).unwrap();

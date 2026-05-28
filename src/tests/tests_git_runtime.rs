@@ -186,6 +186,31 @@ fn staged_worktree_view_materializes_git_pathspec_scope() {
     let _ = fs::remove_dir_all(root);
 }
 
+#[test]
+fn staged_worktree_view_materializes_default_pathspec_wildcards() {
+    let root = git_project("staged-snapshot-default-pathspec-wildcards");
+    fs::create_dir_all(root.join("src/nested")).unwrap();
+    fs::write(root.join("src/lib.rs"), "lib\n").unwrap();
+    fs::write(root.join("src/nested/deep.rs"), "deep\n").unwrap();
+    fs::write(root.join("src/readme.txt"), "text\n").unwrap();
+    Command::new("git")
+        .args(["add", "src/lib.rs", "src/nested/deep.rs", "src/readme.txt"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let staged_view = StagedWorktreeView::apply(&root).unwrap();
+
+    let scope_root = staged_view
+        .materialize_evaluator_scope(&empty_test_agent(), &["src/*.rs".to_string()])
+        .unwrap();
+
+    assert!(scope_root.join("src/lib.rs").exists());
+    assert!(scope_root.join("src/main.rs").exists());
+    assert!(scope_root.join("src/nested/deep.rs").exists());
+    assert!(!scope_root.join("src/readme.txt").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
 #[cfg(unix)]
 #[test]
 fn staged_worktree_view_restricted_scopes_hardlink_lazy_files() {

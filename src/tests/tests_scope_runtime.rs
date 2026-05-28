@@ -60,6 +60,18 @@ fn scope_paths_preserve_git_pathspec_characters() {
 }
 
 #[test]
+fn scope_pathspec_wildcards_match_git_paths() {
+    let default_wildcard = vec!["src/*.rs".to_string()];
+    assert!(path_bytes_in_scope(b"src/main.rs", &default_wildcard));
+    assert!(path_bytes_in_scope(b"src/bin/main.rs", &default_wildcard));
+    assert!(!path_bytes_in_scope(b"src/main.txt", &default_wildcard));
+
+    let glob_magic = vec![":(glob)src/*.rs".to_string()];
+    assert!(path_bytes_in_scope(b"src/main.rs", &glob_magic));
+    assert!(!path_bytes_in_scope(b"src/bin/main.rs", &glob_magic));
+}
+
+#[test]
 fn strict_scope_subset_canonicalizes_before_comparing() {
     assert!(!is_strict_scope_subset(
         &[".".to_string(), "src".to_string()],

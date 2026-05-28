@@ -7,6 +7,7 @@ use crate::check_interrogation_state::{CheckRuntime, InterrogationRunState};
 use crate::check_model_fallback::run_with_model_fallbacks;
 use crate::check_types::{ObservedAnswerState, ParsedAnswer, QueryResult};
 use crate::evaluator_types::{EvaluatorError, EvaluatorRunner};
+use crate::hash::full_scope;
 use crate::logging::DiagnosticLogWriter;
 use crate::scope::sanitize_scope;
 
@@ -58,16 +59,32 @@ pub(crate) fn ask_query_with_model<R: EvaluatorRunner>(
     // `canon check -q` uses the same evaluator input shape as normal checks.
     // q-scope suggestions are trusted only after an independent verification
     // turn returns a schema-valid answer under the suggested scope.
+    let mut active_scope = query.enforced_scope.to_vec();
     let mut result = ask_query_once(
         runtime,
         query.question,
-        query.enforced_scope,
+        &active_scope,
         runner,
         diagnostic_log,
         state,
         model,
     )?;
-    if query_should_verify_narrowing(runtime, state, query.enforced_scope, &result.answer)? {
+    if query_should_retry_full_scope_after_restricted_response(&result.answer, &active_scope) {
+        // Restricted insufficient-evidence is not final for query-mode
+        // interrogations either; retry once with full project scope and let
+        // that response drive narrowing or human review.
+        active_scope = full_scope();
+        result = ask_query_once(
+            runtime,
+            query.question,
+            &active_scope,
+            runner,
+            diagnostic_log,
+            state,
+            model,
+        )?;
+    }
+    if query_should_verify_narrowing(runtime, state, &active_scope, &result.answer)? {
         let verification_scope = sanitize_scope(
             result
                 .answer
@@ -131,6 +148,15 @@ fn ask_query_once<R: EvaluatorRunner>(
         },
     )?;
     finalize_query_answer(runtime, state, enforced_scope, question, response.answer)
+}
+
+fn query_should_retry_full_scope_after_restricted_response(
+    answer: &ParsedAnswer,
+    scope: &[String],
+) -> bool {
+    scope != full_scope()
+        && ObservedAnswerState::from_observed(&answer.answer)
+            == ObservedAnswerState::InsufficientEvidence
 }
 
 fn query_should_verify_narrowing(

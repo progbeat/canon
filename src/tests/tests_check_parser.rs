@@ -125,6 +125,16 @@ fn parser_handles_json_answer_and_free_form_evidence() {
         .as_deref(),
         Some(ERROR_UNPARSABLE)
     );
+    let error_with_suggestion = parse_evaluator_response(
+        r#"{"error":"insufficient-evidence","evidence":"Need more files.","qScopeSuggestion":["src"]}"#,
+        &parse_check_config(check_config_yaml()).unwrap().agent,
+    )
+    .unwrap();
+    assert_eq!(
+        error_with_suggestion.error.as_deref(),
+        Some(ERROR_INSUFFICIENT_EVIDENCE)
+    );
+    assert_eq!(error_with_suggestion.q_scope_suggestion, None);
     assert_eq!(
         parse_evaluator_response(
             r#"{"error":"invalid-question","evidence":"Question is invalid.","qScopeSuggestion":[]}"#,

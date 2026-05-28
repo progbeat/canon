@@ -148,6 +148,24 @@ fn history_parser_accepts_required_prefix_records() {
 }
 
 #[test]
+fn history_parser_accepts_additional_history_fields() {
+    let line = serde_json::to_string(&json!({
+        "timestamp": "1970-01-01T00:00:00Z",
+        "observed": "yes",
+        "evidence": "cached answer",
+        "qScope": ["."],
+        "visibleTreeOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "futureMetadata": {"source": "newer canon"}
+    }))
+    .unwrap();
+
+    let record = parse_history_record_line(Path::new("history.jsonl"), 1, &line).unwrap();
+
+    assert_eq!(record.observed, "yes");
+    assert_eq!(record.scope, vec![".".to_string()]);
+}
+
+#[test]
 fn history_parser_rejects_observed_values_outside_evaluator_answer_schema() {
     for observed in ["", "yes\nno", "yes\rno"] {
         let line = serde_json::to_string(&json!({
@@ -195,7 +213,24 @@ fn history_parser_rejects_error_records_as_answer_history() {
 
     let err = parse_history_record_line(Path::new("history.jsonl"), 1, &line).unwrap_err();
 
-    assert!(err.contains("invalid history JSON"));
+    assert!(err.contains("error responses are not answer history records"));
+}
+
+#[test]
+fn history_parser_rejects_null_error_field_as_answer_history() {
+    let line = serde_json::to_string(&json!({
+        "timestamp": "1970-01-01T00:00:00Z",
+        "observed": "yes",
+        "error": null,
+        "evidence": "not an answer history row",
+        "qScope": ["."],
+        "visibleTreeOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }))
+    .unwrap();
+
+    let err = parse_history_record_line(Path::new("history.jsonl"), 1, &line).unwrap_err();
+
+    assert!(err.contains("error responses are not answer history records"));
 }
 
 #[test]
@@ -273,6 +308,28 @@ fn append_history_record_updates_in_memory_cache() {
     let cached = history_cache.read_records(&root, &expectation).unwrap();
     assert_eq!(cached.len(), 1);
     assert_eq!(cached[0].observed, "yes");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn append_current_history_record_rejects_non_current_visible_tree_oid() {
+    let root = git_project("history-append-current-visible-tree-oid");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
+    let record = sample_record(1, "pass");
+    let mut history_cache = HistoryCache::new();
+    let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
+
+    let err = append_current_history_record_with_cache(
+        &root,
+        &expectation,
+        &record,
+        &mut history_cache,
+        &mut visible_tree_oid_cache,
+    )
+    .unwrap_err();
+
+    assert!(err.contains("visibleTreeOid must match"));
     let _ = fs::remove_dir_all(root);
 }
 

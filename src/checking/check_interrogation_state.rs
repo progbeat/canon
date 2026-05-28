@@ -54,6 +54,11 @@ pub(crate) fn evaluator_thread_reuse_key(
     model: Option<&str>,
     visible_tree_oid: &str,
 ) -> String {
+    // The glossary's thread invariant is one-way: a reused thread must keep
+    // the same evaluator model and visible tree, and different model/tree
+    // inputs must not share a thread. Extra key parts below are stricter
+    // developer-instruction inputs that prevent unsafe reuse without allowing
+    // cross-model or cross-visible-tree reuse.
     let mut key = String::new();
     key.push_str(model.unwrap_or("<default>"));
     key.push('\0');

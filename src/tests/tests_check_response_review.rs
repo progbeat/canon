@@ -236,11 +236,13 @@ fn check_runner_ignores_invalid_q_scope_suggestion() {
     let root = git_project("check-invalid-q-scope-suggestion");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
-    let mut runner = FakeRunner::new(&[&answer(
-        "yes",
-        "missing.rs would be enough if it existed",
-        &["missing.rs"],
-    )]);
+    let response = serde_json::to_string(&json!({
+        "answer": "yes",
+        "evidence": "`README.md`: full scope supports yes",
+        "qScopeSuggestion": ["../missing.rs"]
+    }))
+    .unwrap();
+    let mut runner = FakeRunner::new(&[&response]);
 
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
@@ -248,6 +250,7 @@ fn check_runner_ignores_invalid_q_scope_suggestion() {
     assert!(records.records[0].passed());
     assert_eq!(records.records[0].observed, "yes");
     assert_eq!(records.records[0].scope, vec![".".to_string()]);
+    assert_eq!(records.records[0].suggested_q_scope, None);
     assert_eq!(
         read_history_records(&root, &options.selected[0])
             .unwrap()

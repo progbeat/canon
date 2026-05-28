@@ -1,17 +1,16 @@
 use crate::config_types::AgentConfig;
-use crate::git::{staged_tracked_files_for_pathspecs, GitBlobReader, StagedTrackedFile};
+use crate::git::{staged_tracked_files, GitBlobReader, StagedTrackedFile};
 use crate::hash::full_scope;
 use crate::platform;
 use crate::scope::{
-    effective_ignore_patterns, excluding_ignore_pathspec, sanitize_scope,
-    scope_pathspecs_with_excludes,
+    effective_ignore_patterns, path_bytes_in_scope, path_matches_pattern_bytes, sanitize_scope,
 };
 use crate::staged_worktree_paths::create_snapshot_root;
 #[cfg(test)]
 pub(crate) use crate::staged_worktree_paths::snapshot_parent_outside_worktree;
 use crate::visible_tree_oid::VisibleTreeOidCache;
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -20,7 +19,7 @@ pub(crate) struct StagedWorktreeView {
     materialization_root: PathBuf,
     lazy_root: PathBuf,
     scope_roots: PathBuf,
-    active_excludes_by_deny: RefCell<BTreeMap<Vec<String>, Vec<String>>>,
+    staged_files: Vec<StagedTrackedFile>,
     unpacked_paths: RefCell<BTreeSet<Vec<u8>>>,
     blob_reader: RefCell<Option<GitBlobReader>>,
     next_scope_id: Cell<u64>,
@@ -37,6 +36,7 @@ impl StagedWorktreeView {
         root: &Path,
         _visible_tree_oid_cache: &mut VisibleTreeOidCache,
     ) -> Result<StagedWorktreeView, String> {
+        let staged_files = staged_tracked_files(root)?;
         let materialization_root = create_snapshot_root(root)?;
         if let Err(err) = platform::create_private_dir(&materialization_root.join("lazy"))
             .and_then(|_| platform::create_private_dir(&materialization_root.join("scopes")))
@@ -53,7 +53,7 @@ impl StagedWorktreeView {
             lazy_root: materialization_root.join("lazy"),
             scope_roots: materialization_root.join("scopes"),
             materialization_root,
-            active_excludes_by_deny: RefCell::new(BTreeMap::new()),
+            staged_files,
             unpacked_paths: RefCell::new(BTreeSet::new()),
             blob_reader: RefCell::new(None),
             next_scope_id: Cell::new(0),
@@ -71,11 +71,8 @@ impl StagedWorktreeView {
         scope: &[String],
     ) -> Result<PathBuf, String> {
         let scope = sanitize_scope(scope, agent)?;
-        let deny_patterns = sorted_effective_ignore_patterns(agent);
-        // Configured ignore patterns are part of evaluator-visible Git tree
-        // construction (see glossary). The lazy hardlink policy below receives
-        // the already selected `scope_paths` for that tree.
-        let scope_paths = self.scope_paths_in_evaluator_visible_git_tree(&scope, &deny_patterns)?;
+        let git_tree = self.evaluator_visible_git_tree(agent);
+        let scope_paths = scope_paths_in_git_tree(&git_tree, &scope);
         self.materialize_scope(&scope, &scope_paths)
     }
 
@@ -91,43 +88,23 @@ impl StagedWorktreeView {
         self.hardlink_scope_root(scope_paths)
     }
 
-    fn scope_paths_in_evaluator_visible_git_tree(
-        &self,
-        scope: &[String],
-        deny_patterns: &[String],
-    ) -> Result<Vec<StagedTrackedFile>, String> {
-        let active_excludes = self.active_excluding_ignore_pathspecs(deny_patterns)?;
-        let pathspecs = scope_pathspecs_with_excludes(scope, &active_excludes);
-        staged_tracked_files_for_pathspecs(&self.source_root, &pathspecs).map(|files| {
-            files
-                .into_iter()
-                .filter(StagedTrackedFile::is_materialized_blob)
-                .collect()
-        })
-    }
-
-    fn active_excluding_ignore_pathspecs(
-        &self,
-        deny_patterns: &[String],
-    ) -> Result<Vec<String>, String> {
-        if let Some(active) = self.active_excludes_by_deny.borrow().get(deny_patterns) {
-            return Ok(active.clone());
-        }
-        let mut active = Vec::new();
-        for pattern in deny_patterns {
-            if !staged_tracked_files_for_pathspecs(
-                &self.source_root,
-                std::slice::from_ref(pattern),
-            )?
-            .is_empty()
-            {
-                active.push(excluding_ignore_pathspec(pattern));
-            }
-        }
-        self.active_excludes_by_deny
-            .borrow_mut()
-            .insert(deny_patterns.to_vec(), active.clone());
-        Ok(active)
+    fn evaluator_visible_git_tree(&self, agent: &AgentConfig) -> Vec<StagedTrackedFile> {
+        let deny_patterns = sorted_effective_ignore_patterns(agent);
+        // This is the Git tree handed to the lazy hardlink materializer:
+        // mandatory/configured ignore patterns are already removed from the
+        // evaluator-visible tree, and Gitlinks are not file entries with blob
+        // contents. Symlink entries are retained because Git stores their link
+        // target as blob contents.
+        self.staged_files
+            .iter()
+            .filter(|file| file.is_file_entry_with_blob_contents())
+            .filter(|file| {
+                !deny_patterns
+                    .iter()
+                    .any(|pattern| path_matches_pattern_bytes(&file.path, pattern.as_bytes()))
+            })
+            .cloned()
+            .collect()
     }
 
     fn unpack_missing_files(&self, files: &[StagedTrackedFile]) -> Result<(), String> {
@@ -217,6 +194,17 @@ fn sorted_effective_ignore_patterns(agent: &AgentConfig) -> Vec<String> {
     patterns.sort();
     patterns.dedup();
     patterns
+}
+
+fn scope_paths_in_git_tree(
+    git_tree: &[StagedTrackedFile],
+    scope: &[String],
+) -> Vec<StagedTrackedFile> {
+    git_tree
+        .iter()
+        .filter(|file| path_bytes_in_scope(&file.path, scope))
+        .cloned()
+        .collect()
 }
 
 fn write_materialized_file(

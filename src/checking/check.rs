@@ -25,7 +25,7 @@ use crate::check_types::{
 use crate::config_types::CheckConfig;
 use crate::evaluator_types::EvaluatorRunner;
 use crate::history::HistoryCache;
-use crate::history_append::append_history_record_with_cache;
+use crate::history_append::append_current_history_record_with_cache;
 use crate::history_reuse::is_reusable_history_record;
 use crate::logging::DiagnosticLogWriter;
 use crate::platform::check_interrupted;
@@ -292,11 +292,11 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             if accepted {
                 interrogation = narrowed;
             } else {
-                // A rejected suggestion does not create a new stored q-scope.
-                // Keep the original wide interrogation record, whose scope is
-                // the current verified q-scope that seeded this turn, or full
-                // project scope after policy widening. The rejected candidate
-                // stays in the diagnostic narrowing event only.
+                // A rejected q-scope suggestion remains an evaluator-provided
+                // claim, but it is not a verified q-scope available for final
+                // output, answer history, or future visible-scope formation.
+                // Keep the original wide interrogation record; the rejected
+                // candidate stays in the diagnostic narrowing event only.
                 interrogation.record.suggested_q_scope = None;
                 debug_assert_eq!(interrogation.record.scope, verified_q_scope);
             }
@@ -305,11 +305,12 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         // expectation shape, including free-form exact strings. Error and
         // unparsable responses are not written to history.
         if is_reusable_history_record(&interrogation.record) {
-            run_expectation_try!(append_history_record_with_cache(
+            run_expectation_try!(append_current_history_record_with_cache(
                 root,
                 expectation,
                 &interrogation.record,
                 &mut caches.history,
+                &mut caches.visible_tree_oid,
             ));
         }
         run_expectation_try!(write_latest_non_pass_record_with_cache(

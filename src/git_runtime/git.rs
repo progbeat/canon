@@ -13,7 +13,11 @@ pub(crate) struct StagedTrackedFile {
 }
 
 impl StagedTrackedFile {
-    pub(crate) fn is_materialized_blob(&self) -> bool {
+    pub(crate) fn is_file_entry_with_blob_contents(&self) -> bool {
+        // Git tree "file_entries" for evaluator materialization are entries
+        // whose object can be read as blob contents. Mode 120000 is a symlink
+        // entry in Git, and its blob contents are materialized as a regular
+        // file by the lazy hardlink policy.
         matches!(self.mode.as_str(), "100644" | "100755" | "120000")
     }
 }
@@ -51,19 +55,23 @@ pub(crate) fn staged_tracked_files(root: &Path) -> Result<Vec<StagedTrackedFile>
     tracked_files_for_pathspecs(root, None, &[])
 }
 
-pub(crate) fn staged_tracked_files_for_pathspecs(
-    root: &Path,
-    pathspecs: &[String],
-) -> Result<Vec<StagedTrackedFile>, String> {
-    tracked_files_for_pathspecs(root, None, pathspecs)
-}
-
-pub(crate) fn tracked_files_for_pathspecs_in_index(
-    root: &Path,
-    index_file: &Path,
-    pathspecs: &[String],
-) -> Result<Vec<StagedTrackedFile>, String> {
-    tracked_files_for_pathspecs(root, Some(index_file), pathspecs)
+pub(crate) fn head_tracked_files(root: &Path) -> Result<Option<Vec<StagedTrackedFile>>, String> {
+    if !git_head_tree_exists(root)? {
+        return Ok(None);
+    }
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-tree", "-rz", "--full-tree", "HEAD"])
+        .output()
+        .map_err(|err| format!("failed to run git ls-tree: {}", err))?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed to inspect HEAD tree: {}",
+            command_output_trimmed(&output.stderr, "git ls-tree stderr")?
+        ));
+    }
+    parse_head_tracked_files(&output.stdout).map(Some)
 }
 
 fn tracked_files_for_pathspecs(
@@ -99,6 +107,41 @@ fn tracked_files_for_pathspecs(
         }
     }
     Ok(files)
+}
+
+fn parse_head_tracked_files(stdout: &[u8]) -> Result<Vec<StagedTrackedFile>, String> {
+    let mut files = Vec::new();
+    for entry in stdout.split(|byte| *byte == 0) {
+        if entry.is_empty() {
+            continue;
+        }
+        files.push(parse_head_tracked_file(entry)?);
+    }
+    Ok(files)
+}
+
+fn parse_head_tracked_file(entry: &[u8]) -> Result<StagedTrackedFile, String> {
+    let tab = entry
+        .iter()
+        .position(|byte| *byte == b'\t')
+        .ok_or_else(|| "git ls-tree entry missing path separator".to_string())?;
+    let metadata = std::str::from_utf8(&entry[..tab])
+        .map_err(|_| "git ls-tree entry metadata must be valid UTF-8".to_string())?;
+    let mut fields = metadata.split_whitespace();
+    let mode = fields
+        .next()
+        .ok_or_else(|| "git ls-tree entry missing mode".to_string())?;
+    let _kind = fields
+        .next()
+        .ok_or_else(|| "git ls-tree entry missing object type".to_string())?;
+    let object_id = fields
+        .next()
+        .ok_or_else(|| "git ls-tree entry missing object id".to_string())?;
+    Ok(StagedTrackedFile {
+        path: entry[tab + 1..].to_vec(),
+        mode: mode.to_string(),
+        object_id: object_id.to_string(),
+    })
 }
 
 fn parse_staged_tracked_file(entry: &[u8]) -> Result<Option<StagedTrackedFile>, String> {

@@ -57,7 +57,7 @@ pub(crate) fn latest_history_record_matching_visible_tree_oid(
                 return Ok(HistoryRecordScan::Continue);
             };
             let Some(current_visible_tree_oid) = current_visible_tree_oid_for_scope(&scope)? else {
-                return Ok(HistoryRecordScan::Done(None));
+                return Ok(HistoryRecordScan::Continue);
             };
             if current_visible_tree_oid == record.visible_tree_oid {
                 record.scope = scope;
@@ -79,9 +79,11 @@ pub(crate) fn cooldown_history_record(
         return Ok(None);
     };
     let record = scan_latest_history_records(root, expectation, history_cache, |mut record| {
-        // Cooldown keys off the latest answer history record. Legacy non-answer
-        // rows and invalid scopes are skipped here, while a newer valid fail
-        // still blocks cooldown reuse of an older pass.
+        // Cooldown keys off the latest usable answer history record, unlike
+        // same-tree lookup which searches for the latest visibleTreeOid match.
+        // Legacy non-answer rows and invalid scopes are skipped here, while a
+        // newer valid fail, bad timestamp, or expired pass deliberately blocks
+        // cooldown reuse of an older pass.
         if !is_reusable_history_record_for_expected(&record, &expectation.a) {
             return Ok(HistoryRecordScan::Continue);
         }

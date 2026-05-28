@@ -99,6 +99,10 @@ expectations:
     assert!(instructions.contains("For self-contained questions"));
     assert!(instructions.contains("Do not cite proxy evidence"));
     assert!(instructions.contains("qScopeSuggestion"));
+    assert!(instructions.contains("narrowest scope"));
+    assert!(instructions.contains("answer and justify the whole question"));
+    assert!(instructions.contains("missing files in the enforced scope"));
+    assert!(instructions.contains("direct evidence from the relevant implementation files"));
     assert!(instructions.contains("Enforced scope: [\".\"]"));
     assert!(instructions.contains("Answer-selection policy:"));
     assert!(!instructions.contains("Instruction-boundary policy"));

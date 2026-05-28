@@ -129,11 +129,11 @@ pub(crate) fn q_scope_suggestion_should_get_independent_verification(
     current_scope: &[String],
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<bool, String> {
-    // This is only the Interrogation Policy gate for whether to spend an
-    // independent verification turn: valid scope syntax and at least 25% fewer
-    // visible files. It never accepts or stores the suggestion. Acceptance
-    // happens only after that independent interrogation returns a schema-valid
-    // answer.
+    // Glossary-level q-scope suggestions are evaluator-provided claims. This
+    // helper implements only the Interrogation Policy gate for whether such a
+    // claim is worth an independent verification turn: valid scope syntax and
+    // at least 25% fewer visible files. A false result leaves the evaluator's
+    // claim unverified; it does not redefine what a q-scope suggestion is.
     let Some(suggestion) = suggestion else {
         return Ok(false);
     };
@@ -152,8 +152,9 @@ pub(crate) fn q_scope_suggestion_should_get_independent_verification(
 }
 
 pub(crate) fn narrowed_scope_is_accepted(narrowed: &CheckRecord) -> bool {
-    // A suggestion is accepted only after an independent narrowed
-    // interrogation returns a schema-valid answer.
+    // Acceptance means the q-scope suggestion graduated from evaluator claim
+    // to verified reusable q-scope. Interrogation Policy requires the
+    // independent verification turn to produce a schema-valid answer.
     is_reusable_history_record(narrowed)
 }
 

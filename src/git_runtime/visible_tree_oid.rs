@@ -1,24 +1,16 @@
 use crate::config_types::AgentConfig;
-use crate::git::{
-    git_head_tree_exists, staged_tracked_files_for_pathspecs, tracked_files_for_pathspecs_in_index,
-    StagedTrackedFile,
-};
+use crate::git::{head_tracked_files, staged_tracked_files, StagedTrackedFile};
 #[cfg(test)]
 use crate::hash::full_scope;
 use crate::project::command_output_trimmed;
-#[cfg(all(test, unix))]
-use crate::scope::scope_pathspecs;
 use crate::scope::{
-    effective_ignore_patterns, excluding_ignore_pathspec, sanitize_scope_for_hash,
-    scope_pathspecs_with_excludes,
+    effective_ignore_patterns, is_denied_path_bytes, path_bytes_in_scope, sanitize_scope_for_hash,
 };
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 // Cache-spec ownership note: this module implements only the `visibleTreeOid`
 // fingerprint. Answer-history storage, JSONL rendering, append, and compaction
@@ -28,13 +20,14 @@ const HEX: &[u8; 16] = b"0123456789abcdef";
 const RAW_PATH_HEX_PREFIX: &str = "\0raw-path-hex:";
 
 type ScopeCacheKey = (PathBuf, Vec<String>, Vec<String>);
-static HEAD_INDEX_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Default)]
 pub(crate) struct VisibleTreeOidCache {
     staged_tree_oids: BTreeMap<ScopeCacheKey, Option<String>>,
     staged_entries: BTreeMap<ScopeCacheKey, Vec<String>>,
+    staged_files: BTreeMap<PathBuf, Result<Vec<StagedTrackedFile>, String>>,
     gate_head_values: BTreeMap<ScopeCacheKey, Option<String>>,
+    head_files: BTreeMap<PathBuf, Result<Option<Vec<StagedTrackedFile>>, String>>,
     object_hash_algorithms: BTreeMap<PathBuf, GitObjectHashAlgorithm>,
 }
 
@@ -97,9 +90,19 @@ impl VisibleTreeOidCache {
         if let Some(entries) = self.staged_entries.get(&key) {
             return Ok(entries.clone());
         }
-        let entries = staged_visible_scope_entries(root, agent, scope)?;
+        let files = self.staged_files(root)?;
+        let entries = visible_scope_entries_from_files(&files, agent, scope);
         self.staged_entries.insert(key, entries.clone());
         Ok(entries)
+    }
+
+    fn staged_files(&mut self, root: &Path) -> Result<Vec<StagedTrackedFile>, String> {
+        if let Some(files) = self.staged_files.get(root) {
+            return files.clone();
+        }
+        let files = staged_tracked_files(root);
+        self.staged_files.insert(root.to_path_buf(), files.clone());
+        files
     }
 
     #[cfg(test)]
@@ -114,7 +117,8 @@ impl VisibleTreeOidCache {
         scope: &[String],
     ) -> Result<Vec<String>, String> {
         let scope = sanitize_scope_for_hash(scope)?;
-        staged_scope_entries_for_pathspecs(root, &scope_pathspecs(&scope))
+        let files = self.staged_files(root)?;
+        Ok(scope_entries_from_files(&files, &scope))
     }
 
     pub(crate) fn gate_head_tree_fingerprint(
@@ -129,11 +133,32 @@ impl VisibleTreeOidCache {
             return Ok(hash.clone());
         }
         let object_hash_algorithm = self.object_hash_algorithm(root)?;
-        let hash = head_visible_scope_entries(root, agent, &scope)?
+        let hash = self
+            .head_visible_scope_entries(root, agent, &scope)?
             .map(|entries| visible_tree_oid_from_entries(&entries, object_hash_algorithm))
             .transpose()?;
         self.gate_head_values.insert(key, hash.clone());
         Ok(hash)
+    }
+
+    fn head_visible_scope_entries(
+        &mut self,
+        root: &Path,
+        agent: &AgentConfig,
+        scope: &[String],
+    ) -> Result<Option<Vec<String>>, String> {
+        Ok(self
+            .head_files(root)?
+            .map(|files| visible_scope_entries_from_files(&files, agent, scope)))
+    }
+
+    fn head_files(&mut self, root: &Path) -> Result<Option<Vec<StagedTrackedFile>>, String> {
+        if let Some(files) = self.head_files.get(root) {
+            return files.clone();
+        }
+        let files = head_tracked_files(root);
+        self.head_files.insert(root.to_path_buf(), files.clone());
+        files
     }
 
     fn object_hash_algorithm(&mut self, root: &Path) -> Result<GitObjectHashAlgorithm, String> {
@@ -169,11 +194,7 @@ pub(crate) fn gate_head_tree_fingerprint(
     agent: &AgentConfig,
     scope: &[String],
 ) -> Result<Option<String>, String> {
-    let scope = sanitize_scope_for_hash(scope)?;
-    let object_hash_algorithm = git_object_hash_algorithm(root)?;
-    head_visible_scope_entries(root, agent, &scope)?
-        .map(|entries| visible_tree_oid_from_entries(&entries, object_hash_algorithm))
-        .transpose()
+    VisibleTreeOidCache::new().gate_head_tree_fingerprint(root, agent, scope)
 }
 
 fn visible_tree_oid_from_entries(
@@ -487,106 +508,29 @@ pub(crate) fn staged_scope_entries(root: &Path, scope: &[String]) -> Result<Vec<
     VisibleTreeOidCache::new().staged_scope_entries(root, scope)
 }
 
-fn staged_visible_scope_entries(
-    root: &Path,
+fn visible_scope_entries_from_files(
+    files: &[StagedTrackedFile],
     agent: &AgentConfig,
     scope: &[String],
-) -> Result<Vec<String>, String> {
-    let active_excludes = active_staged_excluding_ignore_pathspecs(root, agent)?;
-    staged_scope_entries_for_pathspecs(
-        root,
-        &scope_pathspecs_with_excludes(scope, &active_excludes),
-    )
+) -> Vec<String> {
+    let visible_files = files
+        .iter()
+        .filter(|file| path_bytes_in_scope(&file.path, scope))
+        .filter(|file| !is_denied_path_bytes(agent, &file.path))
+        .collect::<Vec<_>>();
+    tracked_files_scope_entries(&visible_files)
 }
 
-fn head_visible_scope_entries(
-    root: &Path,
-    agent: &AgentConfig,
-    scope: &[String],
-) -> Result<Option<Vec<String>>, String> {
-    if !git_head_tree_exists(root)? {
-        return Ok(None);
-    }
-    head_visible_scope_entries_for_existing_head(root, agent, scope).map(Some)
+#[cfg(all(test, unix))]
+fn scope_entries_from_files(files: &[StagedTrackedFile], scope: &[String]) -> Vec<String> {
+    let visible_files = files
+        .iter()
+        .filter(|file| path_bytes_in_scope(&file.path, scope))
+        .collect::<Vec<_>>();
+    tracked_files_scope_entries(&visible_files)
 }
 
-fn active_staged_excluding_ignore_pathspecs(
-    root: &Path,
-    agent: &AgentConfig,
-) -> Result<Vec<String>, String> {
-    let mut active = Vec::new();
-    for pattern in effective_ignore_patterns(agent) {
-        if !staged_tracked_files_for_pathspecs(root, std::slice::from_ref(&pattern))?.is_empty() {
-            active.push(excluding_ignore_pathspec(&pattern));
-        }
-    }
-    Ok(active)
-}
-
-fn head_visible_scope_entries_for_existing_head(
-    root: &Path,
-    agent: &AgentConfig,
-    scope: &[String],
-) -> Result<Vec<String>, String> {
-    let index_file = temporary_head_index_path(root);
-    let read_tree = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .arg("read-tree")
-        .arg("HEAD")
-        .env("GIT_INDEX_FILE", &index_file)
-        .output()
-        .map_err(|err| format!("failed to run git read-tree: {}", err));
-    let read_tree = match read_tree {
-        Ok(output) => output,
-        Err(err) => {
-            let _ = fs::remove_file(&index_file);
-            return Err(err);
-        }
-    };
-    if !read_tree.status.success() {
-        let _ = fs::remove_file(&index_file);
-        return Err(format!(
-            "failed to load HEAD into temporary index: {}",
-            command_output_trimmed(&read_tree.stderr, "git read-tree stderr")?
-        ));
-    }
-    let result = active_index_excluding_ignore_pathspecs(root, &index_file, agent).and_then(
-        |active_excludes| {
-            let pathspecs = scope_pathspecs_with_excludes(scope, &active_excludes);
-            tracked_files_for_pathspecs_in_index(root, &index_file, &pathspecs)
-                .map(|files| tracked_files_scope_entries(&files))
-        },
-    );
-    let _ = fs::remove_file(&index_file);
-    result
-}
-
-fn active_index_excluding_ignore_pathspecs(
-    root: &Path,
-    index_file: &Path,
-    agent: &AgentConfig,
-) -> Result<Vec<String>, String> {
-    let mut active = Vec::new();
-    for pattern in effective_ignore_patterns(agent) {
-        if !tracked_files_for_pathspecs_in_index(root, index_file, std::slice::from_ref(&pattern))?
-            .is_empty()
-        {
-            active.push(excluding_ignore_pathspec(&pattern));
-        }
-    }
-    Ok(active)
-}
-
-fn staged_scope_entries_for_pathspecs(
-    root: &Path,
-    pathspecs: &[String],
-) -> Result<Vec<String>, String> {
-    staged_tracked_files_for_pathspecs(root, pathspecs)
-        .map(|files| tracked_files_scope_entries(&files))
-}
-
-fn tracked_files_scope_entries(files: &[StagedTrackedFile]) -> Vec<String> {
+fn tracked_files_scope_entries(files: &[&StagedTrackedFile]) -> Vec<String> {
     let mut entries = files
         .iter()
         .map(|file| {
@@ -600,15 +544,6 @@ fn tracked_files_scope_entries(files: &[StagedTrackedFile]) -> Vec<String> {
         .collect::<Vec<_>>();
     sort_scope_entries(&mut entries);
     entries
-}
-
-fn temporary_head_index_path(_root: &Path) -> PathBuf {
-    let counter = HEAD_INDEX_COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!(
-        "canon-head-index-{}-{}",
-        std::process::id(),
-        counter
-    ))
 }
 
 #[cfg(test)]

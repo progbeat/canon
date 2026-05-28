@@ -2,6 +2,15 @@ use crate::config_types::AgentConfig;
 use crate::hash::full_scope;
 use std::path::Path;
 
+// Glossary implementation map: this module owns scope path normalization,
+// Git pathspec matching, and ignore matching. Visible-scope selection lives in
+// `check_interrogation_state`; visible-tree hashing/materialization live in
+// `git_runtime::visible_tree_oid` and `staged_snapshot::staged_worktree`;
+// q-scope verification/storage/reuse live in `checking::check`,
+// `check_interrogation_policy`, `history_store::history`, and
+// `history_store::history_reuse`; evaluator-thread reuse invariants live in
+// `check_interrogation_state` and `check_interrogation`.
+
 pub(crate) fn sanitize_scope(scope: &[String], agent: &AgentConfig) -> Result<Vec<String>, String> {
     sanitize_scope_paths(scope, Some(agent))
 }
@@ -106,11 +115,19 @@ pub(crate) fn is_denied_path(agent: &AgentConfig, path: &str) -> bool {
         .any(|pattern| path_matches_pattern(path, pattern))
 }
 
-#[cfg(test)]
 pub(crate) fn is_denied_path_bytes(agent: &AgentConfig, path: &[u8]) -> bool {
     effective_ignore_patterns(agent)
         .iter()
         .any(|pattern| path_matches_pattern_bytes(path, pattern.as_bytes()))
+}
+
+pub(crate) fn path_bytes_in_scope(path: &[u8], scope: &[String]) -> bool {
+    if scope == full_scope() {
+        return true;
+    }
+    scope
+        .iter()
+        .any(|base| path_bytes_match_scope_base(path, base))
 }
 
 pub(crate) fn path_matches_pattern(path: &str, pattern: &str) -> bool {
@@ -133,7 +150,6 @@ fn path_matches_normalized_pattern(path: &str, pattern: &str) -> bool {
     glob_path_matches(path, pattern)
 }
 
-#[cfg(test)]
 pub(crate) fn path_matches_pattern_bytes(path: &[u8], pattern: &[u8]) -> bool {
     let path = trim_dot_slash_bytes(path);
     let pattern = trim_dot_slash_bytes(pattern);
@@ -145,6 +161,66 @@ pub(crate) fn path_matches_pattern_bytes(path: &[u8], pattern: &[u8]) -> bool {
             || glob_prefix_matches_path_bytes(path, prefix);
     }
     glob_path_matches_bytes(path, pattern)
+}
+
+fn path_bytes_match_scope_base(path: &[u8], base: &str) -> bool {
+    let Some(pattern) = pathspec_magic_pattern(base) else {
+        let base = trim_dot_slash_bytes(base.as_bytes());
+        if pathspec_has_wildcard_bytes(base) {
+            return path_matches_pattern_bytes(path, base);
+        }
+        return normalized_scope_contains_bytes(base, trim_dot_slash_bytes(path));
+    };
+    match pattern.magic {
+        PathspecMagic::Glob => path_matches_pathspec_glob_bytes(path, pattern.path.as_bytes()),
+        PathspecMagic::Literal => {
+            normalized_scope_contains_bytes(pattern.path.as_bytes(), trim_dot_slash_bytes(path))
+        }
+    }
+}
+
+struct PathspecPattern<'a> {
+    magic: PathspecMagic,
+    path: &'a str,
+}
+
+enum PathspecMagic {
+    Glob,
+    Literal,
+}
+
+fn pathspec_magic_pattern(pathspec: &str) -> Option<PathspecPattern<'_>> {
+    let rest = pathspec.strip_prefix(":(")?;
+    let end = rest.find(')')?;
+    let magic = &rest[..end];
+    let path = &rest[end + 1..];
+    if magic.split(',').any(|item| item == "glob") {
+        return Some(PathspecPattern {
+            magic: PathspecMagic::Glob,
+            path,
+        });
+    }
+    if magic.split(',').any(|item| item == "literal") {
+        return Some(PathspecPattern {
+            magic: PathspecMagic::Literal,
+            path,
+        });
+    }
+    None
+}
+
+fn pathspec_has_wildcard_bytes(pathspec: &[u8]) -> bool {
+    pathspec.iter().any(|byte| matches!(*byte, b'*' | b'?'))
+}
+
+fn normalized_scope_contains_bytes(base: &[u8], path: &[u8]) -> bool {
+    base == b"." || path == base || path.starts_with(&slash_terminated_base(base))
+}
+
+fn slash_terminated_base(base: &[u8]) -> Vec<u8> {
+    let mut prefix = base.to_vec();
+    prefix.push(b'/');
+    prefix
 }
 
 fn glob_prefix_matches_path(path: &str, prefix: &str) -> bool {
@@ -186,14 +262,12 @@ fn glob_path_matches(path: &str, pattern: &str) -> bool {
     matches[path.len()]
 }
 
-#[cfg(test)]
 fn glob_prefix_matches_path_bytes(path: &[u8], prefix: &[u8]) -> bool {
     path.iter()
         .enumerate()
         .any(|(index, byte)| *byte == b'/' && glob_path_matches_bytes(&path[..index], prefix))
 }
 
-#[cfg(test)]
 fn glob_path_matches_bytes(path: &[u8], pattern: &[u8]) -> bool {
     let mut matches = vec![false; path.len() + 1];
     matches[0] = true;
@@ -226,7 +300,55 @@ fn glob_path_matches_bytes(path: &[u8], pattern: &[u8]) -> bool {
     matches[path.len()]
 }
 
-#[cfg(test)]
+fn path_matches_pathspec_glob_bytes(path: &[u8], pattern: &[u8]) -> bool {
+    let path = trim_dot_slash_bytes(path);
+    let pattern = trim_dot_slash_bytes(pattern);
+    let mut matches = vec![false; path.len() + 1];
+    matches[0] = true;
+    let mut pattern_index = 0;
+    while pattern_index < pattern.len() {
+        let mut next = vec![false; path.len() + 1];
+        let pattern_byte = pattern[pattern_index];
+        let double_star = pattern_byte == b'*'
+            && pattern
+                .get(pattern_index + 1)
+                .is_some_and(|byte| *byte == b'*');
+        for index in 0..=path.len() {
+            if !matches[index] {
+                continue;
+            }
+            match pattern_byte {
+                b'*' if double_star => {
+                    next[index] = true;
+                    let mut end = index;
+                    while end < path.len() {
+                        end += 1;
+                        next[end] = true;
+                    }
+                }
+                b'*' => {
+                    next[index] = true;
+                    let mut end = index;
+                    while end < path.len() && path[end] != b'/' {
+                        end += 1;
+                        next[end] = true;
+                    }
+                }
+                b'?' if index < path.len() && path[index] != b'/' => {
+                    next[index + 1] = true;
+                }
+                literal if index < path.len() && path[index] == literal => {
+                    next[index + 1] = true;
+                }
+                _ => {}
+            }
+        }
+        matches = next;
+        pattern_index += if double_star { 2 } else { 1 };
+    }
+    matches[path.len()]
+}
+
 fn trim_dot_slash_bytes(mut path: &[u8]) -> &[u8] {
     while path.starts_with(b"./") {
         path = &path[2..];
@@ -317,34 +439,6 @@ pub(crate) fn effective_ignore_patterns(agent: &AgentConfig) -> Vec<String> {
         }
     }
     patterns
-}
-
-pub(crate) fn scope_pathspecs(scope: &[String]) -> Vec<String> {
-    if scope == full_scope() {
-        vec![".".to_string()]
-    } else {
-        scope.to_vec()
-    }
-}
-
-pub(crate) fn scope_pathspecs_with_excludes(
-    scope: &[String],
-    excluding_pathspecs: &[String],
-) -> Vec<String> {
-    let mut pathspecs = scope_pathspecs(scope);
-    pathspecs.extend(excluding_pathspecs.iter().cloned());
-    pathspecs
-}
-
-pub(crate) fn excluding_ignore_pathspec(pattern: &str) -> String {
-    if let Some(rest) = pattern.strip_prefix(":(") {
-        if let Some(end) = rest.find(')') {
-            let magic = &rest[..end];
-            let path = &rest[end + 1..];
-            return format!(":(exclude,{}){}", magic, path);
-        }
-    }
-    format!(":(exclude){}", pattern)
 }
 
 fn push_unique_pattern(patterns: &mut Vec<String>, pattern: String) {

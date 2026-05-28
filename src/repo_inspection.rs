@@ -134,7 +134,7 @@ impl RepoInspectionCache {
         let files = self.staged_files(root)?;
         let blob_files = files
             .iter()
-            .filter(|file| file.is_materialized_blob())
+            .filter(|file| file.is_file_entry_with_blob_contents())
             .cloned()
             .collect::<Vec<_>>();
         let object_ids = blob_files

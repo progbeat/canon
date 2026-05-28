@@ -110,7 +110,10 @@ use crate::history::{
     history_file_name, history_path, parse_history_record_line, read_history_records,
     read_history_records_from_path, HistoryCache,
 };
-use crate::history_append::{append_history_record, append_history_record_with_cache};
+use crate::history_append::{
+    append_current_history_record_with_cache, append_history_record,
+    append_history_record_with_cache,
+};
 use crate::history_cache_key::history_cache_key;
 use crate::history_cleanup::{active_expectation_ids, cleanup_stale_cache_dirs};
 use crate::history_compaction::{
@@ -118,7 +121,8 @@ use crate::history_compaction::{
     should_compact_history_for_seed,
 };
 use crate::history_reuse::{
-    cooldown_history_record, is_reusable_history_record, latest_stored_q_scope_with_cache,
+    cooldown_history_record, is_reusable_history_record,
+    latest_history_record_matching_visible_tree_oid, latest_stored_q_scope_with_cache,
     same_tree_history_record, same_tree_history_record_with_cache,
 };
 use crate::hooks::*;
@@ -155,7 +159,8 @@ use crate::project_types::{Config, Note};
 use crate::repo_inspection::RepoInspectionCache;
 use crate::scope::{
     effective_ignore_patterns, is_denied_path, is_denied_path_bytes, is_strict_scope_subset,
-    normalize_repo_path, sanitize_scope, sanitize_scope_for_hash, scope_contains, scope_is_within,
+    normalize_repo_path, path_bytes_in_scope, sanitize_scope, sanitize_scope_for_hash,
+    scope_contains, scope_is_within,
 };
 #[cfg(all(unix, not(target_os = "macos")))]
 use crate::staged_worktree::initialize_snapshot_git_repo_for_test;

@@ -125,6 +125,49 @@ pub(crate) struct EvaluatorResponseJson {
     pub(crate) q_scope_suggestion: Option<Vec<String>>,
 }
 
+impl EvaluatorResponseJson {
+    pub(crate) fn validate_schema(&self) -> Result<(), String> {
+        let has_answer = self.answer.is_some();
+        let has_error = self.error.is_some();
+        if has_answer == has_error {
+            return Err("evaluator response must contain exactly one of answer or error".to_string());
+        }
+        if let Some(answer) = self.answer.as_deref() {
+            if answer.is_empty() || contains_schema_line_break(answer) {
+                return Err("answer must be a non-empty single-line string".to_string());
+            }
+        }
+        if let Some(error) = self.error.as_deref() {
+            if !matches!(
+                error,
+                ERROR_INSUFFICIENT_EVIDENCE | ERROR_INVALID_QUESTION | ERROR_UNPARSABLE
+            ) {
+                return Err(format!("unsupported evaluator error: {}", error));
+            }
+        }
+        if let Some(scope) = self.q_scope_suggestion.as_deref() {
+            if scope.is_empty() {
+                return Err("qScopeSuggestion must contain at least one path".to_string());
+            }
+            for item in scope {
+                if item.is_empty() || contains_schema_line_break(item) {
+                    return Err(
+                        "qScopeSuggestion items must be non-empty single-line strings".to_string(),
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn contains_schema_line_break(value: &str) -> bool {
+    value
+        .as_bytes()
+        .iter()
+        .any(|byte| matches!(byte, b'\r' | b'\n'))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum CheckResult {
