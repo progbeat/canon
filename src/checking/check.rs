@@ -6,7 +6,9 @@ use crate::check_interrogation_policy::{
     restore_record_to_enforced_scope, turn_exceeds_break_after_tokens, turn_has_context_compaction,
     write_scope_narrowing_event, InterrogationCall, ScopedInterrogation,
 };
-use crate::check_interrogation_state::{CheckRuntime, InterrogationRunState};
+use crate::check_interrogation_state::{
+    initial_visible_scope_for_expectation, CheckRuntime, InterrogationRunState,
+};
 use crate::check_order_state::{
     write_latest_non_pass_error_with_cache, write_latest_non_pass_record_with_cache,
 };
@@ -22,10 +24,9 @@ use crate::config_types::AgentConfig;
 #[cfg(test)]
 use crate::config_types::CheckConfig;
 use crate::evaluator_types::EvaluatorRunner;
-use crate::hash::full_scope;
 use crate::history::HistoryCache;
 use crate::history_append::append_history_record_with_cache;
-use crate::history_reuse::{is_reusable_history_record, latest_history_scope_with_cache};
+use crate::history_reuse::is_reusable_history_record;
 use crate::logging::DiagnosticLogWriter;
 use crate::platform::check_interrupted;
 use crate::scope::{sanitize_scope, scope_is_within};
@@ -196,23 +197,11 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             return_expectation_error!("interrupted");
         }
 
-        // Fresh interrogation starts from the stored q-scope, or full project
-        // scope when none is stored. This `enforced_scope` is the inclusion
-        // side of the glossary visible scope; the exclusion side is the
-        // expectation agent's normalized ignore patterns, applied last by both
-        // visibleTreeOid hashing and evaluator working-tree materialization.
-        // Stored scopes come from answer-history records that were accepted
-        // after the independent q-scope verification below. Even when a stored
-        // q-scope's paths are absent in the current tree, the first
-        // interrogation still uses that q-scope; a restricted
-        // insufficient-evidence response is what widens to full project scope.
-        let mut enforced_scope = run_expectation_try!(latest_history_scope_with_cache(
+        let mut enforced_scope = run_expectation_try!(initial_visible_scope_for_expectation(
             root,
-            &expectation.agent,
             expectation,
             &mut caches.history
-        ))
-        .unwrap_or_else(full_scope);
+        ));
         // Response-format problems and evaluator runner/model failures are
         // handled inside this call: they become non-pass review records that
         // are written through `write_latest_non_pass_record_with_cache` below.

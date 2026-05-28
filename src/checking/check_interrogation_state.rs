@@ -1,9 +1,11 @@
-use crate::check_types::{CheckRecord, ObservedAnswerState};
+use crate::check_types::{CheckRecord, ObservedAnswerState, SelectedExpectation};
 use crate::config_types::{AgentConfig, CheckConfig};
 use crate::evaluator_config::app_server_model_key;
 use crate::evaluator_response_cache::EvaluatorResponseParseCache;
 use crate::evaluator_turn::evaluator_models;
 use crate::hash::full_scope;
+use crate::history::HistoryCache;
+use crate::history_reuse::latest_history_scope_with_cache;
 use crate::scope::effective_ignore_patterns;
 use crate::staged_worktree::StagedWorktreeView;
 use crate::visible_tree_oid::VisibleTreeOidCache;
@@ -17,6 +19,27 @@ pub(crate) fn should_retry_full_scope_after_restricted_insufficient_evidence(
     scope != full_scope()
         && ObservedAnswerState::from_observed(&record.observed)
             == ObservedAnswerState::InsufficientEvidence
+}
+
+pub(crate) fn initial_visible_scope_for_expectation(
+    root: &Path,
+    expectation: &SelectedExpectation,
+    history_cache: &mut HistoryCache,
+) -> Result<Vec<String>, String> {
+    // Glossary visible-scope selection starts from the latest verified q-scope
+    // stored in answer history. If no q-scope is stored, fresh interrogation
+    // starts from full project scope. This vector is the inclusion side of the
+    // visible scope; `session_root_for_scope` and visibleTreeOid hashing apply
+    // the expectation agent's normalized ignore patterns as exclusions last.
+    //
+    // Stored scopes are trusted because they are written only after independent
+    // q-scope verification. Even if a stored q-scope's paths are absent in the
+    // current tree, the first interrogation still uses that q-scope; restricted
+    // insufficient-evidence is the only policy that widens it to full scope.
+    Ok(
+        latest_history_scope_with_cache(root, &expectation.agent, expectation, history_cache)?
+            .unwrap_or_else(full_scope),
+    )
 }
 
 pub(crate) fn evaluator_thread_reuse_key(
