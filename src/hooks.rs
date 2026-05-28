@@ -352,9 +352,31 @@ fn git_hooks_path_matches(root: &Path, expected: &Path, existing: &str) -> bool 
 }
 
 pub(crate) fn read_optional_file(path: &Path) -> Result<Option<String>, String> {
-    match fs::read_to_string(path) {
-        Ok(content) => Ok(Some(content)),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(format!("failed to read {}: {}", path.display(), err)),
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(None);
+        }
+        Err(err) => return Err(format!("failed to read {}: {}", path.display(), err)),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "refusing to use symlinked pre-commit hook {}",
+            path.display()
+        ));
     }
+    if !metadata.file_type().is_file() {
+        return Err(format!(
+            "refusing to use non-file pre-commit hook {}",
+            path.display()
+        ));
+    }
+    fs::read_to_string(path)
+        .map(Some)
+        .map_err(|err| format!("failed to read regular file {}: {}", path.display(), err))
 }

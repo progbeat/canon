@@ -733,7 +733,7 @@ fn query_mode_uses_agent_and_does_not_write_history() {
     }));
     let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
     let runtime = CheckRuntime::fixed(&root, &root, &config);
-    let mut interrogation_state = InterrogationState::new();
+    let mut interrogation_run_state = InterrogationRunState::new();
 
     let result = run_query_with_runner(
         &runtime,
@@ -742,7 +742,7 @@ fn query_mode_uses_agent_and_does_not_write_history() {
         &full_scope(),
         &mut runner,
         Some(&mut diagnostic_log),
-        &mut interrogation_state,
+        &mut interrogation_run_state,
     )
     .unwrap();
 
@@ -812,7 +812,7 @@ fn query_mode_accepts_narrowed_incorrect_answer_when_expected_is_known() {
         &answer("no", "src/main.rs still fails it", &["src"]),
     ]);
     let runtime = CheckRuntime::fixed(&root, &root, &config);
-    let mut interrogation_state = InterrogationState::new();
+    let mut interrogation_run_state = InterrogationRunState::new();
 
     let result = run_query_with_runner(
         &runtime,
@@ -821,7 +821,7 @@ fn query_mode_accepts_narrowed_incorrect_answer_when_expected_is_known() {
         &full_scope(),
         &mut runner,
         None,
-        &mut interrogation_state,
+        &mut interrogation_run_state,
     )
     .unwrap();
 
@@ -840,7 +840,7 @@ fn query_mode_rejects_changed_narrowing_when_expected_is_unknown() {
         &answer("no", "changed narrow answer", &["src"]),
     ]);
     let runtime = CheckRuntime::fixed(&root, &root, &config);
-    let mut interrogation_state = InterrogationState::new();
+    let mut interrogation_run_state = InterrogationRunState::new();
 
     let result = run_query_with_runner(
         &runtime,
@@ -849,7 +849,7 @@ fn query_mode_rejects_changed_narrowing_when_expected_is_unknown() {
         &full_scope(),
         &mut runner,
         None,
-        &mut interrogation_state,
+        &mut interrogation_run_state,
     )
     .unwrap();
 
@@ -871,7 +871,7 @@ fn query_mode_keeps_explicit_restricted_scope() {
     )]);
     let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
     let runtime = CheckRuntime::fixed(&root, &root, &config);
-    let mut interrogation_state = InterrogationState::new();
+    let mut interrogation_run_state = InterrogationRunState::new();
 
     let err = run_query_with_runner(
         &runtime,
@@ -880,7 +880,7 @@ fn query_mode_keeps_explicit_restricted_scope() {
         &scope,
         &mut runner,
         Some(&mut diagnostic_log),
-        &mut interrogation_state,
+        &mut interrogation_run_state,
     )
     .unwrap_err();
 
@@ -908,7 +908,7 @@ fn query_mode_accepts_denied_command_no_without_widening_scope() {
     .unwrap();
     let mut runner = FakeRunner::new(&[&response]);
     let runtime = CheckRuntime::fixed(&root, &root, &config);
-    let mut interrogation_state = InterrogationState::new();
+    let mut interrogation_run_state = InterrogationRunState::new();
 
     let result = run_query_with_runner(
         &runtime,
@@ -917,7 +917,7 @@ fn query_mode_accepts_denied_command_no_without_widening_scope() {
         &scope,
         &mut runner,
         None,
-        &mut interrogation_state,
+        &mut interrogation_run_state,
     )
     .unwrap();
 
@@ -941,7 +941,7 @@ fn query_mode_errors_when_full_scope_insufficient_evidence_needs_review() {
     )]);
     let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
     let runtime = CheckRuntime::fixed(&root, &root, &config);
-    let mut interrogation_state = InterrogationState::new();
+    let mut interrogation_run_state = InterrogationRunState::new();
 
     let err = run_query_with_runner(
         &runtime,
@@ -950,7 +950,7 @@ fn query_mode_errors_when_full_scope_insufficient_evidence_needs_review() {
         &full_scope(),
         &mut runner,
         Some(&mut diagnostic_log),
-        &mut interrogation_state,
+        &mut interrogation_run_state,
     )
     .unwrap_err();
 
@@ -974,7 +974,7 @@ fn query_mode_allows_self_contained_evidence_without_project_citation() {
     .unwrap();
     let mut runner = FakeRunner::new(&[&response]);
     let runtime = CheckRuntime::fixed(&root, &root, &config);
-    let mut interrogation_state = InterrogationState::new();
+    let mut interrogation_run_state = InterrogationRunState::new();
 
     let result = run_query_with_runner(
         &runtime,
@@ -983,7 +983,7 @@ fn query_mode_allows_self_contained_evidence_without_project_citation() {
         &full_scope(),
         &mut runner,
         None,
-        &mut interrogation_state,
+        &mut interrogation_run_state,
     )
     .unwrap();
 
@@ -1005,7 +1005,7 @@ fn query_and_full_scope_expectation_use_identical_first_turn_input() {
     let mut query_runner = FakeRunner::new(&[&answer("yes", "query evidence", &["."])]);
     let mut check_runner = FakeRunner::new(&[&answer("yes", "check evidence", &["."])]);
     let runtime = CheckRuntime::fixed(&root, &root, &config);
-    let mut query_state = InterrogationState::new();
+    let mut query_state = InterrogationRunState::new();
 
     run_query_with_runner(
         &runtime,

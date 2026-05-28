@@ -1,5 +1,5 @@
 use crate::check_interrogation::interrogate_expectation_with_model;
-use crate::check_interrogation_state::{CheckRuntime, InterrogationState};
+use crate::check_interrogation_state::{CheckRuntime, InterrogationRunState};
 use crate::check_types::{InterrogationResult, SelectedExpectation};
 use crate::config_types::AgentConfig;
 use crate::evaluator_turn::{is_model_technical_failure, model_label};
@@ -13,7 +13,7 @@ pub(crate) fn interrogate_expectation_with_model_fallbacks<R: EvaluatorRunner>(
     expectation: &SelectedExpectation,
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    state: &mut InterrogationState,
+    state: &mut InterrogationRunState,
     enforced_scope: &[String],
 ) -> Result<InterrogationResult, String> {
     run_with_model_fallbacks(
@@ -37,11 +37,11 @@ pub(crate) fn interrogate_expectation_with_model_fallbacks<R: EvaluatorRunner>(
 
 pub(crate) fn run_with_model_fallbacks<T>(
     agent: &AgentConfig,
-    state: &mut InterrogationState,
+    state: &mut InterrogationRunState,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     expectation_id: Option<&str>,
     mut attempt: impl FnMut(
-        &mut InterrogationState,
+        &mut InterrogationRunState,
         &mut Option<&mut DiagnosticLogWriter>,
         Option<&str>,
     ) -> Result<T, EvaluatorError>,

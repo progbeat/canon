@@ -110,11 +110,15 @@ fn scope_containment_normalizes_repo_paths_before_comparing() {
 }
 
 #[test]
-fn evaluator_session_key_is_not_newline_ambiguous() {
+fn evaluator_thread_reuse_key_is_not_newline_ambiguous() {
     let agent = parse_check_config(check_config_yaml()).unwrap().agent;
     assert_ne!(
-        evaluator_session_key(&agent, &["a\nb".to_string(), "c".to_string()], None),
-        evaluator_session_key(&agent, &["a".to_string(), "b\nc".to_string()], None)
+        evaluator_thread_reuse_key(&agent, &["a\nb".to_string(), "c".to_string()], None, "tree"),
+        evaluator_thread_reuse_key(&agent, &["a".to_string(), "b\nc".to_string()], None, "tree")
+    );
+    assert_ne!(
+        evaluator_thread_reuse_key(&agent, &[".".to_string()], None, "tree-a"),
+        evaluator_thread_reuse_key(&agent, &[".".to_string()], None, "tree-b")
     );
 }
 
@@ -291,7 +295,7 @@ expectations:
     let options = check_options(&config, &["1"], false, true);
     let mut runner = FakeRunner::new(&[&answer("no", "src looked clean", &["src"])]);
     let runtime = CheckRuntime::fixed(&root, &root, &config);
-    let mut state = InterrogationState::new();
+    let mut state = InterrogationRunState::new();
     let result = interrogate_expectation_with_model_fallbacks(
         &runtime,
         &options.selected[0],

@@ -6,7 +6,7 @@ use crate::check_interrogation_policy::{
     restore_record_to_enforced_scope, turn_exceeds_break_after_tokens, turn_has_context_compaction,
     write_scope_narrowing_event, InterrogationCall, ScopedInterrogation,
 };
-use crate::check_interrogation_state::{CheckRuntime, InterrogationState};
+use crate::check_interrogation_state::{CheckRuntime, InterrogationRunState};
 use crate::check_order_state::{
     write_latest_non_pass_error_with_cache, write_latest_non_pass_record_with_cache,
 };
@@ -88,9 +88,12 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     let mut narrowing = NarrowingStats::default();
     let non_selected = options.non_selected.clone();
     let root = runtime.root;
-    // Per-run state is shared so interrogations with the same evaluator model
-    // and visible-tree context can reuse one ephemeral evaluator thread.
-    let mut interrogation_state = InterrogationState::new();
+    // This is shared run state, not a shared evaluator thread. Evaluator
+    // threads are stored in a pool keyed by model plus visibleTreeOid (and
+    // stricter instruction inputs), so full-scope retries and narrowed-scope
+    // verifications start different app-server sessions when they see
+    // different visible trees.
+    let mut interrogation_run_state = InterrogationRunState::new();
     macro_rules! current_error {
         ($error:expr) => {
             check_run_error(
@@ -193,8 +196,11 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             return_expectation_error!("interrupted");
         }
 
-        // Cache selection can bypass reusable answer records, but it does not
-        // erase the interrogation-policy scope seed.
+        // Fresh interrogation starts from the stored q-scope, or full project
+        // scope when none is stored. Stored scopes come from answer-history
+        // records that were accepted after the independent q-scope
+        // verification below; missing paths make that stored visible scope
+        // unavailable, so this run falls back to full project scope.
         let mut enforced_scope = run_expectation_try!(latest_history_scope_with_cache(
             root,
             &expectation.agent,
@@ -223,7 +229,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             },
             runner,
             &mut diagnostic_log,
-            &mut interrogation_state,
+            &mut interrogation_run_state,
             &mut caches.visible_tree_oid,
             options.break_after_tokens,
         ));
@@ -246,7 +252,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         // verification needed to trust a strictly narrower cache scope for
         // this expectation's final record.
         if !record_requires_human_review(&interrogation.record)
-            && run_expectation_try!(should_verify_q_scope_suggestion(
+            && run_expectation_try!(q_scope_suggestion_should_get_independent_verification(
                 root,
                 &expectation.agent,
                 interrogation.record.suggested_q_scope.as_deref(),
@@ -274,7 +280,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 },
                 runner,
                 &mut diagnostic_log,
-                &mut interrogation_state,
+                &mut interrogation_run_state,
                 &mut caches.visible_tree_oid,
             ));
             break_after_tokens_hit |=
@@ -339,7 +345,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             break_after_tokens_hit || context_compaction_hit || stop_after_current_expectation;
         let should_stop = run_stop_signal_hit && !options.check_all;
         if run_stop_signal_hit {
-            interrogation_state.clear_thread_sessions();
+            interrogation_run_state.clear_thread_sessions();
         }
         run_expectation_try!(write_and_flush_result_output(
             &mut result_output,
@@ -463,13 +469,18 @@ struct OrderedCachedSelectionHit {
     index: usize,
 }
 
-fn should_verify_q_scope_suggestion(
+fn q_scope_suggestion_should_get_independent_verification(
     root: &Path,
     agent: &AgentConfig,
     suggestion: Option<&[String]>,
     current_scope: &[String],
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<bool, String> {
+    // This is only the Interrogation Policy gate for whether to spend an
+    // independent verification turn: valid scope syntax, existing paths, and
+    // at least 25% fewer visible files. It never accepts or stores the
+    // suggestion. Acceptance happens only after that independent interrogation
+    // returns a schema-valid answer.
     let Some(suggestion) = suggestion else {
         return Ok(false);
     };

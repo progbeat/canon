@@ -19,13 +19,16 @@ pub(crate) fn should_retry_full_scope_after_restricted_insufficient_evidence(
             == ObservedAnswerState::InsufficientEvidence
 }
 
-pub(crate) fn evaluator_session_key(
+pub(crate) fn evaluator_thread_reuse_key(
     agent: &AgentConfig,
     scope: &[String],
     model: Option<&str>,
+    visible_tree_oid: &str,
 ) -> String {
     let mut key = String::new();
     key.push_str(model.unwrap_or("<default>"));
+    key.push('\0');
+    key.push_str(visible_tree_oid);
     key.push('\0');
     for plugin in &agent.plugins {
         key.push_str(&plugin.len().to_string());
@@ -103,18 +106,21 @@ impl<'a> CheckRuntime<'a> {
     }
 }
 
-pub(crate) struct InterrogationState {
-    pub(crate) sessions_by_visible_context: BTreeMap<String, String>,
+pub(crate) struct InterrogationRunState {
+    // This is a run-level pool of evaluator threads, not one thread. The
+    // reuse key starts with evaluator model and visibleTreeOid, so a changed
+    // visible tree cannot look up an existing session from another tree.
+    pub(crate) thread_sessions_by_reuse_key: BTreeMap<String, String>,
     pub(crate) session_instructions: BTreeMap<String, String>,
     pub(crate) unavailable_models: BTreeSet<String>,
     pub(crate) visible_tree_oid_cache: VisibleTreeOidCache,
     pub(crate) parse_cache: EvaluatorResponseParseCache,
 }
 
-impl InterrogationState {
-    pub(crate) fn new() -> InterrogationState {
-        InterrogationState {
-            sessions_by_visible_context: BTreeMap::new(),
+impl InterrogationRunState {
+    pub(crate) fn new() -> InterrogationRunState {
+        InterrogationRunState {
+            thread_sessions_by_reuse_key: BTreeMap::new(),
             session_instructions: BTreeMap::new(),
             unavailable_models: BTreeSet::new(),
             visible_tree_oid_cache: VisibleTreeOidCache::new(),
@@ -139,7 +145,7 @@ impl InterrogationState {
     }
 
     pub(crate) fn clear_thread_sessions(&mut self) {
-        self.sessions_by_visible_context.clear();
+        self.thread_sessions_by_reuse_key.clear();
         self.session_instructions.clear();
     }
 }

@@ -1,7 +1,7 @@
 use crate::check_errors::error_record_from_interrogation_error;
 use crate::check_interrogation_state::{
     should_retry_full_scope_after_restricted_insufficient_evidence, CheckRuntime,
-    InterrogationState,
+    InterrogationRunState,
 };
 use crate::check_model_fallback::interrogate_expectation_with_model_fallbacks;
 use crate::check_narrowing::scope_narrowing_log_fields;
@@ -42,7 +42,7 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
     call: ScopedInterrogation<'_>,
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    interrogation_state: &mut InterrogationState,
+    interrogation_run_state: &mut InterrogationRunState,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
     break_after_tokens: Option<u64>,
 ) -> Result<InterrogationResult, String> {
@@ -50,7 +50,7 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
         call.call(),
         runner,
         diagnostic_log,
-        interrogation_state,
+        interrogation_run_state,
         visible_tree_oid_cache,
     )?;
     let should_stop_after_current_expectation =
@@ -67,7 +67,7 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
             call.call(),
             runner,
             diagnostic_log,
-            interrogation_state,
+            interrogation_run_state,
             visible_tree_oid_cache,
         )?;
         interrogation.stop_after_current_expectation |= should_stop_after_current_expectation;
@@ -81,7 +81,7 @@ pub(crate) fn interrogate_or_error_record<R: EvaluatorRunner>(
     call: InterrogationCall<'_>,
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    interrogation_state: &mut InterrogationState,
+    interrogation_run_state: &mut InterrogationRunState,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<InterrogationResult, String> {
     match interrogate_expectation_with_model_fallbacks(
@@ -89,7 +89,7 @@ pub(crate) fn interrogate_or_error_record<R: EvaluatorRunner>(
         call.expectation,
         runner,
         diagnostic_log,
-        interrogation_state,
+        interrogation_run_state,
         call.scope,
     ) {
         Ok(interrogation) => Ok(interrogation),

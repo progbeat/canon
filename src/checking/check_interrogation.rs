@@ -1,5 +1,7 @@
 use crate::check_interrogation_records::finalize_interrogation_response;
-use crate::check_interrogation_state::{evaluator_session_key, CheckRuntime, InterrogationState};
+use crate::check_interrogation_state::{
+    evaluator_thread_reuse_key, CheckRuntime, InterrogationRunState,
+};
 use crate::check_model_fallback::write_model_fallback_events;
 use crate::check_types::{InterrogationResult, SelectedExpectation};
 use crate::config_types::AgentConfig;
@@ -29,14 +31,26 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
     runtime: &CheckRuntime<'_>,
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    state: &mut InterrogationState,
+    state: &mut InterrogationRunState,
     request: ThreadTurnRequest<'_>,
 ) -> Result<ParsedTurnResponse, EvaluatorError> {
-    let session_key = evaluator_session_key(request.agent, request.enforced_scope, request.model);
-    // Threads are reused only for the same evaluator model and visible-tree
-    // context. Each turn still sends the current expectation prompt as the only
-    // active task input.
-    let existing_session = state.sessions_by_visible_context.get(&session_key).cloned();
+    let visible_tree_oid = state
+        .visible_tree_oid_cache
+        .staged_visible_tree_oid(runtime.root, request.agent, request.enforced_scope)
+        .map_err(EvaluatorError::message)?;
+    let session_key = evaluator_thread_reuse_key(
+        request.agent,
+        request.enforced_scope,
+        request.model,
+        &visible_tree_oid,
+    );
+    // The lookup key begins with the evaluator model and visibleTreeOid. A
+    // restricted retry or q-scope verification with a different visible tree
+    // therefore misses this pool and starts a separate evaluator thread.
+    let existing_session = state
+        .thread_sessions_by_reuse_key
+        .get(&session_key)
+        .cloned();
     let had_existing_session = existing_session.is_some();
     let lifecycle_log = match existing_session {
         Some(existing) => thread_reuse_log(state, existing, request),
@@ -89,7 +103,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
     };
     if !retire_thread_sessions_after_turn(state, runner.take_retired_sessions(), &session_id) {
         state
-            .sessions_by_visible_context
+            .thread_sessions_by_reuse_key
             .insert(session_key, session_id);
     }
     Ok(response)
@@ -98,7 +112,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
 fn ask_current_session<R: EvaluatorRunner>(
     runner: &mut R,
     session_id: &str,
-    state: &mut InterrogationState,
+    state: &mut InterrogationRunState,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     request: ThreadTurnRequest<'_>,
 ) -> Result<ParsedTurnResponse, EvaluatorError> {
@@ -139,7 +153,7 @@ fn ask_in_thread<R: EvaluatorRunner>(
 fn start_thread_session<R: EvaluatorRunner>(
     runtime: &CheckRuntime<'_>,
     runner: &mut R,
-    state: &mut InterrogationState,
+    state: &mut InterrogationRunState,
     session_key: &str,
     request: ThreadTurnRequest<'_>,
 ) -> Result<ThreadLifecycleLog, EvaluatorError> {
@@ -162,7 +176,7 @@ fn start_thread_session<R: EvaluatorRunner>(
         .session_instructions
         .insert(created.clone(), developer_instructions.clone());
     state
-        .sessions_by_visible_context
+        .thread_sessions_by_reuse_key
         .insert(session_key.to_string(), created.clone());
     Ok(ThreadLifecycleLog {
         event: "thread.start",
@@ -172,7 +186,7 @@ fn start_thread_session<R: EvaluatorRunner>(
 }
 
 fn thread_reuse_log(
-    state: &InterrogationState,
+    state: &InterrogationRunState,
     session_id: String,
     request: ThreadTurnRequest<'_>,
 ) -> ThreadLifecycleLog {
@@ -188,7 +202,7 @@ fn thread_reuse_log(
     }
 }
 
-fn clear_thread_sessions_after_failure(state: &mut InterrogationState) {
+fn clear_thread_sessions_after_failure(state: &mut InterrogationRunState) {
     // Reuse applies only to successful, still-live evaluator threads for the
     // same model and visible-tree context. Technical app-server failures can
     // retire the backing process, so keeping the old session ID would point at
@@ -197,7 +211,7 @@ fn clear_thread_sessions_after_failure(state: &mut InterrogationState) {
 }
 
 fn retire_thread_sessions_after_turn(
-    state: &mut InterrogationState,
+    state: &mut InterrogationRunState,
     retired_sessions: Vec<String>,
     active_session_id: &str,
 ) -> bool {
@@ -206,7 +220,7 @@ fn retire_thread_sessions_after_turn(
     }
     let retired_sessions = retired_sessions.into_iter().collect::<BTreeSet<_>>();
     state
-        .sessions_by_visible_context
+        .thread_sessions_by_reuse_key
         .retain(|_, session_id| !retired_sessions.contains(session_id));
     state
         .session_instructions
@@ -215,7 +229,7 @@ fn retire_thread_sessions_after_turn(
 }
 
 fn fail_after_session_error<T>(
-    state: &mut InterrogationState,
+    state: &mut InterrogationRunState,
     err: EvaluatorError,
 ) -> Result<T, EvaluatorError> {
     if session_failure_invalidates_thread(&err) {
@@ -229,7 +243,7 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
     expectation: &SelectedExpectation,
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    state: &mut InterrogationState,
+    state: &mut InterrogationRunState,
     enforced_scope: &[String],
     model: Option<&str>,
 ) -> Result<InterrogationResult, EvaluatorError> {

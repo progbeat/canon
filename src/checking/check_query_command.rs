@@ -1,5 +1,5 @@
 use crate::check_command::prepare_check_execution;
-use crate::check_interrogation_state::{CheckRuntime, InterrogationState};
+use crate::check_interrogation_state::{CheckRuntime, InterrogationRunState};
 use crate::check_output::write_query_output;
 use crate::check_query::run_query_with_runner;
 use crate::check_reporting::{
@@ -51,7 +51,7 @@ pub(crate) fn run_check_query_command(
         &mut visible_tree_oid_cache,
     )?;
     let runtime = CheckRuntime::materialized(root, &execution.staged_view, config);
-    let mut interrogation_state = InterrogationState::new();
+    let mut interrogation_run_state = InterrogationRunState::new();
     let result = run_query_with_runner(
         &runtime,
         question,
@@ -59,7 +59,7 @@ pub(crate) fn run_check_query_command(
         &enforced_scope,
         &mut execution.runner,
         Some(&mut diagnostic_log),
-        &mut interrogation_state,
+        &mut interrogation_run_state,
     );
     let result = match result {
         Ok(result) => result,

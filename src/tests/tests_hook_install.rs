@@ -172,7 +172,7 @@ fn hook_install_refuses_symlinked_reusable_pre_commit_hook() {
 
     let err = run_hook_install(&root).unwrap_err();
 
-    assert!(err.contains("refusing to chmod symlink"));
+    assert!(err.contains("refusing to use symlinked pre-commit hook"));
     assert_eq!(
         fs::read_to_string(&target).unwrap(),
         DEFAULT_PRE_COMMIT_HOOK

@@ -1,4 +1,4 @@
-use crate::check_interrogation_state::{CheckRuntime, InterrogationState};
+use crate::check_interrogation_state::{CheckRuntime, InterrogationRunState};
 use crate::check_types::{InterrogationResult, ParsedAnswer, QueryResult, SelectedExpectation};
 use crate::evaluator_turn::{record_from_response, ParsedTurnResponse};
 use crate::evaluator_types::EvaluatorError;
@@ -10,7 +10,7 @@ pub(crate) fn finalize_interrogation_response(
     runtime: &CheckRuntime<'_>,
     expectation: &SelectedExpectation,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    state: &mut InterrogationState,
+    state: &mut InterrogationRunState,
     enforced_scope: &[String],
     turn_response: ParsedTurnResponse,
 ) -> Result<InterrogationResult, EvaluatorError> {
@@ -41,7 +41,7 @@ pub(crate) fn finalize_interrogation_response(
 
 pub(crate) fn finalize_query_answer(
     runtime: &CheckRuntime<'_>,
-    state: &mut InterrogationState,
+    state: &mut InterrogationRunState,
     enforced_scope: &[String],
     _question: &str,
     response: ParsedAnswer,
@@ -108,7 +108,7 @@ struct FinalizedParsedAnswer {
 
 fn finalize_parsed_answer(
     runtime: &CheckRuntime<'_>,
-    state: &mut InterrogationState,
+    state: &mut InterrogationRunState,
     agent: &crate::config_types::AgentConfig,
     enforced_scope: &[String],
     response: ParsedAnswer,

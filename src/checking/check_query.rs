@@ -2,7 +2,7 @@ use crate::check_interrogation::{ask_with_reused_thread, ThreadTurnRequest};
 use crate::check_interrogation_records::{
     finalize_query_answer, write_query_result_event, write_query_review_required_event,
 };
-use crate::check_interrogation_state::{CheckRuntime, InterrogationState};
+use crate::check_interrogation_state::{CheckRuntime, InterrogationRunState};
 use crate::check_model_fallback::run_with_model_fallbacks;
 use crate::check_types::{ObservedAnswerState, QueryResult};
 use crate::evaluator_types::{EvaluatorError, EvaluatorRunner};
@@ -21,7 +21,7 @@ pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
     enforced_scope: &[String],
     runner: &mut R,
     diagnostic_log: Option<&mut DiagnosticLogWriter>,
-    state: &mut InterrogationState,
+    state: &mut InterrogationRunState,
 ) -> Result<QueryResult, String> {
     let mut diagnostic_log = diagnostic_log;
     run_with_model_fallbacks(
@@ -50,7 +50,7 @@ pub(crate) fn ask_query_with_model<R: EvaluatorRunner>(
     query: QueryRequest<'_>,
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    state: &mut InterrogationState,
+    state: &mut InterrogationRunState,
     model: Option<&str>,
 ) -> Result<QueryResult, EvaluatorError> {
     // `canon check -q` uses the same evaluator input shape as normal checks.
@@ -85,7 +85,7 @@ fn ask_query_once<R: EvaluatorRunner>(
     enforced_scope: &[String],
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    state: &mut InterrogationState,
+    state: &mut InterrogationRunState,
     model: Option<&str>,
 ) -> Result<QueryResult, EvaluatorError> {
     let prompt = question.to_string();

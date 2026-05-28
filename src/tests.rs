@@ -34,8 +34,8 @@ use crate::check_interrogation::{
 };
 use crate::check_interrogation_records::finalize_interrogation_response;
 use crate::check_interrogation_state::{
-    evaluator_session_key, should_retry_full_scope_after_restricted_insufficient_evidence,
-    CheckRuntime, InterrogationState,
+    evaluator_thread_reuse_key, should_retry_full_scope_after_restricted_insufficient_evidence,
+    CheckRuntime, InterrogationRunState,
 };
 use crate::check_lazy_reset::{
     apply_scheduled_lazy_full_scope_resets, lazy_full_scope_reset_count,
