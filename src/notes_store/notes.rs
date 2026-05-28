@@ -1,5 +1,7 @@
 use crate::fs_util::{crossed_size_compaction_bucket, ensure_dir_without_symlinks, reject_symlink};
 use crate::hash::hash_key;
+#[cfg(any(test, not(unix)))]
+use crate::notes_cli::INDEX_LOCK_STALE_AFTER_SECS;
 use crate::notes_header::{
     header, initial_content, normalize_body, validate_note_key, verify_note_key,
     verify_note_key_from_first_line,
@@ -19,6 +21,8 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
 #[cfg(not(unix))]
 use std::path::PathBuf;
+#[cfg(any(test, not(unix)))]
+use std::time::Duration;
 
 const NOTE_LOG_MARKER: &str = "<!-- canon log v1 -->";
 pub(crate) const NOTE_LOG_COMPACT_MIN_BYTES: u64 = 64 * 1024;
@@ -539,15 +543,68 @@ fn lock_note_at_path(path: &Path) -> Result<NoteLock, String> {
 
 #[cfg(not(unix))]
 fn lock_note_at_path(path: &Path) -> Result<NoteLock, String> {
-    let file = fs::OpenOptions::new()
+    match create_note_lock(path) {
+        Ok(file) => Ok(NoteLock {
+            _file: file,
+            path: path.to_path_buf(),
+        }),
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+            if !note_lock_is_stale(path)? {
+                return Err(format!(
+                    "failed to lock {}: lock is already held",
+                    path.display()
+                ));
+            }
+            remove_stale_note_lock(path)?;
+            let file = create_note_lock(path)
+                .map_err(|err| format!("failed to lock {}: {}", path.display(), err))?;
+            Ok(NoteLock {
+                _file: file,
+                path: path.to_path_buf(),
+            })
+        }
+        Err(err) => Err(format!("failed to lock {}: {}", path.display(), err)),
+    }
+}
+
+#[cfg(not(unix))]
+fn create_note_lock(path: &Path) -> Result<fs::File, io::Error> {
+    fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)
-        .map_err(|err| format!("failed to lock {}: {}", path.display(), err))?;
-    Ok(NoteLock {
-        _file: file,
-        path: path.to_path_buf(),
-    })
+}
+
+#[cfg(any(test, not(unix)))]
+pub(crate) fn stale_note_lock_age(age: Duration) -> bool {
+    age >= Duration::from_secs(INDEX_LOCK_STALE_AFTER_SECS)
+}
+
+#[cfg(not(unix))]
+fn note_lock_is_stale(path: &Path) -> Result<bool, String> {
+    reject_symlink(path)?;
+    let metadata = fs::metadata(path)
+        .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
+    let modified = metadata
+        .modified()
+        .map_err(|err| format!("failed to inspect mtime for {}: {}", path.display(), err))?;
+    let age = modified
+        .elapsed()
+        .map_err(|err| format!("failed to inspect age for {}: {}", path.display(), err))?;
+    Ok(stale_note_lock_age(age))
+}
+
+#[cfg(not(unix))]
+fn remove_stale_note_lock(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(format!(
+            "failed to remove stale lock {}: {}",
+            path.display(),
+            err
+        )),
+    }
 }
 
 #[cfg(unix)]

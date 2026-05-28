@@ -21,6 +21,16 @@ fn path_creation_is_deterministic() {
 }
 
 #[test]
+fn note_lock_stale_age_has_explicit_threshold() {
+    assert!(!stale_note_lock_age(Duration::from_secs(
+        INDEX_LOCK_STALE_AFTER_SECS - 1
+    )));
+    assert!(stale_note_lock_age(Duration::from_secs(
+        INDEX_LOCK_STALE_AFTER_SECS
+    )));
+}
+
+#[test]
 fn write_and_append_preserve_metadata() {
     with_env("write-append", |_| {
         let config = Config::from_env().unwrap();
