@@ -189,8 +189,6 @@ fn add_memory_backed_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf
     // Prefer memory-backed locations when the host exposes them. Missing
     // candidates are harmless: snapshot creation skips paths that do not exist
     // and later falls back to the ordinary temporary directory.
-    push_unique_path(parents, PathBuf::from("/dev/shm"));
-    push_unique_path(parents, PathBuf::from("/run/shm"));
     for path in discover_memory_backed_mount_points() {
         push_unique_path(parents, path);
     }

@@ -66,12 +66,26 @@ pub(crate) fn open_file_for_append_without_following_symlink(
 
 pub(crate) fn staged_snapshot_parent_candidates() -> Vec<PathBuf> {
     let mut parents = Vec::new();
+    add_common_memory_backed_staged_snapshot_parent_candidates(&mut parents);
     imp::add_staged_snapshot_parent_candidates(&mut parents);
     let temp_dir = std::env::temp_dir();
     if !parents.iter().any(|parent| parent == &temp_dir) {
         parents.push(temp_dir);
     }
     parents
+}
+
+fn add_common_memory_backed_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
+    // Prefer common RAM-backed locations before ordinary temp directories.
+    // Missing paths are skipped later by snapshot creation.
+    push_unique_path(parents, PathBuf::from("/dev/shm"));
+    push_unique_path(parents, PathBuf::from("/run/shm"));
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
+    }
 }
 
 pub(crate) fn path_from_git_stdout(mut bytes: Vec<u8>) -> PathBuf {

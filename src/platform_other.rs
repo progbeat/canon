@@ -58,9 +58,10 @@ pub(crate) fn add_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) 
 }
 
 fn add_environment_temp_parent_candidates(parents: &mut Vec<PathBuf>) {
-    // Non-Unix platforms have no portable mount table or standard RAM-backed
-    // temp path. If the host provides one through the standard temp
-    // environment variables, try it before the platform fallback temp dir.
+    // Common RAM-backed paths are added by platform.rs before this function.
+    // Non-Unix platforms have no portable mount table; if the host provides a
+    // RAM-backed temp directory through standard temp environment variables,
+    // try it before the platform fallback temp dir.
     for name in ["TMPDIR", "TEMP", "TMP"] {
         let Some(value) = std::env::var_os(name) else {
             continue;
@@ -78,6 +79,11 @@ fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
 }
 
 pub(crate) fn path_from_git_bytes(bytes: Vec<u8>) -> PathBuf {
+    // Non-Unix Rust paths do not expose a portable raw-byte representation.
+    // Preserve valid UTF-8 exactly and use the same replacement mapping for
+    // invalid bytes everywhere this fallback platform converts Git bytes, so
+    // materialization does not reject Git tree entries solely at the platform
+    // boundary.
     PathBuf::from(String::from_utf8_lossy(&bytes).to_string())
 }
 
@@ -90,7 +96,5 @@ pub(crate) fn git_path_bytes(path: &Path) -> Result<Vec<u8>, String> {
 }
 
 pub(crate) fn os_string_from_bytes(bytes: Vec<u8>) -> Result<std::ffi::OsString, String> {
-    String::from_utf8(bytes)
-        .map(std::ffi::OsString::from)
-        .map_err(|err| format!("path argument must be valid UTF-8: {}", err))
+    Ok(path_from_git_bytes(bytes).into_os_string())
 }
