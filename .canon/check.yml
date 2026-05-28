@@ -67,7 +67,7 @@ expectations:
     a: "yes"
 
   # Init and hooks
-  - q: "Does `canon init` create `.canon/check.yml` from an embedded default template and fail without overwriting when `.canon/check.yml` already exists?"
+  - q: "Does `canon init` create `.canon/check.yml` from the default template file at `.canon/templates/default/check.yml` and fail without overwriting when `.canon/check.yml` already exists?"
     a: "yes"
 
   - q: "Is the local Git configuration for this repository set to run the repository pre-commit hook?"
