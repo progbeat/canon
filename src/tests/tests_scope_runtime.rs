@@ -42,7 +42,7 @@ fn repo_paths_reject_nul_before_process_boundaries() {
 }
 
 #[test]
-fn scope_paths_treat_wildcard_characters_as_literal_filename_bytes() {
+fn scope_paths_preserve_git_pathspec_characters() {
     let config = parse_check_config(check_config_yaml()).unwrap();
 
     assert_eq!(
@@ -215,7 +215,7 @@ expectations:
 }
 
 #[test]
-fn agent_ignore_patterns_match_single_segment_wildcards() {
+fn agent_ignore_patterns_use_git_pathspec_wildcards() {
     let config = parse_check_config(
         r#"
 version: 1
@@ -233,7 +233,7 @@ expectations:
     .unwrap();
 
     assert!(is_denied_path(&config.agent, "logs/app.log"));
-    assert!(!is_denied_path(&config.agent, "logs/nested/app.log"));
+    assert!(is_denied_path(&config.agent, "logs/nested/app.log"));
     assert!(is_denied_path(&config.agent, "src/a*b.txt"));
 }
 

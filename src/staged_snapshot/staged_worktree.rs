@@ -1,8 +1,10 @@
 use crate::config_types::AgentConfig;
-use crate::git::{staged_tracked_files, GitBlobReader, StagedTrackedFile};
-use crate::hash::full_scope;
+use crate::git::{staged_tracked_files_for_pathspecs, GitBlobReader, StagedTrackedFile};
 use crate::platform;
-use crate::scope::{effective_ignore_patterns, path_matches_pattern_bytes, sanitize_scope};
+use crate::scope::{
+    effective_ignore_patterns, excluding_ignore_pathspec, sanitize_scope,
+    scope_pathspecs_with_excludes,
+};
 use crate::staged_worktree_paths::create_snapshot_root;
 #[cfg(test)]
 pub(crate) use crate::staged_worktree_paths::snapshot_parent_outside_worktree;
@@ -17,8 +19,8 @@ pub(crate) struct StagedWorktreeView {
     materialization_root: PathBuf,
     lazy_root: PathBuf,
     scope_roots: PathBuf,
-    files: Vec<StagedTrackedFile>,
     lazy_trees_by_deny: RefCell<BTreeMap<Vec<String>, PathBuf>>,
+    active_excludes_by_deny: RefCell<BTreeMap<Vec<String>, Vec<String>>>,
     unpacked_paths_by_deny: RefCell<BTreeMap<Vec<String>, BTreeSet<Vec<u8>>>>,
     blob_reader: RefCell<Option<GitBlobReader>>,
     next_lazy_id: Cell<u64>,
@@ -47,20 +49,13 @@ impl StagedWorktreeView {
                 err
             ));
         }
-        let files = match staged_tracked_files(root) {
-            Ok(files) => files,
-            Err(err) => {
-                let _ = fs::remove_dir_all(&materialization_root);
-                return Err(err);
-            }
-        };
         Ok(StagedWorktreeView {
             source_root: root.to_path_buf(),
             lazy_root: materialization_root.join("lazy"),
             scope_roots: materialization_root.join("scopes"),
             materialization_root,
-            files,
             lazy_trees_by_deny: RefCell::new(BTreeMap::new()),
+            active_excludes_by_deny: RefCell::new(BTreeMap::new()),
             unpacked_paths_by_deny: RefCell::new(BTreeMap::new()),
             blob_reader: RefCell::new(None),
             next_lazy_id: Cell::new(0),
@@ -80,27 +75,49 @@ impl StagedWorktreeView {
     ) -> Result<PathBuf, String> {
         let scope = sanitize_scope(scope, agent)?;
         let deny_patterns = sorted_effective_ignore_patterns(agent);
-        let visible_files = self.visible_files(&scope, &deny_patterns);
+        let visible_files = self.visible_files(&scope, &deny_patterns)?;
         let lazy_tree = self.lazy_tree_for_deny_patterns(&deny_patterns)?;
         self.unpack_missing_files(&lazy_tree, &deny_patterns, &visible_files)?;
         self.copy_scope_root(&lazy_tree, &visible_files)
     }
 
-    fn visible_files(&self, scope: &[String], deny_patterns: &[String]) -> Vec<StagedTrackedFile> {
-        // Materialization uses the same glossary visible-scope order as
-        // visibleTreeOid hashing: include files from the stored q-scope/full
-        // scope first, then apply normalized ignore patterns as exclusions.
-        self.files
-            .iter()
-            .filter(|file| {
-                file.is_materialized_blob()
-                    && path_is_in_scope(&file.path, scope)
-                    && !deny_patterns
-                        .iter()
-                        .any(|pattern| path_matches_pattern_bytes(&file.path, pattern.as_bytes()))
-            })
-            .cloned()
-            .collect()
+    fn visible_files(
+        &self,
+        scope: &[String],
+        deny_patterns: &[String],
+    ) -> Result<Vec<StagedTrackedFile>, String> {
+        let active_excludes = self.active_excluding_ignore_pathspecs(deny_patterns)?;
+        let pathspecs = scope_pathspecs_with_excludes(scope, &active_excludes);
+        staged_tracked_files_for_pathspecs(&self.source_root, &pathspecs).map(|files| {
+            files
+                .into_iter()
+                .filter(StagedTrackedFile::is_materialized_blob)
+                .collect()
+        })
+    }
+
+    fn active_excluding_ignore_pathspecs(
+        &self,
+        deny_patterns: &[String],
+    ) -> Result<Vec<String>, String> {
+        if let Some(active) = self.active_excludes_by_deny.borrow().get(deny_patterns) {
+            return Ok(active.clone());
+        }
+        let mut active = Vec::new();
+        for pattern in deny_patterns {
+            if !staged_tracked_files_for_pathspecs(
+                &self.source_root,
+                std::slice::from_ref(pattern),
+            )?
+            .is_empty()
+            {
+                active.push(excluding_ignore_pathspec(pattern));
+            }
+        }
+        self.active_excludes_by_deny
+            .borrow_mut()
+            .insert(deny_patterns.to_vec(), active.clone());
+        Ok(active)
     }
 
     fn lazy_tree_for_deny_patterns(&self, deny_patterns: &[String]) -> Result<PathBuf, String> {
@@ -222,25 +239,6 @@ fn sorted_effective_ignore_patterns(agent: &AgentConfig) -> Vec<String> {
     patterns.sort();
     patterns.dedup();
     patterns
-}
-
-fn path_is_in_scope(path: &[u8], scope: &[String]) -> bool {
-    scope == full_scope()
-        || scope
-            .iter()
-            .any(|base| path_components_start_with(path, base.as_bytes()))
-}
-
-fn path_components_start_with(path: &[u8], base: &[u8]) -> bool {
-    let path_parts = path_components(path);
-    let base_parts = path_components(base);
-    !base_parts.is_empty() && path_parts.starts_with(&base_parts)
-}
-
-fn path_components(path: &[u8]) -> Vec<&[u8]> {
-    path.split(|byte| *byte == b'/')
-        .filter(|component| !component.is_empty())
-        .collect()
 }
 
 fn write_materialized_file(

@@ -48,10 +48,39 @@ pub(crate) fn git_head_tree_exists(root: &Path) -> Result<bool, String> {
 }
 
 pub(crate) fn staged_tracked_files(root: &Path) -> Result<Vec<StagedTrackedFile>, String> {
-    let output = Command::new("git")
+    tracked_files_for_pathspecs(root, None, &[])
+}
+
+pub(crate) fn staged_tracked_files_for_pathspecs(
+    root: &Path,
+    pathspecs: &[String],
+) -> Result<Vec<StagedTrackedFile>, String> {
+    tracked_files_for_pathspecs(root, None, pathspecs)
+}
+
+pub(crate) fn tracked_files_for_pathspecs_in_index(
+    root: &Path,
+    index_file: &Path,
+    pathspecs: &[String],
+) -> Result<Vec<StagedTrackedFile>, String> {
+    tracked_files_for_pathspecs(root, Some(index_file), pathspecs)
+}
+
+fn tracked_files_for_pathspecs(
+    root: &Path,
+    index_file: Option<&Path>,
+    pathspecs: &[String],
+) -> Result<Vec<StagedTrackedFile>, String> {
+    let mut command = Command::new("git");
+    command
         .arg("-C")
         .arg(root)
-        .args(["ls-files", "-z", "--stage"])
+        .args(["ls-files", "-z", "--stage", "--"])
+        .args(pathspecs);
+    if let Some(index_file) = index_file {
+        command.env("GIT_INDEX_FILE", index_file);
+    }
+    let output = command
         .output()
         .map_err(|err| format!("failed to run git ls-files: {}", err))?;
     if !output.status.success() {

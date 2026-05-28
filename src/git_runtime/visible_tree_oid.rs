@@ -1,15 +1,21 @@
 use crate::config_types::AgentConfig;
-use crate::git::git_head_tree_exists;
+use crate::git::{
+    git_head_tree_exists, staged_tracked_files_for_pathspecs, tracked_files_for_pathspecs_in_index,
+    StagedTrackedFile,
+};
 use crate::hash::full_scope;
 use crate::project::command_output_trimmed;
 use crate::scope::{
-    effective_ignore_patterns, path_matches_pattern_bytes, sanitize_scope_for_hash,
+    effective_ignore_patterns, excluding_ignore_pathspec, sanitize_scope_for_hash, scope_pathspecs,
+    scope_pathspecs_with_excludes,
 };
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 // Cache-spec ownership note: this module implements only the `visibleTreeOid`
 // fingerprint. Answer-history storage, JSONL rendering, append, and compaction
@@ -19,18 +25,12 @@ const HEX: &[u8; 16] = b"0123456789abcdef";
 const RAW_PATH_HEX_PREFIX: &str = "\0raw-path-hex:";
 
 type ScopeCacheKey = (PathBuf, Vec<String>, Vec<String>);
+static HEAD_INDEX_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Default)]
 pub(crate) struct VisibleTreeOidCache {
     values: BTreeMap<ScopeCacheKey, Option<String>>,
-    // These root-level entries are the only staged-tree Git subprocess
-    // results used by `canon check`; scope-specific lookups filter/hash them
-    // in memory.
-    staged_all_entries: BTreeMap<PathBuf, Vec<String>>,
-    staged_root_tree_oids: BTreeMap<PathBuf, String>,
     gate_head_values: BTreeMap<ScopeCacheKey, Option<String>>,
-    gate_head_all_entries: BTreeMap<PathBuf, Option<Vec<String>>>,
-    head_exists: BTreeMap<PathBuf, bool>,
     object_hash_algorithms: BTreeMap<PathBuf, GitObjectHashAlgorithm>,
 }
 
@@ -56,7 +56,7 @@ impl VisibleTreeOidCache {
         scope: &[String],
     ) -> Result<usize, String> {
         let scope = sanitize_scope_for_hash(scope)?;
-        let entries = self.staged_scope_entries_from_full_listing(root, agent, &scope)?;
+        let entries = staged_visible_scope_entries(root, agent, &scope)?;
         Ok(entries
             .iter()
             .filter(|entry| !scope_entry_is_tree(entry))
@@ -72,13 +72,15 @@ impl VisibleTreeOidCache {
         if scope == full_scope() {
             return Ok(Vec::new());
         }
-        let entries = self.staged_all_scope_entries(root)?;
         Ok(scope
             .into_iter()
             .filter(|base| {
-                !entries
-                    .iter()
-                    .any(|entry| scope_entry_is_within_base(base, entry))
+                staged_scope_entries_for_pathspecs(
+                    root,
+                    &scope_pathspecs(std::slice::from_ref(base)),
+                )
+                .map(|entries| entries.is_empty())
+                .unwrap_or(true)
             })
             .collect())
     }
@@ -94,57 +96,13 @@ impl VisibleTreeOidCache {
         if let Some(hash) = self.values.get(&key) {
             return Ok(hash.clone());
         }
-        let root_tree_oid = self.staged_root_tree_oid(root)?;
-        let entries = self.staged_all_scope_entries(root)?.clone();
-        let visible_entries = filter_visible_scope_entries(&entries, agent, &scope);
-        let hash = Some(
-            if scope == full_scope() && visible_entries.len() == entries.len() {
-                // The visible tree is exactly the staged root tree. Git has already
-                // materialized the required object ID, so preserve that native OID
-                // instead of serializing and hashing an equivalent synthetic tree.
-                root_tree_oid
-            } else {
-                visible_tree_oid_from_entries(&visible_entries, self.object_hash_algorithm(root)?)?
-            },
-        );
+        let visible_entries = staged_visible_scope_entries(root, agent, &scope)?;
+        let hash = Some(visible_tree_oid_from_entries(
+            &visible_entries,
+            self.object_hash_algorithm(root)?,
+        )?);
         self.values.insert(key, hash.clone());
         Ok(hash)
-    }
-
-    fn staged_scope_entries_from_full_listing(
-        &mut self,
-        root: &Path,
-        agent: &AgentConfig,
-        scope: &[String],
-    ) -> Result<Vec<String>, String> {
-        // Visible tree OIDs may be requested for many selected, cached, and
-        // narrowed scopes during one `canon check`, so cache the full listing
-        // once. `visibleTreeOid` hashes the evaluator-visible subset of the
-        // scoped tracked tree: canon/evaluator-denied entries are tracked Git
-        // entries, but absent from the staged snapshot the evaluator sees.
-        let entries = self.staged_all_scope_entries(root)?;
-        Ok(filter_visible_scope_entries(entries, agent, scope))
-    }
-
-    fn staged_all_scope_entries(&mut self, root: &Path) -> Result<&Vec<String>, String> {
-        if !self.staged_all_entries.contains_key(root) {
-            let root_tree_oid = self.staged_root_tree_oid(root)?;
-            let entries = staged_tree_scope_entries(root, &root_tree_oid)?;
-            self.staged_all_entries.insert(root.to_path_buf(), entries);
-        }
-        self.staged_all_entries
-            .get(root)
-            .ok_or_else(|| "failed to cache staged scope entries".to_string())
-    }
-
-    fn staged_root_tree_oid(&mut self, root: &Path) -> Result<String, String> {
-        if let Some(oid) = self.staged_root_tree_oids.get(root) {
-            return Ok(oid.clone());
-        }
-        let oid = git_write_index_tree_oid(root)?;
-        self.staged_root_tree_oids
-            .insert(root.to_path_buf(), oid.clone());
-        Ok(oid)
     }
 
     #[cfg(all(test, unix))]
@@ -153,7 +111,8 @@ impl VisibleTreeOidCache {
         root: &Path,
         scope: &[String],
     ) -> Result<Vec<String>, String> {
-        staged_scope_entries_for_scope(root, scope)
+        let scope = sanitize_scope_for_hash(scope)?;
+        staged_scope_entries_for_pathspecs(root, &scope_pathspecs(&scope))
     }
 
     pub(crate) fn gate_head_tree_fingerprint(
@@ -167,44 +126,12 @@ impl VisibleTreeOidCache {
         if let Some(hash) = self.gate_head_values.get(&key) {
             return Ok(hash.clone());
         }
-        // Gate compares staged cache records with the committed HEAD tree to
-        // tell whether a cached failure is a new regression. The same scoped
-        // tree object construction is used for answer-history `visibleTreeOid`
-        // records produced by `staged_visible_tree_oid`.
         let object_hash_algorithm = self.object_hash_algorithm(root)?;
-        let hash = self
-            .gate_head_entries_from_full_listing(root)?
-            .map(|entries| filter_visible_scope_entries(&entries, agent, &scope))
+        let hash = head_visible_scope_entries(root, agent, &scope)?
             .map(|entries| visible_tree_oid_from_entries(&entries, object_hash_algorithm))
             .transpose()?;
         self.gate_head_values.insert(key, hash.clone());
         Ok(hash)
-    }
-
-    fn gate_head_entries_from_full_listing(
-        &mut self,
-        root: &Path,
-    ) -> Result<Option<Vec<String>>, String> {
-        if self.gate_head_all_entries.contains_key(root) {
-            return Ok(self.gate_head_all_entries.get(root).cloned().flatten());
-        }
-        if !self.git_has_head(root)? {
-            self.gate_head_all_entries.insert(root.to_path_buf(), None);
-            return Ok(None);
-        }
-        let entries = head_scope_entries_for_existing_head(root).map(Some)?;
-        self.gate_head_all_entries
-            .insert(root.to_path_buf(), entries.clone());
-        Ok(entries)
-    }
-
-    pub(crate) fn git_has_head(&mut self, root: &Path) -> Result<bool, String> {
-        if let Some(has_head) = self.head_exists.get(root) {
-            return Ok(*has_head);
-        }
-        let has_head = git_head_tree_exists(root)?;
-        self.head_exists.insert(root.to_path_buf(), has_head);
-        Ok(has_head)
     }
 
     fn object_hash_algorithm(&mut self, root: &Path) -> Result<GitObjectHashAlgorithm, String> {
@@ -242,16 +169,9 @@ pub(crate) fn gate_head_tree_fingerprint(
 ) -> Result<Option<String>, String> {
     let scope = sanitize_scope_for_hash(scope)?;
     let object_hash_algorithm = git_object_hash_algorithm(root)?;
-    head_scope_entries(root, &scope).and_then(|entries| {
-        entries
-            .map(|entries| {
-                visible_tree_oid_from_entries(
-                    &filter_visible_scope_entries(&entries, agent, &scope),
-                    object_hash_algorithm,
-                )
-            })
-            .transpose()
-    })
+    head_visible_scope_entries(root, agent, &scope)?
+        .map(|entries| visible_tree_oid_from_entries(&entries, object_hash_algorithm))
+        .transpose()
 }
 
 fn visible_tree_oid_from_entries(
@@ -557,104 +477,134 @@ pub(crate) fn staged_scope_entries(root: &Path, scope: &[String]) -> Result<Vec<
     VisibleTreeOidCache::new().staged_scope_entries(root, scope)
 }
 
-#[cfg(test)]
-pub(crate) fn head_scope_entries(
+fn staged_visible_scope_entries(
     root: &Path,
+    agent: &AgentConfig,
+    scope: &[String],
+) -> Result<Vec<String>, String> {
+    let active_excludes = active_staged_excluding_ignore_pathspecs(root, agent)?;
+    staged_scope_entries_for_pathspecs(
+        root,
+        &scope_pathspecs_with_excludes(scope, &active_excludes),
+    )
+}
+
+fn head_visible_scope_entries(
+    root: &Path,
+    agent: &AgentConfig,
     scope: &[String],
 ) -> Result<Option<Vec<String>>, String> {
     if !git_head_tree_exists(root)? {
         return Ok(None);
     }
-    head_scope_entries_for_existing_head(root)
-        .map(|entries| filter_scope_entries(&entries, scope))
-        .map(Some)
+    head_visible_scope_entries_for_existing_head(root, agent, scope).map(Some)
 }
 
-pub(crate) fn head_scope_entries_for_existing_head(root: &Path) -> Result<Vec<String>, String> {
-    git_scope_entries(root, GitScopeListing::Head)
-}
-
-#[cfg(all(test, unix))]
-fn staged_scope_entries_for_scope(root: &Path, scope: &[String]) -> Result<Vec<String>, String> {
-    let root_tree_oid = git_write_index_tree_oid(root)?;
-    staged_tree_scope_entries(root, &root_tree_oid)
-        .map(|entries| filter_scope_entries(&entries, scope))
-}
-
-#[derive(Clone, Copy)]
-enum GitScopeListing {
-    #[cfg(test)]
-    Index,
-    Head,
-    StagedTree,
-}
-
-fn git_scope_entries(root: &Path, listing: GitScopeListing) -> Result<Vec<String>, String> {
-    git_tree_scope_entries(root, "HEAD", listing)
-}
-
-fn staged_tree_scope_entries(root: &Path, root_tree_oid: &str) -> Result<Vec<String>, String> {
-    git_tree_scope_entries(root, root_tree_oid, GitScopeListing::StagedTree)
-}
-
-fn git_write_index_tree_oid(root: &Path) -> Result<String, String> {
-    let mut command = Command::new("git");
-    command.arg("-C").arg(root).arg("write-tree");
-    let output = command
-        .output()
-        .map_err(|err| format!("failed to run git write-tree: {}", err))?;
-    if !output.status.success() {
-        return Err(format!(
-            "failed to write staged tree: {}",
-            command_output_trimmed(&output.stderr, "git write-tree stderr")?
-        ));
-    }
-    let oid = command_output_trimmed(&output.stdout, "git write-tree stdout")?;
-    if oid.is_empty() {
-        return Err("git write-tree returned an empty tree object id".to_string());
-    }
-    Ok(oid.to_string())
-}
-
-fn git_tree_scope_entries(
+fn active_staged_excluding_ignore_pathspecs(
     root: &Path,
-    treeish: &str,
-    listing: GitScopeListing,
+    agent: &AgentConfig,
 ) -> Result<Vec<String>, String> {
-    let mut command = Command::new("git");
-    command
+    let mut active = Vec::new();
+    for pattern in effective_ignore_patterns(agent) {
+        if !staged_tracked_files_for_pathspecs(root, std::slice::from_ref(&pattern))?.is_empty() {
+            active.push(excluding_ignore_pathspec(&pattern));
+        }
+    }
+    Ok(active)
+}
+
+fn head_visible_scope_entries_for_existing_head(
+    root: &Path,
+    agent: &AgentConfig,
+    scope: &[String],
+) -> Result<Vec<String>, String> {
+    let index_file = temporary_head_index_path(root);
+    let read_tree = Command::new("git")
         .arg("-C")
         .arg(root)
-        .arg("--literal-pathspecs")
-        .args(["ls-tree", "-z", "-r", "-t", treeish, "--"]);
-    let output = command
+        .arg("read-tree")
+        .arg("HEAD")
+        .env("GIT_INDEX_FILE", &index_file)
         .output()
-        .map_err(|err| format!("failed to run {}: {}", listing.command_name(), err))?;
-    if !output.status.success() {
+        .map_err(|err| format!("failed to run git read-tree: {}", err));
+    let read_tree = match read_tree {
+        Ok(output) => output,
+        Err(err) => {
+            let _ = fs::remove_file(&index_file);
+            return Err(err);
+        }
+    };
+    if !read_tree.status.success() {
+        let _ = fs::remove_file(&index_file);
         return Err(format!(
-            "{}: {}",
-            listing.inspect_error(),
-            command_output_trimmed(&output.stderr, listing.stderr_label())?
+            "failed to load HEAD into temporary index: {}",
+            command_output_trimmed(&read_tree.stderr, "git read-tree stderr")?
         ));
     }
-    normalized_git_scope_entries(&output.stdout, listing)
+    let result = active_index_excluding_ignore_pathspecs(root, &index_file, agent).and_then(
+        |active_excludes| {
+            let pathspecs = scope_pathspecs_with_excludes(scope, &active_excludes);
+            tracked_files_for_pathspecs_in_index(root, &index_file, &pathspecs)
+                .map(|files| tracked_files_scope_entries(&files))
+        },
+    );
+    let _ = fs::remove_file(&index_file);
+    result
 }
 
-fn normalized_git_scope_entries(
-    stdout: &[u8],
-    listing: GitScopeListing,
+fn active_index_excluding_ignore_pathspecs(
+    root: &Path,
+    index_file: &Path,
+    agent: &AgentConfig,
 ) -> Result<Vec<String>, String> {
-    let mut entries = Vec::new();
-    for record in stdout.split(|byte| *byte == 0) {
-        if record.is_empty() {
-            continue;
-        }
-        if let Some((metadata, path)) = split_raw_scope_record(record, listing.command_name())? {
-            entries.push(normalize_git_scope_metadata(metadata, path, listing)?);
+    let mut active = Vec::new();
+    for pattern in effective_ignore_patterns(agent) {
+        if !tracked_files_for_pathspecs_in_index(root, index_file, std::slice::from_ref(&pattern))?
+            .is_empty()
+        {
+            active.push(excluding_ignore_pathspec(&pattern));
         }
     }
+    Ok(active)
+}
+
+fn staged_scope_entries_for_pathspecs(
+    root: &Path,
+    pathspecs: &[String],
+) -> Result<Vec<String>, String> {
+    staged_tracked_files_for_pathspecs(root, pathspecs)
+        .map(|files| tracked_files_scope_entries(&files))
+}
+
+fn tracked_files_scope_entries(files: &[StagedTrackedFile]) -> Vec<String> {
+    let mut entries = files
+        .iter()
+        .map(|file| {
+            format!(
+                "{} {}\t{}",
+                file.mode,
+                file.object_id,
+                scope_entry_path(&file.path)
+            )
+        })
+        .collect::<Vec<_>>();
     sort_scope_entries(&mut entries);
-    Ok(entries)
+    entries
+}
+
+fn temporary_head_index_path(_root: &Path) -> PathBuf {
+    let counter = HEAD_INDEX_COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "canon-head-index-{}-{}",
+        std::process::id(),
+        counter
+    ))
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy)]
+enum GitScopeListing {
+    Index,
 }
 
 fn git_object_hash_algorithm(root: &Path) -> Result<GitObjectHashAlgorithm, String> {
@@ -694,100 +644,6 @@ fn filter_scope_entries(entries: &[String], scope: &[String]) -> Vec<String> {
         .collect()
 }
 
-fn filter_visible_scope_entries(
-    entries: &[String],
-    agent: &AgentConfig,
-    scope: &[String],
-) -> Vec<String> {
-    // `visibleTreeOid` fingerprints the glossary visible tree. The base scope
-    // is the latest verified q-scope or full project scope; normalized agent
-    // ignore patterns are then applied last as exclusions. Tracked entries
-    // outside either part cannot support that evaluator answer, so they are
-    // outside the cache-reuse fingerprint.
-    let deny_patterns = effective_ignore_patterns(agent);
-    let visible_entries = entries
-        .iter()
-        .map(|entry| scope_entry_is_visible(entry, scope, &deny_patterns))
-        .collect::<Vec<_>>();
-    let directories_with_non_visible_descendants =
-        directories_with_non_visible_descendants(entries, &visible_entries);
-    entries
-        .iter()
-        .zip(visible_entries)
-        .filter(|(entry, visible)| {
-            // Dropping a Git-reported tree object here does not remove
-            // ancestor directory access from the evaluator-visible tree:
-            // `TreeNode::insert` rebuilds ancestor directories from visible
-            // file entries. We only reuse a tree object's existing OID when it
-            // cannot smuggle non-visible descendants into the fingerprint.
-            *visible
-                && (!scope_entry_is_tree(entry)
-                    || tree_oid_entry_has_only_visible_descendants(
-                        entry,
-                        &directories_with_non_visible_descendants,
-                    ))
-        })
-        .map(|(entry, _)| entry)
-        .cloned()
-        .collect()
-}
-
-fn directories_with_non_visible_descendants(
-    entries: &[String],
-    visible_entries: &[bool],
-) -> BTreeSet<Vec<u8>> {
-    let mut directories = BTreeSet::new();
-    for (entry, visible) in entries.iter().zip(visible_entries) {
-        if *visible {
-            continue;
-        }
-        if let Ok(path) = scope_entry_path_bytes(entry) {
-            add_ancestor_directories(&path, &mut directories);
-        }
-    }
-    directories
-}
-
-fn add_ancestor_directories(path: &[u8], directories: &mut BTreeSet<Vec<u8>>) {
-    let mut end = path.len();
-    while let Some(index) = path[..end].iter().rposition(|byte| *byte == b'/') {
-        if index > 0 {
-            directories.insert(path[..index].to_vec());
-        }
-        end = index;
-    }
-}
-
-fn scope_entry_is_visible(entry: &str, scope: &[String], deny_patterns: &[String]) -> bool {
-    scope_entry_is_in_scope(entry, scope) && !scope_entry_is_denied(entry, deny_patterns)
-}
-
-fn scope_entry_is_in_scope(entry: &str, scope: &[String]) -> bool {
-    scope == full_scope()
-        || scope
-            .iter()
-            .any(|base| scope_entry_is_within_base(base, entry))
-}
-
-fn scope_entry_is_denied(entry: &str, deny_patterns: &[String]) -> bool {
-    let Ok(path) = scope_entry_path_bytes(entry) else {
-        return false;
-    };
-    deny_patterns
-        .iter()
-        .any(|pattern| path_matches_pattern_bytes(&path, pattern.as_bytes()))
-}
-
-fn tree_oid_entry_has_only_visible_descendants(
-    entry: &str,
-    directories_with_non_visible_descendants: &BTreeSet<Vec<u8>>,
-) -> bool {
-    let Ok(directory) = scope_entry_path_bytes(entry) else {
-        return true;
-    };
-    !directories_with_non_visible_descendants.contains(&directory)
-}
-
 fn scope_entry_is_tree(entry: &str) -> bool {
     let metadata = entry.split_once('\t').map(|(metadata, _)| metadata);
     metadata
@@ -795,18 +651,7 @@ fn scope_entry_is_tree(entry: &str) -> bool {
         .is_some_and(is_git_tree_mode)
 }
 
-fn scope_entry_path_bytes(entry: &str) -> Result<Vec<u8>, String> {
-    let components = visible_tree_path_components(scope_entry_from_normalized_entry(entry))?;
-    let mut path = Vec::new();
-    for (index, component) in components.iter().enumerate() {
-        if index > 0 {
-            path.push(b'/');
-        }
-        path.extend_from_slice(component);
-    }
-    Ok(path)
-}
-
+#[cfg(test)]
 fn scope_entry_is_within_base(base: &str, entry: &str) -> bool {
     let path = scope_entry_from_normalized_entry(entry);
     let Ok(base_components) = visible_tree_path_components(base) else {
@@ -818,6 +663,7 @@ fn scope_entry_is_within_base(base: &str, entry: &str) -> bool {
     path_components.starts_with(&base_components)
 }
 
+#[cfg(test)]
 fn scope_entry_from_normalized_entry(entry: &str) -> &str {
     entry
         .split_once('\t')
@@ -825,40 +671,11 @@ fn scope_entry_from_normalized_entry(entry: &str) -> &str {
         .unwrap_or(entry)
 }
 
+#[cfg(test)]
 impl GitScopeListing {
-    fn command_name(self) -> &'static str {
-        match self {
-            #[cfg(test)]
-            GitScopeListing::Index => "git ls-files",
-            GitScopeListing::Head => "git ls-tree",
-            GitScopeListing::StagedTree => "git ls-tree",
-        }
-    }
-
-    fn stderr_label(self) -> &'static str {
-        match self {
-            #[cfg(test)]
-            GitScopeListing::Index => "git ls-files stderr",
-            GitScopeListing::Head => "git ls-tree stderr",
-            GitScopeListing::StagedTree => "git ls-tree stderr",
-        }
-    }
-
-    fn inspect_error(self) -> &'static str {
-        match self {
-            #[cfg(test)]
-            GitScopeListing::Index => "failed to inspect staged scope",
-            GitScopeListing::Head => "failed to inspect HEAD scope",
-            GitScopeListing::StagedTree => "failed to inspect staged scope",
-        }
-    }
-
     fn malformed_entry(self) -> &'static str {
         match self {
-            #[cfg(test)]
             GitScopeListing::Index => "git index entry",
-            GitScopeListing::Head => "git tree entry",
-            GitScopeListing::StagedTree => "git tree entry",
         }
     }
 }
@@ -868,23 +685,12 @@ fn sort_scope_entries(entries: &mut Vec<String>) {
     entries.dedup();
 }
 
-fn split_raw_scope_record<'a>(
-    record: &'a [u8],
-    command: &str,
-) -> Result<Option<(&'a str, &'a [u8])>, String> {
-    let Some(tab) = record.iter().position(|byte| *byte == b'\t') else {
-        return Ok(None);
-    };
-    let metadata = std::str::from_utf8(&record[..tab])
-        .map_err(|_| format!("{} metadata must be valid UTF-8", command))?;
-    Ok(Some((metadata, &record[tab + 1..])))
-}
-
 #[cfg(test)]
 pub(crate) fn normalize_index_metadata(metadata: &str, path: &[u8]) -> Result<String, String> {
     normalize_git_scope_metadata(metadata, path, GitScopeListing::Index)
 }
 
+#[cfg(test)]
 fn normalize_git_scope_metadata(
     metadata: &str,
     path: &[u8],
@@ -894,7 +700,6 @@ fn normalize_git_scope_metadata(
     let mut fields = metadata.split_whitespace();
     let mode = next_scope_metadata_field(&mut fields, listing, &path)?;
     match listing {
-        #[cfg(test)]
         GitScopeListing::Index => {
             let object = next_scope_metadata_field(&mut fields, listing, &path)?;
             let stage = next_scope_metadata_field(&mut fields, listing, &path)?;
@@ -904,27 +709,10 @@ fn normalize_git_scope_metadata(
                 Ok(format!("{} {} {}\t{}", mode, object, stage, path))
             }
         }
-        GitScopeListing::Head | GitScopeListing::StagedTree => {
-            let kind = next_scope_metadata_field(&mut fields, listing, &path)?;
-            let object = next_scope_metadata_field(&mut fields, listing, &path)?;
-            Ok(format!(
-                "{} {}\t{}",
-                normalized_git_tree_mode(mode, kind),
-                object,
-                path
-            ))
-        }
     }
 }
 
-fn normalized_git_tree_mode<'a>(mode: &'a str, kind: &str) -> &'a str {
-    if is_git_tree_mode(mode) || kind == "tree" {
-        "40000"
-    } else {
-        mode
-    }
-}
-
+#[cfg(test)]
 fn next_scope_metadata_field<'a>(
     fields: &mut std::str::SplitWhitespace<'a>,
     listing: GitScopeListing,

@@ -133,6 +133,7 @@ fn path_matches_normalized_pattern(path: &str, pattern: &str) -> bool {
     glob_path_matches(path, pattern)
 }
 
+#[cfg(test)]
 pub(crate) fn path_matches_pattern_bytes(path: &[u8], pattern: &[u8]) -> bool {
     let path = trim_dot_slash_bytes(path);
     let pattern = trim_dot_slash_bytes(pattern);
@@ -166,12 +167,12 @@ fn glob_path_matches(path: &str, pattern: &str) -> bool {
                 '*' => {
                     next[index] = true;
                     let mut end = index;
-                    while end < path.len() && path[end] != '/' {
+                    while end < path.len() {
                         end += 1;
                         next[end] = true;
                     }
                 }
-                '?' if index < path.len() && path[index] != '/' => {
+                '?' if index < path.len() => {
                     next[index + 1] = true;
                 }
                 literal if index < path.len() && path[index] == literal => {
@@ -185,12 +186,14 @@ fn glob_path_matches(path: &str, pattern: &str) -> bool {
     matches[path.len()]
 }
 
+#[cfg(test)]
 fn glob_prefix_matches_path_bytes(path: &[u8], prefix: &[u8]) -> bool {
     path.iter()
         .enumerate()
         .any(|(index, byte)| *byte == b'/' && glob_path_matches_bytes(&path[..index], prefix))
 }
 
+#[cfg(test)]
 fn glob_path_matches_bytes(path: &[u8], pattern: &[u8]) -> bool {
     let mut matches = vec![false; path.len() + 1];
     matches[0] = true;
@@ -204,12 +207,12 @@ fn glob_path_matches_bytes(path: &[u8], pattern: &[u8]) -> bool {
                 b'*' => {
                     next[index] = true;
                     let mut end = index;
-                    while end < path.len() && path[end] != b'/' {
+                    while end < path.len() {
                         end += 1;
                         next[end] = true;
                     }
                 }
-                b'?' if index < path.len() && path[index] != b'/' => {
+                b'?' if index < path.len() => {
                     next[index + 1] = true;
                 }
                 literal if index < path.len() && path[index] == literal => {
@@ -223,6 +226,7 @@ fn glob_path_matches_bytes(path: &[u8], pattern: &[u8]) -> bool {
     matches[path.len()]
 }
 
+#[cfg(test)]
 fn trim_dot_slash_bytes(mut path: &[u8]) -> &[u8] {
     while path.starts_with(b"./") {
         path = &path[2..];
@@ -313,6 +317,34 @@ pub(crate) fn effective_ignore_patterns(agent: &AgentConfig) -> Vec<String> {
         }
     }
     patterns
+}
+
+pub(crate) fn scope_pathspecs(scope: &[String]) -> Vec<String> {
+    if scope == full_scope() {
+        vec![".".to_string()]
+    } else {
+        scope.to_vec()
+    }
+}
+
+pub(crate) fn scope_pathspecs_with_excludes(
+    scope: &[String],
+    excluding_pathspecs: &[String],
+) -> Vec<String> {
+    let mut pathspecs = scope_pathspecs(scope);
+    pathspecs.extend(excluding_pathspecs.iter().cloned());
+    pathspecs
+}
+
+pub(crate) fn excluding_ignore_pathspec(pattern: &str) -> String {
+    if let Some(rest) = pattern.strip_prefix(":(") {
+        if let Some(end) = rest.find(')') {
+            let magic = &rest[..end];
+            let path = &rest[end + 1..];
+            return format!(":(exclude,{}){}", magic, path);
+        }
+    }
+    format!(":(exclude){}", pattern)
 }
 
 fn push_unique_pattern(patterns: &mut Vec<String>, pattern: String) {

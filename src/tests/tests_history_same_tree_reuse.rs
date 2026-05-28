@@ -763,36 +763,51 @@ fn visible_tree_oid_handles_newline_paths_without_line_splitting() {
 
 #[test]
 #[cfg(unix)]
-fn visible_tree_oid_treats_git_pathspec_magic_as_literal_path() {
-    let root = git_project("history-visible-tree-oid-literal-pathspec");
+fn visible_tree_oid_honors_git_pathspec_magic_scope() {
+    let root = git_project("history-visible-tree-oid-pathspec-magic");
     let config = parse_check_config(check_config_yaml()).unwrap();
-    let path = ":(literal)name.txt";
-    fs::write(root.join(path), "first").unwrap();
+    fs::write(root.join("src/pathspec-visible.rs"), "first").unwrap();
+    fs::write(root.join("src/pathspec-hidden.txt"), "first").unwrap();
     Command::new("git")
         .arg("-C")
         .arg(&root)
-        .arg("--literal-pathspecs")
-        .args(["add", "--"])
-        .arg(path)
+        .args([
+            "add",
+            "--",
+            "src/pathspec-visible.rs",
+            "src/pathspec-hidden.txt",
+        ])
         .output()
         .unwrap();
 
-    let entries = staged_scope_entries(&root, &[path.to_string()]).unwrap();
+    let scope = vec![":(glob)src/*.rs".to_string()];
+    let entries = staged_scope_entries(&root, &scope).unwrap();
 
-    assert_eq!(entries.len(), 1);
-    assert!(entries[0].ends_with(path));
-    let before = staged_visible_tree_oid(&root, &config.agent, &[path.to_string()]).unwrap();
-    fs::write(root.join(path), "second").unwrap();
+    assert!(entries
+        .iter()
+        .any(|entry| entry.ends_with("\tsrc/pathspec-visible.rs")));
+    assert!(!entries
+        .iter()
+        .any(|entry| entry.ends_with("\tsrc/pathspec-hidden.txt")));
+    let before = staged_visible_tree_oid(&root, &config.agent, &scope).unwrap();
+    fs::write(root.join("src/pathspec-hidden.txt"), "second").unwrap();
     Command::new("git")
         .arg("-C")
         .arg(&root)
-        .arg("--literal-pathspecs")
-        .args(["add", "--"])
-        .arg(path)
+        .args(["add", "--", "src/pathspec-hidden.txt"])
         .output()
         .unwrap();
-    let after = staged_visible_tree_oid(&root, &config.agent, &[path.to_string()]).unwrap();
-    assert_ne!(before, after);
+    let hidden_change = staged_visible_tree_oid(&root, &config.agent, &scope).unwrap();
+    fs::write(root.join("src/pathspec-visible.rs"), "second").unwrap();
+    Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args(["add", "--", "src/pathspec-visible.rs"])
+        .output()
+        .unwrap();
+    let visible_change = staged_visible_tree_oid(&root, &config.agent, &scope).unwrap();
+    assert_eq!(before, hidden_change);
+    assert_ne!(before, visible_change);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -831,7 +846,7 @@ fn visible_tree_oid_reuses_fully_covered_directory_oid() {
 
 #[cfg(unix)]
 #[test]
-fn staged_scope_entries_reuse_git_tree_oid_for_fully_covered_directory() {
+fn staged_scope_entries_use_git_pathspecs_for_directory_scope() {
     let root = git_project("visible-tree-oid-staged-tree-oid");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let root_tree = Command::new("git")
@@ -863,7 +878,8 @@ fn staged_scope_entries_reuse_git_tree_oid_for_fully_covered_directory() {
     let entries = staged_scope_entries(&root, &scope).unwrap();
     let src_tree_entry = format!("40000 {}\tsrc", src_tree_oid);
 
-    assert!(entries.iter().any(|entry| entry == &src_tree_entry));
+    assert!(entries.iter().any(|entry| entry.ends_with("\tsrc/main.rs")));
+    assert!(!entries.iter().any(|entry| entry.ends_with("\tREADME.md")));
     assert_eq!(
         staged_visible_tree_oid(&root, &config.agent, &scope).unwrap(),
         sha1_visible_tree_oid_from_entries(&[src_tree_entry]).unwrap()
