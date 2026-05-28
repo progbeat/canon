@@ -59,6 +59,9 @@ expectations:
     cooldown: 7d
     thinking: low
 
+  - q: "Are history files append-only except for compaction removing outdated records?"
+    a: "yes"
+
   # Check configuration
   - q: "Can `canon check` use `--config <path>` or `-c <path>` to read checks from a custom YAML config file?"
     a: "yes"
