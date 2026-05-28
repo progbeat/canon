@@ -93,22 +93,35 @@ fn check_output_does_not_render_regular_answers_as_error_text() {
 }
 
 #[test]
-fn check_summary_counts_cached_passes_as_skipped() {
+fn check_summary_counts_cached_passes_as_passed() {
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], true, false);
+    let expectation = options.selected[0].clone();
+    let cached_pass = expectation_record(
+        &config.agent,
+        &expectation,
+        "pass",
+        "yes",
+        "AAAAAAAAAAAAAAAAAAAA".to_string(),
+    );
     let report = CheckRunReport {
         records: Vec::new(),
         non_selected: Vec::new(),
-        cached: Vec::new(),
+        cached: vec![CachedExpectation {
+            expectation,
+            record: cached_pass,
+        }],
         evaluated: 0,
         selected: 0,
-        skipped: 1,
-        silent: 2,
+        skipped: 0,
+        silent: 0,
         narrowing: NarrowingStats::default(),
     };
 
     let summary = render_check_summary(&report, Duration::from_secs(1));
 
-    assert!(summary.contains("1 skipped"));
-    assert!(!summary.contains("passed"));
+    assert!(summary.contains("1 passed"));
+    assert!(!summary.contains("skipped"));
 }
 
 #[test]

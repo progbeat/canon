@@ -228,6 +228,32 @@ fn read_ignores_literal_marker_and_json_body_text() {
 }
 
 #[test]
+fn legacy_append_log_records_still_materialize() {
+    let note = Note {
+        key: "src/main.rs".to_string(),
+        hash: hash_key("src/main.rs"),
+        path: PathBuf::from("note.md"),
+    };
+    let raw = format!(
+        "{}body\n\n<!-- canon log v1 -->\n{{\"op\":\"append\",\"timestamp\":1,\"text\":\"legacy\"}}\n",
+        initial_content(&note.key, &note.hash)
+    );
+
+    let content = materialize_note_content(&note, &raw).unwrap();
+    let mut rendered = String::new();
+    stream_note_content(&note, io::Cursor::new(raw.as_bytes()), |chunk| {
+        rendered.push_str(chunk);
+        Ok(())
+    })
+    .unwrap();
+
+    assert!(content.contains("\nbody\n"));
+    assert!(content.contains("\n## 1\n\nlegacy\n"));
+    assert!(!content.contains("canon log v1"));
+    assert_eq!(rendered, content);
+}
+
+#[test]
 fn write_escapes_note_log_marker_collision() {
     with_env("write-marker-collision", |_| {
         let config = Config::from_env().unwrap();

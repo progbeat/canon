@@ -427,6 +427,19 @@ pub(crate) fn stream_note_content(
             }
             continue;
         }
+        if trimmed == LEGACY_NOTE_LOG_MARKER {
+            let mut rest = String::new();
+            reader
+                .read_to_string(&mut rest)
+                .map_err(|err| format!("failed to read {}: {}", note.path.display(), err))?;
+            if let Some(records) = parse_legacy_note_log_records(&rest) {
+                stream_note_records(note, records, &mut write)?;
+                return Ok(());
+            }
+            write(&decode_note_storage_line(&line))?;
+            write_decoded_note_text(&rest, &mut write)?;
+            return Ok(());
+        }
         write(&decode_note_storage_line(&line))?;
     }
 }
@@ -508,12 +521,38 @@ fn stream_note_record(
     }
 }
 
+fn stream_note_records(
+    note: &Note,
+    records: Vec<NoteRecord>,
+    write: &mut impl FnMut(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    for (index, record) in records.into_iter().enumerate() {
+        stream_note_record(note, record, write, index == 0)?;
+    }
+    Ok(())
+}
+
+fn write_decoded_note_text(
+    text: &str,
+    write: &mut impl FnMut(&str) -> Result<(), String>,
+) -> Result<(), String> {
+    for (_, line) in lines_with_starts(text) {
+        write(&decode_note_storage_line(line))?;
+    }
+    Ok(())
+}
+
 fn find_note_log(note: &Note, content: &str) -> Result<Option<(usize, Vec<NoteRecord>)>, String> {
     for (line_start, line) in lines_with_starts(content) {
         let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
         if is_note_log_marker(note, trimmed, line_start) {
             let log_start = line_start + line.len();
             if let Some(records) = parse_note_log_records(note, &content[log_start..], log_start)? {
+                return Ok(Some((line_start.saturating_sub(1), records)));
+            }
+        } else if trimmed == LEGACY_NOTE_LOG_MARKER {
+            let log_start = line_start + line.len();
+            if let Some(records) = parse_legacy_note_log_records(&content[log_start..]) {
                 return Ok(Some((line_start.saturating_sub(1), records)));
             }
         }
@@ -546,6 +585,19 @@ fn parse_note_log_records(
         }
     }
     Ok((!records.is_empty()).then_some(records))
+}
+
+fn parse_legacy_note_log_records(text: &str) -> Option<Vec<NoteRecord>> {
+    let mut records = Vec::new();
+    for (_, line) in lines_with_starts(text) {
+        let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
+        if trimmed == LEGACY_NOTE_LOG_MARKER || trimmed.trim().is_empty() {
+            continue;
+        }
+        let record = serde_json::from_str(trimmed).ok()?;
+        records.push(record);
+    }
+    (!records.is_empty()).then_some(records)
 }
 
 fn lines_with_starts(text: &str) -> impl Iterator<Item = (usize, &str)> {

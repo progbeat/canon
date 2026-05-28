@@ -31,6 +31,7 @@ use crate::platform::check_interrupted;
 use crate::scope::{sanitize_scope, scope_is_within};
 use crate::time::unix_timestamp;
 use crate::visible_tree_oid::VisibleTreeOidCache;
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
 
@@ -102,7 +103,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                     CheckRunReportCounts {
                         evaluated,
                         selected,
-                        skipped: skipped_count(total_expectations, records.len()),
+                        skipped: skipped_count(total_expectations, &records, &cached),
                         silent,
                     },
                     narrowing,
@@ -136,7 +137,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             });
         }
         if selection.cached_failure_seen {
-            let skipped = skipped_count(total_expectations, records.len());
+            let skipped = skipped_count(total_expectations, &records, &cached);
             return Ok(check_run_report(
                 records,
                 non_selected,
@@ -347,7 +348,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         ));
         records.push(interrogation.record);
         if should_stop {
-            let skipped = skipped_count(total_expectations, records.len());
+            let skipped = skipped_count(total_expectations, &records, &cached);
             return Ok(check_run_report(
                 records,
                 non_selected,
@@ -362,7 +363,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             ));
         }
     }
-    let skipped = skipped_count(total_expectations, records.len());
+    let skipped = skipped_count(total_expectations, &records, &cached);
     Ok(check_run_report(
         records,
         non_selected,
@@ -519,6 +520,31 @@ struct CheckRunReportCounts {
     silent: usize,
 }
 
-fn skipped_count(total_expectations: usize, output_records: usize) -> usize {
-    total_expectations.saturating_sub(output_records)
+fn skipped_count(
+    total_expectations: usize,
+    records: &[CheckRecord],
+    cached: &[CachedExpectation],
+) -> usize {
+    total_expectations.saturating_sub(summary_result_count(records, cached))
+}
+
+fn summary_result_count(records: &[CheckRecord], cached: &[CachedExpectation]) -> usize {
+    let mut seen = BTreeSet::new();
+    let mut count = 0usize;
+    for record in records {
+        if seen.insert(record.id.clone()) {
+            count += 1;
+        }
+    }
+    for cached in cached {
+        let id = if cached.record.id.is_empty() {
+            &cached.expectation.id
+        } else {
+            &cached.record.id
+        };
+        if seen.insert(id.clone()) {
+            count += 1;
+        }
+    }
+    count
 }

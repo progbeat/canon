@@ -135,7 +135,7 @@ fn check_runner_skips_all_cached_passes_before_evaluation() {
     .unwrap();
 
     assert_eq!(report.selected, 0);
-    assert_eq!(report.skipped, 2);
+    assert_eq!(report.skipped, 0);
     assert_eq!(report.silent, 0);
     assert_eq!(report.cached.len(), 2);
     assert_eq!(runner.starts, 0);

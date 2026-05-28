@@ -1,6 +1,7 @@
 use crate::check_types::{is_line_break_char, CheckRecord, CheckRunReport, ParsedAnswer};
 use crate::logging::push_json_control_escape;
 use crate::token_usage_types::TokenUsage;
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::time::Duration;
 
@@ -60,9 +61,9 @@ fn write_stdout_record(
 }
 
 pub(crate) fn report_output_skipped_count(report: &CheckRunReport) -> usize {
-    // `skipped` is the count of expectations with no output category. Cached
-    // passing results are skipped here because only selected/evaluated passes
-    // contribute to the public `passed` count.
+    // `skipped` is the count of expectations outside the summary categories.
+    // Cached passes have no per-expectation stdout line, but they are still
+    // pass results and therefore are not skipped in the summary.
     report.skipped
 }
 
@@ -143,19 +144,13 @@ pub(crate) fn render_token_usage_summary(usage: TokenUsage) -> String {
 pub(crate) fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -> String {
     // Summary order is fixed to match the spec and pytest-style labels:
     // failed, error/errors, passed, skipped.
-    // `report.skipped` is the non-selected count.
-    let mut passed = 0usize;
-    let mut failed = 0usize;
-    let mut errors = 0usize;
-    for record in &report.records {
-        if record.passed() {
-            passed += 1;
-        } else if record_requires_human_review(record) {
-            errors += 1;
-        } else {
-            failed += 1;
-        }
-    }
+    // Cached passes are part of the pass category even though they have no
+    // per-expectation stdout line.
+    let SummaryOutcomeCounts {
+        passed,
+        failed,
+        errors,
+    } = summary_outcome_counts(report);
     let mut outcomes = Vec::new();
     if failed > 0 {
         outcomes.push(format!("{} failed", failed));
@@ -179,6 +174,47 @@ pub(crate) fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -
     }
     let inner = format!(" {} in {:.2}s ", outcomes.join(", "), elapsed.as_secs_f64());
     format!("{}\n", pad_summary_line(&inner))
+}
+
+struct SummaryOutcomeCounts {
+    passed: usize,
+    failed: usize,
+    errors: usize,
+}
+
+fn summary_outcome_counts(report: &CheckRunReport) -> SummaryOutcomeCounts {
+    let mut counts = SummaryOutcomeCounts {
+        passed: 0,
+        failed: 0,
+        errors: 0,
+    };
+    let mut seen = BTreeSet::new();
+    for record in &report.records {
+        if seen.insert(record.id.clone()) {
+            add_summary_record(&mut counts, record);
+        }
+    }
+    for cached in &report.cached {
+        let id = if cached.record.id.is_empty() {
+            &cached.expectation.id
+        } else {
+            &cached.record.id
+        };
+        if seen.insert(id.clone()) {
+            add_summary_record(&mut counts, &cached.record);
+        }
+    }
+    counts
+}
+
+fn add_summary_record(counts: &mut SummaryOutcomeCounts, record: &CheckRecord) {
+    if record.passed() {
+        counts.passed += 1;
+    } else if record_requires_human_review(record) {
+        counts.errors += 1;
+    } else {
+        counts.failed += 1;
+    }
 }
 
 pub(crate) fn pad_summary_line(inner: &str) -> String {

@@ -113,10 +113,10 @@ expectations:
     .unwrap();
 
     assert_eq!(report.selected, 0);
-    assert_eq!(report.skipped, 1);
+    assert_eq!(report.skipped, 0);
     assert_eq!(report.silent, 0);
     assert_eq!(report.cached.len(), 1);
-    assert_eq!(report_output_skipped_count(&report), 1);
+    assert_eq!(report_output_skipped_count(&report), 0);
     assert_eq!(runner.starts, 0);
     assert_eq!(output.flushes, 0);
     assert!(output.bytes.is_empty());
@@ -222,7 +222,7 @@ fn check_runner_deselects_cached_pass_when_no_selectors_are_given() {
     assert_eq!(report.records.len(), 1);
     assert_eq!(report.records[0].number, 2);
     assert_eq!(report.selected, 1);
-    assert_eq!(report.skipped, 1);
+    assert_eq!(report.skipped, 0);
     assert_eq!(report.silent, 0);
     assert_eq!(report.cached.len(), 1);
     assert_eq!(runner.starts, 1);
@@ -277,10 +277,10 @@ expectations:
 
     assert!(report.records.is_empty());
     assert_eq!(report.selected, 0);
-    assert_eq!(report.skipped, 1);
+    assert_eq!(report.skipped, 0);
     assert_eq!(report.silent, 0);
     assert_eq!(report.cached.len(), 1);
-    assert_eq!(report_output_skipped_count(&report), 1);
+    assert_eq!(report_output_skipped_count(&report), 0);
     assert_eq!(runner.starts, 0);
     assert!(output.bytes.is_empty());
     let _ = fs::remove_dir_all(root);
@@ -364,10 +364,10 @@ expectations:
 
     assert_eq!(report.records.len(), 0);
     assert_eq!(report.selected, 0);
-    assert_eq!(report.skipped, 1);
+    assert_eq!(report.skipped, 0);
     assert_eq!(report.silent, 0);
     assert_eq!(report.cached.len(), 1);
-    assert_eq!(report_output_skipped_count(&report), 1);
+    assert_eq!(report_output_skipped_count(&report), 0);
     assert_eq!(runner.starts, 0);
     let _ = fs::remove_dir_all(root);
 }

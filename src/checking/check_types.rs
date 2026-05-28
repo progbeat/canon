@@ -344,7 +344,8 @@ pub(crate) struct CheckRunReport {
     // Expectations selected for evaluator work in this run.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) selected: usize,
-    // Expectations with no per-expectation output category.
+    // Expectations not covered by pass, fail, or human-review summary
+    // categories.
     pub(crate) skipped: usize,
     // Skipped expectations that were selected by the command but intentionally
     // produce no per-expectation stdout.
