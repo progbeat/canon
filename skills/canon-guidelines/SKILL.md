@@ -1,6 +1,6 @@
 ---
 name: canon-guidelines
-description: Summarizes good and bad canon practices.
+description: Guidelines for writing maintainable canon expectations
 ---
 
 # Canon Guidelines
@@ -9,14 +9,23 @@ Canon intent comes from the human; these guidelines only describe what makes can
 
 ## Good Canon
 
-- Defines each reusable concept just once as a highlighted term, using bold Markdown.
-- Never reintroduces the same concept/term in multiple expectations.
+- Is self-consistent.
+- Leaves freedom for future implementation choices.
+- Specifies the necessary minimum and relies on implementers' common sense wherever the canon is silent.
+- Focuses on what must be true, rather than exhaustively listing what must not be true.
+- Avoids enumerating specific cases when a general statement would suffice.
+- Defines each reusable concept once as a highlighted term using bold Markdown.
+- Never reintroduces the same concept in multiple expectations.
 - Keeps expectations isolated, so each expectation can be edited without having to fix other expectations (unless terms change).
 
 ## Bad Canon
 
+- Treats every possible omission as something that must be explicitly specified.
+- Specifies both the required behavior and unnecessary negative cases.
+- Enumerates specific cases instead of making a general statement.
+- Has unclear scope or applies more broadly than intended.
 - Duplicates the same assertion in multiple expectations.
-- Introduces near-synonyms for one concept.
+- Introduces near-synonyms for the same concept.
 
 ## Term Discipline
 
@@ -28,3 +37,5 @@ Canon intent comes from the human; these guidelines only describe what makes can
 - Is this assertion already stated elsewhere?
 - Is a new term being introduced where an existing term should be reused?
 - Would this wording make a future canon change harder?
+- Is this assertion's intended scope clear?
+- Could this be stated as a general rule instead of a list of cases?
