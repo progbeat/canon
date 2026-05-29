@@ -7,12 +7,12 @@ use crate::tests::{
 use std::fs;
 
 #[test]
-fn check_runner_fails_mismatch_and_treats_idk_as_exact_string() {
+fn check_runner_fails_mismatched_schema_valid_answers() {
     let root = git_project("check-fails");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1", "2"], false, true);
     let mut runner = FakeRunner::new(&[
-        &answer("idk", "not enough", &["."]),
+        &answer("maybe", "not enough", &["."]),
         &answer("yes", "wrong", &["."]),
     ]);
     let records =
@@ -23,7 +23,7 @@ fn check_runner_fails_mismatch_and_treats_idk_as_exact_string() {
 }
 
 #[test]
-fn check_runner_reviews_free_form_yes_no_answer_shape() {
+fn check_runner_records_free_form_yes_no_mismatch_history() {
     let root = git_project("check-yes-no-free-form-answer");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
@@ -36,11 +36,14 @@ fn check_runner_reviews_free_form_yes_no_answer_shape() {
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(record_requires_human_review(&records.records[0]));
+    assert!(!record_requires_human_review(&records.records[0]));
     assert_eq!(records.records[0].observed, "Yes: concrete bug");
-    assert!(read_history_records(&root, &options.selected[0])
-        .unwrap()
-        .is_empty());
+    assert_eq!(
+        read_history_records(&root, &options.selected[0])
+            .unwrap()
+            .len(),
+        1
+    );
     let _ = fs::remove_dir_all(root);
 }
 
@@ -123,8 +126,8 @@ expectations:
 }
 
 #[test]
-fn check_runner_reviews_reserved_tokens_for_free_form_exact_answers() {
-    let root = git_project("check-free-form-answer-reserved-token");
+fn check_runner_records_single_line_free_form_mismatch_history() {
+    let root = git_project("check-free-form-answer-other-mismatch");
     let config = parse_check_config(
         r#"
 version: 1
@@ -141,8 +144,8 @@ expectations:
     .unwrap();
     let options = check_options(&config, &["1"], false, true);
     let mut runner = FakeRunner::new(&[&answer(
-        "malformed",
-        "The evaluator marked the question as malformed",
+        "TypeScript",
+        "The evaluator returned a parsed single-line exact-string answer",
         &["."],
     )]);
 
@@ -150,10 +153,13 @@ expectations:
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
     assert!(!records.records[0].passed());
-    assert_eq!(records.records[0].observed, "malformed");
-    assert!(record_requires_human_review(&records.records[0]));
-    assert!(read_history_records(&root, &options.selected[0])
-        .unwrap()
-        .is_empty());
+    assert_eq!(records.records[0].observed, "TypeScript");
+    assert!(!record_requires_human_review(&records.records[0]));
+    assert_eq!(
+        read_history_records(&root, &options.selected[0])
+            .unwrap()
+            .len(),
+        1
+    );
     let _ = fs::remove_dir_all(root);
 }

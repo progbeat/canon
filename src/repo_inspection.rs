@@ -3,9 +3,8 @@ use crate::check_generator_paths::{
     expand_generator_paths, expand_staged_generator_paths_from_listing,
 };
 use crate::config_types::{CheckConfig, RawExpectationItem};
-use crate::git::{
-    git_path_bytes, read_git_blobs, resolve_git_path, staged_tracked_files, StagedTrackedFile,
-};
+use crate::git::{read_git_blobs, resolve_git_path, staged_tracked_files, StagedTrackedFile};
+use crate::platform::git_path_bytes;
 use crate::CHECK_PATH;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -24,6 +23,8 @@ type StagedBlobContents = BTreeMap<Vec<u8>, Vec<u8>>;
 pub(crate) struct RepoInspectionCache {
     git_paths: BTreeMap<GitPathCacheKey, Result<PathBuf, String>>,
     generator_paths: BTreeMap<GeneratorPathsCacheKey, Result<Vec<String>, String>>,
+    // Per-file decoded content is derived from the root-level staged blob
+    // batch below; cache misses here do not spawn additional git processes.
     staged_file_contents: BTreeMap<StagedFileContentCacheKey, Result<String, String>>,
     staged_files: BTreeMap<PathBuf, Result<Vec<StagedTrackedFile>, String>>,
     staged_blob_contents: BTreeMap<PathBuf, Result<StagedBlobContents, String>>,
@@ -131,12 +132,17 @@ impl RepoInspectionCache {
             return cached.clone();
         }
         let files = self.staged_files(root)?;
-        let object_ids = files
+        let blob_files = files
+            .iter()
+            .filter(|file| file.is_file_entry_with_blob_contents())
+            .cloned()
+            .collect::<Vec<_>>();
+        let object_ids = blob_files
             .iter()
             .map(|file| file.object_id.clone())
             .collect::<Vec<_>>();
         let blobs = read_git_blobs(root, &object_ids)?;
-        let contents = files
+        let contents = blob_files
             .into_iter()
             .zip(blobs)
             .map(|(file, blob)| (file.path, blob))

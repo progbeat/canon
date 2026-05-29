@@ -1,4 +1,5 @@
 use std::ffi::OsString;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,8 +46,27 @@ pub(crate) fn make_hook_executable(path: &Path) -> Result<(), String> {
     imp::make_hook_executable(path)
 }
 
+pub(crate) fn set_materialized_file_permissions(path: &Path, mode: &str) -> Result<(), String> {
+    imp::set_materialized_file_permissions(path, mode)
+}
+
+pub(crate) fn create_private_dir(path: &Path) -> io::Result<()> {
+    imp::create_private_dir(path)
+}
+
+pub(crate) fn create_private_dir_all(path: &Path) -> io::Result<()> {
+    imp::create_private_dir_all(path)
+}
+
+pub(crate) fn open_file_for_append_without_following_symlink(
+    path: &Path,
+) -> Result<std::fs::File, String> {
+    imp::open_file_for_append_without_following_symlink(path)
+}
+
 pub(crate) fn staged_snapshot_parent_candidates() -> Vec<PathBuf> {
     let mut parents = Vec::new();
+    add_common_memory_backed_staged_snapshot_parent_candidates(&mut parents);
     imp::add_staged_snapshot_parent_candidates(&mut parents);
     let temp_dir = std::env::temp_dir();
     if !parents.iter().any(|parent| parent == &temp_dir) {
@@ -55,7 +75,20 @@ pub(crate) fn staged_snapshot_parent_candidates() -> Vec<PathBuf> {
     parents
 }
 
-pub(crate) fn path_from_git_stdout(mut bytes: Vec<u8>) -> PathBuf {
+fn add_common_memory_backed_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
+    // Prefer common RAM-backed locations before ordinary temp directories.
+    // Missing paths are skipped later by snapshot creation.
+    push_unique_path(parents, PathBuf::from("/dev/shm"));
+    push_unique_path(parents, PathBuf::from("/run/shm"));
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
+    }
+}
+
+pub(crate) fn path_from_git_stdout(mut bytes: Vec<u8>) -> Result<PathBuf, String> {
     while matches!(bytes.last(), Some(b'\n' | b'\r')) {
         bytes.pop();
     }
@@ -66,6 +99,7 @@ pub(crate) fn git_path_bytes(path: &Path) -> Result<Vec<u8>, String> {
     imp::git_path_bytes(path)
 }
 
+#[cfg(all(test, unix))]
 pub(crate) fn checkout_index_prefix_arg(path: &Path) -> Result<OsString, String> {
     let mut prefix = git_path_bytes(path)?;
     let separator = std::path::MAIN_SEPARATOR as u8;
@@ -75,6 +109,10 @@ pub(crate) fn checkout_index_prefix_arg(path: &Path) -> Result<OsString, String>
     let mut arg = b"--prefix=".to_vec();
     arg.extend(prefix);
     imp::os_string_from_bytes(arg)
+}
+
+pub(crate) fn os_string_from_bytes(bytes: Vec<u8>) -> Result<OsString, String> {
+    imp::os_string_from_bytes(bytes)
 }
 
 #[cfg(all(test, unix))]

@@ -1,6 +1,38 @@
 use super::*;
 
 #[test]
+fn check_runner_starts_from_latest_scope_seed_when_paths_are_absent() {
+    let root = git_project("check-stale-scope-seed");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let expectation = options.selected[0].clone();
+    let mut record = expectation_record(
+        &config.agent,
+        &expectation,
+        RESULT_PASS,
+        "yes",
+        stale_visible_tree_oid(),
+    );
+    record.scope = vec!["src/old-location.rs".to_string()];
+    append_history_record(&root, &expectation, &record).unwrap();
+    let mut runner = FakeRunner::new(&[
+        &error_response(
+            ERROR_INSUFFICIENT_EVIDENCE,
+            "`src/old-location.rs`: not present",
+        ),
+        &answer("yes", "full scope after stale seed", &["."]),
+    ]);
+
+    run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert_eq!(
+        runner.start_scopes,
+        vec![vec!["src/old-location.rs".to_string()], full_scope()]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn generated_prompt_source_does_not_widen_restricted_history_scope() {
     let root = git_project("generated-prompt-source-does-not-widen-scope");
     fs::create_dir_all(root.join("specs")).unwrap();
@@ -43,9 +75,11 @@ expectations:
             prompt: Some(expectation.q.clone()),
             expected: Some(expectation.a.clone()),
             observed: "yes".to_string(),
+            error: None,
             evidence: "src/main.rs was previously enough".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            suggested_q_scope: None,
+            visible_tree_oid: stale_visible_tree_oid(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -59,8 +93,8 @@ expectations:
 }
 
 #[test]
-fn check_runner_replaces_restricted_idk_with_full_scope_answer() {
-    let root = git_project("check-restricted-idk");
+fn check_runner_replaces_restricted_insufficient_evidence_with_full_scope_answer() {
+    let root = git_project("check-restricted-insufficient-evidence");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, false);
     let expectation = options.selected[0].clone();
@@ -76,14 +110,16 @@ fn check_runner_replaces_restricted_idk_with_full_scope_answer() {
             prompt: Some(expectation.q.clone()),
             expected: Some(expectation.a.clone()),
             observed: "yes".to_string(),
+            error: None,
             evidence: "src/main.rs was previously enough".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            suggested_q_scope: None,
+            visible_tree_oid: stale_visible_tree_oid(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
     .unwrap();
-    append_history_record(
+    append_legacy_history_record(
         &root,
         &expectation,
         &CheckRecord {
@@ -94,16 +130,17 @@ fn check_runner_replaces_restricted_idk_with_full_scope_answer() {
             result: CheckResult::Fail,
             prompt: Some(expectation.q.clone()),
             expected: Some(expectation.a.clone()),
-            observed: "idk".to_string(),
+            observed: ERROR_INSUFFICIENT_EVIDENCE.to_string(),
+            error: Some(ERROR_INSUFFICIENT_EVIDENCE.to_string()),
             evidence: "src/main.rs was not enough".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            suggested_q_scope: None,
+            visible_tree_oid: stale_visible_tree_oid(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
-    )
-    .unwrap();
+    );
     let mut runner = FakeRunner::new(&[
-        &answer("idk", "src/main.rs was not enough", &["src/main.rs"]),
+        &error_response(ERROR_INSUFFICIENT_EVIDENCE, "src/main.rs was not enough"),
         &answer("yes", "README.md and src/main.rs answer it", &["."]),
     ]);
 
@@ -120,8 +157,8 @@ fn check_runner_replaces_restricted_idk_with_full_scope_answer() {
 }
 
 #[test]
-fn check_runner_retries_full_scope_for_restricted_idk_with_empty_evidence() {
-    let root = git_project("check-restricted-idk-empty-evidence");
+fn check_runner_retries_restricted_insufficient_evidence_with_empty_evidence() {
+    let root = git_project("check-restricted-insufficient-evidence-empty-evidence");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, false);
     let expectation = options.selected[0].clone();
@@ -137,15 +174,17 @@ fn check_runner_retries_full_scope_for_restricted_idk_with_empty_evidence() {
             prompt: Some(expectation.q.clone()),
             expected: Some(expectation.a.clone()),
             observed: "yes".to_string(),
+            error: None,
             evidence: "src/main.rs was previously enough".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            suggested_q_scope: None,
+            visible_tree_oid: stale_visible_tree_oid(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
     .unwrap();
     let mut runner = FakeRunner::new(&[
-        &answer("idk", "", &["src/main.rs"]),
+        &error_response(ERROR_INSUFFICIENT_EVIDENCE, ""),
         &answer("yes", "full project answers it", &["."]),
     ]);
 
@@ -162,8 +201,8 @@ fn check_runner_retries_full_scope_for_restricted_idk_with_empty_evidence() {
 }
 
 #[test]
-fn check_runner_retries_full_scope_for_restricted_idk_after_token_break_signal() {
-    let root = git_project("check-restricted-idk-token-break");
+fn check_runner_retries_full_scope_for_restricted_insufficient_evidence_after_token_break_signal() {
+    let root = git_project("check-restricted-insufficient-evidence-token-break");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let mut options = parse_check_options(
         &config,
@@ -180,7 +219,7 @@ fn check_runner_retries_full_scope_for_restricted_idk_after_token_break_signal()
     let expectation = options.selected[0].clone();
     append_src_main_pass_history(&root, &config, &expectation);
     let mut runner = FakeRunner::new(&[
-        &answer("idk", "src/main.rs was not enough", &["src/main.rs"]),
+        &error_response(ERROR_INSUFFICIENT_EVIDENCE, "src/main.rs was not enough"),
         &answer("yes", "full project answers it", &["."]),
         &answer("no", "second answer", &["."]),
     ]);
@@ -210,14 +249,14 @@ fn check_runner_retries_full_scope_for_restricted_idk_after_token_break_signal()
 }
 
 #[test]
-fn check_runner_retries_full_scope_for_restricted_idk_after_context_compaction() {
-    let root = git_project("check-restricted-idk-context-compaction");
+fn check_runner_retries_full_scope_for_restricted_insufficient_evidence_after_context_compaction() {
+    let root = git_project("check-restricted-insufficient-evidence-context-compaction");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1", "2"], false, true);
     let expectation = options.selected[0].clone();
     append_src_main_pass_history(&root, &config, &expectation);
     let mut runner = FakeRunner::new(&[
-        &answer("idk", "src/main.rs was not enough", &["src/main.rs"]),
+        &error_response(ERROR_INSUFFICIENT_EVIDENCE, "src/main.rs was not enough"),
         &answer("yes", "full project answers it", &["."]),
         &answer("no", "second answer", &["."]),
     ]);
@@ -251,8 +290,8 @@ fn check_runner_retries_full_scope_for_restricted_idk_after_context_compaction()
 }
 
 #[test]
-fn check_runner_rejects_widened_idk_scope_then_retries_full_scope() {
-    let root = git_project("check-restricted-idk-widened-scope");
+fn check_runner_retries_full_scope_after_restricted_insufficient_evidence() {
+    let root = git_project("check-restricted-insufficient-evidence-retry");
     enable_diagnostic_logs(&root);
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, false);
@@ -269,15 +308,17 @@ fn check_runner_rejects_widened_idk_scope_then_retries_full_scope() {
             prompt: Some(expectation.q.clone()),
             expected: Some(expectation.a.clone()),
             observed: "yes".to_string(),
+            error: None,
             evidence: "src/main.rs was previously enough".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            suggested_q_scope: None,
+            visible_tree_oid: stale_visible_tree_oid(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
     .unwrap();
     let mut runner = FakeRunner::new(&[
-        &answer("idk", "src/main.rs was not enough", &["."]),
+        &error_response(ERROR_INSUFFICIENT_EVIDENCE, "src/main.rs was not enough"),
         &answer("yes", "full project answers it", &["."]),
     ]);
     let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
@@ -300,7 +341,7 @@ fn check_runner_rejects_widened_idk_scope_then_retries_full_scope() {
         vec![vec!["src/main.rs".to_string()], vec![".".to_string()]]
     );
     let log = fs::read_to_string(diagnostic_log.path()).unwrap();
-    assert!(log.contains("widens enforced scope"));
+    assert!(!log.contains("widens enforced scope"));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -321,9 +362,11 @@ fn append_src_main_pass_history(
             prompt: Some(expectation.q.clone()),
             expected: Some(expectation.a.clone()),
             observed: "yes".to_string(),
+            error: None,
             evidence: "src/main.rs was previously enough".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            suggested_q_scope: None,
+            visible_tree_oid: stale_visible_tree_oid(),
             cache_key: Some(history_cache_key(&config.agent, expectation)),
         },
     )
@@ -385,9 +428,11 @@ fn check_runner_starts_from_latest_answer_history_scope_even_when_failed() {
             prompt: Some(expectation.q.clone()),
             expected: Some(expectation.a.clone()),
             observed: "no".to_string(),
+            error: None,
             evidence: "restricted scope was misleading".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            suggested_q_scope: None,
+            visible_tree_oid: stale_visible_tree_oid(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -412,7 +457,7 @@ fn check_runner_scope_seed_ignores_non_reusable_history_answer() {
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
     let expectation = options.selected[0].clone();
-    append_history_record(
+    append_legacy_history_record(
         &root,
         &expectation,
         &CheckRecord {
@@ -423,14 +468,15 @@ fn check_runner_scope_seed_ignores_non_reusable_history_answer() {
             result: CheckResult::Fail,
             prompt: Some(expectation.q.clone()),
             expected: Some(expectation.a.clone()),
-            observed: UNPARSEABLE_OBSERVED.to_string(),
+            observed: ERROR_UNPARSABLE.to_string(),
+            error: None,
             evidence: "legacy review record kept a useful scope".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            suggested_q_scope: None,
+            visible_tree_oid: stale_visible_tree_oid(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
-    )
-    .unwrap();
+    );
     let mut runner = FakeRunner::new(&[&answer("yes", "full project answers it", &["."])]);
 
     let records =
@@ -459,9 +505,11 @@ fn check_runner_ignore_cache_uses_latest_history_scope() {
             prompt: Some(expectation.q.clone()),
             expected: Some(expectation.a.clone()),
             observed: "yes".to_string(),
+            error: None,
             evidence: "src/main.rs was previously enough".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            suggested_q_scope: None,
+            visible_tree_oid: stale_visible_tree_oid(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -481,8 +529,8 @@ fn check_runner_ignore_cache_uses_latest_history_scope() {
 }
 
 #[test]
-fn check_runner_verifies_narrower_scope_after_restricted_idk_retry() {
-    let root = git_project("check-restricted-idk-narrows");
+fn check_runner_verifies_narrower_scope_after_restricted_insufficient_evidence_retry() {
+    let root = git_project("check-restricted-insufficient-evidence-narrows");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, false);
     let expectation = options.selected[0].clone();
@@ -498,14 +546,16 @@ fn check_runner_verifies_narrower_scope_after_restricted_idk_retry() {
             prompt: Some(expectation.q.clone()),
             expected: Some(expectation.a.clone()),
             observed: "yes".to_string(),
+            error: None,
             evidence: "src/main.rs was previously enough".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            suggested_q_scope: None,
+            visible_tree_oid: stale_visible_tree_oid(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
     .unwrap();
-    append_history_record(
+    append_legacy_history_record(
         &root,
         &expectation,
         &CheckRecord {
@@ -516,16 +566,17 @@ fn check_runner_verifies_narrower_scope_after_restricted_idk_retry() {
             result: CheckResult::Fail,
             prompt: Some(expectation.q.clone()),
             expected: Some(expectation.a.clone()),
-            observed: "idk".to_string(),
+            observed: ERROR_INSUFFICIENT_EVIDENCE.to_string(),
+            error: Some(ERROR_INSUFFICIENT_EVIDENCE.to_string()),
             evidence: "src/main.rs was not enough".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            suggested_q_scope: None,
+            visible_tree_oid: stale_visible_tree_oid(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
-    )
-    .unwrap();
+    );
     let mut runner = FakeRunner::new(&[
-        &answer("idk", "src/main.rs was not enough", &["src/main.rs"]),
+        &error_response(ERROR_INSUFFICIENT_EVIDENCE, "src/main.rs was not enough"),
         &answer("yes", "src is enough", &["src"]),
         &answer("yes", "src independently answers it", &["src"]),
     ]);
@@ -550,8 +601,8 @@ fn check_runner_verifies_narrower_scope_after_restricted_idk_retry() {
 }
 
 #[test]
-fn check_runner_does_not_widen_restricted_answer_mismatch() {
-    let root = git_project("check-restricted-failure");
+fn check_runner_keeps_restricted_yes_no_mismatch_without_full_scope_retry() {
+    let root = git_project("check-restricted-yes-no-mismatch");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, false);
     let expectation = options.selected[0].clone();
@@ -567,9 +618,11 @@ fn check_runner_does_not_widen_restricted_answer_mismatch() {
             prompt: Some(expectation.q.clone()),
             expected: Some(expectation.a.clone()),
             observed: "yes".to_string(),
+            error: None,
             evidence: "src/main.rs was previously enough".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            suggested_q_scope: None,
+            visible_tree_oid: stale_visible_tree_oid(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -584,12 +637,13 @@ fn check_runner_does_not_widen_restricted_answer_mismatch() {
 
     assert!(!records.records[0].passed());
     assert_eq!(records.records[0].observed, "no");
+    assert_eq!(records.records[0].scope, vec!["src/main.rs"]);
     assert_eq!(runner.start_scopes, vec![vec!["src/main.rs".to_string()]]);
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn check_runner_retries_full_scope_for_restricted_answer_widening() {
+fn check_runner_does_not_widen_restricted_answer_without_insufficient_evidence() {
     let root = git_project("check-restricted-widening");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, false);
@@ -606,9 +660,11 @@ fn check_runner_retries_full_scope_for_restricted_answer_widening() {
             prompt: Some(expectation.q.clone()),
             expected: Some(expectation.a.clone()),
             observed: "yes".to_string(),
+            error: None,
             evidence: "src/main.rs was previously enough".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            suggested_q_scope: None,
+            visible_tree_oid: stale_visible_tree_oid(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
@@ -623,16 +679,13 @@ fn check_runner_retries_full_scope_for_restricted_answer_widening() {
 
     assert!(records.records[0].passed());
     assert_eq!(records.records[0].observed, "yes");
-    assert_eq!(records.records[0].scope, vec!["."]);
-    assert_eq!(
-        runner.start_scopes,
-        vec![vec!["src/main.rs".to_string()], vec![".".to_string()]]
-    );
+    assert_eq!(records.records[0].scope, vec!["src/main.rs"]);
+    assert_eq!(runner.start_scopes, vec![vec!["src/main.rs".to_string()]]);
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn check_runner_does_not_retry_restricted_widened_empty_evidence() {
+fn check_runner_accepts_restricted_answer_with_empty_evidence() {
     let root = git_project("check-restricted-widened-empty-evidence");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, false);
@@ -646,9 +699,8 @@ fn check_runner_does_not_retry_restricted_widened_empty_evidence() {
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(!records.records[0].passed());
-    assert!(record_requires_human_review(&records.records[0]));
-    assert_eq!(records.records[0].observed, EMPTY_EVIDENCE_OBSERVED);
+    assert!(records.records[0].passed());
+    assert_eq!(records.records[0].observed, "yes");
     assert_eq!(records.records[0].scope, vec!["src/main.rs"]);
     assert_eq!(runner.start_scopes, vec![vec!["src/main.rs".to_string()]]);
     assert_eq!(runner.prompts.len(), 1);
@@ -656,14 +708,18 @@ fn check_runner_does_not_retry_restricted_widened_empty_evidence() {
 }
 
 #[test]
-fn check_runner_does_not_retry_restricted_widened_empty_malformed_answer() {
-    let root = git_project("check-restricted-widened-malformed");
+fn check_runner_does_not_retry_restricted_widened_invalid_answer() {
+    let root = git_project("check-restricted-widened-invalid-answer");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, false);
     let expectation = options.selected[0].clone();
     append_src_main_pass_history(&root, &config, &expectation);
     let mut runner = FakeRunner::new(&[
-        &answer("malformed", "", &["."]),
+        &answer(
+            "unclear",
+            "restricted response was not a valid yes/no answer",
+            &["."],
+        ),
         &answer("yes", "late full-scope answer", &["."]),
     ]);
 
@@ -671,8 +727,8 @@ fn check_runner_does_not_retry_restricted_widened_empty_malformed_answer() {
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
     assert!(!records.records[0].passed());
-    assert!(record_requires_human_review(&records.records[0]));
-    assert_eq!(records.records[0].observed, EMPTY_EVIDENCE_OBSERVED);
+    assert!(!record_requires_human_review(&records.records[0]));
+    assert_eq!(records.records[0].observed, "unclear");
     assert_eq!(records.records[0].scope, vec!["src/main.rs"]);
     assert_eq!(runner.start_scopes, vec![vec!["src/main.rs".to_string()]]);
     assert_eq!(runner.prompts.len(), 1);
@@ -680,8 +736,8 @@ fn check_runner_does_not_retry_restricted_widened_empty_malformed_answer() {
 }
 
 #[test]
-fn check_runner_does_not_widen_restricted_unparseable_response() {
-    let root = git_project("check-restricted-unparseable");
+fn check_runner_does_not_widen_restricted_unparsable_response() {
+    let root = git_project("check-restricted-unparsable");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, false);
     let expectation = options.selected[0].clone();
@@ -697,14 +753,16 @@ fn check_runner_does_not_widen_restricted_unparseable_response() {
             prompt: Some(expectation.q.clone()),
             expected: Some(expectation.a.clone()),
             observed: "yes".to_string(),
+            error: None,
             evidence: "src/main.rs was previously enough".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            suggested_q_scope: None,
+            visible_tree_oid: stale_visible_tree_oid(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
     )
     .unwrap();
-    append_history_record(
+    append_legacy_history_record(
         &root,
         &expectation,
         &CheckRecord {
@@ -715,22 +773,25 @@ fn check_runner_does_not_widen_restricted_unparseable_response() {
             result: CheckResult::Fail,
             prompt: Some(expectation.q.clone()),
             expected: Some(expectation.a.clone()),
-            observed: "malformed".to_string(),
+            observed: ERROR_UNPARSABLE.to_string(),
+            error: Some(ERROR_UNPARSABLE.to_string()),
             evidence: "restricted response was empty".to_string(),
             scope: vec!["src/main.rs".to_string()],
-            scope_hash: "old".to_string(),
+            suggested_q_scope: None,
+            visible_tree_oid: stale_visible_tree_oid(),
             cache_key: Some(history_cache_key(&config.agent, &expectation)),
         },
-    )
-    .unwrap();
+    );
     let mut runner = FakeRunner::new(&["", ""]);
 
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
     assert!(!records.records[0].passed());
-    assert_eq!(records.records[0].observed, UNPARSEABLE_OBSERVED);
+    assert_eq!(records.records[0].observed, ERROR_UNPARSABLE);
     assert_eq!(runner.start_scopes, vec![vec!["src/main.rs".to_string()]]);
-    assert_eq!(read_history_records(&root, &expectation).unwrap().len(), 2);
+    let history = read_history_records(&root, &expectation).unwrap();
+    assert_eq!(history.len(), 1);
+    assert!(history.iter().all(|record| record.error.is_none()));
     let _ = fs::remove_dir_all(root);
 }

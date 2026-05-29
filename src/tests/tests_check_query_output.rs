@@ -48,33 +48,80 @@ fn check_output_failed_and_error_records_use_specified_line_counts() {
         prompt: Some("Question?".to_string()),
         expected: Some("yes".to_string()),
         observed: "no".to_string(),
+        error: None,
         evidence: "evidence".to_string(),
         scope: vec!["src".to_string()],
-        scope_hash: "hash".to_string(),
+        suggested_q_scope: None,
+        visible_tree_oid: "hash".to_string(),
         cache_key: None,
     };
 
-    assert_eq!(render_check_output_record(&record).lines().count(), 6);
-
-    record.observed = OBSERVED_IDK.to_string();
     assert_eq!(render_check_output_record(&record).lines().count(), 5);
+
+    record.observed = ERROR_INSUFFICIENT_EVIDENCE.to_string();
+    record.error = Some(ERROR_INSUFFICIENT_EVIDENCE.to_string());
+    assert_eq!(render_check_output_record(&record).lines().count(), 4);
 }
 
 #[test]
-fn check_summary_counts_silent_selected_passes_as_passed() {
+fn check_output_does_not_render_regular_answers_as_error_text() {
+    let mut record = CheckRecord {
+        timestamp: "1970-01-01T00:00:00Z".to_string(),
+        id: "AAAAAAAAAAAAAAAAAAAA".to_string(),
+        display_id: "A".to_string(),
+        number: 7,
+        result: CheckResult::Fail,
+        prompt: Some("Question?".to_string()),
+        expected: None,
+        observed: "no".to_string(),
+        error: None,
+        evidence: "evidence".to_string(),
+        scope: vec!["src".to_string()],
+        suggested_q_scope: None,
+        visible_tree_oid: "hash".to_string(),
+        cache_key: None,
+    };
+
+    let output = render_check_output_record(&record);
+
+    assert!(output.contains("\nExpected: \n"));
+    assert!(output.contains("\nObserved: no\n"));
+    assert!(!output.contains("\nError: no\n"));
+
+    record.observed = ERROR_UNPARSABLE.to_string();
+    assert!(render_check_output_record(&record).contains("\nObserved: unparsable\n"));
+}
+
+#[test]
+fn check_summary_counts_cached_passes_as_passed() {
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], true, false);
+    let expectation = options.selected[0].clone();
+    let cached_pass = expectation_record(
+        &config.agent,
+        &expectation,
+        "pass",
+        "yes",
+        "AAAAAAAAAAAAAAAAAAAA".to_string(),
+    );
     let report = CheckRunReport {
         records: Vec::new(),
         non_selected: Vec::new(),
+        cached: vec![CachedExpectation {
+            expectation,
+            record: cached_pass,
+        }],
         evaluated: 0,
         selected: 0,
-        skipped: 1,
-        silent: 2,
+        skipped: 0,
+        silent: 0,
         narrowing: NarrowingStats::default(),
     };
 
     let summary = render_check_summary(&report, Duration::from_secs(1));
 
-    assert!(summary.contains("2 passed, 1 skipped"));
+    assert!(summary.contains("1 passed"));
+    assert!(!summary.contains("skipped"));
 }
 
 #[test]
@@ -97,6 +144,7 @@ fn check_agent_message_uses_required_all_pass_and_fallback_text() {
     let pass_report = CheckRunReport {
         records: Vec::new(),
         non_selected: Vec::new(),
+        cached: Vec::new(),
         evaluated: 0,
         selected: 0,
         skipped: 0,
@@ -109,7 +157,7 @@ fn check_agent_message_uses_required_all_pass_and_fallback_text() {
             &config,
             &pass_report,
             &mut HistoryCache::new(),
-            &mut ScopeHashCache::new(),
+            &mut VisibleTreeOidCache::new(),
         )
         .unwrap(),
         "✓ All checks passed. Commit is allowed."
@@ -118,6 +166,7 @@ fn check_agent_message_uses_required_all_pass_and_fallback_text() {
     let fail_report = CheckRunReport {
         records: vec![sample_record(1, "fail")],
         non_selected: Vec::new(),
+        cached: Vec::new(),
         evaluated: 1,
         selected: 1,
         skipped: 0,
@@ -130,7 +179,7 @@ fn check_agent_message_uses_required_all_pass_and_fallback_text() {
             &config,
             &fail_report,
             &mut HistoryCache::new(),
-            &mut ScopeHashCache::new(),
+            &mut VisibleTreeOidCache::new(),
         )
         .unwrap(),
         "▷ Fix the issues and run `canon check` again!"
@@ -143,10 +192,11 @@ fn check_agent_message_counts_human_review_as_non_ok() {
     let root = git_project("check-agent-message-human-review");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let mut error_record = sample_record(1, "fail");
-    error_record.observed = OBSERVED_IDK.to_string();
+    error_record.observed = ERROR_INSUFFICIENT_EVIDENCE.to_string();
     let error_report = CheckRunReport {
         records: vec![error_record],
         non_selected: Vec::new(),
+        cached: Vec::new(),
         evaluated: 1,
         selected: 1,
         skipped: 0,
@@ -160,7 +210,7 @@ fn check_agent_message_counts_human_review_as_non_ok() {
             &config,
             &error_report,
             &mut HistoryCache::new(),
-            &mut ScopeHashCache::new(),
+            &mut VisibleTreeOidCache::new(),
         )
         .unwrap(),
         "▷ Fix the issues and run `canon check` again!"
@@ -169,7 +219,7 @@ fn check_agent_message_counts_human_review_as_non_ok() {
 }
 
 #[test]
-fn staged_pass_notice_ignores_missing_head_cache() {
+fn staged_pass_notice_counts_missing_head_cache_as_fix() {
     let root = git_project("check-head-pass-notice");
     commit_all(&root, "initial");
     fs::write(root.join("README.md"), "changed\n").unwrap();
@@ -188,7 +238,7 @@ fn staged_pass_notice_ignores_missing_head_cache() {
 
     assert_eq!(
         staged_passes_failed_at_head_count(&root, &config.agent, &report).unwrap(),
-        0
+        1
     );
     let _ = fs::remove_dir_all(root);
 }
@@ -237,10 +287,97 @@ fn staged_pass_notice_counts_passes_failed_at_head() {
             &config.agent,
             &report,
             &mut HistoryCache::new(),
-            &mut ScopeHashCache::new(),
+            &mut VisibleTreeOidCache::new(),
         )
         .unwrap(),
         1
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn staged_pass_notice_counts_cached_passes_failed_at_head() {
+    let root = git_project("check-head-pass-notice-cached-pass");
+    let yaml = r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: "Fixed?"
+    a: "yes"
+"#;
+    fs::create_dir_all(root.join(".canon")).unwrap();
+    fs::write(root.join(CHECK_PATH), yaml).unwrap();
+    Command::new("git")
+        .arg("add")
+        .arg(CHECK_PATH)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    commit_all(&root, "initial");
+    let config = parse_check_config(yaml).unwrap();
+    let options = check_options(&config, &[], true, false);
+    let expectation = options.selected[0].clone();
+    let head_hash = gate_head_tree_fingerprint(&root, &config.agent, &full_scope())
+        .unwrap()
+        .unwrap();
+    append_history_record(
+        &root,
+        &expectation,
+        &expectation_record(&config.agent, &expectation, "fail", "no", head_hash),
+    )
+    .unwrap();
+    fs::write(root.join("README.md"), "changed\n").unwrap();
+    Command::new("git")
+        .arg("add")
+        .arg("README.md")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let current_visible_tree_oid =
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
+    append_history_record(
+        &root,
+        &expectation,
+        &expectation_record(
+            &config.agent,
+            &expectation,
+            "pass",
+            "yes",
+            current_visible_tree_oid,
+        ),
+    )
+    .unwrap();
+    let mut runner = FakeRunner::new(&[]);
+
+    let report =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert!(report.records.is_empty());
+    assert_eq!(report.cached.len(), 1);
+    assert_eq!(
+        staged_pass_notice_count(
+            &root,
+            &config.agent,
+            &report,
+            &mut HistoryCache::new(),
+            &mut VisibleTreeOidCache::new(),
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        check_agent_message(
+            &root,
+            &config,
+            &report,
+            &mut HistoryCache::new(),
+            &mut VisibleTreeOidCache::new(),
+        )
+        .unwrap(),
+        "▷ +1 pass compared to HEAD. Commit the staged changes NOW!"
     );
     let _ = fs::remove_dir_all(root);
 }
@@ -292,26 +429,28 @@ fn staged_pass_notice_counts_passes_even_with_existing_failure() {
         .current_dir(&root)
         .output()
         .unwrap();
-    let current_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let current_visible_tree_oid =
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
     let current_pass = expectation_record(
         &config.agent,
         &options.selected[0],
         "pass",
         "yes",
-        current_hash.clone(),
+        current_visible_tree_oid.clone(),
     );
     let current_fail = expectation_record(
         &config.agent,
         &options.selected[1],
         "fail",
         "yes",
-        current_hash,
+        current_visible_tree_oid,
     );
     append_history_record(&root, &options.selected[0], &current_pass).unwrap();
     append_history_record(&root, &options.selected[1], &current_fail).unwrap();
     let report = CheckRunReport {
         records: vec![current_pass, current_fail],
         non_selected: Vec::new(),
+        cached: Vec::new(),
         evaluated: 2,
         selected: 2,
         skipped: 0,
@@ -325,7 +464,7 @@ fn staged_pass_notice_counts_passes_even_with_existing_failure() {
             &config.agent,
             &report,
             &mut HistoryCache::new(),
-            &mut ScopeHashCache::new(),
+            &mut VisibleTreeOidCache::new(),
         )
         .unwrap(),
         1
@@ -336,7 +475,7 @@ fn staged_pass_notice_counts_passes_even_with_existing_failure() {
             &config,
             &report,
             &mut HistoryCache::new(),
-            &mut ScopeHashCache::new(),
+            &mut VisibleTreeOidCache::new(),
         )
         .unwrap(),
         vec![
@@ -349,7 +488,7 @@ fn staged_pass_notice_counts_passes_even_with_existing_failure() {
 }
 
 #[test]
-fn check_agent_message_blocks_commit_when_regression_cache_is_missing() {
+fn check_agent_message_allows_commit_when_only_regression_cache_is_missing() {
     let root = git_project("check-agent-message-gate-missing-cache");
     let yaml = r#"
 version: 1
@@ -422,26 +561,28 @@ expectations:
         .current_dir(&root)
         .output()
         .unwrap();
-    let current_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let current_visible_tree_oid =
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
     let current_pass = expectation_record(
         &config.agent,
         &options.selected[0],
         "pass",
         "yes",
-        current_hash.clone(),
+        current_visible_tree_oid.clone(),
     );
     let current_fail = expectation_record(
         &config.agent,
         &options.selected[1],
         "fail",
         "yes",
-        current_hash,
+        current_visible_tree_oid,
     );
     append_history_record(&root, &options.selected[0], &current_pass).unwrap();
     append_history_record(&root, &options.selected[1], &current_fail).unwrap();
     let report = CheckRunReport {
         records: vec![current_pass, current_fail],
         non_selected: Vec::new(),
+        cached: Vec::new(),
         evaluated: 2,
         selected: 3,
         skipped: 0,
@@ -455,10 +596,13 @@ expectations:
             &config,
             &report,
             &mut HistoryCache::new(),
-            &mut ScopeHashCache::new(),
+            &mut VisibleTreeOidCache::new(),
         )
         .unwrap(),
-        vec!["▷ Fix the issues and run `canon check` again!".to_string()]
+        vec![
+            "▷ +1 pass compared to HEAD. Commit the staged changes NOW!".to_string(),
+            "▷ Then fix the remaining issues and run `canon check` again!".to_string(),
+        ]
     );
     let _ = fs::remove_dir_all(root);
 }
@@ -492,7 +636,16 @@ fn check_agent_message_prioritizes_regressions_over_fixes() {
         .current_dir(&root)
         .output()
         .unwrap();
-    let current_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let current_visible_tree_oid =
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
+    let current_fail = expectation_record(
+        &config.agent,
+        &options.selected[1],
+        "fail",
+        "yes",
+        current_visible_tree_oid.clone(),
+    );
+    append_history_record(&root, &options.selected[1], &current_fail).unwrap();
     let report = CheckRunReport {
         records: vec![
             expectation_record(
@@ -500,17 +653,12 @@ fn check_agent_message_prioritizes_regressions_over_fixes() {
                 &options.selected[0],
                 "pass",
                 "yes",
-                current_hash.clone(),
+                current_visible_tree_oid.clone(),
             ),
-            expectation_record(
-                &config.agent,
-                &options.selected[1],
-                "fail",
-                "yes",
-                current_hash,
-            ),
+            current_fail,
         ],
         non_selected: Vec::new(),
+        cached: Vec::new(),
         evaluated: 2,
         selected: 2,
         skipped: 0,
@@ -524,7 +672,7 @@ fn check_agent_message_prioritizes_regressions_over_fixes() {
             &config,
             &report,
             &mut HistoryCache::new(),
-            &mut ScopeHashCache::new(),
+            &mut VisibleTreeOidCache::new(),
         )
         .unwrap(),
         "▷ Fix the issues and run `canon check` again!"
@@ -584,12 +732,8 @@ fn query_mode_uses_agent_and_does_not_write_history() {
         context_compaction_events: Vec::new(),
     }));
     let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
-    let runtime = CheckRuntime {
-        root: &root,
-        snapshot_root: &root,
-        config: &config,
-    };
-    let mut interrogation_state = InterrogationState::new();
+    let runtime = CheckRuntime::fixed(&root, &root, &config);
+    let mut interrogation_run_state = InterrogationRunState::new();
 
     let result = run_query_with_runner(
         &runtime,
@@ -598,12 +742,12 @@ fn query_mode_uses_agent_and_does_not_write_history() {
         &full_scope(),
         &mut runner,
         Some(&mut diagnostic_log),
-        &mut interrogation_state,
+        &mut interrogation_run_state,
     )
     .unwrap();
 
     assert_eq!(result.answer.answer, "no");
-    assert_eq!(result.answer.scope, vec!["src"]);
+    assert_eq!(result.answer.scope, vec!["src".to_string()]);
     assert_eq!(
         runner.prompts,
         vec![
@@ -622,16 +766,13 @@ fn query_mode_uses_agent_and_does_not_write_history() {
             Some("gpt-5.4-mini".to_string())
         ]
     );
-    assert_eq!(
-        runner.start_thinking,
-        vec!["medium".to_string(), "medium".to_string()]
-    );
+    assert_eq!(runner.start_thinking, vec!["medium", "medium"]);
     let cache_dir = root.join(".git/canon/cache");
     assert!(!cache_dir.exists() || fs::read_dir(&cache_dir).unwrap().next().is_none());
     let output = render_query_output(&result.answer);
     assert_eq!(
         output,
-        "Observed: no\nEvidence: `src/main.rs`: src/main.rs says no\nScope: [\"src\"]\n"
+        "Observed: no\nEvidence: `src/main.rs`: src/main.rs says no\nSuggested q-scope: [\"src\"]\n"
     );
     let log = fs::read_to_string(diagnostic_log.path()).unwrap();
     assert!(log.contains(r#""event":"query.result""#));
@@ -682,15 +823,11 @@ fn query_mode_accepts_narrowed_incorrect_answer_when_expected_is_known() {
     let root = git_project("query-mode-known-expected-narrowing");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let mut runner = FakeRunner::new(&[
-        &answer("yes", "full scope passes", &["src"]),
+        &answer("no", "full scope fails it", &["src"]),
         &answer("no", "src/main.rs still fails it", &["src"]),
     ]);
-    let runtime = CheckRuntime {
-        root: &root,
-        snapshot_root: &root,
-        config: &config,
-    };
-    let mut interrogation_state = InterrogationState::new();
+    let runtime = CheckRuntime::fixed(&root, &root, &config);
+    let mut interrogation_run_state = InterrogationRunState::new();
 
     let result = run_query_with_runner(
         &runtime,
@@ -699,7 +836,7 @@ fn query_mode_accepts_narrowed_incorrect_answer_when_expected_is_known() {
         &full_scope(),
         &mut runner,
         None,
-        &mut interrogation_state,
+        &mut interrogation_run_state,
     )
     .unwrap();
 
@@ -708,24 +845,63 @@ fn query_mode_accepts_narrowed_incorrect_answer_when_expected_is_known() {
         result.answer.evidence,
         "`src/main.rs`: src/main.rs still fails it"
     );
-    assert_eq!(result.answer.scope, vec!["src"]);
+    assert_eq!(result.answer.scope, vec!["src".to_string()]);
+    assert_eq!(
+        runner.start_scopes,
+        vec![full_scope(), vec!["src".to_string()]]
+    );
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn query_mode_rejects_changed_narrowing_when_expected_is_unknown() {
-    let root = git_project("query-mode-unknown-expected-narrowing");
+fn query_mode_accepts_changed_narrowing_when_wide_matches_known_expected() {
+    let root = git_project("query-mode-known-expected-accepted-narrowing");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let mut runner = FakeRunner::new(&[
+        &answer("yes", "full scope passes", &["src"]),
+        &answer("no", "src/main.rs changes the answer", &["src"]),
+    ]);
+    let runtime = CheckRuntime::fixed(&root, &root, &config);
+    let mut interrogation_run_state = InterrogationRunState::new();
+
+    let result = run_query_with_runner(
+        &runtime,
+        "Ad-hoc question?",
+        Some("yes"),
+        &full_scope(),
+        &mut runner,
+        None,
+        &mut interrogation_run_state,
+    )
+    .unwrap();
+
+    assert_eq!(result.answer.answer, "no");
+    assert_eq!(
+        result.answer.evidence,
+        "`src/main.rs`: src/main.rs changes the answer"
+    );
+    assert_eq!(result.answer.scope, vec!["src".to_string()]);
+    assert_eq!(
+        result.answer.q_scope_suggestion,
+        Some(vec!["src".to_string()])
+    );
+    assert_eq!(
+        runner.start_scopes,
+        vec![full_scope(), vec!["src".to_string()]]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn query_mode_accepts_changed_narrowing_when_expected_is_unknown() {
+    let root = git_project("query-mode-unknown-expected-accepted-narrowing");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let mut runner = FakeRunner::new(&[
         &answer("yes", "full scope answer", &["src"]),
         &answer("no", "changed narrow answer", &["src"]),
     ]);
-    let runtime = CheckRuntime {
-        root: &root,
-        snapshot_root: &root,
-        config: &config,
-    };
-    let mut interrogation_state = InterrogationState::new();
+    let runtime = CheckRuntime::fixed(&root, &root, &config);
+    let mut interrogation_run_state = InterrogationRunState::new();
 
     let result = run_query_with_runner(
         &runtime,
@@ -734,33 +910,43 @@ fn query_mode_rejects_changed_narrowing_when_expected_is_unknown() {
         &full_scope(),
         &mut runner,
         None,
-        &mut interrogation_state,
+        &mut interrogation_run_state,
     )
     .unwrap();
 
-    assert_eq!(result.answer.answer, "yes");
-    assert_eq!(result.answer.evidence, "`src/main.rs`: full scope answer");
-    assert_eq!(result.answer.scope, full_scope());
+    assert_eq!(result.answer.answer, "no");
+    assert_eq!(
+        result.answer.evidence,
+        "`src/main.rs`: changed narrow answer"
+    );
+    assert_eq!(result.answer.scope, vec!["src".to_string()]);
+    assert_eq!(
+        result.answer.q_scope_suggestion,
+        Some(vec!["src".to_string()])
+    );
+    assert_eq!(
+        runner.start_scopes,
+        vec![full_scope(), vec!["src".to_string()]]
+    );
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn query_mode_can_use_explicit_restricted_scope() {
+fn query_mode_retries_restricted_insufficient_evidence_with_full_scope() {
     let root = git_project("query-mode-restricted-scope");
     enable_diagnostic_logs(&root);
     let config = parse_check_config(check_config_yaml()).unwrap();
     let scope = vec!["src".to_string()];
     let mut runner = FakeRunner::new(&[
-        &answer("idk", "needs files outside this restricted scope", &["."]),
-        &answer("yes", "full-scope evidence answers it", &["."]),
+        &error_response(
+            ERROR_INSUFFICIENT_EVIDENCE,
+            "needs files outside this restricted scope",
+        ),
+        &answer("yes", "full scope has the evidence", &["."]),
     ]);
     let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
-    let runtime = CheckRuntime {
-        root: &root,
-        snapshot_root: &root,
-        config: &config,
-    };
-    let mut interrogation_state = InterrogationState::new();
+    let runtime = CheckRuntime::fixed(&root, &root, &config);
+    let mut interrogation_run_state = InterrogationRunState::new();
 
     let result = run_query_with_runner(
         &runtime,
@@ -769,10 +955,12 @@ fn query_mode_can_use_explicit_restricted_scope() {
         &scope,
         &mut runner,
         Some(&mut diagnostic_log),
-        &mut interrogation_state,
+        &mut interrogation_run_state,
     )
     .unwrap();
 
+    assert_eq!(result.answer.answer, "yes");
+    assert_eq!(result.answer.scope, full_scope());
     assert_eq!(runner.start_scopes, vec![scope, full_scope()]);
     assert_eq!(
         runner.prompts,
@@ -781,32 +969,60 @@ fn query_mode_can_use_explicit_restricted_scope() {
             "Ad-hoc scoped question?".to_string()
         ]
     );
-    assert_eq!(result.answer.answer, "yes");
-    assert_eq!(result.answer.scope, full_scope());
-    assert_eq!(
-        result.answer.evidence,
-        "`README.md`: full-scope evidence answers it"
-    );
     assert_eq!(runner.starts, 2);
     let log = fs::read_to_string(diagnostic_log.path()).unwrap();
     assert!(log.contains(r#""event":"query.result""#));
-    assert!(log.contains(r#""scope":["."]"#));
+    assert!(!log.contains(r#""event":"query.review_required""#));
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn query_mode_errors_when_full_scope_idk_needs_review() {
-    let root = git_project("query-mode-full-scope-idk");
+fn query_mode_accepts_denied_command_no_without_widening_scope() {
+    let root = git_project("query-mode-denied-command-no");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let scope = vec!["src/main.rs".to_string()];
+    let response = serde_json::to_string(&json!({
+        "answer": "no",
+        "evidence": "`wc src/cli.rs` failed with `wc: src/cli.rs: open: Operation not permitted`, so I could not see its output.",
+        "qScopeSuggestion": ["src/cli.rs"]
+    }))
+    .unwrap();
+    let mut runner = FakeRunner::new(&[&response]);
+    let runtime = CheckRuntime::fixed(&root, &root, &config);
+    let mut interrogation_run_state = InterrogationRunState::new();
+
+    let result = run_query_with_runner(
+        &runtime,
+        "Try to run `wc src/cli.rs`. Can you see its output?",
+        None,
+        &scope,
+        &mut runner,
+        None,
+        &mut interrogation_run_state,
+    )
+    .unwrap();
+
+    assert_eq!(result.answer.answer, "no");
+    assert_eq!(result.answer.scope, scope);
+    assert_eq!(
+        result.answer.evidence,
+        "`wc src/cli.rs` failed with `wc: src/cli.rs: open: Operation not permitted`, so I could not see its output."
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn query_mode_errors_when_full_scope_insufficient_evidence_needs_review() {
+    let root = git_project("query-mode-full-scope-insufficient-evidence");
     enable_diagnostic_logs(&root);
     let config = parse_check_config(check_config_yaml()).unwrap();
-    let mut runner = FakeRunner::new(&[&answer("idk", "full scope still cannot answer", &["."])]);
+    let mut runner = FakeRunner::new(&[&error_response(
+        ERROR_INSUFFICIENT_EVIDENCE,
+        "full scope still cannot answer",
+    )]);
     let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
-    let runtime = CheckRuntime {
-        root: &root,
-        snapshot_root: &root,
-        config: &config,
-    };
-    let mut interrogation_state = InterrogationState::new();
+    let runtime = CheckRuntime::fixed(&root, &root, &config);
+    let mut interrogation_run_state = InterrogationRunState::new();
 
     let err = run_query_with_runner(
         &runtime,
@@ -815,15 +1031,50 @@ fn query_mode_errors_when_full_scope_idk_needs_review() {
         &full_scope(),
         &mut runner,
         Some(&mut diagnostic_log),
-        &mut interrogation_state,
+        &mut interrogation_run_state,
     )
     .unwrap_err();
 
-    assert!(err.contains("query requires human review: full-scope idk"));
+    assert!(err.contains("query requires human review: insufficient evidence"));
     let log = fs::read_to_string(diagnostic_log.path()).unwrap();
     assert!(!log.contains(r#""event":"query.result""#));
     assert!(log.contains(r#""event":"query.review_required""#));
-    assert!(log.contains(r#""reason":"full-scope idk""#));
+    assert!(log.contains(r#""reason":"insufficient evidence""#));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn query_mode_allows_self_contained_evidence_without_project_citation() {
+    let root = git_project("query-mode-self-contained-evidence");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let response = serde_json::to_string(&json!({
+        "answer": "4",
+        "evidence": "Basic arithmetic: 2+2=4.",
+        "qScopeSuggestion": ["."]
+    }))
+    .unwrap();
+    let mut runner = FakeRunner::new(&[&response]);
+    let runtime = CheckRuntime::fixed(&root, &root, &config);
+    let mut interrogation_run_state = InterrogationRunState::new();
+
+    let result = run_query_with_runner(
+        &runtime,
+        "2+2=?",
+        None,
+        &full_scope(),
+        &mut runner,
+        None,
+        &mut interrogation_run_state,
+    )
+    .unwrap();
+
+    assert_eq!(result.answer.answer, "4");
+    assert_eq!(result.answer.evidence, "Basic arithmetic: 2+2=4.");
+    assert_eq!(result.answer.scope, full_scope());
+    assert_eq!(
+        render_query_output(&result.answer),
+        "Observed: 4\nEvidence: Basic arithmetic: 2+2=4.\nSuggested q-scope: [\".\"]\n"
+    );
     let _ = fs::remove_dir_all(root);
 }
 
@@ -834,12 +1085,8 @@ fn query_and_full_scope_expectation_use_identical_first_turn_input() {
     let expectation = check_options(&config, &["1"], false, true).selected[0].clone();
     let mut query_runner = FakeRunner::new(&[&answer("yes", "query evidence", &["."])]);
     let mut check_runner = FakeRunner::new(&[&answer("yes", "check evidence", &["."])]);
-    let runtime = CheckRuntime {
-        root: &root,
-        snapshot_root: &root,
-        config: &config,
-    };
-    let mut query_state = InterrogationState::new();
+    let runtime = CheckRuntime::fixed(&root, &root, &config);
+    let mut query_state = InterrogationRunState::new();
 
     run_query_with_runner(
         &runtime,
@@ -905,7 +1152,63 @@ fn successful_narrowing_logs_stats_and_one_final_result() {
     assert_eq!(log.matches(r#""event":"expectation.result""#).count(), 1);
     assert_eq!(log.matches(r#""event":"interrogation.result""#).count(), 2);
     assert!(log.contains(r#""event":"scope.narrowing""#));
+    assert!(log.contains(r#""originalScope":["."]"#));
+    assert!(log.contains(r#""proposedScope":["src"]"#));
     assert!(log.contains(r#""accepted":true"#));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn narrowing_verifies_smaller_suggestions_outside_current_scope() {
+    let root = git_project("narrowing-outside-current-scope");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    fs::write(root.join("src/a.rs"), "a\n").unwrap();
+    fs::write(root.join("src/b.rs"), "b\n").unwrap();
+    fs::write(root.join("src/c.rs"), "c\n").unwrap();
+    fs::create_dir_all(root.join("private")).unwrap();
+    fs::write(root.join("private/a.txt"), "a\n").unwrap();
+    Command::new("git")
+        .args(["add", "src/a.rs", "src/b.rs", "src/c.rs", "private/a.txt"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let expectation = options.selected[0].clone();
+    let scope = vec!["src".to_string()];
+    let mut scope_seed = expectation_record(
+        &config.agent,
+        &expectation,
+        "pass",
+        "yes",
+        staged_visible_tree_oid(&root, &config.agent, &scope).unwrap(),
+    );
+    scope_seed.scope = scope.clone();
+    append_history_record(&root, &expectation, &scope_seed).unwrap();
+    let response = serde_json::to_string(&json!({
+        "answer": "yes",
+        "evidence": "`src/main.rs`: full answer",
+        "qScopeSuggestion": ["private"]
+    }))
+    .unwrap();
+    let narrowed = serde_json::to_string(&json!({
+        "answer": "yes",
+        "evidence": "`private/a.txt`: narrow answer",
+        "qScopeSuggestion": ["private"]
+    }))
+    .unwrap();
+    let mut runner = FakeRunner::new(&[&response, &narrowed]);
+
+    let report =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert_eq!(runner.starts, 2);
+    assert_eq!(
+        runner.start_scopes,
+        vec![scope.clone(), vec!["private".to_string()]]
+    );
+    assert_eq!(report.narrowing.attempted, 1);
+    assert_eq!(report.narrowing.accepted, 1);
+    assert_eq!(report.records[0].scope, vec!["private".to_string()]);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -918,7 +1221,7 @@ fn failed_narrowing_logs_stats_and_keeps_wider_final_result() {
     let expectation = options.selected[0].clone();
     let mut runner = FakeRunner::new(&[
         &answer("no", "full answer", &["src"]),
-        &answer("yes", "narrow answer", &["src"]),
+        &error_response(ERROR_INVALID_QUESTION, "narrowing verification failed"),
     ]);
     let mut diagnostic_log = DiagnosticLogWriter::create(&root).unwrap();
 
@@ -938,16 +1241,19 @@ fn failed_narrowing_logs_stats_and_keeps_wider_final_result() {
     assert_eq!(report.narrowing.rejected, 1);
     assert_eq!(report.records[0].observed, "no");
     assert_eq!(report.records[0].evidence, "`src/main.rs`: full answer");
-    assert_eq!(report.records[0].scope, vec!["."]);
+    assert_eq!(report.records[0].scope, full_scope());
+    assert_eq!(report.records[0].suggested_q_scope, None);
     let history = read_history_records(&root, &expectation).unwrap();
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].observed, "no");
     assert_eq!(history[0].evidence, "`src/main.rs`: full answer");
-    assert_eq!(history[0].scope, vec!["."]);
+    assert_eq!(history[0].scope, full_scope());
     let log = fs::read_to_string(diagnostic_log.path()).unwrap();
     assert_eq!(log.matches(r#""event":"expectation.result""#).count(), 1);
     assert_eq!(log.matches(r#""event":"interrogation.result""#).count(), 2);
     assert!(log.contains(r#""event":"scope.narrowing""#));
+    assert!(log.contains(r#""originalScope":["."]"#));
+    assert!(log.contains(r#""proposedScope":["src"]"#));
     assert!(log.contains(r#""accepted":false"#));
     let _ = fs::remove_dir_all(root);
 }

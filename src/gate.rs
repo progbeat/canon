@@ -1,18 +1,20 @@
 use crate::check_preflight::{
     is_canon_only_staged_change_bytes, is_canon_project_path_bytes, staged_changed_path_bytes,
 };
-use crate::check_selection::{
-    expectation_identities, select_expectations_with_identities, ExpectationIdentity,
-};
-use crate::check_types::SelectedExpectation;
+#[cfg(test)]
+use crate::check_selection::ExpectationIdentity;
+use crate::check_selection::{expectation_identities, select_expectations_with_identities};
+use crate::check_types::{CheckRecord, SelectedExpectation};
 use crate::cli::CommandError;
 use crate::config_types::{AgentConfig, CheckConfig};
 use crate::history::HistoryCache;
-use crate::history_reuse::latest_history_record_matching_hash;
+use crate::history_reuse::{
+    cooldown_history_record, latest_history_record_matching_visible_tree_oid,
+};
 use crate::output::write_stderr_line;
 use crate::repo_inspection::RepoInspectionCache;
-use crate::scope_hash::ScopeHashCache;
 use crate::time::unix_timestamp;
+use crate::visible_tree_oid::VisibleTreeOidCache;
 use crate::CHECK_PATH;
 use std::ffi::OsString;
 use std::path::Path;
@@ -25,87 +27,76 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
             "canon gate does not accept arguments\n▷ Run `canon gate` without arguments.".into(),
         );
     }
-    match gate_project_change(root)? {
-        GateProjectChange::MixedCanonAndNonCanon => {
-            write_stderr_line(
-                "canon gate: .canon/** changes must not be mixed with non-.canon changes",
-            )?;
-            write_stderr_line("▷ Ask human to handle .canon/ changes.")?;
+    if gate_result_or_failure(has_mixed_canon_and_non_canon_changes(root))? {
+        write_stderr_line(
+            "canon gate: .canon/** changes must not be mixed with non-.canon changes",
+        )?;
+        write_stderr_line("▷ Ask human to handle .canon/ changes.")?;
+        return Err(CommandError::GateFailed);
+    }
+    let num_regressions = gate_result_or_failure(gate_regression_count(root))?;
+    if num_regressions > 0 {
+        write_gate_failure_event(GateFailureEvent::Regressed)?;
+        return Err(CommandError::GateFailed);
+    }
+    Ok(())
+}
+
+fn gate_result_or_failure<T>(result: Result<T, String>) -> Result<T, CommandError> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(err) => {
+            write_stderr_line(&format!("canon gate: {}", err))?;
+            write_stderr_line(gate_error_advice())?;
             Err(CommandError::GateFailed)
         }
-        GateProjectChange::CanonOnly => Ok(()),
-        GateProjectChange::Other => {
-            let mut repo_cache = RepoInspectionCache::new();
-            let config = repo_cache.load_check_config(root, Path::new(CHECK_PATH))?;
-            let mut scope_hash_cache = ScopeHashCache::new();
-            let mut history_cache = HistoryCache::new();
-            let now = unix_timestamp()?;
-            let identities = expectation_identities(&config)?;
-            let mut wrote_missing_header = false;
-            let passed = gate_pass_with_config(
-                root,
-                &config,
-                &identities,
-                GateCaches {
-                    history: &mut history_cache,
-                    scope_hash: &mut scope_hash_cache,
-                },
-                now,
-                |event| write_gate_failure_event(event, &mut wrote_missing_header),
-            )?;
-            if passed {
-                Ok(())
-            } else {
-                Err(CommandError::GateFailed)
-            }
-        }
     }
+}
+
+fn gate_regression_count(root: &Path) -> Result<usize, String> {
+    let mut repo_cache = RepoInspectionCache::new();
+    let config = repo_cache.load_check_config(root, Path::new(CHECK_PATH))?;
+    let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
+    let mut history_cache = HistoryCache::new();
+    gate_regression_count_with_config(
+        root,
+        &config,
+        &mut history_cache,
+        &mut visible_tree_oid_cache,
+    )
 }
 
 pub(crate) enum GateFailureEvent {
     Regressed,
-    Missing,
-    MissingComplete { has_regressions: bool },
 }
 
-enum GateProjectChange {
-    MixedCanonAndNonCanon,
-    CanonOnly,
-    Other,
-}
-
-fn gate_project_change(root: &Path) -> Result<GateProjectChange, String> {
+fn has_mixed_canon_and_non_canon_changes(root: &Path) -> Result<bool, String> {
     let changed_paths = staged_changed_path_bytes(root)?;
     let has_canon_change = changed_paths
         .iter()
         .any(|path| is_canon_project_path_bytes(path));
-    if has_canon_change && !is_canon_only_staged_change_bytes(&changed_paths) {
-        return Ok(GateProjectChange::MixedCanonAndNonCanon);
-    }
-    if has_canon_change {
-        return Ok(GateProjectChange::CanonOnly);
-    }
-    Ok(GateProjectChange::Other)
+    Ok(has_canon_change && !is_canon_only_staged_change_bytes(&changed_paths))
 }
 
+#[cfg(test)]
 pub(crate) fn gate_pass_with_config(
     root: &Path,
     config: &CheckConfig,
     identities: &[ExpectationIdentity],
     mut caches: GateCaches<'_>,
-    _now: u64,
+    now: u64,
     emit_failure: impl FnMut(GateFailureEvent) -> Result<(), String>,
 ) -> Result<bool, String> {
     let selected_expectations = select_expectations_with_identities(config, identities, &[])?;
-    // The gate pseudocode is the raw comparison loop over every no-selector
-    // expectation. Cooldown is only a `canon check` work-saving filter; the
-    // pre-commit gate still compares cached HEAD and staged results for the
-    // selected expectations.
+    // The gate pseudocode fails only on staged regressions. Missing staged
+    // cached results are non-blocking; `canon check` is still responsible for
+    // producing fresh history when the human wants full confirmation.
     gate_selected_expectations(
         root,
         &config.agent,
         &selected_expectations,
         &mut caches,
+        now,
         emit_failure,
     )
 }
@@ -114,12 +105,13 @@ pub(crate) fn gate_regression_count_with_config(
     root: &Path,
     config: &CheckConfig,
     history_cache: &mut HistoryCache,
-    scope_hash_cache: &mut ScopeHashCache,
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<usize, String> {
     // This is the gate spec's expectation comparison as a count: HEAD pass
-    // followed by staged non-pass or missing cache.
+    // followed by staged fail.
     let identities = expectation_identities(config)?;
     let selected_expectations = select_expectations_with_identities(config, &identities, &[])?;
+    let now = unix_timestamp()?;
     selected_expectations
         .iter()
         .map(|expectation| {
@@ -128,18 +120,21 @@ pub(crate) fn gate_regression_count_with_config(
                 &config.agent,
                 expectation,
                 history_cache,
-                scope_hash_cache,
+                visible_tree_oid_cache,
+                now,
             )?
             .is_blocking() as usize)
         })
         .sum()
 }
 
+#[cfg(test)]
 fn gate_selected_expectations(
     root: &Path,
     agent: &AgentConfig,
     selected_expectations: &[SelectedExpectation],
     caches: &mut GateCaches<'_>,
+    now: u64,
     mut emit_failure: impl FnMut(GateFailureEvent) -> Result<(), String>,
 ) -> Result<bool, String> {
     // These statuses are the only expectation-related way `canon gate` can
@@ -149,18 +144,17 @@ fn gate_selected_expectations(
     // `canon check`'s `num_regressions`; if that count is zero, this loop has
     // no expectation-related failure branch to take.
     for expectation in selected_expectations {
-        match gate_expectation_status(root, agent, expectation, caches.history, caches.scope_hash)?
-        {
+        match gate_expectation_status(
+            root,
+            agent,
+            expectation,
+            caches.history,
+            caches.visible_tree_oid,
+            now,
+        )? {
             GateExpectationStatus::PassedOrNonBlocking => {}
             GateExpectationStatus::Regressed => {
                 emit_failure(GateFailureEvent::Regressed)?;
-                return Ok(false);
-            }
-            GateExpectationStatus::MissingAfterHeadPass => {
-                emit_failure(GateFailureEvent::Missing)?;
-                emit_failure(GateFailureEvent::MissingComplete {
-                    has_regressions: false,
-                })?;
                 return Ok(false);
             }
         }
@@ -173,29 +167,29 @@ fn gate_expectation_status(
     agent: &AgentConfig,
     expectation: &SelectedExpectation,
     history_cache: &mut HistoryCache,
-    scope_hash_cache: &mut ScopeHashCache,
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
+    now: u64,
 ) -> Result<GateExpectationStatus, String> {
-    let previous = exact_gate_cache_result_for_tree(
+    let previous = gate_cache_result_for_tree_at(
         root,
         agent,
         expectation,
         GateComparisonTree::Head,
         history_cache,
-        scope_hash_cache,
+        visible_tree_oid_cache,
+        now,
     )?;
-    let current = exact_gate_cache_result_for_tree(
+    let current = gate_cache_result_for_tree_at(
         root,
         agent,
         expectation,
         GateComparisonTree::StagedIndex,
         history_cache,
-        scope_hash_cache,
+        visible_tree_oid_cache,
+        now,
     )?;
     Ok(match (previous, current) {
         (GateCacheResult::Pass, GateCacheResult::Fail) => GateExpectationStatus::Regressed,
-        (GateCacheResult::Pass, GateCacheResult::Missing) => {
-            GateExpectationStatus::MissingAfterHeadPass
-        }
         _ => GateExpectationStatus::PassedOrNonBlocking,
     })
 }
@@ -203,44 +197,25 @@ fn gate_expectation_status(
 enum GateExpectationStatus {
     PassedOrNonBlocking,
     Regressed,
-    MissingAfterHeadPass,
 }
 
 impl GateExpectationStatus {
     fn is_blocking(&self) -> bool {
-        matches!(
-            self,
-            GateExpectationStatus::Regressed | GateExpectationStatus::MissingAfterHeadPass
-        )
+        matches!(self, GateExpectationStatus::Regressed)
     }
 }
 
+#[cfg(test)]
 pub(crate) struct GateCaches<'a> {
     pub(crate) history: &'a mut HistoryCache,
-    pub(crate) scope_hash: &'a mut ScopeHashCache,
+    pub(crate) visible_tree_oid: &'a mut VisibleTreeOidCache,
 }
 
-fn write_gate_failure_event(
-    event: GateFailureEvent,
-    wrote_missing_header: &mut bool,
-) -> Result<(), String> {
+fn write_gate_failure_event(event: GateFailureEvent) -> Result<(), String> {
     match event {
         GateFailureEvent::Regressed => {
             write_stderr_line("canon gate: staged changes regress cached canon results")?;
             write_stderr_line(gate_regression_advice())
-        }
-        GateFailureEvent::Missing => {
-            if !*wrote_missing_header {
-                write_stderr_line("canon gate: missing cached canon answers for staged changes")?;
-                *wrote_missing_header = true;
-            }
-            Ok(())
-        }
-        GateFailureEvent::MissingComplete { has_regressions } => {
-            if let Some(advice) = gate_missing_cache_advice(has_regressions) {
-                write_stderr_line(advice)?;
-            }
-            Ok(())
         }
     }
 }
@@ -249,14 +224,8 @@ pub(crate) fn gate_regression_advice() -> &'static str {
     "▷ Fix staged regressions and run `canon check` again!"
 }
 
-pub(crate) fn gate_missing_cache_advice(has_regressions: bool) -> Option<&'static str> {
-    // Regressions are the blocking action. When regressions and missing cache
-    // records coexist, do not spend tokens filling unrelated missing records.
-    if has_regressions {
-        Some("canon gate: fix staged regressions before filling missing cache")
-    } else {
-        Some("canon gate: run `canon check` before committing")
-    }
+pub(crate) fn gate_error_advice() -> &'static str {
+    "▷ Fix the gate error and run `canon check` again!"
 }
 
 #[derive(Debug, Clone)]
@@ -266,32 +235,72 @@ pub(crate) enum GateCacheResult {
     Missing,
 }
 
-pub(crate) fn exact_gate_cache_result_for_tree(
+pub(crate) fn gate_cached_result_for_tree(
     root: &Path,
     agent: &AgentConfig,
     expectation: &SelectedExpectation,
     tree: GateComparisonTree,
     history_cache: &mut HistoryCache,
-    scope_hash_cache: &mut ScopeHashCache,
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<GateCacheResult, String> {
-    let record =
-        latest_history_record_matching_hash(
-            root,
-            expectation,
-            history_cache,
-            |scope| match tree {
-                GateComparisonTree::StagedIndex => scope_hash_cache
-                    .staged_scope_hash(root, agent, scope)
-                    .map(Some),
-                GateComparisonTree::Head => {
-                    scope_hash_cache.gate_head_tree_fingerprint(root, agent, scope)
-                }
-            },
-        )?;
+    gate_cache_result_for_tree_at(
+        root,
+        agent,
+        expectation,
+        tree,
+        history_cache,
+        visible_tree_oid_cache,
+        unix_timestamp()?,
+    )
+}
+
+fn gate_cache_result_for_tree_at(
+    root: &Path,
+    agent: &AgentConfig,
+    expectation: &SelectedExpectation,
+    tree: GateComparisonTree,
+    history_cache: &mut HistoryCache,
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
+    now: u64,
+) -> Result<GateCacheResult, String> {
+    let same_tree = latest_history_record_matching_visible_tree_oid(
+        root,
+        expectation,
+        history_cache,
+        |scope| match tree {
+            GateComparisonTree::StagedIndex => visible_tree_oid_cache
+                .staged_visible_tree_oid(root, agent, scope)
+                .map(Some),
+            GateComparisonTree::Head => {
+                visible_tree_oid_cache.gate_head_tree_fingerprint(root, agent, scope)
+            }
+        },
+    )?;
+    let cooldown = cooldown_history_record(root, agent, expectation, history_cache, now)?;
+    let record = newer_gate_record(same_tree, cooldown);
     match record {
         Some(record) if record.passed() => Ok(GateCacheResult::Pass),
         Some(_) => Ok(GateCacheResult::Fail),
         None => Ok(GateCacheResult::Missing),
+    }
+}
+
+fn newer_gate_record(
+    same_tree: Option<CheckRecord>,
+    cooldown: Option<CheckRecord>,
+) -> Option<CheckRecord> {
+    match (same_tree, cooldown) {
+        (Some(same_tree), Some(cooldown)) => {
+            if crate::time::parse_record_timestamp(&cooldown.timestamp).unwrap_or(0)
+                > crate::time::parse_record_timestamp(&same_tree.timestamp).unwrap_or(0)
+            {
+                Some(cooldown)
+            } else {
+                Some(same_tree)
+            }
+        }
+        (Some(record), None) | (None, Some(record)) => Some(record),
+        (None, None) => None,
     }
 }
 

@@ -106,12 +106,8 @@ fn model_failure_clears_cached_sessions_for_all_scopes() {
             &["README.md"],
         )),
     ]);
-    let runtime = CheckRuntime {
-        root: &root,
-        snapshot_root: &root,
-        config: &config,
-    };
-    let mut state = InterrogationState::new();
+    let runtime = CheckRuntime::fixed(&root, &root, &config);
+    let mut state = InterrogationRunState::new();
 
     let first = interrogate_expectation_with_model_fallbacks(
         &runtime,

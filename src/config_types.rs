@@ -1,9 +1,11 @@
 use serde::Deserialize;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CheckConfig {
     pub(crate) version: u32,
+    pub(crate) presets: BTreeMap<String, AgentConfig>,
     pub(crate) agent: AgentConfig,
     pub(crate) expectations: Vec<Expectation>,
 }
@@ -12,7 +14,10 @@ pub(crate) struct CheckConfig {
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawCheckConfig {
     pub(crate) version: u32,
-    pub(crate) agent: AgentConfig,
+    #[serde(default)]
+    pub(crate) presets: Option<BTreeMap<String, RawPresetConfig>>,
+    #[serde(default)]
+    pub(crate) agent: Option<RawLegacyAgentConfig>,
     pub(crate) expectations: Vec<RawExpectationItem>,
 }
 
@@ -20,28 +25,88 @@ pub(crate) struct RawCheckConfig {
 #[serde(deny_unknown_fields)]
 pub(crate) struct AgentConfig {
     #[serde(default)]
-    pub(crate) model: ModelConfig,
+    pub(crate) models: Vec<String>,
     #[serde(default = "default_thinking")]
     pub(crate) thinking: String,
     #[serde(default)]
     pub(crate) instructions: Option<String>,
+    #[serde(default)]
     pub(crate) ignore: Vec<String>,
+    #[serde(default)]
     pub(crate) plugins: Vec<String>,
 }
 
 impl AgentConfig {
+    pub(crate) fn implementation_default() -> AgentConfig {
+        AgentConfig {
+            models: Vec::new(),
+            thinking: default_thinking(),
+            instructions: None,
+            ignore: Vec::new(),
+            plugins: Vec::new(),
+        }
+    }
+
     pub(crate) fn custom_instructions(&self) -> &str {
         self.instructions.as_deref().unwrap_or("")
     }
 }
 
+impl Default for AgentConfig {
+    fn default() -> AgentConfig {
+        AgentConfig::implementation_default()
+    }
+}
+
 #[derive(Debug, Deserialize, Clone, Default)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ModelConfig {
+pub(crate) struct RawPresetConfig {
+    #[serde(default)]
+    pub(crate) extends: Option<String>,
+    #[serde(default)]
+    pub(crate) models: Option<Vec<String>>,
+    #[serde(default)]
+    pub(crate) thinking: Option<String>,
+    #[serde(default)]
+    pub(crate) instructions: Option<String>,
+    #[serde(default)]
+    pub(crate) ignore: Option<Vec<String>>,
+    #[serde(default)]
+    pub(crate) plugins: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RawLegacyAgentConfig {
+    #[serde(default)]
+    pub(crate) model: RawLegacyModelConfig,
+    #[serde(default)]
+    pub(crate) thinking: Option<String>,
+    #[serde(default)]
+    pub(crate) instructions: Option<String>,
+    #[serde(default)]
+    pub(crate) ignore: Option<Vec<String>>,
+    #[serde(default)]
+    pub(crate) plugins: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RawLegacyModelConfig {
     #[serde(default)]
     pub(crate) primary: Option<String>,
     #[serde(default)]
     pub(crate) fallbacks: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RawExpectationSettings {
+    pub(crate) preset: Option<String>,
+    pub(crate) models: Option<Vec<String>>,
+    pub(crate) thinking: Option<String>,
+    pub(crate) instructions: Option<String>,
+    pub(crate) ignore: Option<Vec<String>>,
+    pub(crate) plugins: Option<Vec<String>>,
 }
 
 pub(crate) fn default_thinking() -> String {
@@ -55,6 +120,8 @@ pub(crate) struct Expectation {
     pub(crate) a: String,
     #[serde(default, skip)]
     pub(crate) prompt_scope: Vec<String>,
+    #[serde(default, skip)]
+    pub(crate) agent: AgentConfig,
     #[serde(default)]
     pub(crate) cooldown: Option<String>,
     #[serde(default)]
@@ -73,7 +140,7 @@ pub(crate) struct RawExplicitExpectation {
     pub(crate) q: String,
     pub(crate) a: String,
     pub(crate) cooldown: Option<String>,
-    pub(crate) thinking: Option<String>,
+    pub(crate) settings: RawExpectationSettings,
 }
 
 #[derive(Debug, Clone)]
@@ -82,7 +149,7 @@ pub(crate) struct RawGeneratorExpectation {
     pub(crate) path: String,
     pub(crate) a: String,
     pub(crate) cooldown: Option<String>,
-    pub(crate) thinking: Option<String>,
+    pub(crate) settings: RawExpectationSettings,
 }
 
 #[derive(Debug, Clone)]
@@ -108,7 +175,17 @@ struct RawExpectationFields {
     #[serde(default)]
     cooldown: Option<String>,
     #[serde(default)]
+    preset: Option<String>,
+    #[serde(default)]
+    models: Option<Vec<String>>,
+    #[serde(default)]
     thinking: Option<String>,
+    #[serde(default)]
+    instructions: Option<String>,
+    #[serde(default)]
+    ignore: Option<Vec<String>>,
+    #[serde(default)]
+    plugins: Option<Vec<String>>,
 }
 
 impl<'de> Deserialize<'de> for RawExpectationItem {
@@ -130,14 +207,27 @@ impl RawExpectationItem {
             path,
             include,
             cooldown,
+            preset,
+            models,
             thinking,
+            instructions,
+            ignore,
+            plugins,
         } = fields;
+        let settings = RawExpectationSettings {
+            preset,
+            models,
+            thinking,
+            instructions,
+            ignore,
+            plugins,
+        };
         match (q, q_template, path, a) {
             (Some(q), _, _, Some(a)) => Ok(RawExpectationItem::Explicit(RawExplicitExpectation {
                 q,
                 a,
                 cooldown,
-                thinking,
+                settings,
             })),
             (None, Some(q_template), Some(path), Some(a)) => {
                 Ok(RawExpectationItem::Generator(RawGeneratorExpectation {
@@ -145,7 +235,7 @@ impl RawExpectationItem {
                     path,
                     a,
                     cooldown,
-                    thinking,
+                    settings,
                 }))
             }
             fields => {

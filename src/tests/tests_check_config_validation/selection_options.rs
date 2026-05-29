@@ -1,4 +1,5 @@
 use crate::check_selection::{expectation_identities, parse_check_options, select_expectations};
+use crate::hash::expectation_id;
 use crate::tests::{check_config_yaml, parse_check_config, test_selector};
 
 #[test]
@@ -21,6 +22,55 @@ fn selected_expectation_selectors_are_validated() {
     assert!(select_expectations(&config, &["not-a-prefix".into()]).is_err());
     let duplicate = test_selector(&config, "1");
     assert!(select_expectations(&config, &[duplicate.clone().into(), duplicate.into()]).is_err());
+}
+
+#[test]
+fn selected_expectation_display_ids_stay_unique_within_collected_expectations() {
+    let questions = (0..80)
+        .map(|index| format!("Does selected display id fixture {} pass?", index))
+        .collect::<Vec<_>>();
+    let colliding_question = questions
+        .iter()
+        .find(|question| {
+            let id = expectation_id(question);
+            questions
+                .iter()
+                .filter(|candidate| expectation_id(candidate).starts_with(&id[..1]))
+                .count()
+                > 1
+        })
+        .expect("fixture questions should contain a first-character ID collision");
+    let expectations = questions
+        .iter()
+        .map(|question| format!("  - q: {:?}\n    a: \"yes\"", question))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let config = parse_check_config(&format!(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+{}
+"#,
+        expectations
+    ))
+    .unwrap();
+    let id = expectation_id(colliding_question);
+    let global_display_id = expectation_identities(&config)
+        .unwrap()
+        .into_iter()
+        .find(|identity| identity.id == id)
+        .unwrap()
+        .display_id;
+
+    let selected = select_expectations(&config, &[id.into()]).unwrap();
+
+    assert!(global_display_id.len() > 1);
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected[0].display_id, global_display_id);
 }
 
 #[test]

@@ -3,15 +3,15 @@ use super::*;
 pub(crate) fn check_config_yaml() -> &'static str {
     r#"
 version: 1
-agent:
-  model:
-    primary: gpt-5.4-mini
-    fallbacks:
+presets:
+  default:
+    models:
+      - gpt-5.4-mini
       - gpt-5.3-codex-spark
-  thinking: medium
-  ignore:
-    - "target/**"
-  plugins: []
+    thinking: medium
+    ignore:
+      - "target/**"
+    plugins: []
 expectations:
   - q: "First?"
     a: "yes"
@@ -107,8 +107,11 @@ impl EvaluatorRunner for FakeRunner {
         self.start_instructions.push(instructions.to_string());
         self.start_roots.push(session_cwd.to_path_buf());
         self.start_ignores.push(effective_ignore_patterns(agent));
-        self.start_models
-            .push(model.or(agent.model.primary.as_deref()).map(str::to_string));
+        self.start_models.push(
+            model
+                .or_else(|| agent.models.first().map(String::as_str))
+                .map(str::to_string),
+        );
         self.start_thinking.push(thinking.to_string());
         self.start_plugins.push(agent.plugins.clone());
         self.start_scopes.push(scope.to_vec());
@@ -212,6 +215,7 @@ pub(crate) fn check_options(
     CheckOptions {
         selected,
         non_selected,
+        selectors_provided: !selectors.is_empty(),
         skipped,
         check_all: !stop_after_non_pass,
         ignore_cache,
@@ -223,7 +227,7 @@ pub(crate) fn check_options(
 pub(crate) fn test_selector(config: &CheckConfig, selector: &str) -> String {
     if let Ok(number) = selector.parse::<usize>() {
         if let Some(expectation) = config.expectations.get(number.saturating_sub(1)) {
-            return expectation_id(&expectation.q, &expectation.a);
+            return expectation_id(&expectation.q);
         }
     }
     selector.to_string()
@@ -234,7 +238,15 @@ pub(crate) fn answer(answer: &str, evidence: &str, scope: &[&str]) -> String {
     serde_json::to_string(&json!({
         "answer": answer,
         "evidence": evidence,
-        "scope": scope,
+        "qScopeSuggestion": scope,
+    }))
+    .unwrap()
+}
+
+pub(crate) fn error_response(error: &str, evidence: &str) -> String {
+    serde_json::to_string(&json!({
+        "error": error,
+        "evidence": evidence,
     }))
     .unwrap()
 }
@@ -276,7 +288,7 @@ fn check_result_from_label(label: &str) -> CheckResult {
 pub(crate) fn sample_record(number: usize, result: &str) -> CheckRecord {
     let prompt = "Question?".to_string();
     let expected = "yes".to_string();
-    let id = expectation_id(&prompt, &expected);
+    let id = expectation_id(&prompt);
     CheckRecord {
         timestamp: "1970-01-01T00:00:00Z".to_string(),
         id: id.clone(),
@@ -286,9 +298,11 @@ pub(crate) fn sample_record(number: usize, result: &str) -> CheckRecord {
         prompt: Some(prompt),
         expected: Some(expected),
         observed: if result == "pass" { "yes" } else { "no" }.to_string(),
+        error: None,
         evidence: "README.md has evidence".to_string(),
         scope: vec![".".to_string()],
-        scope_hash: "AAAAAAAAAAAAAAAAAAAA".to_string(),
+        suggested_q_scope: None,
+        visible_tree_oid: crate::tests::stale_visible_tree_oid(),
         cache_key: None,
     }
 }
@@ -298,7 +312,7 @@ pub(crate) fn expectation_record(
     expectation: &SelectedExpectation,
     result: &str,
     observed: &str,
-    scope_hash: String,
+    visible_tree_oid: String,
 ) -> CheckRecord {
     CheckRecord {
         timestamp: "1970-01-01T00:00:00Z".to_string(),
@@ -309,9 +323,11 @@ pub(crate) fn expectation_record(
         prompt: Some(expectation.q.clone()),
         expected: Some(expectation.a.clone()),
         observed: observed.to_string(),
+        error: None,
         evidence: "cached answer".to_string(),
         scope: full_scope(),
-        scope_hash,
+        suggested_q_scope: None,
+        visible_tree_oid,
         cache_key: Some(history_cache_key(agent, expectation)),
     }
 }

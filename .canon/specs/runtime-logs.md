@@ -42,10 +42,9 @@ Runtime logs should also make evaluator thread creation and reuse understandable
 when that behavior matters for debugging. The effective evaluator instructions
 used for a thread should be inspectable from the logs.
 
-For each evaluator turn, runtime logs should contain enough data to determine
-input tokens, cached input tokens, output tokens, and reasoning output tokens.
-The usage can be matched to that evaluator turn. If the turn checks an expectation,
-the usage can also be matched to that expectation.
+For each evaluator turn where usage data is available, runtime logs should
+contain enough data to determine input tokens, cached input tokens, output tokens,
+and reasoning output tokens. The usage can be matched to that evaluator turn.
 
 Event names and event-specific schemas are implementation-defined as long as the
 required information remains available from the logs.

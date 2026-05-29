@@ -46,11 +46,15 @@ answered from a smaller part of the repository, `canon` narrows and verifies
 that scope. The scope is enforced with filesystem permissions, so the evaluator
 cannot read project files outside the allowed scope.
 
-That keeps larger canons practical: checks untouched by the staged change can
-be skipped, while broad expectations can still use the full project when they
-need it. `cooldown` gives broad review expectations, such as dead files, dirty
-hacks, or idiomaticity, their own review cadence: after a recent pass, they do
-not have to be re-proven for every small commit.
+That keeps larger canons practical: a same-tree result can be reused when the
+expectation's `visibleTreeOid` still matches the evaluator-visible tree, while
+`cooldown` gives broad review expectations, such as dead files, dirty hacks, or
+idiomaticity, their own review cadence. A cached result is the newer of those
+two reusable results.
+
+When `canon check` is run with no selectors, cached failures are reported first
+and must be fixed before fresh evaluation continues. If every cached result is a
+pass, only expectations without a cached result are selected for evaluator work.
 
 ## Commands
 
@@ -58,19 +62,20 @@ not have to be re-proven for every small commit.
 canon init
 ```
 
-Create `.canon/check.yml`.
+Create `.canon/check.yml` from canon's embedded default template.
 
 ```sh
 canon check
 ```
 
-Evaluate configured expectations against the staged project state.
+Evaluate configured expectations against the staged project state, using cached
+results to avoid unnecessary evaluator work.
 
 ```sh
 canon check a7F K9m
 ```
 
-Run selected expectations by unique ID prefix.
+Explicitly evaluate selected expectations by unique ID prefix.
 
 ```sh
 canon check -q "Can you find any practically exploitable security vulnerability?"
@@ -88,9 +93,9 @@ canon check --config other-check.yml
 canon check -c other-check.yml
 ```
 
-Bypass exact cached answer reuse, recheck fresh cooldown passes, continue after a
-failed expectation, or use another config. By default, `canon check` stops after
-the first final non-pass result.
+Bypass same-tree cached results, bypass cooldown results, explicitly evaluate
+all configured expectations and continue after non-pass results, or use another
+config. By default, fresh evaluation stops after the first non-pass result.
 
 ```sh
 canon gate

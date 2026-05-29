@@ -17,7 +17,7 @@ fn diagnostic_log_is_written_to_numeric_active_file_and_flushed() {
     assert_eq!(lines.len(), 1);
     let json: Value = serde_json::from_str(lines[0]).unwrap();
     assert_eq!(json["result"], "pass");
-    assert_eq!(json["id"], expectation_id("Question?", "yes"));
+    assert_eq!(json["id"], expectation_id("Question?"));
     assert!(json.get("display_id").is_none());
     assert!(json.get("displayId").is_none());
     assert!(json.get("number").is_none());
@@ -26,7 +26,7 @@ fn diagnostic_log_is_written_to_numeric_active_file_and_flushed() {
     assert_eq!(json["observed"], "yes");
     assert_eq!(json["evidence"], "README.md has evidence");
     assert_eq!(json["scope"], json!(["."]));
-    assert!(json.get("scopeTreeOid").is_none());
+    assert!(json.get("visibleTreeOid").is_none());
     let expected_order = [
         "\"timestamp\"",
         "\"id\"",
@@ -53,7 +53,7 @@ fn runtime_log_result_keeps_raw_review_diagnostics() {
     let mut wrong_record = sample_record(1, "fail");
     wrong_record.observed = "no".to_string();
     let mut review_record = sample_record(2, "fail");
-    review_record.observed = UNPARSEABLE_OBSERVED.to_string();
+    review_record.observed = ERROR_UNPARSABLE.to_string();
     let path = write_diagnostic_log(&root, &[wrong_record, review_record]).unwrap();
 
     let events = fs::read_to_string(&path)
@@ -67,10 +67,35 @@ fn runtime_log_result_keeps_raw_review_diagnostics() {
     assert_eq!(events[0]["observed"], "no");
     assert_eq!(events[1]["result"], "fail");
     assert_eq!(events[1]["expected"], "yes");
-    assert_eq!(events[1]["observed"], UNPARSEABLE_OBSERVED);
+    assert_eq!(events[1]["observed"], ERROR_UNPARSABLE);
     assert_eq!(events[1]["evidence"], "README.md has evidence");
     assert_eq!(events[2]["event"], "expectation.review_required");
-    assert_eq!(events[2]["observed"], UNPARSEABLE_OBSERVED);
+    assert_eq!(events[2]["observed"], ERROR_UNPARSABLE);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn git_config_get_uses_exit_status_for_missing_keys() {
+    let root = git_project("git-config-missing-key");
+
+    assert_eq!(git_config_get(&root, "canon.missing.key").unwrap(), None);
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn git_config_get_reports_status_for_failed_reads() {
+    let root = git_project("git-config-invalid-key");
+
+    let err = git_config_get(&root, "bad key").unwrap_err();
+
+    match err {
+        GitConfigGetError::ReadFailed { status, stderr, .. } => {
+            assert!(status.contains("exit status 1"), "{status}");
+            assert!(stderr.contains("key"), "{stderr}");
+        }
+        other => panic!("unexpected git config error: {other:?}"),
+    }
     let _ = fs::remove_dir_all(root);
 }
 

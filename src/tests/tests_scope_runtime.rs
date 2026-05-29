@@ -12,7 +12,6 @@ fn scope_is_canonicalized() {
     let many_paths = parse_scope_json(r#"["a", "b", "c", "d", "e"]"#, &config.agent).unwrap();
     assert_eq!(many_paths, vec!["a", "b", "c", "d", "e"]);
     assert!(parse_scope_json(r#"[]"#, &config.agent).is_err());
-    assert!(parse_scope_json(r#"["target/output.txt"]"#, &config.agent).is_err());
 }
 
 #[test]
@@ -42,7 +41,7 @@ fn repo_paths_reject_nul_before_process_boundaries() {
 }
 
 #[test]
-fn scope_paths_treat_wildcard_characters_as_literal_filename_bytes() {
+fn scope_paths_preserve_git_pathspec_characters() {
     let config = parse_check_config(check_config_yaml()).unwrap();
 
     assert_eq!(
@@ -57,6 +56,18 @@ fn scope_paths_treat_wildcard_characters_as_literal_filename_bytes() {
         sanitize_scope_for_hash(&["src/what?.rs".to_string()]).unwrap(),
         vec!["src/what?.rs".to_string()]
     );
+}
+
+#[test]
+fn scope_pathspec_wildcards_match_git_paths() {
+    let default_wildcard = vec!["src/*.rs".to_string()];
+    assert!(path_bytes_in_scope(b"src/main.rs", &default_wildcard));
+    assert!(path_bytes_in_scope(b"src/bin/main.rs", &default_wildcard));
+    assert!(!path_bytes_in_scope(b"src/main.txt", &default_wildcard));
+
+    let glob_magic = vec![":(glob)src/*.rs".to_string()];
+    assert!(path_bytes_in_scope(b"src/main.rs", &glob_magic));
+    assert!(!path_bytes_in_scope(b"src/bin/main.rs", &glob_magic));
 }
 
 #[test]
@@ -110,27 +121,69 @@ fn scope_containment_normalizes_repo_paths_before_comparing() {
 }
 
 #[test]
-fn evaluator_session_key_is_not_newline_ambiguous() {
+fn evaluator_thread_reuse_key_is_not_newline_ambiguous() {
+    let agent = parse_check_config(check_config_yaml()).unwrap().agent;
     assert_ne!(
-        evaluator_session_key(&["a\nb".to_string(), "c".to_string()]),
-        evaluator_session_key(&["a".to_string(), "b\nc".to_string()])
+        evaluator_thread_reuse_key(&agent, &["a\nb".to_string(), "c".to_string()], None, "tree"),
+        evaluator_thread_reuse_key(&agent, &["a".to_string(), "b\nc".to_string()], None, "tree")
+    );
+    assert_ne!(
+        evaluator_thread_reuse_key(&agent, &[".".to_string()], None, "tree-a"),
+        evaluator_thread_reuse_key(&agent, &[".".to_string()], None, "tree-b")
     );
 }
 
 #[test]
-fn evaluator_response_scope_rejects_denied_paths() {
+fn evaluator_response_scope_keeps_ignored_paths_as_valid_scope_entries() {
     let config = parse_check_config(check_config_yaml()).unwrap();
-    assert!(parse_scope_strings(&[".canon/check.yml".to_string()], &config.agent).is_err());
-    assert!(parse_scope_strings(
+    assert_eq!(
+        parse_scope_strings(&[".canon/check.yml".to_string()], &config.agent).unwrap(),
+        vec![".canon/check.yml".to_string()]
+    );
+    assert_eq!(
+        parse_scope_strings(
+            &["src/main.rs".to_string(), "target/output.txt".to_string()],
+            &config.agent,
+        )
+        .unwrap(),
+        vec!["src/main.rs".to_string(), "target/output.txt".to_string()]
+    );
+    assert_eq!(
+        parse_scope_strings(
+            &[".".to_string(), "target/output.txt".to_string()],
+            &config.agent,
+        )
+        .unwrap(),
+        full_scope()
+    );
+}
+
+#[test]
+fn ignored_scope_paths_are_excluded_from_materialized_visible_tree() {
+    let root = git_project("ignored-scope-materialized-visible-tree");
+    fs::create_dir_all(root.join("target")).unwrap();
+    fs::write(root.join("target/output.txt"), "ignored\n").unwrap();
+    fs::write(root.join("src/main.rs"), "main\n").unwrap();
+    Command::new("git")
+        .args(["add", "target/output.txt", "src/main.rs"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let scope = parse_scope_strings(
         &["src/main.rs".to_string(), "target/output.txt".to_string()],
         &config.agent,
     )
-    .is_err());
-    assert!(parse_scope_strings(
-        &[".".to_string(), "target/output.txt".to_string()],
-        &config.agent,
-    )
-    .is_err());
+    .unwrap();
+
+    let staged_view = StagedWorktreeView::apply(&root).unwrap();
+    let scope_root = staged_view
+        .materialize_evaluator_scope(&config.agent, &scope)
+        .unwrap();
+
+    assert!(scope_root.join("src/main.rs").exists());
+    assert!(!scope_root.join("target/output.txt").exists());
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -164,13 +217,16 @@ expectations:
     .unwrap();
 
     assert_eq!(config.agent.ignore, vec!["foo/bar/**"]);
-    assert!(parse_scope_strings(&["foo/bar/baz.rs".to_string()], &config.agent).is_err());
+    assert_eq!(
+        parse_scope_strings(&["foo/bar/baz.rs".to_string()], &config.agent).unwrap(),
+        vec!["foo/bar/baz.rs".to_string()]
+    );
 }
 
 #[test]
 fn runtime_ignore_pattern_normalization_fails_closed_for_invalid_patterns() {
     let agent = AgentConfig {
-        model: ModelConfig::default(),
+        models: Vec::new(),
         thinking: "low".to_string(),
         instructions: Some("x".to_string()),
         ignore: vec!["../secrets/**".to_string()],
@@ -210,7 +266,7 @@ expectations:
 }
 
 #[test]
-fn agent_ignore_patterns_match_single_segment_wildcards() {
+fn agent_ignore_patterns_use_git_pathspec_wildcards() {
     let config = parse_check_config(
         r#"
 version: 1
@@ -228,7 +284,7 @@ expectations:
     .unwrap();
 
     assert!(is_denied_path(&config.agent, "logs/app.log"));
-    assert!(!is_denied_path(&config.agent, "logs/nested/app.log"));
+    assert!(is_denied_path(&config.agent, "logs/nested/app.log"));
     assert!(is_denied_path(&config.agent, "src/a*b.txt"));
 }
 
@@ -289,12 +345,8 @@ expectations:
     .unwrap();
     let options = check_options(&config, &["1"], false, true);
     let mut runner = FakeRunner::new(&[&answer("no", "src looked clean", &["src"])]);
-    let runtime = CheckRuntime {
-        root: &root,
-        snapshot_root: &root,
-        config: &config,
-    };
-    let mut state = InterrogationState::new();
+    let runtime = CheckRuntime::fixed(&root, &root, &config);
+    let mut state = InterrogationRunState::new();
     let result = interrogate_expectation_with_model_fallbacks(
         &runtime,
         &options.selected[0],
@@ -306,6 +358,6 @@ expectations:
     .unwrap();
 
     assert!(result.record.passed());
-    assert_eq!(result.record.scope, vec!["src"]);
+    assert_eq!(result.record.scope, full_scope());
     let _ = fs::remove_dir_all(root);
 }

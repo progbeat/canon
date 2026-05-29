@@ -101,6 +101,48 @@ fn check_runner_starts_sessions_from_snapshot_root() {
 }
 
 #[test]
+fn check_runner_starts_new_thread_for_narrowed_visible_tree() {
+    let root = git_project("check-runner-narrowed-thread");
+    let config = parse_check_config(
+        r#"
+version: 1
+presets:
+  default:
+    models:
+      - gpt-5.4-mini
+    thinking: medium
+    instructions: Answer from files only.
+    ignore: []
+    plugins: []
+expectations:
+  - q: "Does src/main.rs answer yes?"
+    a: "yes"
+"#,
+    )
+    .unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let mut runner = FakeRunner::new(&[
+        &answer("yes", "src/main.rs says yes", &["src/main.rs"]),
+        &answer("yes", "src/main.rs says yes", &["src/main.rs"]),
+    ]);
+
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert!(records.records.iter().all(CheckRecord::passed));
+    assert_eq!(runner.starts, 2);
+    assert_eq!(
+        runner.sessions,
+        vec!["session-1".to_string(), "session-2".to_string()]
+    );
+    assert_eq!(
+        runner.start_scopes,
+        vec![vec![".".to_string()], vec!["src/main.rs".to_string()]]
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn check_runner_retires_oversized_scope_thread_after_completed_expectation() {
     let root = git_project("check-runner-retire-oversized-thread");
     let config = parse_check_config(

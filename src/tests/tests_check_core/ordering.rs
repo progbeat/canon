@@ -7,12 +7,12 @@ use crate::history::HistoryCache;
 use crate::history_append::append_history_record;
 use crate::logging::render_runtime_log_event;
 use crate::logging::DiagnosticLogWriter;
-use crate::scope_hash::staged_scope_hash;
 use crate::tests::{
-    answer, check_config_yaml, check_options, enable_diagnostic_logs, expectation_record,
-    git_project, parse_check_config, FakeRunner,
+    answer, append_legacy_history_record, check_config_yaml, check_options, enable_diagnostic_logs,
+    expectation_record, git_project, parse_check_config, FakeRunner,
 };
-use crate::{RESULT_FAIL, UNPARSEABLE_OBSERVED};
+use crate::visible_tree_oid::staged_visible_tree_oid;
+use crate::{ERROR_UNPARSABLE, RESULT_FAIL};
 use serde_json::json;
 use std::fs;
 use std::io::{self, Write};
@@ -28,8 +28,8 @@ fn selected_expectations_run_latest_non_pass_first() {
         &config.agent,
         &second,
         "fail",
-        "no",
-        staged_scope_hash(&root, &config.agent, &full_scope()).unwrap(),
+        "yes",
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap(),
     );
     record.timestamp = "2026-01-01T00:00:00Z".to_string();
     append_history_record(&root, &second, &record).unwrap();
@@ -57,7 +57,7 @@ fn check_runner_orders_latest_non_pass_before_selected_order() {
         &second,
         "fail",
         "yes",
-        staged_scope_hash(&root, &config.agent, &full_scope()).unwrap(),
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap(),
     );
     record.timestamp = "2026-01-01T00:00:00Z".to_string();
     append_history_record(&root, &second, &record).unwrap();
@@ -78,27 +78,46 @@ fn check_runner_orders_latest_non_pass_before_selected_order() {
 }
 
 #[test]
-fn check_runner_orders_selected_expectations_before_pass_cache_skip() {
+fn check_runner_skips_all_cached_passes_before_evaluation() {
     let root = git_project("check-order-before-cache-skip");
     enable_diagnostic_logs(&root);
     let config = parse_check_config(check_config_yaml()).unwrap();
-    let options = check_options(&config, &["1", "2"], true, false);
+    let options = check_options(&config, &[], true, false);
     let first = options.selected[0].clone();
     let second = options.selected[1].clone();
-    let current_hash = staged_scope_hash(&root, &config.agent, &full_scope()).unwrap();
+    let current_visible_tree_oid =
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
     append_history_record(
         &root,
         &first,
-        &expectation_record(&config.agent, &first, "pass", "yes", current_hash.clone()),
+        &expectation_record(
+            &config.agent,
+            &first,
+            "pass",
+            "yes",
+            current_visible_tree_oid.clone(),
+        ),
     )
     .unwrap();
     append_history_record(
         &root,
         &second,
-        &expectation_record(&config.agent, &second, "pass", "no", current_hash.clone()),
+        &expectation_record(
+            &config.agent,
+            &second,
+            "pass",
+            "no",
+            current_visible_tree_oid.clone(),
+        ),
     )
     .unwrap();
-    let mut non_pass = expectation_record(&config.agent, &second, "fail", "yes", current_hash);
+    let mut non_pass = expectation_record(
+        &config.agent,
+        &second,
+        "fail",
+        "yes",
+        current_visible_tree_oid,
+    );
     non_pass.timestamp = "2026-01-01T00:00:00Z".to_string();
     write_latest_non_pass_record(&root, &second, &non_pass).unwrap();
     let mut runner = FakeRunner::new(&[]);
@@ -115,14 +134,59 @@ fn check_runner_orders_selected_expectations_before_pass_cache_skip() {
     )
     .unwrap();
 
-    assert_eq!(report.selected, 2);
+    assert_eq!(report.selected, 0);
     assert_eq!(report.skipped, 0);
-    assert_eq!(report.silent, 2);
+    assert_eq!(report.silent, 0);
+    assert_eq!(report.cached.len(), 2);
     assert_eq!(runner.starts, 0);
     let log = fs::read_to_string(diagnostic_log.path()).unwrap();
-    let second_hit = log.find(&format!(r#""id":"{}""#, second.id)).unwrap();
-    let first_hit = log.find(&format!(r#""id":"{}""#, first.id)).unwrap();
-    assert!(second_hit < first_hit);
+    assert!(log.contains(&format!(r#""id":"{}""#, first.id)));
+    assert!(log.contains(&format!(r#""id":"{}""#, second.id)));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_runner_orders_cached_failures_by_latest_non_pass_state() {
+    let root = git_project("check-order-cached-failures");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &[], true, false);
+    let first = options.selected[0].clone();
+    let second = options.selected[1].clone();
+    let current_visible_tree_oid =
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
+
+    let mut first_cached = expectation_record(
+        &config.agent,
+        &first,
+        "fail",
+        "no",
+        current_visible_tree_oid.clone(),
+    );
+    first_cached.timestamp = "2026-01-03T00:00:00Z".to_string();
+    append_history_record(&root, &first, &first_cached).unwrap();
+
+    let mut second_cached = expectation_record(
+        &config.agent,
+        &second,
+        "fail",
+        "yes",
+        current_visible_tree_oid,
+    );
+    second_cached.timestamp = "2026-01-01T00:00:00Z".to_string();
+    append_history_record(&root, &second, &second_cached).unwrap();
+
+    let mut second_latest = second_cached.clone();
+    second_latest.timestamp = "2026-01-04T00:00:00Z".to_string();
+    write_latest_non_pass_record(&root, &second, &second_latest).unwrap();
+    let mut runner = FakeRunner::new(&[]);
+
+    let report =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert_eq!(report.records.len(), 2);
+    assert_eq!(report.records[0].id, second.id);
+    assert_eq!(report.records[1].id, first.id);
+    assert_eq!(runner.starts, 0);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -137,8 +201,8 @@ fn selected_expectations_use_recorded_errors_for_order() {
         &config.agent,
         &second,
         "fail",
-        UNPARSEABLE_OBSERVED,
-        staged_scope_hash(&root, &config.agent, &full_scope()).unwrap(),
+        ERROR_UNPARSABLE,
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap(),
     );
     record.timestamp = "2026-01-01T00:00:00Z".to_string();
     write_latest_non_pass_record(&root, &second, &record).unwrap();
@@ -152,6 +216,36 @@ fn selected_expectations_use_recorded_errors_for_order() {
     .unwrap();
 
     assert_eq!(ordered[0].id, second.id);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn selected_expectations_ignore_legacy_history_errors_for_order() {
+    let root = git_project("check-order-legacy-history-errors");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1", "2"], false, true);
+    let first = options.selected[0].clone();
+    let second = options.selected[1].clone();
+    let mut record = expectation_record(
+        &config.agent,
+        &second,
+        "fail",
+        ERROR_UNPARSABLE,
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap(),
+    );
+    record.timestamp = "2026-01-01T00:00:00Z".to_string();
+    record.error = Some(ERROR_UNPARSABLE.to_string());
+    append_legacy_history_record(&root, &second, &record);
+    let mut history_cache = HistoryCache::new();
+
+    let ordered = order_expectations_by_latest_non_pass(
+        &root,
+        vec![first.clone(), second.clone()],
+        &mut history_cache,
+    )
+    .unwrap();
+
+    assert_eq!(ordered[0].id, first.id);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -209,8 +303,8 @@ fn selected_expectations_ignore_runtime_log_errors_for_order() {
         &[
             ("id", json!(second.id.clone())),
             ("result", json!(RESULT_FAIL)),
-            ("observed", json!(UNPARSEABLE_OBSERVED)),
-            ("evidence", json!("unparseable")),
+            ("observed", json!(ERROR_UNPARSABLE)),
+            ("evidence", json!("unparsable")),
             ("scope", json!(full_scope())),
             ("prompt", json!(second.q.clone())),
             ("expected", json!(second.a.clone())),

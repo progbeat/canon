@@ -21,6 +21,16 @@ fn path_creation_is_deterministic() {
 }
 
 #[test]
+fn note_lock_stale_age_has_explicit_threshold() {
+    assert!(!stale_note_lock_age(Duration::from_secs(
+        INDEX_LOCK_STALE_AFTER_SECS - 1
+    )));
+    assert!(stale_note_lock_age(Duration::from_secs(
+        INDEX_LOCK_STALE_AFTER_SECS
+    )));
+}
+
+#[test]
 fn write_and_append_preserve_metadata() {
     with_env("write-append", |_| {
         let config = Config::from_env().unwrap();
@@ -69,9 +79,194 @@ fn append_persists_log_record_without_rewriting_note() {
         let content = materialize_note_content(&note, &raw).unwrap();
         assert!(content.contains("\nbody\n"));
         assert!(content.contains("decision"));
-        assert!(raw.contains("<!-- canon log v1 -->"));
+        assert!(raw.contains("<!-- canon log v1 "));
         assert!(raw.contains(r#""op":"append""#));
     });
+}
+
+#[test]
+fn concurrent_appends_keep_note_log_records_materializable() {
+    with_env("append-log-concurrent", |_| {
+        let config = Config::from_env().unwrap();
+        write_note(&config, "src/main.rs", "body").unwrap();
+        let root = config.root.clone();
+
+        let handles = (0..16)
+            .map(|index| {
+                let root = root.clone();
+                std::thread::spawn(move || {
+                    let config = Config { root };
+                    append_note(&config, "src/main.rs", &format!("decision-{index:02}")).unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let note = note_for_key(&config, "src/main.rs").unwrap();
+        let raw = fs::read_to_string(&note.path).unwrap();
+        let content = materialize_note_content(&note, &raw).unwrap();
+        assert!(content.contains("\nbody\n"));
+        for index in 0..16 {
+            assert!(content.contains(&format!("decision-{index:02}")));
+        }
+    });
+}
+
+#[test]
+fn failed_append_rollback_removes_partial_note_log_record() {
+    with_env("append-log-rollback", |_| {
+        let config = Config::from_env().unwrap();
+        write_note(&config, "src/main.rs", "body").unwrap();
+        append_note(&config, "src/main.rs", "kept").unwrap();
+        let note = note_for_key(&config, "src/main.rs").unwrap();
+        let previous_size = fs::metadata(&note.path).unwrap().len();
+        let partial = b"\n<!-- canon log v1 -->\n{\"op\":\"append\"";
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(&note.path)
+            .unwrap();
+        file.write_all(partial).unwrap();
+        file.flush().unwrap();
+        drop(file);
+
+        rollback_note_log_append_for_test(&note.path, previous_size).unwrap();
+
+        let raw = fs::read_to_string(&note.path).unwrap();
+        assert_eq!(raw.len() as u64, previous_size);
+        let content = materialize_note_content(&note, &raw).unwrap();
+        assert!(content.contains("kept"));
+        assert!(!content.contains(r#"{"op":"append""#));
+    });
+}
+
+#[test]
+fn truncated_authenticated_append_log_does_not_become_visible_text() {
+    let note = Note {
+        key: "src/main.rs".to_string(),
+        hash: hash_key("src/main.rs"),
+        path: PathBuf::from("note.md"),
+    };
+    let base = format!("{}body\n", initial_content(&note.key, &note.hash));
+    let mut raw = base.clone();
+    raw.push('\n');
+    let marker_offset = raw.len();
+    raw.push_str(&test_note_log_marker(&note, marker_offset as u64));
+    raw.push('\n');
+    raw.push_str(r#"{"op":"append""#);
+
+    let content = materialize_note_content(&note, &raw).unwrap();
+    let mut rendered = String::new();
+    stream_note_content(&note, io::Cursor::new(raw.as_bytes()), |chunk| {
+        rendered.push_str(chunk);
+        Ok(())
+    })
+    .unwrap();
+
+    assert_eq!(content, base);
+    assert!(rendered.contains("body"));
+    assert!(!rendered.contains("canon log v1"));
+    assert!(!rendered.contains(r#"{"op":"append""#));
+}
+
+#[test]
+fn truncated_later_append_log_keeps_prior_valid_log_records() {
+    let note = Note {
+        key: "src/main.rs".to_string(),
+        hash: hash_key("src/main.rs"),
+        path: PathBuf::from("note.md"),
+    };
+    let mut raw = format!("{}body\n", initial_content(&note.key, &note.hash));
+    raw.push('\n');
+    let first_marker_offset = raw.len();
+    raw.push_str(&test_note_log_marker(&note, first_marker_offset as u64));
+    raw.push('\n');
+    raw.push_str(r#"{"op":"append","timestamp":1,"text":"kept"}"#);
+    raw.push('\n');
+    raw.push('\n');
+    let second_marker_offset = raw.len();
+    raw.push_str(&test_note_log_marker(&note, second_marker_offset as u64));
+    raw.push('\n');
+    raw.push_str(r#"{"op":"append""#);
+
+    let content = materialize_note_content(&note, &raw).unwrap();
+
+    assert!(content.contains("\n## 1\n\nkept\n"));
+    assert!(!content.contains("canon log v1"));
+    assert!(!content.contains(r#"{"op":"append""#));
+}
+
+#[test]
+fn marker_only_truncated_append_log_does_not_hide_later_valid_append() {
+    let note = Note {
+        key: "src/main.rs".to_string(),
+        hash: hash_key("src/main.rs"),
+        path: PathBuf::from("note.md"),
+    };
+    let mut raw = format!("{}body\n", initial_content(&note.key, &note.hash));
+    raw.push('\n');
+    let first_marker_offset = raw.len();
+    raw.push_str(&test_note_log_marker(&note, first_marker_offset as u64));
+    raw.push('\n');
+    raw.push('\n');
+    let second_marker_offset = raw.len();
+    raw.push_str(&test_note_log_marker(&note, second_marker_offset as u64));
+    raw.push('\n');
+    raw.push_str(r#"{"op":"append","timestamp":1,"text":"later"}"#);
+    raw.push('\n');
+
+    let content = materialize_note_content(&note, &raw).unwrap();
+    let mut rendered = String::new();
+    stream_note_content(&note, io::Cursor::new(raw.as_bytes()), |chunk| {
+        rendered.push_str(chunk);
+        Ok(())
+    })
+    .unwrap();
+
+    assert!(content.contains("\n## 1\n\nlater\n"));
+    assert!(rendered.contains("\n## 1\n\nlater\n"));
+    assert!(!rendered.contains("canon log v1"));
+}
+
+#[test]
+fn stale_partial_json_line_does_not_hide_later_valid_append() {
+    let note = Note {
+        key: "src/main.rs".to_string(),
+        hash: hash_key("src/main.rs"),
+        path: PathBuf::from("note.md"),
+    };
+    let mut raw = format!("{}body\n", initial_content(&note.key, &note.hash));
+    raw.push('\n');
+    let first_marker_offset = raw.len();
+    raw.push_str(&test_note_log_marker(&note, first_marker_offset as u64));
+    raw.push('\n');
+    raw.push_str(r#"{"op":"append","timestamp":1"#);
+    raw.push('\n');
+    let second_marker_offset = raw.len();
+    raw.push_str(&test_note_log_marker(&note, second_marker_offset as u64));
+    raw.push('\n');
+    raw.push_str(r#"{"op":"append","timestamp":2,"text":"later"}"#);
+    raw.push('\n');
+
+    let content = materialize_note_content(&note, &raw).unwrap();
+    let mut rendered = String::new();
+    stream_note_content(&note, io::Cursor::new(raw.as_bytes()), |chunk| {
+        rendered.push_str(chunk);
+        Ok(())
+    })
+    .unwrap();
+
+    assert!(content.contains("\n## 2\n\nlater\n"));
+    assert!(rendered.contains("\n## 2\n\nlater\n"));
+    assert!(!rendered.contains(r#""timestamp":1"#));
+}
+
+fn test_note_log_marker(note: &Note, marker_offset: u64) -> String {
+    format!(
+        "<!-- canon log v1 hash={} offset={} -->",
+        note.hash, marker_offset
+    )
 }
 
 #[test]
@@ -94,6 +289,33 @@ fn append_compacts_note_log_after_threshold() {
 }
 
 #[test]
+fn append_succeeds_when_followup_compaction_rewrite_fails() {
+    with_env("append-log-compact-fails", |_| {
+        let config = Config::from_env().unwrap();
+        write_note(&config, "src/main.rs", "body").unwrap();
+        let note = note_for_key(&config, "src/main.rs").unwrap();
+        let file_name = note.path.file_name().unwrap().to_str().unwrap();
+        let temp_path = note
+            .path
+            .with_file_name(format!(".{}.{}.tmp", file_name, process::id()));
+        fs::write(&temp_path, "block compaction temp create").unwrap();
+
+        append_note(
+            &config,
+            "src/main.rs",
+            &"decision".repeat((NOTE_LOG_COMPACT_MIN_BYTES / 8) as usize + 1),
+        )
+        .unwrap();
+
+        let raw = fs::read_to_string(&note.path).unwrap();
+        let content = materialize_note_content(&note, &raw).unwrap();
+        assert!(raw.contains("<!-- canon log v1 "));
+        assert!(content.contains("decision"));
+        let _ = fs::remove_file(temp_path);
+    });
+}
+
+#[test]
 fn materialize_note_content_ignores_marker_like_body_text() {
     let note = Note {
         key: "src/main.rs".to_string(),
@@ -108,6 +330,124 @@ fn materialize_note_content_ignores_marker_like_body_text() {
     let content = materialize_note_content(&note, &raw).unwrap();
 
     assert_eq!(content, raw);
+}
+
+#[test]
+fn read_ignores_literal_marker_and_json_body_text() {
+    let note = Note {
+        key: "src/main.rs".to_string(),
+        hash: hash_key("src/main.rs"),
+        path: PathBuf::from("note.md"),
+    };
+    let raw = format!(
+        "{}body\n<!-- canon log v1 -->\n{{\"op\":\"append\",\"timestamp\":1,\"text\":\"example\"}}\nordinary text\n",
+        initial_content(&note.key, &note.hash)
+    );
+
+    let content = materialize_note_content(&note, &raw).unwrap();
+    let mut rendered = String::new();
+    stream_note_content(&note, io::Cursor::new(raw.as_bytes()), |chunk| {
+        rendered.push_str(chunk);
+        Ok(())
+    })
+    .unwrap();
+
+    assert_eq!(content, raw);
+    assert_eq!(rendered, raw);
+}
+
+#[test]
+fn legacy_append_log_records_still_materialize() {
+    let note = Note {
+        key: "src/main.rs".to_string(),
+        hash: hash_key("src/main.rs"),
+        path: PathBuf::from("note.md"),
+    };
+    let raw = format!(
+        "{}body\n\n<!-- canon log v1 -->\n{{\"op\":\"append\",\"timestamp\":1,\"text\":\"legacy\"}}\n",
+        initial_content(&note.key, &note.hash)
+    );
+
+    let content = materialize_note_content(&note, &raw).unwrap();
+    let mut rendered = String::new();
+    stream_note_content(&note, io::Cursor::new(raw.as_bytes()), |chunk| {
+        rendered.push_str(chunk);
+        Ok(())
+    })
+    .unwrap();
+
+    assert!(content.contains("\nbody\n"));
+    assert!(content.contains("\n## 1\n\nlegacy\n"));
+    assert!(!content.contains("canon log v1"));
+    assert_eq!(rendered, content);
+}
+
+#[test]
+fn write_escapes_note_log_marker_collision() {
+    with_env("write-marker-collision", |_| {
+        let config = Config::from_env().unwrap();
+        let body = "body\n<!-- canon log v1 -->\n{\"op\":\"write\",\"text\":\"x\"}";
+
+        write_note(&config, "src/main.rs", body).unwrap();
+
+        let note = note_for_key(&config, "src/main.rs").unwrap();
+        let raw = fs::read_to_string(&note.path).unwrap();
+        assert!(raw.contains("\n\\<!-- canon log v1 -->\n"));
+        assert!(!raw.contains("\n<!-- canon log v1 -->\n{\"op\":\"write\""));
+        let mut rendered = String::new();
+        stream_note_content(&note, io::Cursor::new(raw.as_bytes()), |chunk| {
+            rendered.push_str(chunk);
+            Ok(())
+        })
+        .unwrap();
+        assert!(rendered.contains(body));
+    });
+}
+
+#[test]
+fn read_streams_later_append_log_marker_lines_unescaped() {
+    with_env("append-marker-stream", |_| {
+        let config = Config::from_env().unwrap();
+        write_note(&config, "src/main.rs", "body").unwrap();
+        append_note(&config, "src/main.rs", "ok").unwrap();
+        append_note(&config, "src/main.rs", "<!-- canon log v1 -->").unwrap();
+
+        let note = note_for_key(&config, "src/main.rs").unwrap();
+        let raw = fs::read_to_string(&note.path).unwrap();
+        assert!(raw.contains("<!-- canon log v1 -->"));
+        let mut rendered = String::new();
+        stream_note_content(&note, io::Cursor::new(raw.as_bytes()), |chunk| {
+            rendered.push_str(chunk);
+            Ok(())
+        })
+        .unwrap();
+        assert!(rendered.contains("\n<!-- canon log v1 -->\n"));
+        assert!(!rendered.contains("\\<!-- canon log v1 -->"));
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn append_note_refuses_symlinked_note_file() {
+    use std::os::unix::fs::symlink;
+
+    with_env("append-symlink", |_| {
+        let config = Config::from_env().unwrap();
+        write_note(&config, "src/main.rs", "body").unwrap();
+        let note = note_for_key(&config, "src/main.rs").unwrap();
+        let outside = temp_home("append-symlink-target");
+        ensure_dir(&outside).unwrap();
+        let target = outside.join("target.md");
+        let target_content = initial_content(&note.key, &note.hash);
+        fs::write(&target, &target_content).unwrap();
+        fs::remove_file(&note.path).unwrap();
+        symlink(&target, &note.path).unwrap();
+
+        let err = append_note(&config, "src/main.rs", "append").unwrap_err();
+
+        assert!(err.contains("failed to open"), "{err}");
+        assert_eq!(fs::read_to_string(&target).unwrap(), target_content);
+    });
 }
 
 #[test]

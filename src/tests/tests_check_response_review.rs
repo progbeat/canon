@@ -188,15 +188,15 @@ fn evaluator_turn_log_errors_when_successful_response_lacks_usage() {
 }
 
 #[test]
-fn check_runner_requires_human_review_for_unparseable_response() {
-    let root = git_project("check-unparseable-first-response");
+fn check_runner_requires_human_review_for_unparsable_response() {
+    let root = git_project("check-unparsable-first-response");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
     let mut runner = FakeRunner::new(&["not parseable"]);
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
     assert!(!records.records[0].passed());
-    assert_eq!(records.records[0].observed, UNPARSEABLE_OBSERVED);
+    assert_eq!(records.records[0].observed, ERROR_UNPARSABLE);
     assert_eq!(runner.prompts.len(), 1);
     assert!(read_history_records(&root, &options.selected[0])
         .unwrap()
@@ -205,8 +205,8 @@ fn check_runner_requires_human_review_for_unparseable_response() {
 }
 
 #[test]
-fn check_runner_marks_unparseable_after_response_parse_fails() {
-    let root = git_project("check-unparseable");
+fn check_runner_marks_unparsable_after_response_parse_fails() {
+    let root = git_project("check-unparsable");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
     let mut runner = FakeRunner::new(&[""]);
@@ -222,7 +222,7 @@ fn check_runner_marks_unparseable_after_response_parse_fails() {
     )
     .unwrap();
     assert!(!records.records[0].passed());
-    assert_eq!(records.records[0].observed, UNPARSEABLE_OBSERVED);
+    assert_eq!(records.records[0].observed, ERROR_UNPARSABLE);
     assert!(records.records[0].evidence.contains("response: <empty>"));
     assert_eq!(runner.prompts.len(), 1);
     assert!(read_history_records(&root, &options.selected[0])
@@ -232,40 +232,48 @@ fn check_runner_marks_unparseable_after_response_parse_fails() {
 }
 
 #[test]
-fn check_runner_marks_absent_response_scope_unparseable() {
-    let root = git_project("check-absent-response-scope");
+fn check_runner_ignores_invalid_q_scope_suggestion() {
+    let root = git_project("check-invalid-q-scope-suggestion");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
-    let mut runner = FakeRunner::new(&[&answer(
-        "yes",
-        "missing.rs would be enough if it existed",
-        &["missing.rs"],
-    )]);
+    let response = serde_json::to_string(&json!({
+        "answer": "yes",
+        "evidence": "`README.md`: full scope supports yes",
+        "qScopeSuggestion": ["../missing.rs"]
+    }))
+    .unwrap();
+    let mut runner = FakeRunner::new(&[&response]);
 
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(!records.records[0].passed());
-    assert_eq!(records.records[0].observed, UNPARSEABLE_OBSERVED);
-    assert!(records.records[0].evidence.contains("missing.rs"));
+    assert!(records.records[0].passed());
+    assert_eq!(records.records[0].observed, "yes");
     assert_eq!(records.records[0].scope, vec![".".to_string()]);
-    assert!(read_history_records(&root, &options.selected[0])
-        .unwrap()
-        .is_empty());
+    assert_eq!(records.records[0].suggested_q_scope, None);
+    assert_eq!(
+        read_history_records(&root, &options.selected[0])
+            .unwrap()
+            .len(),
+        1
+    );
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn check_runner_retries_full_scope_for_restricted_idk_non_answer() {
-    let root = git_project("check-narrow-idk");
+fn check_runner_records_full_scope_insufficient_evidence_error() {
+    let root = git_project("check-full-scope-insufficient-evidence-error");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
-    let mut runner = FakeRunner::new(&[&answer("idk", "src/main.rs is insufficient", &["src"])]);
+    let mut runner = FakeRunner::new(&[&error_response(
+        ERROR_INSUFFICIENT_EVIDENCE,
+        "src/main.rs is insufficient",
+    )]);
 
     let report =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert_eq!(report.records[0].observed, OBSERVED_IDK);
+    assert_eq!(report.records[0].observed, ERROR_INSUFFICIENT_EVIDENCE);
     assert_eq!(report.narrowing.attempted, 0);
     assert_eq!(runner.start_scopes, vec![vec![".".to_string()]]);
     assert!(read_history_records(&root, &options.selected[0])
@@ -275,8 +283,8 @@ fn check_runner_retries_full_scope_for_restricted_idk_non_answer() {
 }
 
 #[test]
-fn check_runner_does_not_retry_unparseable_response() {
-    let root = git_project("check-unparseable-no-retry");
+fn check_runner_does_not_retry_unparsable_response() {
+    let root = git_project("check-unparsable-no-retry");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
     let later_answer = answer("yes", "README.md", &["."]);
@@ -286,13 +294,13 @@ fn check_runner_does_not_retry_unparseable_response() {
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
     assert!(!records.records[0].passed());
-    assert_eq!(records.records[0].observed, UNPARSEABLE_OBSERVED);
+    assert_eq!(records.records[0].observed, ERROR_UNPARSABLE);
     assert_eq!(runner.prompts.len(), 1);
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn check_runner_requires_human_review_when_evidence_stays_empty() {
+fn check_runner_accepts_empty_evidence_answer() {
     let root = git_project("check-empty-evidence");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
@@ -308,51 +316,186 @@ fn check_runner_requires_human_review_when_evidence_stays_empty() {
         None,
     )
     .unwrap();
-    assert!(!records.records[0].passed());
-    assert!(record_requires_human_review(&records.records[0]));
-    assert_eq!(records.records[0].observed, EMPTY_EVIDENCE_OBSERVED);
-    assert!(records.records[0].evidence.contains("evidence was empty"));
+    assert!(records.records[0].passed());
+    assert!(!record_requires_human_review(&records.records[0]));
+    assert_eq!(records.records[0].observed, "yes");
+    assert_eq!(records.records[0].evidence, "");
     assert_eq!(runner.prompts.len(), 1);
-    assert!(read_history_records(&root, &options.selected[0])
-        .unwrap()
-        .is_empty());
+    assert_eq!(
+        read_history_records(&root, &options.selected[0])
+            .unwrap()
+            .len(),
+        1
+    );
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn check_runner_requires_human_review_for_malformed_answer() {
-    let root = git_project("check-malformed-answer");
+fn check_runner_requires_human_review_when_evidence_has_no_project_citation() {
+    let root = git_project("check-missing-evidence-citation");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
-    let malformed = answer("malformed", "question is malformed", &["."]);
-    let mut runner = FakeRunner::new(&[&malformed]);
-    let records =
-        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
-    assert!(!records.records[0].passed());
-    assert_eq!(records.records[0].observed, "malformed");
-    assert_eq!(runner.prompts.len(), 1);
-    let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn check_runner_does_not_retry_after_malformed_empty_evidence() {
-    let root = git_project("check-malformed-empty-evidence");
-    let config = parse_check_config(check_config_yaml()).unwrap();
-    let options = check_options(&config, &["1"], false, true);
-    let malformed = answer("malformed", "", &["."]);
-    let mut runner = FakeRunner::new(&[&malformed, &malformed, &answer("yes", "late", &["."])]);
+    let response = serde_json::to_string(&json!({
+        "answer": "yes",
+        "evidence": "README.md has evidence but is not cited",
+        "qScopeSuggestion": ["."]
+    }))
+    .unwrap();
+    let mut runner = FakeRunner::new(&[&response]);
 
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
+    assert!(records.records[0].passed());
+    assert!(!record_requires_human_review(&records.records[0]));
+    assert_eq!(records.records[0].observed, "yes");
+    assert_eq!(
+        read_history_records(&root, &options.selected[0])
+            .unwrap()
+            .len(),
+        1
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_runner_allows_self_contained_arithmetic_without_project_citation() {
+    let root = git_project("check-self-contained-arithmetic");
+    let config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: Answer directly.
+  ignore: []
+  plugins: []
+expectations:
+  - q: "2+2=?"
+    a: "4"
+"#,
+    )
+    .unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let response = serde_json::to_string(&json!({
+        "answer": "4",
+        "evidence": "Derived directly from the user prompt.",
+        "qScopeSuggestion": ["<none>"]
+    }))
+    .unwrap();
+    let mut runner = FakeRunner::new(&[&response]);
+
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert!(records.records[0].passed());
+    assert_eq!(records.records[0].observed, "4");
+    assert_eq!(
+        records.records[0].evidence,
+        "Derived directly from the user prompt."
+    );
+    assert_eq!(records.records[0].scope, full_scope());
+    assert_eq!(
+        read_history_records(&root, &options.selected[0])
+            .unwrap()
+            .len(),
+        1
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_runner_records_mismatched_answer_without_project_citation() {
+    let root = git_project("check-invalid-answer-missing-evidence-citation");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let response = serde_json::to_string(&json!({
+        "answer": "maybe",
+        "evidence": "README.md might have evidence but is not cited",
+        "qScopeSuggestion": ["."]
+    }))
+    .unwrap();
+    let mut runner = FakeRunner::new(&[&response]);
+
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
     assert!(!records.records[0].passed());
-    assert_eq!(records.records[0].observed, EMPTY_EVIDENCE_OBSERVED);
+    assert!(!record_requires_human_review(&records.records[0]));
+    assert_eq!(records.records[0].observed, "maybe");
+    assert_eq!(
+        read_history_records(&root, &options.selected[0])
+            .unwrap()
+            .len(),
+        1
+    );
     assert_eq!(runner.prompts.len(), 1);
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn check_runner_does_not_retry_after_empty_evidence() {
+fn check_runner_records_second_mismatched_answer_without_project_citation() {
+    let root = git_project("check-second-invalid-answer-missing-evidence-citation");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let response = serde_json::to_string(&json!({
+        "answer": "unclear",
+        "evidence": "question cannot be answered but no project citation is present",
+        "qScopeSuggestion": ["."]
+    }))
+    .unwrap();
+    let mut runner = FakeRunner::new(&[&response]);
+
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert!(!records.records[0].passed());
+    assert!(!record_requires_human_review(&records.records[0]));
+    assert_eq!(records.records[0].observed, "unclear");
+    assert_eq!(
+        read_history_records(&root, &options.selected[0])
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(runner.prompts.len(), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_runner_records_mismatched_yes_no_answer() {
+    let root = git_project("check-mismatched-yes-no-answer");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let invalid = answer("unclear", "question needs a yes/no answer", &["."]);
+    let mut runner = FakeRunner::new(&[&invalid]);
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+    assert!(!records.records[0].passed());
+    assert!(!record_requires_human_review(&records.records[0]));
+    assert_eq!(records.records[0].observed, "unclear");
+    assert_eq!(runner.prompts.len(), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_runner_does_not_retry_after_mismatched_answer() {
+    let root = git_project("check-mismatched-answer-no-retry");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], false, true);
+    let invalid = answer("unclear", "question needs a clearer answer", &["."]);
+    let mut runner = FakeRunner::new(&[&invalid, &invalid, &answer("yes", "late", &["."])]);
+
+    let records =
+        run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
+
+    assert!(!records.records[0].passed());
+    assert!(!record_requires_human_review(&records.records[0]));
+    assert_eq!(records.records[0].observed, "unclear");
+    assert_eq!(runner.prompts.len(), 1);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_runner_does_not_retry_after_empty_evidence_answer() {
     let root = git_project("check-empty-evidence-no-retry");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
@@ -362,20 +505,21 @@ fn check_runner_does_not_retry_after_empty_evidence() {
     let records =
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
-    assert!(!records.records[0].passed());
-    assert_eq!(records.records[0].observed, EMPTY_EVIDENCE_OBSERVED);
+    assert!(records.records[0].passed());
+    assert_eq!(records.records[0].observed, "yes");
+    assert!(!record_requires_human_review(&records.records[0]));
     assert_eq!(runner.prompts.len(), 1);
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn check_runner_keeps_semantic_malformed_as_human_review_failure() {
-    let root = git_project("check-full-malformed");
+fn check_runner_keeps_mismatched_answer_as_failure() {
+    let root = git_project("check-full-mismatched-answer");
     let config = parse_check_config(check_config_yaml()).unwrap();
     let options = check_options(&config, &["1"], false, true);
     let mut runner = FakeRunner::new(&[&answer(
-        "malformed",
-        "full scope response stayed malformed",
+        "unclear",
+        "full scope response is a schema-valid answer that does not match expected",
         &["."],
     )]);
 
@@ -383,7 +527,8 @@ fn check_runner_keeps_semantic_malformed_as_human_review_failure() {
         run_check_with_runner(&root, &root, &config, &options, &mut runner, None, None).unwrap();
 
     assert!(!records.records[0].passed());
-    assert_eq!(records.records[0].observed, "malformed");
+    assert!(!record_requires_human_review(&records.records[0]));
+    assert_eq!(records.records[0].observed, "unclear");
     assert_eq!(runner.start_scopes, vec![vec![".".to_string()]]);
     let _ = fs::remove_dir_all(root);
 }

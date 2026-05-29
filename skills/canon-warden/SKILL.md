@@ -27,6 +27,8 @@ When you are already making project changes and the canon is violated, whether d
 
 Do not take `canon check` evidence on trust. Before acting on a result, verify that the evidence actually supports the observed answer and answers the expectation question. If `canon check` gives a wrong answer, unsupported evidence, or evidence that is irrelevant to the question while the project satisfies the expectation, treat that as a readability issue.
 
+Follow canon terminology in implementation code and documentation. If project terminology drifts away from terms defined in the canon, treat that as a readability issue.
+
 When improving readability, use comments where they help, but prefer making the code self-explanatory through clearer naming, better structure, and focused refactoring.
 
 ## Committing

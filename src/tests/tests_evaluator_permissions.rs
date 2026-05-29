@@ -1,59 +1,96 @@
 use super::*;
 
 #[test]
-fn evaluator_permissions_always_deny_canon_and_agent_ignores() {
+fn evaluator_permissions_allow_only_materialized_working_tree_without_scope_filters() {
     let agent = AgentConfig {
-        model: ModelConfig::default(),
+        models: Vec::new(),
         thinking: "low".to_string(),
         instructions: Some("Answer from files only.".to_string()),
         ignore: vec!["target/**".to_string()],
         plugins: Vec::new(),
     };
-    let config = evaluator_thread_config(&agent, &full_scope(), None, &agent.thinking);
-    let root_permissions = config["permissions"]["canon_check"]["filesystem"][":project_roots"]
+    let session_root = Path::new("/tmp/canon-check-snapshot");
+    let config =
+        evaluator_thread_config(&agent, &full_scope(), None, &agent.thinking, session_root);
+    let filesystem = config["permissions"]["canon_check"]["filesystem"]
         .as_object()
         .unwrap();
-    assert_eq!(root_permissions["."], "read");
-    assert_eq!(root_permissions[".canon"], "none");
-    assert_eq!(root_permissions[".canon/**"], "none");
-    assert_eq!(root_permissions[".git/canon"], "none");
-    assert_eq!(root_permissions[".git/canon/**"], "none");
-    assert_eq!(root_permissions[".git/canon/logs"], "none");
-    assert_eq!(root_permissions[".git/canon/logs/**"], "none");
-    assert_eq!(root_permissions["target"], "none");
-    assert_eq!(root_permissions["target/**"], "none");
     assert_eq!(
         config["permissions"]["canon_check"]["filesystem"][":root"],
+        "deny"
+    );
+    assert_eq!(
+        config["permissions"]["canon_check"]["filesystem"][":minimal"],
         "read"
     );
+    assert_eq!(filesystem[&session_path(session_root, ".")], "read");
+    assert_eq!(filesystem[&session_glob(session_root, "**")], "read");
+    assert!(filesystem.get(":workspace_roots").is_none());
+    assert!(filesystem.get(".canon").is_none());
+    assert!(filesystem.get(".canon/**").is_none());
+    assert!(filesystem.get("target").is_none());
+    assert!(filesystem.get("target/**").is_none());
+    assert!(filesystem
+        .get(&session_path(session_root, ".canon"))
+        .is_none());
+    assert!(filesystem
+        .get(&session_glob(session_root, ".canon/**"))
+        .is_none());
+    assert!(filesystem
+        .get(&session_path(session_root, "target"))
+        .is_none());
+    assert!(filesystem
+        .get(&session_glob(session_root, "target/**"))
+        .is_none());
+    assert_eq!(filesystem["/etc/**"], "read");
+    assert_eq!(filesystem["/private/etc/**"], "read");
+    assert_eq!(filesystem["/usr/share/**"], "read");
+    assert_eq!(filesystem["~"], "read");
+    assert_eq!(filesystem["~/.zshenv"], "read");
+    assert!(filesystem.get("~/**").is_none());
     assert_eq!(config["model_reasoning_effort"], "low");
     assert!(config["permissions"]["canon_check"]["filesystem"]
         .get("~/.codex/tmp/**")
         .is_none());
-    assert!(config["permissions"]["canon_check"]["filesystem"]
-        .get(":tmpdir")
-        .is_none());
-    assert!(config["permissions"]["canon_check"]["filesystem"]
-        .get(":slash_tmp")
-        .is_none());
-    assert!(config["permissions"]["canon_check"]["filesystem"]
-        .get("/private/tmp/**")
-        .is_none());
+    assert_eq!(
+        config["permissions"]["canon_check"]["filesystem"][":tmpdir"],
+        "deny"
+    );
+    assert_eq!(
+        config["permissions"]["canon_check"]["filesystem"][":slash_tmp"],
+        "deny"
+    );
+    assert_eq!(
+        config["permissions"]["canon_check"]["filesystem"]["/tmp"],
+        "deny"
+    );
+    assert_eq!(
+        config["permissions"]["canon_check"]["filesystem"]["/tmp/**"],
+        "deny"
+    );
+    assert_eq!(
+        config["permissions"]["canon_check"]["filesystem"]["/private/tmp"],
+        "deny"
+    );
+    assert_eq!(
+        config["permissions"]["canon_check"]["filesystem"]["/private/tmp/**"],
+        "deny"
+    );
     assert_eq!(
         config["permissions"]["canon_check"]["filesystem"]["~/.codex/sessions"],
-        "none"
+        "deny"
     );
     assert_eq!(
         config["permissions"]["canon_check"]["filesystem"]["~/.codex/sessions/**"],
-        "none"
+        "deny"
     );
     assert_eq!(
         config["permissions"]["canon_check"]["filesystem"]["~/.codex/memories"],
-        "none"
+        "deny"
     );
     assert_eq!(
         config["permissions"]["canon_check"]["filesystem"]["~/.codex/memories/**"],
-        "none"
+        "deny"
     );
     assert!(config["permissions"]["canon_check"]["filesystem"]
         .as_object()
@@ -79,46 +116,76 @@ fn evaluator_permissions_always_deny_canon_and_agent_ignores() {
 }
 
 #[test]
-fn restricted_evaluator_scope_is_enforced_by_filesystem_permissions() {
+fn evaluator_working_tree_permissions_do_not_encode_restricted_scope() {
     let agent = AgentConfig {
-        model: ModelConfig::default(),
+        models: Vec::new(),
         thinking: "low".to_string(),
         instructions: Some("Answer from files only.".to_string()),
         ignore: vec!["target/**".to_string()],
         plugins: Vec::new(),
     };
-    let root_permissions = evaluator_thread_root_permissions(&agent, &["src".to_string()]);
+    let session_root = Path::new("/tmp/canon-check-snapshot/scopes/0");
+    let config = evaluator_thread_config(
+        &agent,
+        &["src/bin/main.rs".to_string()],
+        None,
+        &agent.thinking,
+        session_root,
+    );
+    let filesystem = config["permissions"]["canon_check"]["filesystem"]
+        .as_object()
+        .unwrap();
 
-    assert_eq!(root_permissions["."], "none");
-    assert_eq!(root_permissions["src"], "read");
-    assert_eq!(root_permissions["src/**"], "read");
-    assert_eq!(root_permissions[".canon"], "none");
-    assert_eq!(root_permissions[".canon/**"], "none");
-    assert_eq!(root_permissions["target"], "none");
-    assert_eq!(root_permissions["target/**"], "none");
+    assert_eq!(filesystem[&session_path(session_root, ".")], "read");
+    assert_eq!(filesystem[&session_glob(session_root, "**")], "read");
+    assert!(filesystem.get(&session_path(session_root, "src")).is_none());
+    assert!(filesystem
+        .get(&session_path(session_root, "src/bin/main.rs"))
+        .is_none());
+    assert!(filesystem.get("src").is_none());
+    assert!(filesystem.get("src/**").is_none());
+    assert!(filesystem.get("target/**").is_none());
 
-    let file_scope_permissions =
-        evaluator_thread_root_permissions(&agent, &["src/bin/main.rs".to_string()]);
-    assert_eq!(file_scope_permissions["."], "none");
-    assert_eq!(file_scope_permissions["src"], "read");
-    assert_eq!(file_scope_permissions["src/bin"], "read");
-    assert_eq!(file_scope_permissions["src/bin/main.rs"], "read");
-    assert_eq!(file_scope_permissions["src/bin/main.rs/**"], "read");
-    assert!(!file_scope_permissions.contains_key("src/**"));
-    assert!(!file_scope_permissions.contains_key("src/bin/**"));
+    let working_tree_permissions = evaluator_working_tree_permissions(session_root);
+    assert_eq!(
+        working_tree_permissions[&session_path(session_root, ".")],
+        "read"
+    );
+    assert_eq!(
+        working_tree_permissions[&session_glob(session_root, "**")],
+        "read"
+    );
+}
+
+fn session_path(root: &Path, path: &str) -> String {
+    if path == "." {
+        root.display().to_string()
+    } else {
+        root.join(path).display().to_string()
+    }
+}
+
+fn session_glob(root: &Path, pattern: &str) -> String {
+    root.join(pattern).display().to_string()
 }
 
 #[test]
 fn evaluator_model_is_configured_when_present() {
     let config = parse_check_config(check_config_yaml()).unwrap();
-    let thread_config =
-        evaluator_thread_config(&config.agent, &full_scope(), None, &config.agent.thinking);
+    let thread_config = evaluator_thread_config(
+        &config.agent,
+        &full_scope(),
+        None,
+        &config.agent.thinking,
+        Path::new("/tmp/canon-check-snapshot"),
+    );
     assert_eq!(thread_config["model"], "gpt-5.4-mini");
     let fallback_config = evaluator_thread_config(
         &config.agent,
         &full_scope(),
         Some("gpt-5.3-codex-spark"),
         &config.agent.thinking,
+        Path::new("/tmp/canon-check-snapshot"),
     );
     assert_eq!(fallback_config["model"], "gpt-5.3-codex-spark");
 }
@@ -140,12 +207,38 @@ expectations:
     )
     .unwrap();
     assert!(check_config_loads_plugins(&config));
-    let thread_config =
-        evaluator_thread_config(&config.agent, &full_scope(), None, &config.agent.thinking);
+    let thread_config = evaluator_thread_config(
+        &config.agent,
+        &full_scope(),
+        None,
+        &config.agent.thinking,
+        Path::new("/tmp/canon-check-snapshot"),
+    );
     assert_eq!(
         thread_config["plugins"]["canon@codex-plugins"]["enabled"],
         json!(true)
     );
+}
+
+#[test]
+fn plugin_loading_uses_default_agent_plugins_directly() {
+    let mut config = parse_check_config(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins:
+    - "canon@codex-plugins"
+expectations:
+  - q: "Question?"
+    a: "yes"
+"#,
+    )
+    .unwrap();
+    config.expectations[0].agent.plugins.clear();
+
+    assert!(check_config_loads_plugins(&config));
 }
 
 #[test]
@@ -184,9 +277,10 @@ fn app_server_starts_with_plugins_disabled_by_default() {
         })
         .unwrap();
     assert!(model_catalog_arg.starts_with("model_catalog_json=\""));
-    let canonical_root = root.canonicalize().unwrap();
-    let model_catalog_path = resolve_git_path(&canonical_root, "canon/evaluator-model-catalogs")
+    let model_catalog_path = std::env::temp_dir()
+        .canonicalize()
         .unwrap()
+        .join("canon-evaluator-model-catalogs")
         .join(format!("{}.json", process::id()));
     assert_eq!(
         model_catalog_arg,
@@ -245,20 +339,24 @@ fn app_server_starts_with_plugins_disabled_by_default() {
                 .then_some(pair[1].as_str())
         })
         .unwrap();
-    assert!(filesystem_arg.contains(r#"":project_roots"={"."="none""#));
-    assert!(filesystem_arg.contains(r#"".canon/**"="none""#));
-    assert!(filesystem_arg.contains(r#""target"="none""#));
-    assert!(filesystem_arg.contains(r#""target/**"="none""#));
+    assert!(!filesystem_arg.contains(r#"":workspace_roots""#));
+    assert!(!filesystem_arg.contains(r#"".canon/**"="deny""#));
+    assert!(!filesystem_arg.contains(r#""target"="deny""#));
+    assert!(!filesystem_arg.contains(r#""target/**"="deny""#));
     assert!(filesystem_arg.contains(r#"":root"="read""#));
-    assert!(!filesystem_arg.contains(r#"":tmpdir""#));
-    assert!(!filesystem_arg.contains(r#"":slash_tmp""#));
-    assert!(!filesystem_arg.contains(r#""/private/tmp/**""#));
+    assert!(filesystem_arg.contains(r#"":minimal"="read""#));
+    assert!(filesystem_arg.contains(r#"":tmpdir"="deny""#));
+    assert!(filesystem_arg.contains(r#"":slash_tmp"="deny""#));
+    assert!(filesystem_arg.contains(r#""/tmp"="deny""#));
+    assert!(filesystem_arg.contains(r#""/tmp/**"="deny""#));
+    assert!(filesystem_arg.contains(r#""/private/tmp"="deny""#));
+    assert!(filesystem_arg.contains(r#""/private/tmp/**"="deny""#));
     assert!(!filesystem_arg.contains(r#""~/.codex/tmp/**""#));
     assert!(filesystem_arg.contains(r#""glob_scan_max_depth"=32"#));
-    assert!(filesystem_arg.contains(r#""~/.codex/sessions"="none""#));
-    assert!(filesystem_arg.contains(r#""~/.codex/sessions/**"="none""#));
-    assert!(filesystem_arg.contains(r#""~/.codex/memories"="none""#));
-    assert!(filesystem_arg.contains(r#""~/.codex/memories/**"="none""#));
+    assert!(filesystem_arg.contains(r#""~/.codex/sessions"="deny""#));
+    assert!(filesystem_arg.contains(r#""~/.codex/sessions/**"="deny""#));
+    assert!(filesystem_arg.contains(r#""~/.codex/memories"="deny""#));
+    assert!(filesystem_arg.contains(r#""~/.codex/memories/**"="deny""#));
     assert!(!filesystem_arg.contains(r#""write""#));
     assert!(!filesystem_arg.contains(r#""."="read""#));
     assert!(disabled
@@ -316,16 +414,13 @@ fn evaluator_codex_home_preserves_auth_without_skills_or_plugins() {
 
     let root = git_project("app-server-empty-codex-home");
     let evaluator_home = prepare_evaluator_codex_home(&root).unwrap();
+    let canonical_root = root.canonicalize().unwrap();
 
     assert_eq!(
         evaluator_home,
-        env::temp_dir()
-            .canonicalize()
-            .unwrap()
-            .join("canon")
-            .join(".codex")
+        resolve_git_path(&canonical_root, "canon/evaluator-codex-home/.codex").unwrap()
     );
-    assert!(!evaluator_home.starts_with(&root));
+    assert!(evaluator_home.starts_with(resolve_git_path(&canonical_root, "canon").unwrap()));
     let auth_path = evaluator_home.join("auth.json");
     assert!(auth_path.exists());
     #[cfg(unix)]
@@ -393,17 +488,49 @@ fn evaluator_codex_home_symlinks_auth_inside_codex_sandbox() {
 
 #[test]
 #[cfg(unix)]
-fn evaluator_codex_home_rejects_symlinked_temp_parent() {
+fn evaluator_codex_home_skips_auth_mirror_when_source_is_same_home_alias() {
     use std::os::unix::fs::symlink;
 
     let _guard = ENV_LOCK.lock().expect("lock test environment");
-    let env_snapshot = EnvSnapshot::capture(&["CODEX_HOME", "TMPDIR"]);
+    let env_snapshot = EnvSnapshot::capture(&["CODEX_HOME", "CODEX_SANDBOX"]);
+    env_snapshot.remove("CODEX_SANDBOX");
+    let root = git_project("app-server-same-codex-home-alias");
+    let canonical_root = root.canonicalize().unwrap();
+    let evaluator_home =
+        resolve_git_path(&canonical_root, "canon/evaluator-codex-home/.codex").unwrap();
+    fs::create_dir_all(&evaluator_home).unwrap();
+    let auth_path = evaluator_home.join("auth.json");
+    fs::write(&auth_path, "{}\n").unwrap();
+    let alias_root = TestDir::new("codex-home-same-target-alias");
+    let alias_path = alias_root.path().join("alias");
+    symlink(&evaluator_home, &alias_path).unwrap();
+    env_snapshot.set("CODEX_HOME", &alias_path);
+
+    let prepared_home = prepare_evaluator_codex_home(&root).unwrap();
+
+    assert_eq!(prepared_home, evaluator_home);
+    assert_eq!(fs::read_to_string(&auth_path).unwrap(), "{}\n");
+    assert!(!fs::symlink_metadata(&auth_path)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    let _ = fs::remove_dir_all(evaluator_home);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+#[cfg(unix)]
+fn evaluator_codex_home_rejects_symlinked_state_parent() {
+    use std::os::unix::fs::symlink;
+
+    let _guard = ENV_LOCK.lock().expect("lock test environment");
+    let env_snapshot = EnvSnapshot::capture(&["CODEX_HOME"]);
     env_snapshot.remove("CODEX_HOME");
-    let temp_root = TestDir::new("codex-home-temp-root");
-    let target_root = TestDir::new("codex-home-temp-target");
-    symlink(target_root.path(), temp_root.path().join("canon")).unwrap();
-    env_snapshot.set("TMPDIR", temp_root.path());
     let root = git_project("app-server-symlinked-temp-canon");
+    let state_root = resolve_git_path(&root, "canon").unwrap();
+    fs::create_dir_all(&state_root).unwrap();
+    let target_root = TestDir::new("codex-home-state-target");
+    symlink(target_root.path(), state_root.join("evaluator-codex-home")).unwrap();
 
     let err = prepare_evaluator_codex_home(&root).unwrap_err();
 
@@ -421,11 +548,11 @@ fn app_server_environment_does_not_inherit_parent_secrets() {
         "HOME",
         "PATH",
     ]);
+    let expected_path = env::var_os("PATH").map(|path| path.to_string_lossy().into_owned());
     env_snapshot.set("CANON_TEST_SECRET", "secret-token");
     env_snapshot.set("CODEX_HOME", "/tmp/source-codex-home");
     env_snapshot.set("CODEX_THREAD_ID", "parent-thread");
     env_snapshot.set("HOME", "/tmp/real-home");
-    env_snapshot.set("PATH", "/bin:/usr/bin");
     let isolated_home = Path::new("/tmp/canon/.codex");
     let mut command = Command::new("codex");
 
@@ -452,30 +579,18 @@ fn app_server_environment_does_not_inherit_parent_secrets() {
     );
     assert_eq!(
         envs.get("PATH").and_then(|value| value.as_deref()),
-        Some("/bin:/usr/bin")
+        expected_path.as_deref()
     );
     assert!(envs.contains_key("TMPDIR"));
 }
 
 #[test]
 fn app_server_startup_config_escapes_toml_control_characters() {
-    let agent = AgentConfig {
-        model: ModelConfig::default(),
-        thinking: "low".to_string(),
-        instructions: Some("Answer from files only.".to_string()),
-        ignore: vec![
-            "quoted\"path/**".to_string(),
-            "control\u{0007}path/**".to_string(),
-            "delete\u{007f}path/**".to_string(),
-        ],
-        plugins: Vec::new(),
-    };
+    let filesystem_arg = app_server_startup_filesystem_arg();
 
-    let filesystem_arg = app_server_startup_filesystem_arg(&agent);
-
-    assert!(filesystem_arg.contains(r#""quoted\"path"="none""#));
-    assert!(filesystem_arg.contains(r#""control\u0007path"="none""#));
-    assert!(filesystem_arg.contains(r#""delete\u007Fpath"="none""#));
+    assert!(!filesystem_arg.contains("quoted"));
+    assert!(!filesystem_arg.contains("control"));
+    assert!(!filesystem_arg.contains("delete"));
     assert!(!filesystem_arg.contains('\u{0007}'));
     assert!(!filesystem_arg.contains('\u{007f}'));
 }

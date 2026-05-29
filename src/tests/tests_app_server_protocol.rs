@@ -8,9 +8,9 @@ fn completed_agent_message_text_is_turn_text_fallback() {
             "item": {
                 "role": "assistant",
                 "content": [
-                    { "type": "output_text", "text": "ANSWER: yes\n" },
+                    { "type": "output_text", "text": "{\"answer\":\"yes\"" },
                     { "type": "tool_result", "metadata": { "text": "ignored" } },
-                    { "type": "output_text", "text": "EVIDENCE:\nok\nSCOPE: [\".\"]" }
+                    { "type": "output_text", "text": ",\"evidence\":\"ok\",\"qScopeSuggestion\":[\".\"]}" }
                 ]
             }
         }
@@ -19,11 +19,14 @@ fn completed_agent_message_text_is_turn_text_fallback() {
     append_completed_agent_text(&message, &mut completed_text);
     assert_eq!(
         turn_text(String::new(), completed_text),
-        "ANSWER: yes\nEVIDENCE:\nok\nSCOPE: [\".\"]"
+        "{\"answer\":\"yes\",\"evidence\":\"ok\",\"qScopeSuggestion\":[\".\"]}"
     );
     assert_eq!(
-        turn_text("ANSWER: no".to_string(), "ANSWER: yes".to_string()),
-        "ANSWER: no"
+        turn_text(
+            "{\"answer\":\"no\",\"evidence\":\"kept\"}".to_string(),
+            "{\"answer\":\"yes\",\"evidence\":\"ignored\"}".to_string()
+        ),
+        "{\"answer\":\"no\",\"evidence\":\"kept\"}"
     );
 }
 
@@ -130,6 +133,26 @@ fn app_server_message_rejects_malformed_envelopes() {
 
     let err = app_server_message(&json!({"params": {}})).unwrap_err();
     assert!(err.contains("missing both id and method"));
+}
+
+#[test]
+fn turn_start_request_includes_session_cwd() {
+    let request = turn_start_request(
+        "thread-1",
+        "Question?",
+        Some("gpt-test"),
+        "medium",
+        Some(Path::new("/tmp/canon-check-snapshot")),
+    )
+    .unwrap();
+
+    assert_eq!(request["threadId"], json!("thread-1"));
+    assert_eq!(request["cwd"], json!("/tmp/canon-check-snapshot"));
+    assert_eq!(request["model"], json!("gpt-test"));
+    assert_eq!(request["effort"], json!("medium"));
+    assert_eq!(request["input"][0]["type"], json!("text"));
+    assert_eq!(request["input"][0]["text"], json!("Question?"));
+    assert!(request.get("outputSchema").is_none());
 }
 
 #[test]

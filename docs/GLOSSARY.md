@@ -13,6 +13,11 @@ of being selected from the configured expectations.
 Stored check history that lets `canon` avoid asking the evaluator again when a
 previous answer still applies to the current staged project state.
 
+## Cached result
+
+The reusable result for an expectation in the current Git state. It is the newer
+of the expectation's same-tree result and cooldown result, when either exists.
+
 ## Canon
 
 The set of expectations that describes what must stay true for a project. In a
@@ -35,6 +40,11 @@ The YAML file that defines evaluator settings and expectations. By default,
 A time window during which a recent passing result can remain valid without
 being re-proven for every small staged change. Cooldown is useful for broad
 review expectations that are expensive to recheck on every commit.
+
+## Cooldown result
+
+A passing answer-history record that is still inside the expectation's
+configured cooldown window.
 
 ## Evidence
 
@@ -72,28 +82,72 @@ history.
 ## `canon check`
 
 The command that evaluates expectations against the staged project state. It
-asks the evaluator when a reusable cached result is not available and records
-the resulting answer, evidence, and scope.
+collects configured expectations, computes cached results, and selects only the
+expectations that require evaluator work. With no selectors, cached failures are
+reported without fresh evaluation; if every cached result is a pass, uncached
+expectations are evaluated.
 
 ## `canon gate`
 
 The command used by the pre-commit hook. It checks the staged project state
-against existing canon history and fails quickly when a commit needs a fresh
-`canon check` or contains a new regression.
+against existing canon history and fails quickly when staged changes regress a
+cached pass. Missing cached results are non-blocking; run `canon check` when
+fresh confirmation is needed.
 
 ## Scope
 
-The smallest set of repository paths that is sufficient for the evaluator to
-answer a question correctly. Full project scope is written as `.`.
+A Git pathspec list that defines a subset of tracked repository files. Full
+project scope is written as `.`.
+
+## Q-scope
+
+A question scope: a scope complete for a question. If files outside the q-scope
+change while files inside it stay the same, the correct answer to the question
+should not change.
+
+## Q-scope suggestion
+
+An evaluator-provided scope claiming to be narrow enough to answer the current
+question. It may or may not be a valid q-scope. `canon check` only attempts to
+verify a valid suggestion when its induced visible tree has at least 25% fewer
+files than the current visible tree.
 
 ## Scope narrowing
 
-The process of checking whether an expectation can be answered from a smaller
-scope than the full project. Narrower scopes make cached results more reusable
-when unrelated files change.
+The runtime process for trying to store a narrower q-scope. When an evaluator
+returns an answer with a q-scope suggestion, `canon check` may run an independent
+interrogation under that suggested scope. The suggestion is stored only when
+that verification produces a valid evaluator response with an answer.
+
+## Same-tree result
+
+The latest answer-history record for an expectation whose stored
+`visibleTreeOid` matches the current `visibleTreeOid` for that record's scope.
+
+## Selected expectations
+
+The expectations that require evaluator work in the current `canon check` run.
+Explicit selectors select matching expectations directly; the default
+no-selector check subtracts cached passing expectations and evaluates none while
+cached failures are present.
 
 ## Staged snapshot
 
 The temporary Git-tracked project state that `canon check` evaluates. It comes
 from the Git index, so unstaged and untracked working tree files are not part of
 the snapshot.
+
+## `visibleTreeOid`
+
+The Git-compatible object ID of the tracked tree entries visible to the
+evaluator after enforced scope and ignore rules are applied.
+
+## Visible scope
+
+The scope applied to a staged tracked tree for an evaluator interrogation. It is
+the latest stored q-scope for the expectation, or full project scope when no
+q-scope is stored, with configured ignore patterns applied last.
+
+## Visible tree
+
+The scoped tree induced by a visible scope.
