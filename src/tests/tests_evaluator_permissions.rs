@@ -116,6 +116,47 @@ fn evaluator_permissions_allow_only_materialized_working_tree_without_scope_filt
 }
 
 #[test]
+fn no_sandbox_thread_config_keeps_snapshot_permission_profile() {
+    let agent = AgentConfig {
+        models: Vec::new(),
+        thinking: "low".to_string(),
+        instructions: Some("Answer from files only.".to_string()),
+        ignore: vec!["target/**".to_string()],
+        plugins: Vec::new(),
+    };
+    let config = evaluator_thread_config_with_no_sandbox(
+        &agent,
+        &full_scope(),
+        None,
+        &agent.thinking,
+        Path::new("/tmp/canon-check-snapshot"),
+        true,
+    );
+
+    assert_eq!(config["sandbox_mode"], "danger-full-access");
+    assert_eq!(config["default_permissions"], "canon_check");
+    let filesystem = config["permissions"]["canon_check"]["filesystem"]
+        .as_object()
+        .unwrap();
+    assert_eq!(filesystem[":root"], "deny");
+    assert_eq!(
+        filesystem[&session_path(Path::new("/tmp/canon-check-snapshot"), ".")],
+        "read"
+    );
+    assert_eq!(
+        filesystem[&session_glob(Path::new("/tmp/canon-check-snapshot"), "**")],
+        "read"
+    );
+    assert_eq!(config["history"]["persistence"], "none");
+    assert_eq!(config["model_reasoning_effort"], "low");
+    assert_eq!(config["include_environment_context"], json!(false));
+    assert_eq!(config["include_permissions_instructions"], json!(false));
+    assert_eq!(config["include_apps_instructions"], json!(false));
+    assert_eq!(config["features"]["tool_search"], json!(false));
+    assert_eq!(config["project_doc_max_bytes"], json!(0));
+}
+
+#[test]
 fn evaluator_working_tree_permissions_do_not_encode_restricted_scope() {
     let agent = AgentConfig {
         models: Vec::new(),
@@ -373,6 +414,34 @@ fn app_server_starts_with_plugins_disabled_by_default() {
         .windows(2)
         .any(|pair| pair == ["--disable", "shell_tool"]));
     assert_eq!(&enabled[enabled.len() - 2..], ["--listen", "stdio://"]);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn no_sandbox_app_server_args_keep_canon_permission_profile() {
+    let root = git_project("app-server-args-no-sandbox");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let args = app_server_startup_config_args_with_no_sandbox(&root, &config.agent, true).unwrap();
+
+    assert!(args
+        .windows(2)
+        .any(|pair| pair == ["-c", "sandbox_mode=\"danger-full-access\""]));
+    assert!(args
+        .windows(2)
+        .any(|pair| pair == ["-c", "default_permissions=\"canon_check\""]));
+    assert!(args
+        .windows(2)
+        .any(|pair| { pair[0] == "-c" && pair[1].starts_with("permissions.canon_check.") }));
+    assert!(args
+        .windows(2)
+        .any(|pair| pair == ["-c", "include_environment_context=false"]));
+    assert!(args
+        .windows(2)
+        .any(|pair| pair == ["-c", "features.tool_search=false"]));
+    assert!(args
+        .windows(2)
+        .any(|pair| { pair == ["-c", "thread_reuse.carryover_token_target=[10000,30000]",] }));
+
     let _ = fs::remove_dir_all(root);
 }
 

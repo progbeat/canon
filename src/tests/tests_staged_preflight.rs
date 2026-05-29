@@ -79,10 +79,44 @@ fn check_config_loads_staged_default_config_not_worktree() {
     let mut cache = RepoInspectionCache::new();
 
     let config = cache
-        .load_check_config(&root, Path::new(CHECK_PATH))
+        .load_check_config(&root, Path::new(CHECK_PATH), &TreeSource::Staged)
         .unwrap();
 
     assert_eq!(config.expectations.len(), 2);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_config_loads_explicit_tree_config_not_staged_or_worktree() {
+    let root = git_project("check-config-explicit-tree");
+    fs::create_dir_all(root.join(".canon/specs")).unwrap();
+    fs::write(root.join(CHECK_PATH), tree_check_config("Head?")).unwrap();
+    fs::write(root.join(".canon/specs/a.md"), "head spec").unwrap();
+    Command::new("git")
+        .args(["add", CHECK_PATH, ".canon/specs/a.md"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    commit_all(&root, "head canon");
+    fs::write(root.join(CHECK_PATH), tree_check_config("Staged?")).unwrap();
+    fs::write(root.join(".canon/specs/a.md"), "staged spec").unwrap();
+    Command::new("git")
+        .args(["add", CHECK_PATH, ".canon/specs/a.md"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    fs::write(root.join(CHECK_PATH), tree_check_config("Worktree?")).unwrap();
+    fs::write(root.join(".canon/specs/a.md"), "worktree spec").unwrap();
+    let source = TreeSource::resolve(&root, "HEAD", "--tree").unwrap();
+    let mut cache = RepoInspectionCache::new();
+
+    let config = cache
+        .load_check_config(&root, Path::new(CHECK_PATH), &source)
+        .unwrap();
+
+    assert_eq!(config.expectations.len(), 2);
+    assert_eq!(config.expectations[0].q, "Head?");
+    assert_eq!(config.expectations[1].q, "head spec");
     let _ = fs::remove_dir_all(root);
 }
 
@@ -104,7 +138,9 @@ fn check_config_loads_staged_custom_config_not_worktree() {
     fs::write(root.join(alt), "version: 1\nagent: []\n").unwrap();
     let mut cache = RepoInspectionCache::new();
 
-    let config = cache.load_check_config(&root, Path::new(alt)).unwrap();
+    let config = cache
+        .load_check_config(&root, Path::new(alt), &TreeSource::Staged)
+        .unwrap();
 
     assert_eq!(config.expectations.len(), 2);
     let _ = fs::remove_dir_all(root);
@@ -117,7 +153,7 @@ fn check_config_rejects_untracked_default_config() {
     let mut cache = RepoInspectionCache::new();
 
     let err = cache
-        .load_check_config(&root, Path::new(CHECK_PATH))
+        .load_check_config(&root, Path::new(CHECK_PATH), &TreeSource::Staged)
         .unwrap_err();
 
     assert!(err.contains("No canon check config found at .canon/check.yml"));
@@ -132,7 +168,9 @@ fn check_config_rejects_untracked_custom_config() {
     fs::write(root.join(alt), check_config_yaml()).unwrap();
     let mut cache = RepoInspectionCache::new();
 
-    let err = cache.load_check_config(&root, Path::new(alt)).unwrap_err();
+    let err = cache
+        .load_check_config(&root, Path::new(alt), &TreeSource::Staged)
+        .unwrap_err();
 
     assert!(err.contains("failed to read staged other-check.yml"));
     let _ = fs::remove_dir_all(root);
@@ -179,7 +217,7 @@ expectations:
     let mut cache = RepoInspectionCache::new();
 
     let config = cache
-        .load_check_config(&root, Path::new("checks/check.yml"))
+        .load_check_config(&root, Path::new("checks/check.yml"), &TreeSource::Staged)
         .unwrap();
 
     assert_eq!(config.expectations.len(), 1);
@@ -226,7 +264,7 @@ expectations:
     let mut cache = RepoInspectionCache::new();
 
     let config = cache
-        .load_check_config(&root, Path::new("checks/check.yml"))
+        .load_check_config(&root, Path::new("checks/check.yml"), &TreeSource::Staged)
         .unwrap();
 
     assert_eq!(config.expectations.len(), 1);
@@ -269,7 +307,7 @@ expectations:
     let mut cache = RepoInspectionCache::new();
 
     let config = cache
-        .load_check_config(&root, Path::new("checks/check.yml"))
+        .load_check_config(&root, Path::new("checks/check.yml"), &TreeSource::Staged)
         .unwrap();
 
     assert_eq!(config.expectations.len(), 1);
@@ -300,7 +338,7 @@ fn check_config_staged_delete_does_not_fall_back_to_worktree() {
     let mut cache = RepoInspectionCache::new();
 
     let err = cache
-        .load_check_config(&root, Path::new(CHECK_PATH))
+        .load_check_config(&root, Path::new(CHECK_PATH), &TreeSource::Staged)
         .unwrap_err();
 
     assert!(err.contains("No canon check config found at .canon/check.yml"));
@@ -326,7 +364,9 @@ fn check_config_literal_pathspec_name_loads_staged_content() {
     fs::write(root.join(path), "version: 1\nagent: []\n").unwrap();
     let mut cache = RepoInspectionCache::new();
 
-    let config = cache.load_check_config(&root, Path::new(path)).unwrap();
+    let config = cache
+        .load_check_config(&root, Path::new(path), &TreeSource::Staged)
+        .unwrap();
 
     assert_eq!(config.expectations.len(), 2);
     let _ = fs::remove_dir_all(root);
@@ -361,4 +401,22 @@ fn check_command_logs_start_and_finish_for_cache_cleanup_failure() {
     assert!(!log.contains(r#""errors":"#));
     assert!(log.contains("failed to read"));
     let _ = fs::remove_dir_all(root);
+}
+
+fn tree_check_config(question: &str) -> String {
+    format!(
+        r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: "{question}"
+    a: "yes"
+  - path: "specs/*.md"
+    q_template: "{{{{content}}}}"
+    a: "yes"
+"#
+    )
 }

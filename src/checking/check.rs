@@ -31,6 +31,7 @@ use crate::logging::DiagnosticLogWriter;
 use crate::platform::check_interrupted;
 use crate::scope::{sanitize_scope, scope_is_within};
 use crate::time::unix_timestamp;
+use crate::tree_source::TreeSource;
 use crate::visible_tree_oid::VisibleTreeOidCache;
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -119,9 +120,10 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             $expr.map_err(|err| current_error!(err.to_string()))?
         };
     }
-    let check_work_queue = if !options.selectors_provided && !options.check_all {
+    let check_work_queue = if !options.selectors_provided {
         let selection = run_try!(default_check_selection(
             root,
+            runtime.tree_source,
             options,
             &mut caches.history,
             &mut caches.visible_tree_oid,
@@ -209,7 +211,6 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         // produced.
         let mut interrogation = run_expectation_try!(interrogate_with_full_scope_retry(
             ScopedInterrogation {
-                root,
                 runtime: &runtime,
                 expectation,
                 enforced_scope: &mut verified_q_scope,
@@ -240,7 +241,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         // this expectation's final record.
         if !record_requires_human_review(&interrogation.record)
             && run_expectation_try!(q_scope_suggestion_should_get_independent_verification(
-                root,
+                &runtime,
                 &expectation.agent,
                 interrogation.record.suggested_q_scope.as_deref(),
                 &verified_q_scope,
@@ -260,7 +261,6 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             ));
             let narrowed = run_expectation_try!(interrogate_or_error_record(
                 InterrogationCall {
-                    root,
                     runtime: &runtime,
                     expectation,
                     scope: &verification_scope,
@@ -307,6 +307,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         if is_reusable_history_record(&interrogation.record) {
             run_expectation_try!(append_current_history_record_with_cache(
                 root,
+                runtime.tree_source,
                 expectation,
                 &interrogation.record,
                 &mut caches.history,
@@ -325,7 +326,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         let run_stop_signal_hit =
             break_after_tokens_hit || context_compaction_hit || stop_after_current_expectation;
         let should_stop =
-            !options.check_all && (!interrogation.record.passed() || run_stop_signal_hit);
+            !options.keep_going && (!interrogation.record.passed() || run_stop_signal_hit);
         if run_stop_signal_hit {
             interrogation_run_state.clear_thread_sessions();
         }
@@ -378,6 +379,7 @@ struct CachedSelectionHit {
 
 fn default_check_selection(
     root: &Path,
+    source: &TreeSource,
     options: &CheckOptions,
     history_cache: &mut HistoryCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
@@ -390,6 +392,7 @@ fn default_check_selection(
     for expectation in options.selected.clone() {
         match cached_result_for_expectation(
             root,
+            source,
             &expectation.agent,
             &expectation,
             history_cache,

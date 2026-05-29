@@ -1,4 +1,3 @@
-use crate::output::write_stdout_line;
 use serde_json::{json, Value};
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -48,6 +47,28 @@ pub(crate) fn evaluator_response_output_schema() -> Value {
     })
 }
 
+pub(crate) fn app_server_evaluator_response_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "answer": { "type": ["string", "null"] },
+            "error": { "type": ["string", "null"] },
+            "evidence": { "type": "string" },
+            "qScopeSuggestion": {
+                "type": ["array", "null"],
+                "minItems": 1,
+                "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\r\\n]*$"
+                }
+            }
+        },
+        "required": ["answer", "error", "evidence", "qScopeSuggestion"],
+        "additionalProperties": false
+    })
+}
+
 pub(crate) fn evaluator_turn_input(prompt: &str) -> Result<Value, String> {
     Ok(Value::String(prompt.to_string()))
 }
@@ -57,21 +78,4 @@ pub(crate) fn render_evaluator_turn_input(input: &Value) -> Result<String, Strin
         .as_str()
         .map(str::to_string)
         .ok_or_else(|| "evaluator task input must be a string".to_string())
-}
-
-pub(crate) fn print_help() -> Result<(), String> {
-    for line in [
-        "canon - AI linter for project expectations",
-        "",
-        "Usage:",
-        "  canon init",
-        "  canon hook install",
-        "  canon hook uninstall",
-        "  canon check [-c|--config <path>] [--all] [--ignore-cache] [--ignore-cooldown] [expectation selectors...]",
-        "  canon check -q <question> [-s|--scope <path>...]",
-        "  canon gate",
-    ] {
-        write_stdout_line(line)?;
-    }
-    Ok(())
 }

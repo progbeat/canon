@@ -115,9 +115,7 @@ fn finalize_parsed_answer(
 ) -> Result<FinalizedParsedAnswer, EvaluatorError> {
     let scope = sanitize_scope(enforced_scope, agent)?;
     let visible_tree_oid =
-        state
-            .visible_tree_oid_cache
-            .staged_visible_tree_oid(runtime.root, agent, &scope)?;
+        runtime.visible_tree_oid(&mut state.visible_tree_oid_cache, agent, &scope)?;
     let mut response = response;
     response.scope = scope.clone();
     response.q_scope_suggestion = response

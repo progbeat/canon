@@ -143,16 +143,85 @@ fn turn_start_request_includes_session_cwd() {
         Some("gpt-test"),
         "medium",
         Some(Path::new("/tmp/canon-check-snapshot")),
+        false,
     )
     .unwrap();
 
     assert_eq!(request["threadId"], json!("thread-1"));
     assert_eq!(request["cwd"], json!("/tmp/canon-check-snapshot"));
+    assert_eq!(request["environments"][0]["environmentId"], json!("local"));
+    assert_eq!(
+        request["environments"][0]["cwd"],
+        json!("/tmp/canon-check-snapshot")
+    );
     assert_eq!(request["model"], json!("gpt-test"));
     assert_eq!(request["effort"], json!("medium"));
     assert_eq!(request["input"][0]["type"], json!("text"));
     assert_eq!(request["input"][0]["text"], json!("Question?"));
-    assert!(request.get("outputSchema").is_none());
+    assert_eq!(request["outputSchema"]["type"], json!("object"));
+    assert_eq!(
+        request["outputSchema"]["required"],
+        json!(["answer", "error", "evidence", "qScopeSuggestion"])
+    );
+    assert_eq!(
+        request["outputSchema"]["properties"]["answer"]["type"],
+        json!(["string", "null"])
+    );
+    assert_eq!(
+        request["outputSchema"]["properties"]["qScopeSuggestion"]["type"],
+        json!(["array", "null"])
+    );
+    assert_eq!(
+        request["outputSchema"]["properties"]["qScopeSuggestion"]["minItems"],
+        json!(1)
+    );
+    assert!(request["outputSchema"]["oneOf"].is_null());
+}
+
+#[test]
+fn app_server_evaluator_response_normalization_removes_schema_nulls() {
+    assert_eq!(
+        normalize_app_server_evaluator_response(
+            r#"{"answer":"yes","error":null,"evidence":"ok","qScopeSuggestion":["."]}"#,
+        ),
+        r#"{"answer":"yes","evidence":"ok","qScopeSuggestion":["."]}"#
+    );
+    assert_eq!(
+        normalize_app_server_evaluator_response(
+            r#"{"answer":null,"error":"insufficient-evidence","evidence":"missing","qScopeSuggestion":null}"#,
+        ),
+        r#"{"error":"insufficient-evidence","evidence":"missing"}"#
+    );
+    assert_eq!(
+        normalize_app_server_evaluator_response(
+            r#"{"answer":"insufficient-evidence","error":"insufficient-evidence","evidence":"missing","qScopeSuggestion":["."]}"#,
+        ),
+        r#"{"error":"insufficient-evidence","evidence":"missing","qScopeSuggestion":["."]}"#
+    );
+    assert_eq!(
+        normalize_app_server_evaluator_response(
+            r#"{"answer":"yes","error":"insufficient-evidence","evidence":"ambiguous","qScopeSuggestion":["."]}"#,
+        ),
+        r#"{"answer":"yes","error":"insufficient-evidence","evidence":"ambiguous","qScopeSuggestion":["."]}"#
+    );
+}
+
+#[test]
+fn no_sandbox_turn_start_request_uses_app_server_sandbox_policy() {
+    let request = turn_start_request(
+        "thread-1",
+        "Question?",
+        None,
+        "medium",
+        Some(Path::new("/tmp/canon-check-snapshot")),
+        true,
+    )
+    .unwrap();
+
+    assert_eq!(
+        request["sandboxPolicy"],
+        json!({ "type": "dangerFullAccess" })
+    );
 }
 
 #[test]

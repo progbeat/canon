@@ -88,14 +88,19 @@ debug the same question under a narrower evaluator scope.
 ```sh
 canon check --ignore-cache
 canon check --ignore-cooldown
-canon check --all
+canon check --keep-going
+canon check --tree HEAD --against-tree HEAD~1
+canon check --no-sandbox
 canon check --config other-check.yml
 canon check -c other-check.yml
 ```
 
 Bypass same-tree cached results, bypass cooldown results, explicitly evaluate
-all configured expectations and continue after non-pass results, or use another
-config. By default, fresh evaluation stops after the first non-pass result.
+all configured expectations and continue after non-pass results, check an
+explicit Git tree with a separate comparison tree, mark an externally isolated
+runner as responsible for host sandboxing while Canon still materializes the
+staged snapshot, or use another config. By default, fresh evaluation stops
+after the first non-pass result.
 
 ```sh
 canon gate

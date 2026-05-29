@@ -1,24 +1,25 @@
 use crate::config_types::AgentConfig;
-use crate::git::{
-    staged_tracked_files, staged_tracked_files_for_pathspecs, GitBlobReader, StagedTrackedFile,
-};
+use crate::git::{GitBlobReader, StagedTrackedFile};
 use crate::hash::full_scope;
 use crate::platform;
-use crate::scope::{git_pathspecs_for_visible_scope, sanitize_scope};
+use crate::scope::{is_denied_path_bytes, path_bytes_in_scope, sanitize_scope};
 use crate::staged_worktree_paths::create_snapshot_root;
 #[cfg(test)]
 pub(crate) use crate::staged_worktree_paths::snapshot_parent_outside_worktree;
+use crate::tree_source::TreeSource;
 use crate::visible_tree_oid::VisibleTreeOidCache;
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 pub(crate) struct StagedWorktreeView {
     source_root: PathBuf,
+    source: TreeSource,
     materialization_root: PathBuf,
     lazy_root: PathBuf,
     scope_roots: PathBuf,
+    source_files: RefCell<Option<Vec<StagedTrackedFile>>>,
     unpacked_paths: RefCell<BTreeSet<Vec<u8>>>,
     blob_reader: RefCell<Option<GitBlobReader>>,
     next_scope_id: Cell<u64>,
@@ -31,11 +32,20 @@ impl StagedWorktreeView {
         StagedWorktreeView::apply_with_visible_tree_oid_cache(root, &mut visible_tree_oid_cache)
     }
 
+    #[cfg(test)]
     pub(crate) fn apply_with_visible_tree_oid_cache(
         root: &Path,
+        visible_tree_oid_cache: &mut VisibleTreeOidCache,
+    ) -> Result<StagedWorktreeView, String> {
+        StagedWorktreeView::apply_for_tree_source(root, TreeSource::Staged, visible_tree_oid_cache)
+    }
+
+    pub(crate) fn apply_for_tree_source(
+        root: &Path,
+        source: TreeSource,
         _visible_tree_oid_cache: &mut VisibleTreeOidCache,
     ) -> Result<StagedWorktreeView, String> {
-        let _staged_files = staged_tracked_files(root)?;
+        let _files = source.tracked_files(root)?;
         let materialization_root = create_snapshot_root(root)?;
         if let Err(err) = platform::create_private_dir(&materialization_root.join("lazy"))
             .and_then(|_| platform::create_private_dir(&materialization_root.join("scopes")))
@@ -49,9 +59,11 @@ impl StagedWorktreeView {
         }
         Ok(StagedWorktreeView {
             source_root: root.to_path_buf(),
+            source,
             lazy_root: materialization_root.join("lazy"),
             scope_roots: materialization_root.join("scopes"),
             materialization_root,
+            source_files: RefCell::new(None),
             unpacked_paths: RefCell::new(BTreeSet::new()),
             blob_reader: RefCell::new(None),
             next_scope_id: Cell::new(0),
@@ -90,44 +102,27 @@ impl StagedWorktreeView {
         agent: &AgentConfig,
         scope: &[String],
     ) -> Result<Vec<StagedTrackedFile>, String> {
-        let files = self.staged_files_in_visible_scope(agent, scope)?;
-        // The lazy spec iterates file_entries(git_tree). For evaluator
-        // materialization, those are Git entries whose object can be read as
-        // blob contents: regular files, executable files, and symlinks.
-        // Gitlinks point at commits, not blobs, so they are outside that set.
-        Ok(files
+        // The lazy hardlink policy is defined over file_entries(git_tree).
+        // Canon's TreeSource supplies that Git tree, whether it is the staged
+        // index tree or an explicit `--tree` revision. The materializer then
+        // applies visible-scope and ignore filters to blob-backed entries from
+        // that source tree.
+        Ok(self
+            .source_files()?
             .into_iter()
-            .filter(|file| file.is_file_entry_with_blob_contents())
+            .filter(|file| file.has_materializable_blob_contents())
+            .filter(|file| path_bytes_in_scope(&file.path, scope))
+            .filter(|file| !is_denied_path_bytes(agent, &file.path))
             .collect())
     }
 
-    fn staged_files_in_visible_scope(
-        &self,
-        agent: &AgentConfig,
-        scope: &[String],
-    ) -> Result<Vec<StagedTrackedFile>, String> {
-        if scope == full_scope() {
-            let pathspecs = git_pathspecs_for_visible_scope(agent, scope);
-            return staged_tracked_files_for_pathspecs(&self.source_root, &pathspecs);
+    fn source_files(&self) -> Result<Vec<StagedTrackedFile>, String> {
+        if let Some(files) = self.source_files.borrow().as_ref() {
+            return Ok(files.clone());
         }
-
-        let scoped_files = staged_tracked_files_for_pathspecs(&self.source_root, scope)?;
-        let full_visible_pathspecs = git_pathspecs_for_visible_scope(agent, &full_scope());
-        let full_visible_paths =
-            staged_tracked_files_for_pathspecs(&self.source_root, &full_visible_pathspecs)?
-                .into_iter()
-                .map(|file| file.path)
-                .collect::<HashSet<_>>();
-
-        // Glossary defines visible scope as the q-scope with configured ignore
-        // patterns applied last. Intersecting the Git-selected q-scope with the
-        // full visible tree keeps both halves as Git pathspec operations and
-        // avoids relying on `git ls-files <exact-file> :(exclude)<path>`, which
-        // can return an empty listing for exact file scopes.
-        Ok(scoped_files
-            .into_iter()
-            .filter(|file| full_visible_paths.contains(&file.path))
-            .collect())
+        let files = self.source.tracked_files(&self.source_root)?;
+        *self.source_files.borrow_mut() = Some(files.clone());
+        Ok(files)
     }
 
     fn unpack_missing_files(&self, files: &[StagedTrackedFile]) -> Result<(), String> {

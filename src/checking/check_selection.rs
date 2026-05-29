@@ -38,7 +38,7 @@ pub(crate) fn resolve_check_options_with_identities(
         non_selected,
         selectors_provided: !options.selectors.is_empty(),
         skipped,
-        check_all: options.check_all,
+        keep_going: options.keep_going,
         ignore_cache: options.ignore_cache,
         ignore_cooldown: options.ignore_cooldown,
         break_after_tokens: options.break_after_tokens,
@@ -57,32 +57,41 @@ fn parse_raw_check_options(args: &[OsString]) -> Result<RawCheckOptions, String>
 fn check_options_parser() -> Command {
     Command::new("check-options")
         .no_binary_name(true)
-        .disable_help_flag(true)
         .disable_version_flag(true)
 }
 
 pub(crate) fn add_check_option_args(command: Command) -> Command {
     command
-        .arg(Arg::new("all").long("all").action(ArgAction::SetTrue))
+        .arg(
+            Arg::new("keep_going")
+                .long("keep-going")
+                .alias("all")
+                .help("Continue after failures")
+                .action(ArgAction::SetTrue),
+        )
         .arg(
             Arg::new("ignore_cache")
                 .long("ignore-cache")
+                .help("Re-evaluate expectations with cached results")
                 .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("ignore_cooldown")
                 .long("ignore-cooldown")
+                .help("Re-evaluate expectations in cooldown")
                 .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("break_after_tokens")
                 .long("break-after-tokens")
+                .help("Stop after this many evaluator tokens")
                 .num_args(1)
                 .allow_hyphen_values(true)
                 .value_parser(OsStringValueParser::new()),
         )
         .arg(
             Arg::new("selectors")
+                .help("Expectation selectors: ID prefixes or full expectation IDs")
                 .num_args(0..)
                 .action(ArgAction::Append)
                 .value_parser(OsStringValueParser::new()),
@@ -102,7 +111,7 @@ pub(crate) fn raw_check_options_from_matches(
         None => None,
     };
     Ok(RawCheckOptions {
-        check_all: matches.get_flag("all"),
+        keep_going: matches.get_flag("keep_going"),
         ignore_cache: matches.get_flag("ignore_cache"),
         ignore_cooldown: matches.get_flag("ignore_cooldown"),
         break_after_tokens,

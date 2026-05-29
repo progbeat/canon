@@ -9,7 +9,7 @@ use crate::app_server_protocol::{
     app_server_failure_from_value, app_server_message, append_completed_agent_text,
     context_compaction_event, token_usage_update, turn_idle_timed_out, turn_started_id, turn_text,
 };
-use crate::app_server_runner::turn_start_request;
+use crate::app_server_runner::{normalize_app_server_evaluator_response, turn_start_request};
 use crate::app_server_usage::{
     carryover_tokens, record_context_compaction_event, record_token_usage_update,
     thread_reuse_policy_should_retire,
@@ -18,15 +18,12 @@ use crate::check::run_check_with_runner;
 use crate::check_command::{
     check_command_writes_agent_message, prepare_check_execution, run_check_command,
 };
-use crate::check_command_args::parse_check_command_args;
+use crate::check_command_args::{check_help_requested, parse_check_command_args};
 use crate::check_command_finish::{
     check_agent_message, check_agent_messages, pass_improvement_notice, staged_pass_notice_count,
     staged_passes_failed_at_head_count,
 };
-use crate::check_config::{
-    parse_check_config_content, parse_check_config_content_with_root,
-    parse_staged_check_config_content_with_root,
-};
+use crate::check_config::{parse_check_config_content, parse_check_config_content_with_root};
 use crate::check_errors::error_record_from_interrogation_error;
 use crate::check_generator_paths::{expand_filesystem_generator_paths, expand_generator_paths};
 use crate::check_interrogation::{
@@ -86,8 +83,9 @@ use crate::evaluator::{
     evaluator_response_output_schema, evaluator_turn_input, render_evaluator_turn_input,
 };
 use crate::evaluator_config::{
-    app_server_args, app_server_model_key, app_server_startup_filesystem_arg,
-    evaluator_model_catalog_json, evaluator_thread_config, evaluator_working_tree_permissions,
+    app_server_args, app_server_model_key, app_server_startup_config_args_with_no_sandbox,
+    app_server_startup_filesystem_arg, evaluator_model_catalog_json, evaluator_thread_config,
+    evaluator_thread_config_with_no_sandbox, evaluator_working_tree_permissions,
     thread_reuse_carryover_token_target_arg, toml_string,
 };
 use crate::evaluator_prompt::{developer_instructions, EVALUATOR_BASE_INSTRUCTIONS};
@@ -169,6 +167,7 @@ use crate::time::{format_record_timestamp, parse_record_timestamp, unix_timestam
 use crate::token_usage_types::{
     reference_token_cost, ContextCompactionEvent, EvaluatorTurnUsage, TokenUsage, TokenUsageUpdate,
 };
+use crate::tree_source::TreeSource;
 #[cfg(unix)]
 use crate::visible_tree_oid::staged_scope_entries;
 use crate::visible_tree_oid::{

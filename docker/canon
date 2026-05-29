@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+image="${CANON_DOCKER_IMAGE:-canon:local}"
+project_root="$(git rev-parse --path-format=absolute --show-toplevel)"
+git_dir="${project_root}/.git"
+canon_state="${git_dir}/canon"
+
+mkdir -p "${canon_state}"
+
+# Host-side trust boundary:
+# - project files are writable so `canon init` can create .canon/check.yml;
+# - Git metadata is read-only except Canon-owned persistent state;
+# - one scratch tmpfs holds auth, Git locks, and evaluator files.
+exec docker run --rm -i \
+  --user "$(id -u):$(id -g)" \
+  --read-only \
+  --tmpfs "/scratch:mode=1777" \
+  -v "${project_root}:/work:rw" \
+  -v "${git_dir}:/work/.git:ro" \
+  -v "${canon_state}:/work/.git/canon:rw" \
+  --mount "type=bind,src=${CODEX_HOME:-$HOME/.codex},dst=/codex,readonly" \
+  "${image}" "$@"

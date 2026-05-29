@@ -78,7 +78,7 @@ fn check_options_accept_all_with_selected_selectors() {
     let config = parse_check_config(check_config_yaml()).unwrap();
     let default_options =
         parse_check_options(&config, &[test_selector(&config, "2").into()]).unwrap();
-    assert!(!default_options.check_all);
+    assert!(!default_options.keep_going);
     assert!(!default_options.ignore_cooldown);
     assert_eq!(default_options.break_after_tokens, None);
     assert_eq!(default_options.selected.len(), 1);
@@ -96,7 +96,7 @@ fn check_options_accept_all_with_selected_selectors() {
         ],
     )
     .unwrap();
-    assert!(all_options.check_all);
+    assert!(all_options.keep_going);
     assert!(all_options.ignore_cooldown);
     assert_eq!(all_options.break_after_tokens, Some(200000));
     assert_eq!(all_options.selected.len(), 1);

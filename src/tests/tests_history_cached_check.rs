@@ -287,7 +287,7 @@ expectations:
 }
 
 #[test]
-fn check_runner_all_runs_fresh_cooldown_pass() {
+fn check_runner_explicit_selector_runs_fresh_cooldown_pass() {
     let root = git_project("check-all-cooldown-runs");
     let config = parse_check_config(
         r#"
@@ -303,7 +303,7 @@ expectations:
 "#,
     )
     .unwrap();
-    let options = check_options(&config, &[], false, false);
+    let options = check_options(&config, &["1"], false, false);
     let expectation = options.selected[0].clone();
     let mut record = expectation_record(
         &config.agent,

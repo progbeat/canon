@@ -13,11 +13,10 @@ pub(crate) struct StagedTrackedFile {
 }
 
 impl StagedTrackedFile {
-    pub(crate) fn is_file_entry_with_blob_contents(&self) -> bool {
-        // Git tree "file_entries" for evaluator materialization are entries
-        // whose object can be read as blob contents. Mode 120000 is a symlink
-        // entry in Git, and its blob contents are materialized as a regular
-        // file by the lazy hardlink policy.
+    pub(crate) fn has_materializable_blob_contents(&self) -> bool {
+        // The lazy materialization policy calls `read_blob` for each file
+        // entry. Regular files, executable files, and Git symlink entries are
+        // all stored as blobs and can be materialized as regular files.
         matches!(self.mode.as_str(), "100644" | "100755" | "120000")
     }
 }
@@ -66,19 +65,49 @@ pub(crate) fn head_tracked_files(root: &Path) -> Result<Option<Vec<StagedTracked
     if !git_head_tree_exists(root)? {
         return Ok(None);
     }
+    tree_tracked_files(root, "HEAD").map(Some)
+}
+
+pub(crate) fn resolve_tree_oid(root: &Path, treeish: &str) -> Result<String, String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
-        .args(["ls-tree", "-rz", "--full-tree", "HEAD"])
+        .args([
+            "rev-parse",
+            "--verify",
+            "-q",
+            &format!("{treeish}^{{tree}}"),
+        ])
+        .output()
+        .map_err(|err| format!("failed to run git rev-parse: {}", err))?;
+    if !output.status.success() {
+        return Err(format!(
+            "not a valid Git tree ({})",
+            command_output_trimmed(&output.stderr, "git rev-parse stderr")
+                .unwrap_or("git rev-parse failed")
+        ));
+    }
+    command_output_trimmed(&output.stdout, "git rev-parse stdout").map(str::to_string)
+}
+
+pub(crate) fn tree_tracked_files(
+    root: &Path,
+    treeish: &str,
+) -> Result<Vec<StagedTrackedFile>, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-tree", "-rz", "--full-tree", "-r", treeish])
         .output()
         .map_err(|err| format!("failed to run git ls-tree: {}", err))?;
     if !output.status.success() {
         return Err(format!(
-            "failed to inspect HEAD tree: {}",
+            "failed to inspect Git tree {}: {}",
+            treeish,
             command_output_trimmed(&output.stderr, "git ls-tree stderr")?
         ));
     }
-    parse_head_tracked_files(&output.stdout).map(Some)
+    parse_tree_tracked_files(&output.stdout)
 }
 
 fn tracked_files_for_pathspecs(
@@ -116,18 +145,18 @@ fn tracked_files_for_pathspecs(
     Ok(files)
 }
 
-fn parse_head_tracked_files(stdout: &[u8]) -> Result<Vec<StagedTrackedFile>, String> {
+fn parse_tree_tracked_files(stdout: &[u8]) -> Result<Vec<StagedTrackedFile>, String> {
     let mut files = Vec::new();
     for entry in stdout.split(|byte| *byte == 0) {
         if entry.is_empty() {
             continue;
         }
-        files.push(parse_head_tracked_file(entry)?);
+        files.push(parse_tree_tracked_file(entry)?);
     }
     Ok(files)
 }
 
-fn parse_head_tracked_file(entry: &[u8]) -> Result<StagedTrackedFile, String> {
+fn parse_tree_tracked_file(entry: &[u8]) -> Result<StagedTrackedFile, String> {
     let tab = entry
         .iter()
         .position(|byte| *byte == b'\t')

@@ -23,11 +23,11 @@ fn repo_inspection_cache_reuses_generator_path_expansion() {
     let mut cache = RepoInspectionCache::new();
 
     let first = cache
-        .generator_paths(&root, Path::new("check.yml"), "specs/*.md", false)
+        .filesystem_generator_paths(&root, Path::new("check.yml"), "specs/*.md")
         .unwrap();
     fs::write(root.join("specs/b.md"), "# B\n").unwrap();
     let second = cache
-        .generator_paths(&root, Path::new("check.yml"), "specs/*.md", false)
+        .filesystem_generator_paths(&root, Path::new("check.yml"), "specs/*.md")
         .unwrap();
 
     assert_eq!(first, vec!["specs/a.md".to_string()]);

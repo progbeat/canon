@@ -1,6 +1,6 @@
 use crate::app_server::AppServerRunner;
 use crate::config_types::AgentConfig;
-use crate::evaluator_config::app_server_args;
+use crate::evaluator_config::app_server_args_with_no_sandbox;
 use crate::evaluator_types::EvaluatorError;
 use crate::fs_util::ensure_dir_without_symlinks;
 use crate::git::resolve_git_path;
@@ -92,9 +92,15 @@ impl AppServerRunner {
         root: &Path,
         load_plugins: bool,
         agent: &AgentConfig,
+        no_sandbox: bool,
     ) -> Result<AppServerRunner, EvaluatorError> {
         let mut command = Command::new("codex");
-        command.args(app_server_args(root, load_plugins, agent)?);
+        command.args(app_server_args_with_no_sandbox(
+            root,
+            load_plugins,
+            agent,
+            no_sandbox,
+        )?);
         let codex_home = if load_plugins {
             None
         } else {
@@ -140,6 +146,7 @@ impl AppServerRunner {
             last_turn_usage: None,
             retired_sessions: Default::default(),
             session_cwds: BTreeMap::new(),
+            no_sandbox,
         };
         runner.send_request(
             "initialize",

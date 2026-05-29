@@ -66,6 +66,71 @@ fn staged_worktree_view_materializes_staged_snapshot_without_touching_worktree()
 }
 
 #[test]
+fn tree_worktree_view_materializes_explicit_git_tree_not_staged_changes() {
+    let root = git_project("tree-snapshot-head");
+    commit_all(&root, "initial");
+    fs::write(root.join("README.md"), "staged\n").unwrap();
+    Command::new("git")
+        .arg("add")
+        .arg("README.md")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    fs::write(root.join("README.md"), "worktree\n").unwrap();
+    let source = TreeSource::resolve(&root, "HEAD", "--tree").unwrap();
+    let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
+
+    let staged_view =
+        StagedWorktreeView::apply_for_tree_source(&root, source, &mut visible_tree_oid_cache)
+            .unwrap();
+    let scope_root = staged_view
+        .materialize_evaluator_scope(&empty_test_agent(), &full_scope())
+        .unwrap();
+
+    assert_eq!(
+        fs::read_to_string(scope_root.join("README.md")).unwrap(),
+        "hello"
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("README.md")).unwrap(),
+        "worktree\n"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn visible_tree_oid_for_explicit_git_tree_matches_tree_oid() {
+    let root = git_project("tree-visible-oid-head");
+    commit_all(&root, "initial");
+    fs::write(root.join("README.md"), "staged\n").unwrap();
+    Command::new("git")
+        .arg("add")
+        .arg("README.md")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let head_tree = command_output_trimmed(
+        &Command::new("git")
+            .args(["rev-parse", "HEAD^{tree}"])
+            .current_dir(&root)
+            .output()
+            .unwrap()
+            .stdout,
+        "git rev-parse stdout",
+    )
+    .unwrap()
+    .to_string();
+    let source = TreeSource::resolve(&root, "HEAD", "--tree").unwrap();
+
+    let oid = VisibleTreeOidCache::new()
+        .visible_tree_oid(&root, &source, &empty_test_agent(), &full_scope())
+        .unwrap();
+
+    assert_eq!(oid, head_tree);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn staged_worktree_view_removes_evaluator_denied_paths_from_snapshot() {
     let root = git_project("staged-snapshot-evaluator-deny");
     write_check_config(&root);

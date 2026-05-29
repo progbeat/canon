@@ -172,7 +172,7 @@ fn query_should_verify_narrowing(
         return Ok(false);
     }
     q_scope_suggestion_should_get_independent_verification(
-        runtime.root,
+        runtime,
         &runtime.config.agent,
         answer.q_scope_suggestion.as_deref(),
         enforced_scope,

@@ -217,7 +217,7 @@ pub(crate) fn check_options(
         non_selected,
         selectors_provided: !selectors.is_empty(),
         skipped,
-        check_all: !stop_after_non_pass,
+        keep_going: !stop_after_non_pass,
         ignore_cache,
         ignore_cooldown: false,
         break_after_tokens: None,

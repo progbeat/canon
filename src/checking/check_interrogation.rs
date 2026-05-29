@@ -36,7 +36,12 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
 ) -> Result<ParsedTurnResponse, EvaluatorError> {
     let visible_tree_oid = state
         .visible_tree_oid_cache
-        .staged_visible_tree_oid(runtime.root, request.agent, request.enforced_scope)
+        .visible_tree_oid(
+            runtime.root,
+            runtime.tree_source,
+            request.agent,
+            request.enforced_scope,
+        )
         .map_err(EvaluatorError::message)?;
     let session_key = evaluator_thread_reuse_key(
         request.agent,

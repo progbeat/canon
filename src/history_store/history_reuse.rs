@@ -5,6 +5,7 @@ use crate::config_types::AgentConfig;
 use crate::history::HistoryCache;
 use crate::scope::sanitize_scope_for_hash;
 use crate::time::parse_record_timestamp;
+use crate::tree_source::TreeSource;
 use crate::visible_tree_oid::VisibleTreeOidCache;
 use std::path::Path;
 
@@ -18,6 +19,7 @@ pub(crate) fn same_tree_history_record(
     let mut history_cache = HistoryCache::new();
     same_tree_history_record_with_cache(
         root,
+        &TreeSource::Staged,
         agent,
         expectation,
         &mut history_cache,
@@ -27,6 +29,7 @@ pub(crate) fn same_tree_history_record(
 
 pub(crate) fn same_tree_history_record_with_cache(
     root: &Path,
+    source: &TreeSource,
     agent: &AgentConfig,
     expectation: &SelectedExpectation,
     history_cache: &mut HistoryCache,
@@ -34,7 +37,7 @@ pub(crate) fn same_tree_history_record_with_cache(
 ) -> Result<Option<CheckRecord>, String> {
     latest_history_record_matching_visible_tree_oid(root, expectation, history_cache, |scope| {
         visible_tree_oid_cache
-            .staged_visible_tree_oid(root, agent, scope)
+            .visible_tree_oid(root, source, agent, scope)
             .map(Some)
     })
 }

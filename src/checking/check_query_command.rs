@@ -1,4 +1,4 @@
-use crate::check_command::prepare_check_execution;
+use crate::check_command::{prepare_check_execution, PrepareCheckExecutionOptions};
 use crate::check_interrogation_state::{CheckRuntime, InterrogationRunState};
 use crate::check_output::write_query_output;
 use crate::check_query::run_query_with_runner;
@@ -9,6 +9,7 @@ use crate::config_types::CheckConfig;
 use crate::hash::full_scope;
 use crate::logging::DiagnosticLogWriter;
 use crate::scope::sanitize_scope;
+use crate::tree_source::TreeSource;
 use crate::visible_tree_oid::VisibleTreeOidCache;
 use serde_json::json;
 use std::io;
@@ -19,6 +20,8 @@ pub(crate) fn run_check_query_command(
     config: &CheckConfig,
     question: &str,
     query_scope: &[String],
+    tree_source: &TreeSource,
+    no_sandbox: bool,
     mut diagnostic_log: DiagnosticLogWriter,
 ) -> Result<(), String> {
     // `canon check -q` runs one ad-hoc query, not the selected-expectation loop
@@ -46,11 +49,16 @@ pub(crate) fn run_check_query_command(
         root,
         config,
         &mut diagnostic_log,
-        true,
-        1,
+        PrepareCheckExecutionOptions {
+            tree_source,
+            no_sandbox,
+            query: true,
+            errors_on_failure: 1,
+        },
         &mut visible_tree_oid_cache,
     )?;
-    let runtime = CheckRuntime::materialized(root, &execution.staged_view, config);
+    let runtime =
+        CheckRuntime::materialized(root, &execution.staged_view, &execution.tree_source, config);
     let mut interrogation_run_state = InterrogationRunState::new();
     let result = run_query_with_runner(
         &runtime,

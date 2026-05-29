@@ -380,9 +380,9 @@ pub(crate) struct CheckOptions {
     #[cfg_attr(not(test), allow(dead_code))]
     // Command-selector misses before check-only work-saving filters.
     pub(crate) skipped: usize,
-    // `--all` treats the collected expectations as an explicit fresh
-    // evaluation request and continues after non-pass results.
-    pub(crate) check_all: bool,
+    // `--keep-going` continues after non-pass results among selected
+    // expectations; it does not bypass default cache-based selection.
+    pub(crate) keep_going: bool,
     pub(crate) ignore_cache: bool,
     pub(crate) ignore_cooldown: bool,
     pub(crate) break_after_tokens: Option<u64>,
@@ -390,7 +390,7 @@ pub(crate) struct CheckOptions {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RawCheckOptions {
-    pub(crate) check_all: bool,
+    pub(crate) keep_going: bool,
     pub(crate) ignore_cache: bool,
     pub(crate) ignore_cooldown: bool,
     pub(crate) break_after_tokens: Option<u64>,
@@ -399,7 +399,7 @@ pub(crate) struct RawCheckOptions {
 
 impl RawCheckOptions {
     pub(crate) fn is_empty(&self) -> bool {
-        !self.check_all
+        !self.keep_going
             && !self.ignore_cache
             && !self.ignore_cooldown
             && self.break_after_tokens.is_none()
@@ -409,6 +409,10 @@ impl RawCheckOptions {
 
 pub(crate) struct CheckCommandArgs {
     pub(crate) config_path: PathBuf,
+    pub(crate) tree: String,
+    pub(crate) against_tree: String,
+    pub(crate) against_tree_explicit: bool,
+    pub(crate) no_sandbox: bool,
     pub(crate) query: Option<String>,
     pub(crate) query_scope: Vec<String>,
     pub(crate) options: RawCheckOptions,

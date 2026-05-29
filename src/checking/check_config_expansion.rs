@@ -5,6 +5,7 @@ use crate::config_types::{
     RawExpectationSettings, RawGeneratorExpectation, RawIncludeExpectation, RawPresetConfig,
 };
 use crate::repo_inspection::RepoInspectionCache;
+use crate::tree_source::TreeSource;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -167,19 +168,19 @@ fn apply_expectation_settings(
     normalize_agent_config(agent.clone()).map(|normalized| *agent = normalized)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) enum CheckConfigSource {
-    Staged,
+    Tree(TreeSource),
     #[cfg(test)]
     Worktree,
 }
 
 impl CheckConfigSource {
-    fn is_staged(self) -> bool {
+    fn tree_source(&self) -> Option<&TreeSource> {
         match self {
-            CheckConfigSource::Staged => true,
+            CheckConfigSource::Tree(source) => Some(source),
             #[cfg(test)]
-            CheckConfigSource::Worktree => false,
+            CheckConfigSource::Worktree => None,
         }
     }
 }
@@ -287,10 +288,16 @@ impl RawExpectationExpansion<'_> {
                 item_number, label
             )
         })?;
-        let files = match self.cache.as_deref_mut() {
-            Some(cache) => cache.generator_paths(root, config_path, path, self.source.is_staged()),
-            None => expand_generator_paths(root, config_path, path, self.source.is_staged()),
-        }?;
+        let files = if let Some(source) = self.source.tree_source().cloned() {
+            match self.cache.as_deref_mut() {
+                Some(cache) => cache.generator_paths(root, config_path, path, &source)?,
+                None => {
+                    return Err("tree config expansion requires RepoInspectionCache".to_string())
+                }
+            }
+        } else {
+            expand_generator_paths(root, config_path, path, false)?
+        };
         Ok(files)
     }
 
@@ -299,8 +306,8 @@ impl RawExpectationExpansion<'_> {
             .root
             .ok_or_else(|| "config expansion has no project root".to_string())?;
         match self.source {
-            CheckConfigSource::Staged => match self.cache.as_deref_mut() {
-                Some(cache) => cache.staged_file_content(root, file),
+            CheckConfigSource::Tree(ref source) => match self.cache.as_deref_mut() {
+                Some(cache) => cache.tree_file_content(root, source, file),
                 None => Err("staged config expansion requires RepoInspectionCache".to_string()),
             },
             #[cfg(test)]

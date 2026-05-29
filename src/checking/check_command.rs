@@ -19,8 +19,9 @@ use crate::logging::DiagnosticLogWriter;
 use crate::platform::{install_check_signal_handlers, reset_check_interrupted};
 use crate::repo_inspection::RepoInspectionCache;
 use crate::staged_worktree::StagedWorktreeView;
+use crate::tree_source::TreeSource;
 use crate::visible_tree_oid::VisibleTreeOidCache;
-use crate::CANON_CACHE_DIR_GIT_PATH;
+use crate::{CANON_CACHE_DIR_GIT_PATH, CHECK_PATH};
 use serde_json::json;
 use std::ffi::OsString;
 use std::io::{self, Write};
@@ -31,14 +32,24 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     let started = Instant::now();
     install_check_signal_handlers().map_err(CommandError::from)?;
     reset_check_interrupted();
-    let write_agent_message = check_command_writes_agent_message(args);
     let command = parse_check_command_args(args)?;
+    let checked_tree = TreeSource::resolve(root, &command.tree, "--tree")?;
+    let against_tree = if command.against_tree_explicit {
+        TreeSource::resolve(root, &command.against_tree, "--against-tree")?
+    } else {
+        TreeSource::Git {
+            treeish: command.against_tree.clone(),
+            tree_oid: String::new(),
+        }
+    };
+    let write_agent_message =
+        check_command_writes_agent_message(&command.config_path, &checked_tree, &against_tree);
     let mut repo_cache = RepoInspectionCache::new();
     // Runtime logs are canon-owned state under `${CANON_STATE_DIR}/logs`, not
     // project working-tree content. They are created before snapshot evaluation
     // and are denied to evaluator sessions by the mandatory ignore policy.
     let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
-    let config = match repo_cache.load_check_config(root, &command.config_path) {
+    let config = match repo_cache.load_check_config(root, &command.config_path, &checked_tree) {
         Ok(config) => config,
         Err(err) => {
             return fail_check_before_selection(
@@ -84,6 +95,8 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             &config,
             question,
             &command.query_scope,
+            &checked_tree,
+            command.no_sandbox,
             diagnostic_log,
         )
         .map_err(CommandError::from);
@@ -111,8 +124,12 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         root,
         &config,
         &mut diagnostic_log,
-        false,
-        0,
+        PrepareCheckExecutionOptions {
+            tree_source: &checked_tree,
+            no_sandbox: command.no_sandbox,
+            query: false,
+            errors_on_failure: 0,
+        },
         &mut check_caches.visible_tree_oid,
     )
     .map_err(CommandError::from)?;
@@ -141,7 +158,12 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     // selected expectation; that helper renders the public human-readable
     // check-output record (`P. OK`, `P. FAILED`, or `P. ERROR`) and flushes it
     // before the next expectation starts.
-    let runtime = CheckRuntime::materialized(root, &execution.staged_view, &config);
+    let runtime = CheckRuntime::materialized(
+        root,
+        &execution.staged_view,
+        &execution.tree_source,
+        &config,
+    );
     // This expectation loop computes the final `CheckRunReport`. It writes and
     // flushes each per-expectation stdout record inside the loop; the public
     // trailer does not exist until the report and final token usage exist.
@@ -194,8 +216,14 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     }
 }
 
-pub(crate) fn check_command_writes_agent_message(args: &[OsString]) -> bool {
-    args.is_empty()
+pub(crate) fn check_command_writes_agent_message(
+    config_path: &Path,
+    checked_tree: &TreeSource,
+    against_tree: &TreeSource,
+) -> bool {
+    config_path == Path::new(CHECK_PATH)
+        && checked_tree.is_default_checked_tree()
+        && against_tree.is_default_against_tree()
 }
 
 struct CompletedCheckRun {
@@ -253,7 +281,15 @@ fn write_check_error_finish_event(
 
 pub(crate) struct PreparedCheckExecution {
     pub(crate) staged_view: StagedWorktreeView,
+    pub(crate) tree_source: TreeSource,
     pub(crate) runner: LazyAppServerRunner,
+}
+
+pub(crate) struct PrepareCheckExecutionOptions<'a> {
+    pub(crate) tree_source: &'a TreeSource,
+    pub(crate) no_sandbox: bool,
+    pub(crate) query: bool,
+    pub(crate) errors_on_failure: usize,
 }
 
 fn write_check_trailer(
@@ -275,28 +311,41 @@ pub(crate) fn prepare_check_execution(
     root: &Path,
     config: &CheckConfig,
     diagnostic_log: &mut DiagnosticLogWriter,
-    query: bool,
-    errors_on_failure: usize,
+    options: PrepareCheckExecutionOptions<'_>,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<PreparedCheckExecution, String> {
     // Prepare a scope materializer outside the real working tree so evaluator
     // sessions cannot observe unstaged, untracked, or non-visible project
     // content.
-    let staged_view =
-        match StagedWorktreeView::apply_with_visible_tree_oid_cache(root, visible_tree_oid_cache) {
-            Ok(staged_view) => staged_view,
-            Err(err) => {
-                write_prepare_check_failure(diagnostic_log, query, errors_on_failure, &err)?;
-                return Err(err);
-            }
-        };
+    let staged_view = match StagedWorktreeView::apply_for_tree_source(
+        root,
+        options.tree_source.clone(),
+        visible_tree_oid_cache,
+    ) {
+        Ok(staged_view) => staged_view,
+        Err(err) => {
+            write_prepare_check_failure(
+                diagnostic_log,
+                options.query,
+                options.errors_on_failure,
+                &err,
+            )?;
+            return Err(err);
+        }
+    };
     // The app-server starts from the real project root so Canon-owned runtime
     // state and model catalog config stay under that repository's `.git/canon`.
     // Evaluator sessions get a materialized visible tree as `thread/start.cwd` in
     // `check_interrogation::start_thread_session`.
-    let runner = LazyAppServerRunner::new(root, check_config_loads_plugins(config), &config.agent);
+    let runner = LazyAppServerRunner::new(
+        root,
+        check_config_loads_plugins(config),
+        &config.agent,
+        options.no_sandbox,
+    );
     Ok(PreparedCheckExecution {
         staged_view,
+        tree_source: options.tree_source.clone(),
         runner,
     })
 }

@@ -322,6 +322,7 @@ fn append_current_history_record_rejects_non_current_visible_tree_oid() {
 
     let err = append_current_history_record_with_cache(
         &root,
+        &TreeSource::Staged,
         &expectation,
         &record,
         &mut history_cache,

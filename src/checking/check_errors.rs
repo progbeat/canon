@@ -1,18 +1,18 @@
+use crate::check_interrogation_state::CheckRuntime;
 use crate::check_types::{CheckRecord, CheckRecordOutcome, CheckResult, SelectedExpectation};
 use crate::config_types::AgentConfig;
 use crate::visible_tree_oid::VisibleTreeOidCache;
 use crate::ERROR_UNPARSABLE;
-use std::path::Path;
 
 pub(crate) fn error_record_from_interrogation_error(
-    root: &Path,
+    runtime: &CheckRuntime<'_>,
     agent: &AgentConfig,
     expectation: &SelectedExpectation,
     scope: &[String],
     error: &str,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<CheckRecord, String> {
-    let visible_tree_oid = visible_tree_oid_cache.staged_visible_tree_oid(root, agent, scope)?;
+    let visible_tree_oid = runtime.visible_tree_oid(visible_tree_oid_cache, agent, scope)?;
     CheckRecord::current_from_expectation(
         agent,
         expectation,

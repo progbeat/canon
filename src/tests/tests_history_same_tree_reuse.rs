@@ -105,6 +105,7 @@ fn reusable_history_record_cache_is_refreshed_after_append() {
 
     assert!(same_tree_history_record_with_cache(
         &root,
+        &TreeSource::Staged,
         &config.agent,
         &expectation,
         &mut history_cache,
@@ -124,6 +125,7 @@ fn reusable_history_record_cache_is_refreshed_after_append() {
 
     assert!(same_tree_history_record_with_cache(
         &root,
+        &TreeSource::Staged,
         &config.agent,
         &expectation,
         &mut history_cache,
@@ -155,6 +157,7 @@ fn reusable_history_record_with_cache_rechecks_current_visible_tree_oid() {
 
     assert!(same_tree_history_record_with_cache(
         &root,
+        &TreeSource::Staged,
         &config.agent,
         &expectation,
         &mut history_cache,
@@ -174,6 +177,7 @@ fn reusable_history_record_with_cache_rechecks_current_visible_tree_oid() {
 
     assert!(same_tree_history_record_with_cache(
         &root,
+        &TreeSource::Staged,
         &config.agent,
         &expectation,
         &mut history_cache,

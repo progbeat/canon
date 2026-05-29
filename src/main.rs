@@ -203,6 +203,8 @@ mod staged_worktree;
 mod staged_worktree_paths;
 mod time;
 mod token_usage_types;
+#[path = "git_runtime/tree_source.rs"]
+mod tree_source;
 #[path = "git_runtime/visible_tree_oid.rs"]
 mod visible_tree_oid;
 

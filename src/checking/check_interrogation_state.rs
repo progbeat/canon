@@ -8,9 +8,13 @@ use crate::history::HistoryCache;
 use crate::history_reuse::latest_stored_q_scope_with_cache;
 use crate::scope::effective_ignore_patterns;
 use crate::staged_worktree::StagedWorktreeView;
+use crate::tree_source::TreeSource;
 use crate::visible_tree_oid::VisibleTreeOidCache;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+
+#[cfg(test)]
+static STAGED_RUNTIME_TREE_SOURCE: TreeSource = TreeSource::Staged;
 
 pub(crate) fn should_retry_full_scope_after_restricted_response(
     record: &CheckRecord,
@@ -90,6 +94,7 @@ pub(crate) fn evaluator_thread_reuse_key(
 pub(crate) struct CheckRuntime<'a> {
     pub(crate) root: &'a Path,
     pub(crate) config: &'a CheckConfig,
+    pub(crate) tree_source: &'a TreeSource,
     session_roots: CheckSessionRoots<'a>,
 }
 
@@ -109,6 +114,7 @@ impl<'a> CheckRuntime<'a> {
         CheckRuntime {
             root,
             config,
+            tree_source: &STAGED_RUNTIME_TREE_SOURCE,
             session_roots: CheckSessionRoots::Fixed(snapshot_root),
         }
     }
@@ -116,13 +122,33 @@ impl<'a> CheckRuntime<'a> {
     pub(crate) fn materialized(
         root: &'a Path,
         staged_view: &'a StagedWorktreeView,
+        tree_source: &'a TreeSource,
         config: &'a CheckConfig,
     ) -> CheckRuntime<'a> {
         CheckRuntime {
             root,
             config,
+            tree_source,
             session_roots: CheckSessionRoots::Materialized(staged_view),
         }
+    }
+
+    pub(crate) fn visible_tree_oid(
+        &self,
+        cache: &mut VisibleTreeOidCache,
+        agent: &AgentConfig,
+        scope: &[String],
+    ) -> Result<String, String> {
+        cache.visible_tree_oid(self.root, self.tree_source, agent, scope)
+    }
+
+    pub(crate) fn visible_file_count(
+        &self,
+        cache: &mut VisibleTreeOidCache,
+        agent: &AgentConfig,
+        scope: &[String],
+    ) -> Result<usize, String> {
+        cache.visible_file_count(self.root, self.tree_source, agent, scope)
     }
 
     pub(crate) fn session_root_for_scope(

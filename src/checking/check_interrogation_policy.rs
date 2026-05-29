@@ -12,17 +12,14 @@ use crate::history_reuse::is_reusable_history_record;
 use crate::logging::DiagnosticLogWriter;
 use crate::scope::sanitize_scope;
 use crate::visible_tree_oid::VisibleTreeOidCache;
-use std::path::Path;
 
 pub(crate) struct InterrogationCall<'a> {
-    pub(crate) root: &'a Path,
     pub(crate) runtime: &'a CheckRuntime<'a>,
     pub(crate) expectation: &'a SelectedExpectation,
     pub(crate) scope: &'a [String],
 }
 
 pub(crate) struct ScopedInterrogation<'a> {
-    pub(crate) root: &'a Path,
     pub(crate) runtime: &'a CheckRuntime<'a>,
     pub(crate) expectation: &'a SelectedExpectation,
     pub(crate) enforced_scope: &'a mut Vec<String>,
@@ -31,7 +28,6 @@ pub(crate) struct ScopedInterrogation<'a> {
 impl<'a> ScopedInterrogation<'a> {
     fn call(&self) -> InterrogationCall<'_> {
         InterrogationCall {
-            root: self.root,
             runtime: self.runtime,
             expectation: self.expectation,
             scope: self.enforced_scope,
@@ -94,7 +90,7 @@ pub(crate) fn interrogate_or_error_record<R: EvaluatorRunner>(
         Ok(interrogation) => Ok(interrogation),
         Err(err) => Ok(InterrogationResult {
             record: error_record_from_interrogation_error(
-                call.root,
+                call.runtime,
                 &call.expectation.agent,
                 call.expectation,
                 call.scope,
@@ -123,7 +119,7 @@ pub(crate) fn turn_has_context_compaction(interrogation: &InterrogationResult) -
 }
 
 pub(crate) fn q_scope_suggestion_should_get_independent_verification(
-    root: &Path,
+    runtime: &CheckRuntime<'_>,
     agent: &AgentConfig,
     suggestion: Option<&[String]>,
     current_scope: &[String],
@@ -141,13 +137,11 @@ pub(crate) fn q_scope_suggestion_should_get_independent_verification(
         Ok(scope) => scope,
         Err(_) => return Ok(false),
     };
-    let current_count =
-        visible_tree_oid_cache.staged_visible_file_count(root, agent, current_scope)?;
+    let current_count = runtime.visible_file_count(visible_tree_oid_cache, agent, current_scope)?;
     if current_count == 0 {
         return Ok(false);
     }
-    let suggested_count =
-        visible_tree_oid_cache.staged_visible_file_count(root, agent, &suggestion)?;
+    let suggested_count = runtime.visible_file_count(visible_tree_oid_cache, agent, &suggestion)?;
     Ok(suggested_count.saturating_mul(4) <= current_count.saturating_mul(3))
 }
 

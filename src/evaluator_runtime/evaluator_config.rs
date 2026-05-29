@@ -38,18 +38,33 @@ const EVALUATOR_DISABLED_FEATURES: &[&str] = &[
     "workspace_dependencies",
 ];
 
+#[cfg(test)]
 pub(crate) fn evaluator_thread_config(
+    agent: &AgentConfig,
+    scope: &[String],
+    model: Option<&str>,
+    thinking: &str,
+    session_root: &Path,
+) -> Value {
+    evaluator_thread_config_with_no_sandbox(agent, scope, model, thinking, session_root, false)
+}
+
+pub(crate) fn evaluator_thread_config_with_no_sandbox(
     agent: &AgentConfig,
     _scope: &[String],
     model: Option<&str>,
     thinking: &str,
     session_root: &Path,
+    no_sandbox: bool,
 ) -> Value {
     // Scope and ignore filtering is enforced by the materialized evaluator
     // working tree. App-server permissions only sandbox that already-filtered
     // cwd, so they must not encode scoped project paths.
     let mut config = evaluator_base_config(FILESYSTEM_DENY, codex_reasoning_effort(thinking));
     add_evaluator_working_tree_permissions(&mut config, session_root);
+    if no_sandbox {
+        config["sandbox_mode"] = json!("danger-full-access");
+    }
     if let Some(model) = model.or_else(|| agent.models.first().map(String::as_str)) {
         config["model"] = Value::String(model.to_string());
     }
@@ -189,17 +204,29 @@ pub(crate) fn enabled_plugins_config(agent: &AgentConfig) -> Value {
     Value::Object(plugins)
 }
 
+#[cfg(test)]
 pub(crate) fn app_server_args(
     root: &Path,
     load_plugins: bool,
     agent: &AgentConfig,
+) -> Result<Vec<String>, String> {
+    app_server_args_with_no_sandbox(root, load_plugins, agent, false)
+}
+
+pub(crate) fn app_server_args_with_no_sandbox(
+    root: &Path,
+    load_plugins: bool,
+    agent: &AgentConfig,
+    no_sandbox: bool,
 ) -> Result<Vec<String>, String> {
     let mut args = vec!["app-server".to_string()];
     for feature in evaluator_disabled_app_server_features(load_plugins) {
         args.push("--disable".to_string());
         args.push(feature.to_string());
     }
-    args.extend(app_server_startup_config_args(root, agent)?);
+    args.extend(app_server_startup_config_args_with_no_sandbox(
+        root, agent, no_sandbox,
+    )?);
     args.push("--listen".to_string());
     args.push("stdio://".to_string());
     Ok(args)
@@ -215,12 +242,20 @@ fn evaluator_disabled_app_server_features(load_plugins: bool) -> Vec<&'static st
     features
 }
 
-pub(crate) fn app_server_startup_config_args(
+pub(crate) fn app_server_startup_config_args_with_no_sandbox(
     root: &Path,
     agent: &AgentConfig,
+    no_sandbox: bool,
 ) -> Result<Vec<String>, String> {
     let thread_reuse = thread_reuse_config(root)?;
     let mut args = Vec::new();
+    if no_sandbox {
+        // Docker supplies the outer isolation boundary. Keep Canon's
+        // permission profile below so evaluator tools are still confined to
+        // the materialized snapshot, while avoiding the host OS sandbox
+        // launcher that is unavailable in the container.
+        push_config_arg(&mut args, "sandbox_mode=\"danger-full-access\"");
+    }
     push_config_arg(&mut args, "default_permissions=\"canon_check\"");
     push_config_arg(&mut args, "history.persistence=\"none\"");
     if let Some(reasoning_effort) = codex_reasoning_effort(&agent.thinking) {

@@ -8,6 +8,7 @@ use crate::scope::{
     effective_ignore_patterns, git_pathspecs_for_visible_scope, is_denied_path_bytes,
     path_bytes_in_scope, sanitize_scope_for_hash,
 };
+use crate::tree_source::TreeSource;
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
 use std::collections::BTreeMap;
@@ -22,10 +23,13 @@ const HEX: &[u8; 16] = b"0123456789abcdef";
 const RAW_PATH_HEX_PREFIX: &str = "\0raw-path-hex:";
 
 type ScopeCacheKey = (PathBuf, Vec<String>, Vec<String>);
+type SourceScopeCacheKey = (PathBuf, String, Vec<String>, Vec<String>);
 
 #[derive(Default)]
 pub(crate) struct VisibleTreeOidCache {
     staged_tree_oids: BTreeMap<ScopeCacheKey, Option<String>>,
+    tree_source_oids: BTreeMap<SourceScopeCacheKey, String>,
+    tree_source_entries: BTreeMap<SourceScopeCacheKey, Vec<String>>,
     staged_entries: BTreeMap<ScopeCacheKey, Vec<String>>,
     staged_files: BTreeMap<PathBuf, Result<Vec<StagedTrackedFile>, String>>,
     staged_index_tree_oids: BTreeMap<PathBuf, Result<String, String>>,
@@ -49,6 +53,19 @@ impl VisibleTreeOidCache {
             .ok_or("failed to hash staged scope".to_string())
     }
 
+    pub(crate) fn visible_tree_oid(
+        &mut self,
+        root: &Path,
+        source: &TreeSource,
+        agent: &AgentConfig,
+        scope: &[String],
+    ) -> Result<String, String> {
+        match source {
+            TreeSource::Staged => self.staged_visible_tree_oid(root, agent, scope),
+            TreeSource::Git { .. } => self.git_tree_visible_tree_oid(root, source, agent, scope),
+        }
+    }
+
     pub(crate) fn staged_visible_file_count(
         &mut self,
         root: &Path,
@@ -61,6 +78,26 @@ impl VisibleTreeOidCache {
             .iter()
             .filter(|entry| !scope_entry_is_tree(entry))
             .count())
+    }
+
+    pub(crate) fn visible_file_count(
+        &mut self,
+        root: &Path,
+        source: &TreeSource,
+        agent: &AgentConfig,
+        scope: &[String],
+    ) -> Result<usize, String> {
+        match source {
+            TreeSource::Staged => self.staged_visible_file_count(root, agent, scope),
+            TreeSource::Git { .. } => {
+                let scope = sanitize_scope_for_hash(scope)?;
+                let entries = self.git_tree_visible_scope_entries(root, source, agent, &scope)?;
+                Ok(entries
+                    .iter()
+                    .filter(|entry| !scope_entry_is_tree(entry))
+                    .count())
+            }
+        }
     }
 
     fn staged_visible_tree_oid_option(
@@ -88,6 +125,43 @@ impl VisibleTreeOidCache {
         Ok(hash)
     }
 
+    fn git_tree_visible_tree_oid(
+        &mut self,
+        root: &Path,
+        source: &TreeSource,
+        agent: &AgentConfig,
+        scope: &[String],
+    ) -> Result<String, String> {
+        let scope = sanitize_scope_for_hash(scope)?;
+        let key = source_scope_cache_key(root, source, agent, &scope);
+        if let Some(hash) = self.tree_source_oids.get(&key) {
+            return Ok(hash.clone());
+        }
+        let visible_entries = self.git_tree_visible_scope_entries(root, source, agent, &scope)?;
+        let hash =
+            visible_tree_oid_from_entries(&visible_entries, self.object_hash_algorithm(root)?)?;
+        self.tree_source_oids.insert(key, hash.clone());
+        Ok(hash)
+    }
+
+    fn git_tree_visible_scope_entries(
+        &mut self,
+        root: &Path,
+        source: &TreeSource,
+        agent: &AgentConfig,
+        scope: &[String],
+    ) -> Result<Vec<String>, String> {
+        let key = source_scope_cache_key(root, source, agent, scope);
+        if let Some(entries) = self.tree_source_entries.get(&key) {
+            return Ok(entries.clone());
+        }
+        let visible_files = source.visible_files(root, agent, scope)?;
+        let visible_files = visible_files.iter().collect::<Vec<_>>();
+        let entries = tracked_files_scope_entries(&visible_files);
+        self.tree_source_entries.insert(key, entries.clone());
+        Ok(entries)
+    }
+
     fn staged_visible_scope_entries(
         &mut self,
         root: &Path,
@@ -105,7 +179,7 @@ impl VisibleTreeOidCache {
         }
         let visible_files = files
             .iter()
-            .filter(|file| file.is_file_entry_with_blob_contents())
+            .filter(|file| file.has_materializable_blob_contents())
             .filter(|file| !is_denied_path_bytes(agent, &file.path))
             .collect::<Vec<_>>();
         let entries = tracked_files_scope_entries(&visible_files);
@@ -252,6 +326,23 @@ fn scope_cache_key(root: &Path, agent: &AgentConfig, scope: &[String]) -> ScopeC
     deny_patterns.sort();
     deny_patterns.dedup();
     (root.to_path_buf(), scope.to_vec(), deny_patterns)
+}
+
+fn source_scope_cache_key(
+    root: &Path,
+    source: &TreeSource,
+    agent: &AgentConfig,
+    scope: &[String],
+) -> SourceScopeCacheKey {
+    let mut deny_patterns = effective_ignore_patterns(agent);
+    deny_patterns.sort();
+    deny_patterns.dedup();
+    (
+        root.to_path_buf(),
+        source.cache_key(),
+        scope.to_vec(),
+        deny_patterns,
+    )
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@ use crate::history_reuse::{
     CachedHistoryRecord,
 };
 use crate::logging::DiagnosticLogWriter;
+use crate::tree_source::TreeSource;
 use crate::visible_tree_oid::VisibleTreeOidCache;
 use serde_json::json;
 use std::path::Path;
@@ -29,6 +30,7 @@ pub(crate) struct CachedResultLookup {
 
 pub(crate) fn cached_result_for_expectation(
     root: &Path,
+    source: &TreeSource,
     agent: &AgentConfig,
     expectation: &SelectedExpectation,
     history_cache: &mut HistoryCache,
@@ -38,6 +40,7 @@ pub(crate) fn cached_result_for_expectation(
     let same_tree = if lookup.include_same_tree {
         same_tree_history_record_with_cache(
             root,
+            source,
             agent,
             expectation,
             history_cache,

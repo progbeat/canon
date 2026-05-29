@@ -2,17 +2,21 @@ use crate::app_server::{AppServerRunner, LazyAppServerRunner};
 use crate::app_server_transport::AppServerTurnRequest;
 use crate::check_validation::codex_reasoning_effort;
 use crate::config_types::AgentConfig;
-use crate::evaluator::{evaluator_turn_input, render_evaluator_turn_input};
-use crate::evaluator_config::evaluator_thread_config;
+use crate::evaluator::{
+    app_server_evaluator_response_output_schema, evaluator_turn_input, render_evaluator_turn_input,
+};
+use crate::evaluator_config::evaluator_thread_config_with_no_sandbox;
 use crate::evaluator_prompt::EVALUATOR_BASE_INSTRUCTIONS;
 use crate::evaluator_turn::is_model_technical_failure;
 use crate::evaluator_types::{EvaluatorError, EvaluatorRunner};
 use crate::token_usage_types::{EvaluatorTurnUsage, TokenUsage};
+use crate::{ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION, ERROR_UNPARSABLE};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
 const EVALUATOR_SESSION_START_SOURCE: &str = "clear";
+const LOCAL_ENVIRONMENT_ID: &str = "local";
 
 impl LazyAppServerRunner {
     pub(crate) fn token_usage(&self) -> Option<TokenUsage> {
@@ -136,7 +140,16 @@ impl EvaluatorRunner for AppServerRunner {
             base_instructions: EVALUATOR_BASE_INSTRUCTIONS,
             developer_instructions: instructions,
             approval_policy: "never",
-            config: evaluator_thread_config(agent, scope, model, thinking, session_cwd),
+            sandbox: self.no_sandbox.then_some("danger-full-access"),
+            environments: vec![local_environment_params(session_cwd)],
+            config: evaluator_thread_config_with_no_sandbox(
+                agent,
+                scope,
+                model,
+                thinking,
+                session_cwd,
+                self.no_sandbox,
+            ),
             // Evaluator threads are invocation-local and ephemeral. Canon still
             // reuses live thread IDs by scope within this `canon check`, but
             // oversized carryover is handled by retiring the local session ID
@@ -170,8 +183,11 @@ impl EvaluatorRunner for AppServerRunner {
             model,
             thinking,
             self.session_cwds.get(session_id).map(PathBuf::as_path),
+            self.no_sandbox,
         )?;
-        self.send_turn_request("turn/start", AppServerTurnRequest::new(session_id, request))
+        let response =
+            self.send_turn_request("turn/start", AppServerTurnRequest::new(session_id, request))?;
+        Ok(normalize_app_server_evaluator_response(&response))
     }
 
     fn take_last_turn_usage(&mut self) -> Option<EvaluatorTurnUsage> {
@@ -189,6 +205,7 @@ pub(crate) fn turn_start_request(
     model: Option<&str>,
     thinking: &str,
     cwd: Option<&Path>,
+    no_sandbox: bool,
 ) -> Result<Value, EvaluatorError> {
     let input = evaluator_turn_input(prompt)?;
     let input_text = render_evaluator_turn_input(&input)?;
@@ -203,6 +220,10 @@ pub(crate) fn turn_start_request(
     });
     if let Some(cwd) = cwd {
         request["cwd"] = Value::String(cwd.display().to_string());
+        request["environments"] = json!([local_environment_params(cwd)]);
+    }
+    if no_sandbox {
+        request["sandboxPolicy"] = json!({ "type": "dangerFullAccess" });
     }
     if let Some(model) = model {
         request["model"] = Value::String(model.to_string());
@@ -210,11 +231,48 @@ pub(crate) fn turn_start_request(
     if let Some(effort) = codex_reasoning_effort(thinking) {
         request["effort"] = Value::String(effort.to_string());
     }
-    // The app-server structured-output subset requires every property to be
-    // listed in `required`, which cannot represent canon's answer/error one-of
-    // without introducing non-canon null fields. Developer instructions and
-    // `parse_evaluator_response` enforce the exact canon response contract.
+    request["outputSchema"] = app_server_evaluator_response_output_schema();
     Ok(request)
+}
+
+pub(crate) fn normalize_app_server_evaluator_response(response: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<Value>(response.trim()) else {
+        return response.to_string();
+    };
+    let Some(object) = value.as_object_mut() else {
+        return response.to_string();
+    };
+    let mut removed_null = false;
+    for key in ["answer", "error", "qScopeSuggestion"] {
+        if object.get(key).is_some_and(Value::is_null) {
+            object.remove(key);
+            removed_null = true;
+        }
+    }
+    let removed_error_answer = match (
+        object.get("answer").and_then(Value::as_str),
+        object.get("error").and_then(Value::as_str),
+    ) {
+        (Some(answer), Some(error))
+            if is_reserved_evaluator_error(answer) && is_reserved_evaluator_error(error) =>
+        {
+            object.remove("answer");
+            true
+        }
+        _ => false,
+    };
+    if removed_null || removed_error_answer {
+        serde_json::to_string(&value).unwrap_or_else(|_| response.to_string())
+    } else {
+        response.to_string()
+    }
+}
+
+fn is_reserved_evaluator_error(value: &str) -> bool {
+    matches!(
+        value,
+        ERROR_INSUFFICIENT_EVIDENCE | ERROR_INVALID_QUESTION | ERROR_UNPARSABLE
+    )
 }
 
 #[derive(Serialize)]
@@ -226,10 +284,27 @@ struct ThreadStartParams<'a> {
     developer_instructions: &'a str,
     #[serde(rename = "approvalPolicy")]
     approval_policy: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sandbox: Option<&'a str>,
+    environments: Vec<TurnEnvironmentParams>,
     config: Value,
     ephemeral: bool,
     #[serde(rename = "sessionStartSource")]
     session_start_source: &'a str,
+}
+
+#[derive(Serialize)]
+struct TurnEnvironmentParams {
+    #[serde(rename = "environmentId")]
+    environment_id: &'static str,
+    cwd: String,
+}
+
+fn local_environment_params(cwd: &Path) -> TurnEnvironmentParams {
+    TurnEnvironmentParams {
+        environment_id: LOCAL_ENVIRONMENT_ID,
+        cwd: cwd.display().to_string(),
+    }
 }
 
 #[derive(Deserialize)]

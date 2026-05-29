@@ -2,6 +2,7 @@ use crate::check_config_expansion::{expand_raw_check_config, CheckConfigSource};
 use crate::check_validation::validate_check_config;
 use crate::config_types::{CheckConfig, RawCheckConfig};
 use crate::repo_inspection::RepoInspectionCache;
+use crate::tree_source::TreeSource;
 use std::path::Path;
 
 #[cfg(test)]
@@ -32,25 +33,26 @@ pub(crate) fn parse_check_config_content_with_root(
         content,
         cache,
         if config_path == Path::new(CHECK_PATH) {
-            CheckConfigSource::Staged
+            CheckConfigSource::Tree(TreeSource::Staged)
         } else {
             CheckConfigSource::Worktree
         },
     )
 }
 
-pub(crate) fn parse_staged_check_config_content_with_root(
+pub(crate) fn parse_tree_check_config_content_with_root(
     root: &Path,
     config_path: &Path,
     content: &str,
     cache: &mut RepoInspectionCache,
+    source: TreeSource,
 ) -> Result<CheckConfig, String> {
     parse_check_config_content_with_root_and_source(
         root,
         config_path,
         content,
         cache,
-        CheckConfigSource::Staged,
+        CheckConfigSource::Tree(source),
     )
 }
 

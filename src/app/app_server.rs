@@ -26,12 +26,14 @@ pub(crate) struct AppServerRunner {
     pub(crate) last_turn_usage: Option<EvaluatorTurnUsage>,
     pub(crate) retired_sessions: BTreeSet<String>,
     pub(crate) session_cwds: BTreeMap<String, PathBuf>,
+    pub(crate) no_sandbox: bool,
 }
 
 pub(crate) struct LazyAppServerRunner {
     pub(crate) app_server_root: PathBuf,
     pub(crate) load_plugins: bool,
     pub(crate) agent: AgentConfig,
+    pub(crate) no_sandbox: bool,
     pub(crate) inner: Option<AppServerRunner>,
     pub(crate) sessions: BTreeSet<String>,
     pub(crate) retired_token_usage: TokenUsage,
@@ -42,11 +44,13 @@ impl LazyAppServerRunner {
         app_server_root: &std::path::Path,
         load_plugins: bool,
         agent: &AgentConfig,
+        no_sandbox: bool,
     ) -> LazyAppServerRunner {
         LazyAppServerRunner {
             app_server_root: app_server_root.to_path_buf(),
             load_plugins,
             agent: agent.clone(),
+            no_sandbox,
             inner: None,
             sessions: BTreeSet::new(),
             retired_token_usage: TokenUsage::default(),
@@ -59,6 +63,7 @@ impl LazyAppServerRunner {
                 &self.app_server_root,
                 self.load_plugins,
                 &self.agent,
+                self.no_sandbox,
             )?);
         }
         match self.inner.as_mut() {

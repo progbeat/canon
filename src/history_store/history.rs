@@ -7,6 +7,7 @@ use crate::git::resolve_git_path;
 use crate::logging_error::{external_log_error, DiagnosticLogError, DiagnosticLogResult};
 use crate::path_io_error::PathIoError;
 use crate::time::parse_record_timestamp;
+use crate::tree_source::TreeSource;
 use crate::visible_tree_oid::{
     git_object_oid_has_hex_len, git_object_oid_has_known_shape,
     repository_native_object_oid_hex_len, repository_native_object_oid_is_valid,
@@ -346,23 +347,25 @@ pub(crate) fn append_history_record_with_cache(
 
 pub(crate) fn append_current_history_record_with_cache(
     root: &Path,
+    source: &TreeSource,
     expectation: &SelectedExpectation,
     record: &CheckRecord,
     history_cache: &mut HistoryCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<(), String> {
-    validate_current_visible_tree_oid(root, expectation, record, visible_tree_oid_cache)?;
+    validate_current_visible_tree_oid(root, source, expectation, record, visible_tree_oid_cache)?;
     append_history_record_with_cache(root, expectation, record, history_cache)
 }
 
 fn validate_current_visible_tree_oid(
     root: &Path,
+    source: &TreeSource,
     expectation: &SelectedExpectation,
     record: &CheckRecord,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<(), String> {
     let current_visible_tree_oid =
-        visible_tree_oid_cache.staged_visible_tree_oid(root, &expectation.agent, &record.scope)?;
+        visible_tree_oid_cache.visible_tree_oid(root, source, &expectation.agent, &record.scope)?;
     if record.visible_tree_oid != current_visible_tree_oid {
         return Err(
             "visibleTreeOid must match the current repository visible tree for qScope".to_string(),

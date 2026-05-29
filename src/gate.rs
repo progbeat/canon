@@ -14,6 +14,7 @@ use crate::history_reuse::{
 use crate::output::write_stderr_line;
 use crate::repo_inspection::RepoInspectionCache;
 use crate::time::unix_timestamp;
+use crate::tree_source::TreeSource;
 use crate::visible_tree_oid::VisibleTreeOidCache;
 use crate::CHECK_PATH;
 use std::ffi::OsString;
@@ -55,7 +56,7 @@ fn gate_result_or_failure<T>(result: Result<T, String>) -> Result<T, CommandErro
 
 fn gate_regression_count(root: &Path) -> Result<usize, String> {
     let mut repo_cache = RepoInspectionCache::new();
-    let config = repo_cache.load_check_config(root, Path::new(CHECK_PATH))?;
+    let config = repo_cache.load_check_config(root, Path::new(CHECK_PATH), &TreeSource::Staged)?;
     let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
     let mut history_cache = HistoryCache::new();
     gate_regression_count_with_config(
