@@ -1,8 +1,55 @@
 # `canon check` Command
 
-This section specifies the stdout and stderr format for check runs that process
-expectations. It is not an exhaustive output contract for modes that do not
-process expectations.
+```sh
+$ canon check --help
+Check whether a Git tree meets project expectations written in the canon.
+
+Usage: canon check [OPTIONS] [EXPECTATION]...
+
+Arguments:
+  [EXPECTATION]...  Expectation selectors: ID prefixes or full expectation IDs
+
+Options:
+  -c, --config <PATH>          Read expectations from this config file [default: .canon/check.yml]
+  -q <QUESTION>                Ask one question
+  -s, --scope <PATHSPEC>       Set the visible scope for the question
+      --tree <TREE>            Check this Git tree [default: :staged]
+      --against-tree <TREE>    Compare against this Git tree [default: HEAD]
+      --keep-going             Continue after failures
+      --ignore-cache           Re-evaluate expectations with cached results
+      --ignore-cooldown        Re-evaluate expectations in cooldown
+      --no-sandbox             Disable canon-managed sandboxing; caller is responsible for isolation
+  -h, --help                   Print help
+
+Examples:
+  canon check
+      Check staged content against all canon expectations.
+
+  canon check a7F K9m
+      Check canon expectations selected by ID prefix.
+
+  canon check --ignore-cache a7F
+      Freshly check one canon expectation.
+
+  canon check --tree HEAD --against-tree HEAD~1 a7F
+      Check one canon expectation on HEAD with comparison against the previous commit.
+
+  canon check -q "Does the app expose Undo?"
+      Ask a one-off question.
+
+  canon check -q "Does the app expose Undo?" -s src/app.rs
+      Ask a one-off question with a restricted visible scope.
+```
+
+*The `canon check --help` output may differ from this example in wording,
+wrapping, spacing, and option order, while preserving the same command usage,
+options, defaults, and common examples.*
+
+## Expectation Result Output
+
+When a check run processes expectations, stdout contains one result entry per
+passing evaluated expectation, failed expectation, or errored expectation that
+is emitted by the run.
 
 For each passing evaluated expectation, stdout contains exactly one line:
 
@@ -86,9 +133,7 @@ Let:
 - `num_regressions` be the number of expectations that changed from `pass` to any non-pass result compared to HEAD.
 - `num_fixes` be the number of expectations that changed from any non-pass result (including missing) to `pass` compared to HEAD.
 
-Assuming no Ctrl-C or other interruption, when `canon check` is called without
-arguments, the check run may emit instructions for the agent that ran it like
-this:
+Assuming no Ctrl-C or other interruption, when `canon check` uses the default config, checks the `:staged` tree, and compares against `HEAD`, the check run may emit instructions for the agent that ran it like this:
 
 ```text
 def print_agent_messages(num_failed, num_errors, num_fixes, num_regressions):

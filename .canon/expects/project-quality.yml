@@ -61,6 +61,9 @@
   a: "no"
   cooldown: 7d
 
+- q: "Do `canon --help` and every `canon <command> --help` output render through clap?"
+  a: "yes"
+
 # - q: "Are there obvious removable naming redundancies in source paths or module/import paths that make navigation noisier?"
 #   a: "no"
 #   cooldown: 7d
