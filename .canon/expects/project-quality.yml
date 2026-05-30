@@ -71,6 +71,16 @@
 - q: "Are tests outside implementation files limited to platform-independent intended behavior through public interfaces?"
   a: "yes"
 
+- q: "Are there dedicated test files?"
+  a: "yes"
+  # forbidden_evidence_substrings: "`README.md`"
+
+# TODO: Uncomment after implementing cooldown on fail or something similar to limit noise.
+
+# - q: "Are there any places where code outside a type's owning module rewrites fields that define the type's identity, provenance, result, or invariants instead of using a constructor or transformation owned by that module?"
+#   a: "no"
+#   cooldown: {"pass": 7d, "fail": 1d}
+
 # - q: "Can you find a critical high-confidence bug with a concrete failing scenario?"
 #   a: "no"
 #   preset: smart
