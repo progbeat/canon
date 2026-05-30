@@ -158,52 +158,19 @@ fn turn_start_request_includes_session_cwd() {
     assert_eq!(request["effort"], json!("medium"));
     assert_eq!(request["input"][0]["type"], json!("text"));
     assert_eq!(request["input"][0]["text"], json!("Question?"));
-    assert_eq!(request["outputSchema"]["type"], json!("object"));
-    assert_eq!(
-        request["outputSchema"]["required"],
-        json!(["answer", "error", "evidence", "qScopeSuggestion"])
-    );
-    assert_eq!(
-        request["outputSchema"]["properties"]["answer"]["type"],
-        json!(["string", "null"])
-    );
-    assert_eq!(
-        request["outputSchema"]["properties"]["qScopeSuggestion"]["type"],
-        json!(["array", "null"])
-    );
-    assert_eq!(
-        request["outputSchema"]["properties"]["qScopeSuggestion"]["minItems"],
-        json!(1)
-    );
-    assert!(request["outputSchema"]["oneOf"].is_null());
-}
-
-#[test]
-fn app_server_evaluator_response_normalization_removes_schema_nulls() {
-    assert_eq!(
-        normalize_app_server_evaluator_response(
-            r#"{"answer":"yes","error":null,"evidence":"ok","qScopeSuggestion":["."]}"#,
-        ),
-        r#"{"answer":"yes","evidence":"ok","qScopeSuggestion":["."]}"#
-    );
-    assert_eq!(
-        normalize_app_server_evaluator_response(
-            r#"{"answer":null,"error":"insufficient-evidence","evidence":"missing","qScopeSuggestion":null}"#,
-        ),
-        r#"{"error":"insufficient-evidence","evidence":"missing"}"#
-    );
-    assert_eq!(
-        normalize_app_server_evaluator_response(
-            r#"{"answer":"insufficient-evidence","error":"insufficient-evidence","evidence":"missing","qScopeSuggestion":["."]}"#,
-        ),
-        r#"{"error":"insufficient-evidence","evidence":"missing","qScopeSuggestion":["."]}"#
-    );
-    assert_eq!(
-        normalize_app_server_evaluator_response(
-            r#"{"answer":"yes","error":"insufficient-evidence","evidence":"ambiguous","qScopeSuggestion":["."]}"#,
-        ),
-        r#"{"answer":"yes","error":"insufficient-evidence","evidence":"ambiguous","qScopeSuggestion":["."]}"#
-    );
+    assert!(request.get("outputSchema").is_none());
+    let agent = AgentConfig {
+        models: Vec::new(),
+        thinking: "low".to_string(),
+        instructions: None,
+        ignore: Vec::new(),
+        plugins: Vec::new(),
+    };
+    assert!(parse_evaluator_response(
+        r#"{"answer":"yes","error":null,"evidence":"ok","qScopeSuggestion":["."]}"#,
+        &agent,
+    )
+    .is_err());
 }
 
 #[test]

@@ -1,5 +1,5 @@
+use crate::check::output::record_requires_human_review;
 use crate::check::run_check_with_runner;
-use crate::check_output::record_requires_human_review;
 use crate::history::read_history_records;
 use crate::tests::{
     answer, check_config_yaml, check_options, git_project, parse_check_config, FakeRunner,

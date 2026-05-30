@@ -1,11 +1,11 @@
-use crate::check_config::parse_tree_check_config_content_with_root;
+use crate::check::config::parse_tree_check_config_content_with_root;
 #[cfg(test)]
-use crate::check_generator_paths::expand_generator_paths;
-use crate::check_generator_paths::expand_staged_generator_paths_from_listing;
+use crate::check::generator_paths::expand_generator_paths;
+use crate::check::generator_paths::expand_staged_generator_paths_from_listing;
 use crate::config_types::{CheckConfig, RawExpectationItem};
+use crate::git::tree_source::TreeSource;
 use crate::git::{read_git_blobs, resolve_git_path, staged_tracked_files, StagedTrackedFile};
 use crate::platform::git_path_bytes;
-use crate::tree_source::TreeSource;
 use crate::CHECK_PATH;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -177,7 +177,7 @@ impl RepoInspectionCache {
         let tree_paths = self
             .tree_files(root, source)?
             .into_iter()
-            .filter(|file| file.has_materializable_blob_contents())
+            .filter(|file| file.is_blob_file_entry())
             .filter_map(|file| String::from_utf8(file.path).ok())
             .collect::<Vec<_>>();
         expand_staged_generator_paths_from_listing(config_path, path, &tree_paths)
@@ -232,7 +232,7 @@ impl RepoInspectionCache {
         let files = self.staged_files(root)?;
         let blob_files = files
             .iter()
-            .filter(|file| file.has_materializable_blob_contents())
+            .filter(|file| file.is_blob_file_entry())
             .cloned()
             .collect::<Vec<_>>();
         let object_ids = blob_files
@@ -266,7 +266,7 @@ impl RepoInspectionCache {
                 let files = self.tree_files(root, source)?;
                 let blob_files = files
                     .iter()
-                    .filter(|file| file.has_materializable_blob_contents())
+                    .filter(|file| file.is_blob_file_entry())
                     .cloned()
                     .collect::<Vec<_>>();
                 let object_ids = blob_files

@@ -1,4 +1,4 @@
-use crate::check_validation::{validate_optional_model, validate_plugin_config_key};
+use crate::check::validation::{validate_optional_model, validate_plugin_config_key};
 
 #[test]
 fn plugin_keys_must_have_exactly_one_nonempty_separator() {

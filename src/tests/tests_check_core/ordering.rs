@@ -1,17 +1,17 @@
+use crate::check::order_state::{latest_recorded_non_pass_timestamp, write_latest_non_pass_record};
 use crate::check::run_check_with_runner;
-use crate::check_order_state::{latest_recorded_non_pass_timestamp, write_latest_non_pass_record};
-use crate::check_selection::order_expectations_by_latest_non_pass;
+use crate::check::selection::order_expectations_by_latest_non_pass;
 use crate::fs_util::ensure_dir;
+use crate::git::visible_tree_oid::staged_visible_tree_oid;
 use crate::hash::full_scope;
+use crate::history::append::append_history_record;
 use crate::history::HistoryCache;
-use crate::history_append::append_history_record;
-use crate::logging::render_runtime_log_event;
-use crate::logging::DiagnosticLogWriter;
+use crate::logs::render_runtime_log_event;
+use crate::logs::DiagnosticLogWriter;
 use crate::tests::{
     answer, append_legacy_history_record, check_config_yaml, check_options, enable_diagnostic_logs,
     expectation_record, git_project, parse_check_config, FakeRunner,
 };
-use crate::visible_tree_oid::staged_visible_tree_oid;
 use crate::{ERROR_UNPARSABLE, RESULT_FAIL};
 use serde_json::json;
 use std::fs;

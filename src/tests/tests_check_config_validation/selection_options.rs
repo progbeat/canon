@@ -1,4 +1,4 @@
-use crate::check_selection::{expectation_identities, parse_check_options, select_expectations};
+use crate::check::selection::{expectation_identities, parse_check_options, select_expectations};
 use crate::hash::expectation_id;
 use crate::tests::{check_config_yaml, parse_check_config, test_selector};
 

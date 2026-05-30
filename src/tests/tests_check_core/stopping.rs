@@ -1,5 +1,5 @@
 use crate::check::run_check_with_runner;
-use crate::check_selection::parse_check_options;
+use crate::check::selection::parse_check_options;
 use crate::tests::{
     answer, check_config_yaml, check_options, git_project, parse_check_config, test_selector,
     FakeRunner,

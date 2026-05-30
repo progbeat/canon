@@ -1,4 +1,4 @@
-use crate::check_selection::parse_cooldown;
+use crate::check::selection::parse_cooldown;
 use crate::tests::parse_check_config;
 
 #[test]

@@ -4,13 +4,13 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::process;
 
-use crate::check_command::run_check_command;
-use crate::check_command_args::{check_help_command, check_help_requested, print_check_help};
+use crate::check::command::run_check_command;
+use crate::check::command_args::{check_help_command, check_help_requested};
 use crate::gate::run_gate_command;
 use crate::hooks::{run_hook_command, run_init};
-use crate::logging::DiagnosticLogError;
+use crate::logs::DiagnosticLogError;
+use crate::notes::cli::{arg_to_string, collect_text_or_stdin, require_key, run_rg};
 use crate::notes::{append_note, delete_note, ensure_note, read_note, write_note};
-use crate::notes_cli::{arg_to_string, collect_text_or_stdin, require_key, run_rg};
 use crate::output::{write_stderr_line, write_stdout, write_stdout_line};
 use crate::project::{git_project_root, print_root, project_root_or_current};
 use crate::project_types::Config;
@@ -144,7 +144,7 @@ fn run_command(args: Vec<OsString>) -> Result<(), CommandError> {
         }
         "check" => {
             if check_help_requested(&args[1..]) {
-                print_check_help()?;
+                print_clap_help(check_help_command())?;
                 return Ok(());
             }
             let root = git_project_root(Path::new("."))?;

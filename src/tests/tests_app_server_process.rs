@@ -3,7 +3,7 @@ use super::*;
 #[cfg(unix)]
 #[test]
 fn app_server_stderr_reader_forwards_before_eof() {
-    use crate::app_server_process::spawn_app_server_stderr_reader_with_forwarder;
+    use crate::app::process::spawn_app_server_stderr_reader_with_forwarder;
     use std::os::unix::net::UnixStream;
     use std::sync::mpsc;
 

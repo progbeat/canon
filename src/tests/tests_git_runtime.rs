@@ -309,6 +309,36 @@ fn staged_worktree_view_restricted_scopes_hardlink_lazy_files() {
 }
 
 #[test]
+fn staged_worktree_view_reuses_restricted_scope_root_by_tree_oid() {
+    let root = git_project("staged-snapshot-scope-tree-oid");
+    fs::write(root.join("a.txt"), "GOOD\n").unwrap();
+    Command::new("git")
+        .args(["add", "a.txt"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    let staged_view = StagedWorktreeView::apply(&root).unwrap();
+
+    let first_scope = staged_view
+        .materialize_evaluator_scope(&empty_test_agent(), &["a.txt".to_string()])
+        .unwrap();
+    let second_scope = staged_view
+        .materialize_evaluator_scope(&empty_test_agent(), &["a.txt".to_string()])
+        .unwrap();
+
+    assert_eq!(first_scope, second_scope);
+    assert_eq!(
+        first_scope.parent().unwrap().file_name().unwrap().to_str(),
+        Some("scopes")
+    );
+    assert_eq!(
+        fs::read_to_string(first_scope.join("a.txt")).unwrap(),
+        "GOOD\n"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn staged_worktree_view_full_scope_returns_lazy_tree() {
     let root = git_project("staged-snapshot-full-returns-lazy");
     fs::write(root.join("a.txt"), "GOOD\n").unwrap();
@@ -356,7 +386,7 @@ fn staged_worktree_view_snapshot_directories_are_private() {
 }
 
 #[test]
-fn staged_worktree_view_ignores_gitlinks_during_materialization() {
+fn staged_worktree_view_excludes_gitlinks_from_blob_file_entries() {
     let root = git_project("staged-snapshot-gitlink");
     let output = Command::new("git")
         .args([

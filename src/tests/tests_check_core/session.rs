@@ -1,6 +1,6 @@
 use crate::check::run_check_with_runner;
-use crate::check_types::CheckRecord;
-use crate::logging::DiagnosticLogWriter;
+use crate::check::types::CheckRecord;
+use crate::logs::DiagnosticLogWriter;
 use crate::tests::{
     answer, check_config_yaml, check_options, enable_diagnostic_logs, git_project,
     parse_check_config, FakeRunner, TestDir,

@@ -178,8 +178,8 @@ fn finish_check_report_logs_finish_after_lazy_reset_failure() {
         narrowing: NarrowingStats::default(),
     };
 
-    let err = crate::check_command_finish::finish_check_report(
-        crate::check_command_finish::CheckReportFinishContext {
+    let err = crate::check::command_finish::finish_check_report(
+        crate::check::command_finish::CheckReportFinishContext {
             root: &root,
             config: &config,
             diagnostic_log: &mut diagnostic_log,
@@ -289,6 +289,55 @@ fn lazy_full_scope_reset_preserves_existing_full_scope_pass_when_resetting_narro
             .map(|record| record.scope),
         Some(full_scope())
     );
+    let mut history_cache = HistoryCache::new();
+    assert_eq!(
+        latest_stored_q_scope_with_cache(&root, &config.agent, &expectation, &mut history_cache,)
+            .unwrap(),
+        Some(full_scope())
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn lazy_full_scope_reset_drops_all_narrowed_history_after_latest_full_scope() {
+    let root = git_project("check-lazy-reset-drop-later-narrowed");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let expectation = check_options(&config, &[], false, true).selected[0].clone();
+    let older_narrow_scope = vec!["README.md".to_string()];
+    let mut older_narrow = expectation_record(
+        &config.agent,
+        &expectation,
+        "pass",
+        "yes",
+        staged_visible_tree_oid(&root, &config.agent, &older_narrow_scope).unwrap(),
+    );
+    older_narrow.scope = older_narrow_scope;
+    append_history_record(&root, &expectation, &older_narrow).unwrap();
+    let full_record = expectation_record(
+        &config.agent,
+        &expectation,
+        "pass",
+        "yes",
+        staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap(),
+    );
+    append_history_record(&root, &expectation, &full_record).unwrap();
+    let newer_narrow_scope = vec!["src".to_string()];
+    let mut newer_narrow = expectation_record(
+        &config.agent,
+        &expectation,
+        "pass",
+        "yes",
+        staged_visible_tree_oid(&root, &config.agent, &newer_narrow_scope).unwrap(),
+    );
+    newer_narrow.scope = newer_narrow_scope;
+    append_history_record(&root, &expectation, &newer_narrow).unwrap();
+
+    set_non_selected_expectation_scopes_to_full(&root, std::slice::from_ref(&expectation)).unwrap();
+
+    let records = read_history_records(&root, &expectation).unwrap();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].scope, vec!["README.md".to_string()]);
+    assert_eq!(records[1].scope, full_scope());
     let mut history_cache = HistoryCache::new();
     assert_eq!(
         latest_stored_q_scope_with_cache(&root, &config.agent, &expectation, &mut history_cache,)

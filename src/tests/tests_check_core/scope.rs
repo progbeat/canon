@@ -1,7 +1,7 @@
+use crate::check::order_state::latest_recorded_non_pass_timestamp;
+use crate::check::output::record_requires_human_review;
 use crate::check::run_check_with_runner;
-use crate::check_order_state::latest_recorded_non_pass_timestamp;
-use crate::check_output::record_requires_human_review;
-use crate::check_selection::parse_check_options;
+use crate::check::selection::parse_check_options;
 use crate::history::read_history_records;
 use crate::tests::{
     answer, check_config_yaml, check_options, error_response, git_project, parse_check_config,
