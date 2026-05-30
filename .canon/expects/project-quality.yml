@@ -68,6 +68,9 @@
   a: "no"
   cooldown: 7d
 
+- q: "Are tests outside implementation files limited to platform-independent intended behavior through public interfaces?"
+  a: "yes"
+
 # - q: "Can you find a critical high-confidence bug with a concrete failing scenario?"
 #   a: "no"
 #   preset: smart
