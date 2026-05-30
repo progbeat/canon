@@ -1,22 +1,16 @@
 use crate::check::selection::{selected_expectation_at, ExpectationIdentity};
-use crate::check::types::{
-    CachedExpectation, CheckRecord, ObservedAnswerState, SelectedExpectation,
-};
+use crate::check::types::{CachedExpectation, SelectedExpectation};
 use crate::config_types::{AgentConfig, CheckConfig};
 use crate::fs_util::{for_each_nonempty_line, write_temp_file_then_replace};
 use crate::git::resolve_git_path;
 use crate::hash::full_scope;
-use crate::history::compaction::compact_history_temp_path;
-use crate::history::{
-    read_repository_history_records_from_path, render_answer_history_record, HistoryCache,
-};
 use crate::logs::DiagnosticLogWriter;
-use crate::scope::sanitize_scope_for_hash;
 use serde_json::json;
+use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(crate) fn apply_lazy_full_scope_reset(
     root: &Path,
@@ -68,15 +62,19 @@ pub(crate) fn apply_scheduled_lazy_full_scope_resets(
     root: &Path,
     config: &CheckConfig,
     identities: &[ExpectationIdentity],
-) -> Result<usize, String> {
+) -> Result<BTreeSet<String>, String> {
+    // A scheduled reset is run-local selection state. Answer history remains
+    // append-only; the fresh full-scope result, if any, is appended normally.
     let ids = read_scheduled_lazy_full_scope_resets(root)?;
     if ids.is_empty() {
-        return Ok(0);
+        return Ok(BTreeSet::new());
     }
     let expectations = scheduled_reset_expectations(config, identities, &ids)?;
-    set_non_selected_expectation_scopes_to_full(root, &expectations)?;
     remove_scheduled_lazy_full_scope_resets(root)?;
-    Ok(expectations.len())
+    Ok(expectations
+        .into_iter()
+        .map(|expectation| expectation.id)
+        .collect())
 }
 
 pub(crate) struct LazyFullScopeResetPlan {
@@ -182,17 +180,6 @@ pub(crate) fn sample_reset_expectations(
     sampled
 }
 
-pub(crate) fn set_non_selected_expectation_scopes_to_full(
-    root: &Path,
-    expectations: &[SelectedExpectation],
-) -> Result<(), String> {
-    let mut history_cache = HistoryCache::new();
-    for expectation in expectations {
-        set_expectation_scope_to_full_for_next_check(root, expectation, &mut history_cache)?;
-    }
-    Ok(())
-}
-
 pub(crate) fn schedule_lazy_full_scope_resets(
     root: &Path,
     expectations: &[SelectedExpectation],
@@ -201,7 +188,7 @@ pub(crate) fn schedule_lazy_full_scope_resets(
     if expectations.is_empty() {
         return remove_scheduled_lazy_full_scope_resets_at_path(&path);
     }
-    let temp_path = compact_history_temp_path(&path)?;
+    let temp_path = lazy_full_scope_reset_schedule_temp_path(&path)?;
     write_temp_file_then_replace(&temp_path, &path, |file| {
         for expectation in expectations {
             file.write_all(expectation.id.as_bytes())
@@ -240,6 +227,22 @@ fn lazy_full_scope_reset_schedule_path(root: &Path) -> Result<std::path::PathBuf
     resolve_git_path(root, "canon/lazy-full-scope-reset")
 }
 
+fn lazy_full_scope_reset_schedule_temp_path(path: &Path) -> Result<PathBuf, String> {
+    let file_name = path.file_name().ok_or_else(|| {
+        format!(
+            "lazy reset schedule path has no file name: {}",
+            path.display()
+        )
+    })?;
+    let mut temp_name = file_name.to_os_string();
+    temp_name.push(format!(
+        ".tmp.{}.{}",
+        std::process::id(),
+        random_reset_seed()
+    ));
+    Ok(path.with_file_name(temp_name))
+}
+
 fn scheduled_reset_expectations(
     config: &CheckConfig,
     identities: &[ExpectationIdentity],
@@ -253,92 +256,6 @@ fn scheduled_reset_expectations(
         expectations.push(selected_expectation_at(config, identities, index, true)?);
     }
     Ok(expectations)
-}
-
-fn set_expectation_scope_to_full_for_next_check(
-    root: &Path,
-    expectation: &SelectedExpectation,
-    history_cache: &mut HistoryCache,
-) -> Result<(), String> {
-    let path = history_cache.path(root, expectation)?;
-    if !path.exists() {
-        return Ok(());
-    }
-    let records = read_repository_history_records_from_path(root, &path, &expectation.a)?;
-    let Some((latest_index, latest_scope)) = latest_reusable_record_scope(&records, expectation)
-    else {
-        return Ok(());
-    };
-    if latest_scope == full_scope() {
-        return Ok(());
-    }
-    // The next run derives its initial visible scope from the latest answer
-    // history q-scope. Retaining an older narrowed answer after reset would
-    // still seed a narrowed interrogation, so keep only records through the
-    // newest reusable full-scope answer. With none, clearing history makes the
-    // next run fall back to full project scope.
-    let retained = match latest_reusable_full_scope_record_index(&records, expectation) {
-        Some(index) => &records[..=index],
-        None => &records[..0],
-    };
-    debug_assert!(retained.len() <= latest_index);
-    rewrite_answer_history_records(&path, retained)?;
-    history_cache.records.insert(path, retained.to_vec());
-    Ok(())
-}
-
-fn rewrite_answer_history_records(path: &Path, records: &[CheckRecord]) -> Result<(), String> {
-    let temp_path = compact_history_temp_path(path)?;
-    write_temp_file_then_replace(&temp_path, path, |file| {
-        for record in records {
-            let line = render_answer_history_record(record).map_err(|err| err.to_string())?;
-            file.write_all(line.as_bytes())
-                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
-            file.write_all(b"\n")
-                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
-        }
-        Ok(())
-    })
-}
-
-fn latest_reusable_record_scope(
-    records: &[CheckRecord],
-    expectation: &SelectedExpectation,
-) -> Option<(usize, Vec<String>)> {
-    records
-        .iter()
-        .enumerate()
-        .rev()
-        .find_map(|(index, record)| {
-            reusable_record_scope(record, expectation).map(|scope| (index, scope))
-        })
-}
-
-fn latest_reusable_full_scope_record_index(
-    records: &[CheckRecord],
-    expectation: &SelectedExpectation,
-) -> Option<usize> {
-    for (index, record) in records.iter().enumerate().rev() {
-        let Some(scope) = reusable_record_scope(record, expectation) else {
-            continue;
-        };
-        if scope == full_scope() {
-            return Some(index);
-        }
-    }
-    None
-}
-
-fn reusable_record_scope(
-    record: &CheckRecord,
-    expectation: &SelectedExpectation,
-) -> Option<Vec<String>> {
-    if !ObservedAnswerState::from_expected_and_observed(&expectation.a, &record.observed)
-        .is_reusable_history()
-    {
-        return None;
-    }
-    sanitize_scope_for_hash(&record.scope).ok()
 }
 
 fn random_reset_seed() -> u64 {

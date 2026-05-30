@@ -63,9 +63,11 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
 ) -> Result<CheckRunReport, CheckRunError> {
     let mut caches = CheckRunCaches::new();
     let runtime = CheckRuntime::fixed(root, snapshot_root, config);
+    let scheduled_full_scope_reset_ids = BTreeSet::new();
     run_check_with_runner_and_caches(
         runtime,
         options,
+        &scheduled_full_scope_reset_ids,
         runner,
         diagnostic_log,
         result_output,
@@ -76,6 +78,7 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
 pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     runtime: CheckRuntime<'_>,
     options: &CheckOptions,
+    scheduled_full_scope_reset_ids: &BTreeSet<String>,
     runner: &mut R,
     mut diagnostic_log: Option<&mut DiagnosticLogWriter>,
     mut result_output: Option<&mut dyn Write>,
@@ -127,6 +130,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             options,
             &mut caches.history,
             &mut caches.visible_tree_oid,
+            scheduled_full_scope_reset_ids,
             run_try!(unix_timestamp()),
             &mut diagnostic_log,
         ));
@@ -202,7 +206,8 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         let mut verified_q_scope = run_expectation_try!(initial_visible_scope_for_expectation(
             root,
             expectation,
-            &mut caches.history
+            &mut caches.history,
+            scheduled_full_scope_reset_ids,
         ));
         // Response-format problems and evaluator runner/model failures are
         // handled inside this call: they become non-pass review records that
@@ -383,6 +388,7 @@ fn default_check_selection(
     options: &CheckOptions,
     history_cache: &mut HistoryCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
+    scheduled_full_scope_reset_ids: &BTreeSet<String>,
     now: u64,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
 ) -> Result<CachedSelection, String> {
@@ -390,6 +396,7 @@ fn default_check_selection(
     let mut cached = Vec::new();
     let mut cached_failure_seen = false;
     for expectation in options.selected.clone() {
+        let scheduled_full_scope_reset = scheduled_full_scope_reset_ids.contains(&expectation.id);
         match cached_result_for_expectation(
             root,
             source,
@@ -399,8 +406,8 @@ fn default_check_selection(
             visible_tree_oid_cache,
             CachedResultLookup {
                 now,
-                include_same_tree: !options.ignore_cache,
-                include_cooldown: !options.ignore_cooldown,
+                include_same_tree: !options.ignore_cache && !scheduled_full_scope_reset,
+                include_cooldown: !options.ignore_cooldown && !scheduled_full_scope_reset,
             },
         )? {
             Some(hit) => {

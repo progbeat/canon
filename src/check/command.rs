@@ -84,15 +84,19 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             )
         }
     };
-    if let Err(err) = apply_scheduled_lazy_full_scope_resets(root, &config, &identities) {
-        return fail_check_before_selection(
-            &mut diagnostic_log,
-            query_start_field,
-            query_mode,
-            0,
-            err,
-        );
-    }
+    let scheduled_full_scope_reset_ids =
+        match apply_scheduled_lazy_full_scope_resets(root, &config, &identities) {
+            Ok(ids) => ids,
+            Err(err) => {
+                return fail_check_before_selection(
+                    &mut diagnostic_log,
+                    query_start_field,
+                    query_mode,
+                    0,
+                    err,
+                )
+            }
+        };
     if let Some(question) = command.query.as_deref() {
         return run_check_query_command(
             root,
@@ -174,6 +178,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     let records_result = run_check_with_runner_and_caches(
         runtime,
         &options,
+        &scheduled_full_scope_reset_ids,
         &mut execution.runner,
         Some(&mut diagnostic_log),
         Some(&mut result_output),

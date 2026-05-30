@@ -108,10 +108,6 @@ impl ObservedAnswerState {
     pub(crate) fn requires_human_review(self) -> bool {
         !matches!(self, ObservedAnswerState::Answer)
     }
-
-    pub(crate) fn is_reusable_history(self) -> bool {
-        matches!(self, ObservedAnswerState::Answer)
-    }
 }
 
 #[derive(Debug, Deserialize)]

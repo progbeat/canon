@@ -1,6 +1,6 @@
 // Answer-history lookup for the Cache spec: newest-to-oldest history scanning
 // plus current visibleTreeOid matching.
-use crate::check::types::{CheckRecord, CheckResult, ObservedAnswerState, SelectedExpectation};
+use crate::check::types::{CheckRecord, CheckResult, SelectedExpectation};
 use crate::config_types::AgentConfig;
 use crate::git::tree_source::TreeSource;
 use crate::git::visible_tree_oid::VisibleTreeOidCache;
@@ -53,9 +53,6 @@ pub(crate) fn latest_history_record_matching_visible_tree_oid(
     // newest-to-oldest visibleTreeOid match.
     let matched_record =
         scan_latest_history_records(root, expectation, history_cache, |mut record| {
-            if !is_reusable_history_record_for_expected(&record, &expectation.a) {
-                return Ok(HistoryRecordScan::Continue);
-            }
             let Ok(scope) = sanitize_scope_for_hash(&record.scope) else {
                 return Ok(HistoryRecordScan::Continue);
             };
@@ -82,14 +79,10 @@ pub(crate) fn cooldown_history_record(
         return Ok(None);
     };
     let record = scan_latest_history_records(root, expectation, history_cache, |mut record| {
-        // Cooldown keys off the latest usable answer history record, unlike
-        // same-tree lookup which searches for the latest visibleTreeOid match.
-        // Legacy non-answer rows and invalid scopes are skipped here, while a
-        // newer valid fail, bad timestamp, or expired pass deliberately blocks
-        // cooldown reuse of an older pass.
-        if !is_reusable_history_record_for_expected(&record, &expectation.a) {
-            return Ok(HistoryRecordScan::Continue);
-        }
+        // Cooldown keys off the latest answer history record, unlike same-tree
+        // lookup which searches for the latest visibleTreeOid match. Invalid
+        // scopes are skipped here, while a newer fail, bad timestamp, or
+        // expired pass deliberately blocks cooldown reuse of an older pass.
         let Ok(scope) = sanitize_scope_for_hash(&record.scope) else {
             return Ok(HistoryRecordScan::Continue);
         };
@@ -148,10 +141,9 @@ pub(crate) fn latest_stored_q_scope_with_cache(
     // cached check result and does not let callers skip evaluator work. Cache
     // specifies that answer-history records contain schema-valid `answer`
     // responses only, and each record's `qScope` is the q-scope used to form
-    // that record's visible tree. Error and unparsable records are not answer
-    // history records and cannot seed a fresh interrogation.
+    // that record's visible tree.
     scan_latest_history_records(root, expectation, history_cache, |record| {
-        let Some(scope) = sanitized_answer_history_q_scope(&record, &expectation.a) else {
+        let Some(scope) = sanitized_answer_history_q_scope(&record) else {
             return Ok(HistoryRecordScan::Continue);
         };
         Ok(HistoryRecordScan::Done(Some(scope)))
@@ -179,10 +171,7 @@ fn scan_latest_history_records<T>(
     Ok(None)
 }
 
-fn sanitized_answer_history_q_scope(record: &CheckRecord, expected: &str) -> Option<Vec<String>> {
-    if !is_reusable_history_record_for_expected(record, expected) {
-        return None;
-    }
+fn sanitized_answer_history_q_scope(record: &CheckRecord) -> Option<Vec<String>> {
     sanitize_scope_for_hash(&record.scope).ok()
 }
 
@@ -203,14 +192,10 @@ fn record_with_current_expectation(
 }
 
 pub(crate) fn is_reusable_history_record(record: &CheckRecord) -> bool {
-    record
-        .expected_text()
-        .is_some_and(|expected| is_reusable_history_record_for_expected(record, expected))
-}
-
-fn is_reusable_history_record_for_expected(record: &CheckRecord, expected: &str) -> bool {
-    ObservedAnswerState::from_expected_and_observed(expected, &record.observed)
-        .is_reusable_history()
+    // Runtime persistence uses "reusable" to mean "schema-valid answer
+    // response". Fail answers are reusable cache records; evaluator errors and
+    // unparsable review records are not answer history.
+    record.expected_text().is_some() && record.error.is_none()
 }
 
 fn current_result_for_history_record(

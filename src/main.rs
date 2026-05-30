@@ -172,15 +172,13 @@ mod history {
     pub(crate) mod cache_key;
     #[path = "cleanup.rs"]
     pub(crate) mod cleanup;
-    #[path = "compaction.rs"]
-    pub(crate) mod compaction;
     #[path = "reuse.rs"]
     pub(crate) mod reuse;
 }
 // Cache answer history is implemented end-to-end in `history::store`: path/read
 // cache, answer-only durable JSONL writes, required field order, and
-// probabilistic retention. The append/compaction modules below are thin import
-// wrappers; `history::reuse` owns same-tree/cooldown lookup.
+// probabilistic retention. The append module below is a thin import wrapper;
+// `history::reuse` owns same-tree/cooldown lookup.
 mod hooks;
 mod logs {
     #[path = "writer.rs"]
