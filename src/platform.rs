@@ -50,6 +50,14 @@ pub(crate) fn set_materialized_file_permissions(path: &Path, mode: &str) -> Resu
     imp::set_materialized_file_permissions(path, mode)
 }
 
+pub(crate) fn set_materialized_dir_permissions(path: &Path) -> Result<(), String> {
+    imp::set_materialized_dir_permissions(path)
+}
+
+pub(crate) fn set_private_dir_permissions(path: &Path) -> Result<(), String> {
+    imp::set_private_dir_permissions(path)
+}
+
 pub(crate) fn create_materialized_symlink(target: &[u8], link: &Path) -> Result<(), String> {
     imp::create_materialized_symlink(target, link)
 }

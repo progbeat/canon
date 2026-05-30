@@ -194,14 +194,80 @@ impl StagedWorktreeView {
             }
             platform::hardlink_file_or_copy_symlink(&source, &target)?;
         }
+        make_scope_directories_read_only(&scope_root)?;
         Ok(scope_root)
     }
 }
 
 impl Drop for StagedWorktreeView {
     fn drop(&mut self) {
+        let _ = make_materialization_directories_private(&self.scope_roots);
         let _ = fs::remove_dir_all(&self.materialization_root);
     }
+}
+
+fn make_scope_directories_read_only(path: &Path) -> Result<(), String> {
+    for entry in fs::read_dir(path).map_err(|err| {
+        format!(
+            "failed to read evaluator scope directory {}: {}",
+            path.display(),
+            err
+        )
+    })? {
+        let entry = entry.map_err(|err| {
+            format!(
+                "failed to read evaluator scope directory entry in {}: {}",
+                path.display(),
+                err
+            )
+        })?;
+        let file_type = entry.file_type().map_err(|err| {
+            format!(
+                "failed to inspect evaluator scope path {}: {}",
+                entry.path().display(),
+                err
+            )
+        })?;
+        if file_type.is_dir() {
+            make_scope_directories_read_only(&entry.path())?;
+        }
+    }
+    platform::set_materialized_dir_permissions(path)
+}
+
+fn make_materialization_directories_private(path: &Path) -> Result<(), String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            return Err(format!(
+                "failed to inspect evaluator materialization directory {}: {}",
+                path.display(),
+                err
+            ));
+        }
+    };
+    if !metadata.file_type().is_dir() {
+        return Ok(());
+    }
+    platform::set_private_dir_permissions(path)?;
+    for entry in fs::read_dir(path).map_err(|err| {
+        format!(
+            "failed to read evaluator materialization directory {}: {}",
+            path.display(),
+            err
+        )
+    })? {
+        let entry = entry.map_err(|err| {
+            format!(
+                "failed to read evaluator materialization directory entry in {}: {}",
+                path.display(),
+                err
+            )
+        })?;
+        make_materialization_directories_private(&entry.path())?;
+    }
+    Ok(())
 }
 
 fn write_materialized_file(

@@ -364,7 +364,7 @@ fn staged_worktree_view_full_scope_returns_scope_root_by_tree_oid() {
 
 #[cfg(unix)]
 #[test]
-fn staged_worktree_view_snapshot_directories_are_private() {
+fn staged_worktree_view_scope_directories_are_read_only() {
     let root = git_project("staged-snapshot-private-dirs");
     fs::create_dir_all(root.join("dir")).unwrap();
     fs::write(root.join("dir/secret.txt"), "secret\n").unwrap();
@@ -383,8 +383,8 @@ fn staged_worktree_view_snapshot_directories_are_private() {
     assert_private_dir(&materialization_root.join("lazy"));
     assert_private_dir(&materialization_root.join("lazy/dir"));
     assert_private_dir(&materialization_root.join("scopes"));
-    assert_private_dir(&scope_root);
-    assert_private_dir(&scope_root.join("dir"));
+    assert_read_only_dir(&scope_root);
+    assert_read_only_dir(&scope_root.join("dir"));
 
     let _ = fs::remove_dir_all(root);
 }
@@ -885,6 +885,14 @@ fn assert_private_dir(path: &Path) {
 
     let mode = fs::metadata(path).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o700, "{} mode is {:o}", path.display(), mode);
+}
+
+#[cfg(unix)]
+fn assert_read_only_dir(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = fs::metadata(path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o555, "{} mode is {:o}", path.display(), mode);
 }
 
 #[cfg(unix)]

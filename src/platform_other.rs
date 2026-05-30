@@ -39,6 +39,14 @@ pub(crate) fn set_materialized_file_permissions(_path: &Path, _mode: &str) -> Re
     Ok(())
 }
 
+pub(crate) fn set_materialized_dir_permissions(_path: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+pub(crate) fn set_private_dir_permissions(_path: &Path) -> Result<(), String> {
+    Ok(())
+}
+
 pub(crate) fn create_materialized_symlink(target: &[u8], link: &Path) -> Result<(), String> {
     #[cfg(windows)]
     {

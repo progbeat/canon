@@ -156,6 +156,29 @@ pub(crate) fn set_materialized_file_permissions(path: &Path, mode: &str) -> Resu
         .map_err(|err| format!("failed to chmod {}: {}", path.display(), err))
 }
 
+pub(crate) fn set_materialized_dir_permissions(path: &Path) -> Result<(), String> {
+    set_directory_permissions(path, 0o555)
+}
+
+pub(crate) fn set_private_dir_permissions(path: &Path) -> Result<(), String> {
+    set_directory_permissions(path, 0o700)
+}
+
+fn set_directory_permissions(path: &Path, mode: u32) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
+    if !metadata.file_type().is_dir() {
+        return Err(format!(
+            "refusing to chmod non-directory {}",
+            path.display()
+        ));
+    }
+    let mut permissions = metadata.permissions();
+    permissions.set_mode(mode);
+    fs::set_permissions(path, permissions)
+        .map_err(|err| format!("failed to chmod {}: {}", path.display(), err))
+}
+
 pub(crate) fn create_materialized_symlink(target: &[u8], link: &Path) -> Result<(), String> {
     let target = std::ffi::OsStr::from_bytes(target);
     symlink(target, link).map_err(|err| {
