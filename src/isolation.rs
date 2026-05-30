@@ -169,7 +169,13 @@ impl Drop for NaiveIsolationGuard {
 }
 
 fn configured_secret_dir() -> Option<PathBuf> {
-    env::var_os(CANON_SECRET_DIR).map(PathBuf::from)
+    let value = env::var_os(CANON_SECRET_DIR)?;
+    // Match the policy's `if self.secret_dir` branches: an empty environment
+    // value is falsey and therefore behaves like no configured secret dir.
+    if value.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(value))
 }
 
 fn configured_dir(name: &str) -> Option<PathBuf> {

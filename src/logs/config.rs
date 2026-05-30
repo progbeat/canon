@@ -88,14 +88,8 @@ pub(crate) fn active_log_file_name(config: &DiagnosticLogConfig) -> DiagnosticLo
 }
 
 pub(crate) fn active_log_max_bytes(config: &DiagnosticLogConfig, file_count: usize) -> u64 {
-    if config.max_bytes == 0 {
-        return u64::MAX;
-    }
+    debug_assert!(config.max_bytes > 0);
     (config.max_bytes / file_count as u64).max(1)
-}
-
-pub(crate) fn diagnostic_logs_unlimited(config: &DiagnosticLogConfig) -> bool {
-    !config.explicitly_disabled && config.max_bytes == 0
 }
 
 pub(crate) fn diagnostic_logs_explicitly_disabled(config: &DiagnosticLogConfig) -> bool {

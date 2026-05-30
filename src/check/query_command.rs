@@ -2,9 +2,7 @@ use crate::check::command::{prepare_check_execution, PrepareCheckExecutionOption
 use crate::check::interrogation_state::{
     initial_visible_scope_for_expectation, CheckRuntime, InterrogationRunState,
 };
-use crate::check::lazy_reset::{
-    apply_lazy_full_scope_reset_for_cached, clear_active_lazy_full_scope_reset_ids,
-};
+use crate::check::lazy_reset::clear_active_lazy_full_scope_reset_ids;
 use crate::check::output::write_query_output;
 use crate::check::query::run_query_with_runner;
 use crate::check::reporting::{
@@ -202,12 +200,7 @@ fn write_query_finish(
     diagnostic_log: &mut DiagnosticLogWriter,
     err: Option<&str>,
 ) -> Result<(), String> {
-    // Query mode is ad-hoc and has no selected/cached expectation set; for the
-    // lazy reset algorithm it is equivalent to `cached_expectations = []`.
     let mut finish_error = err.map(str::to_string);
-    if let Err(reset_err) = apply_lazy_full_scope_reset_for_cached(root, 0, &[], diagnostic_log) {
-        finish_error.get_or_insert(reset_err);
-    }
     // A query can consume only the matching expectation's active reset, and
     // only when its implicit scope actually used that reset. Unrelated active
     // reset markers remain for a later expectation run.

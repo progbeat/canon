@@ -202,6 +202,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             return_expectation_error!("interrupted");
         }
 
+        let lazy_full_scope_reset = scheduled_full_scope_reset_ids.contains(&expectation.id);
         let mut verified_q_scope = run_expectation_try!(initial_visible_scope_for_expectation(
             root,
             expectation,
@@ -243,7 +244,11 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         // signals in default mode; they do not skip the independent
         // verification needed to trust a strictly narrower cache scope for
         // this expectation's final record.
-        if !record_requires_human_review(&interrogation.record)
+        // A lazy full-scope reset must persist a full-project q-scope for this
+        // run; accepting a fresh narrower suggestion immediately would undo
+        // the reset before it takes effect.
+        if !lazy_full_scope_reset
+            && !record_requires_human_review(&interrogation.record)
             && run_expectation_try!(q_scope_suggestion_should_get_independent_verification(
                 &runtime,
                 &expectation.agent,
