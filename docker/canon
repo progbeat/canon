@@ -15,6 +15,8 @@ mkdir -p "${canon_state}"
 # - one scratch tmpfs holds auth, Git locks, and evaluator files.
 exec docker run --rm -i \
   --user "$(id -u):$(id -g)" \
+  --cap-drop=ALL \
+  --security-opt=no-new-privileges \
   --read-only \
   --tmpfs "/scratch:mode=1777" \
   -v "${project_root}:${container_repository}:rw" \

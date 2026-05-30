@@ -68,6 +68,10 @@ pub(crate) fn apply_lazy_full_scope_reset_for_cached(
 pub(crate) fn activate_scheduled_lazy_full_scope_resets(root: &Path) -> Result<(), String> {
     let ids = read_scheduled_lazy_full_scope_resets(root)?;
     if !ids.is_empty() {
+        // Activation is the scheduled reset taking effect for this invocation:
+        // cache lookup treats active IDs as not reusable, and fresh
+        // interrogation starts from full project scope. The active marker is
+        // cleared only after that full-scope record is written.
         write_active_lazy_full_scope_reset_markers(root, &ids)?;
         remove_scheduled_lazy_full_scope_resets(root)?;
     }

@@ -259,7 +259,8 @@ impl RawExpectationExpansion<'_> {
             self.include_stack.push(file.clone());
             let result = (|| {
                 let content = self.read_expanded_file(&file)?;
-                let included = self.parse_included_items(&file, &content)?;
+                let mut included = self.parse_included_items(&file, &content)?;
+                inherit_include_settings(&mut included, &item.settings);
                 self.expand_items(Path::new(&file), included)
             })();
             self.include_stack.pop();
@@ -339,6 +340,43 @@ impl RawExpectationExpansion<'_> {
             .ok_or_else(|| format!("unknown preset: {}", preset))?;
         apply_expectation_settings(&mut agent, settings)?;
         Ok(agent)
+    }
+}
+
+fn inherit_include_settings(items: &mut [RawExpectationItem], inherited: &RawExpectationSettings) {
+    for item in items {
+        match item {
+            RawExpectationItem::Explicit(item) => {
+                inherit_expectation_settings(&mut item.settings, inherited);
+            }
+            RawExpectationItem::Generator(item) => {
+                inherit_expectation_settings(&mut item.settings, inherited);
+            }
+            RawExpectationItem::Include(item) => {
+                inherit_expectation_settings(&mut item.settings, inherited);
+            }
+        }
+    }
+}
+
+fn inherit_expectation_settings(
+    settings: &mut RawExpectationSettings,
+    inherited: &RawExpectationSettings,
+) {
+    if settings.preset.is_none() {
+        settings.preset = inherited.preset.clone();
+    }
+    if settings.models.is_none() {
+        settings.models = inherited.models.clone();
+    }
+    if settings.thinking.is_none() {
+        settings.thinking = inherited.thinking.clone();
+    }
+    if settings.ignore.is_none() {
+        settings.ignore = inherited.ignore.clone();
+    }
+    if settings.plugins.is_none() {
+        settings.plugins = inherited.plugins.clone();
     }
 }
 

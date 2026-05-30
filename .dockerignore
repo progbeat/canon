@@ -10,6 +10,7 @@
 !resources/
 !resources/**
 !docker/
+!docker/canon
 !docker/entrypoint
 
 !.canon/

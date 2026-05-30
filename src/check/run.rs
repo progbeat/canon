@@ -346,7 +346,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             &interrogation.record
         ));
         records.push(interrogation.record);
-        if scheduled_full_scope_reset_ids.contains(&expectation.id) {
+        if lazy_full_scope_reset {
             run_expectation_try!(clear_active_lazy_full_scope_reset(root, expectation));
         }
         if should_stop {
@@ -430,8 +430,9 @@ fn default_check_selection(
     }
     if cached_failure_seen {
         // Default selection stops at cached failures. Active lazy full-scope
-        // reset markers are consumed only when their expectation is actually
-        // selected in a later invocation.
+        // reset markers remain active and keep their expectations from using
+        // narrow cached results until a full-scope interrogation can persist a
+        // replacement record.
         selected.clear();
         let mut ordered_cached = cached
             .into_iter()

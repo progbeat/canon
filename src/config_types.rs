@@ -147,6 +147,7 @@ pub(crate) struct RawGeneratorExpectation {
 #[derive(Debug, Clone)]
 pub(crate) struct RawIncludeExpectation {
     pub(crate) include: String,
+    pub(crate) settings: RawExpectationSettings,
 }
 
 #[derive(Debug, Deserialize)]
@@ -230,6 +231,7 @@ impl RawExpectationItem {
                 if let Some(include) = include {
                     return Ok(RawExpectationItem::Include(RawIncludeExpectation {
                         include,
+                        settings,
                     }));
                 }
                 match fields {

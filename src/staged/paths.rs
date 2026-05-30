@@ -32,13 +32,10 @@ pub(crate) fn create_snapshot_root(root: &Path) -> Result<SnapshotRoot, String> 
         return create_snapshot_root_from_configured_cache_dir(&path);
     }
     let mut errors = Vec::new();
-    // The lazy hardlink policy prefers memory-backed temporary storage when
-    // the host provides a usable parent. Platform discovery is centralized in
-    // `platform::memory_backed_staged_snapshot_parent_candidates`: Unix adds
-    // common RAM paths and /proc-discovered tmpfs/ramfs mounts, while other
-    // platforms can expose explicit RAM-disk temp roots. Ordinary temporary
-    // storage is tried only after every discovered memory-backed parent is
-    // missing, inside the worktree, or unusable.
+    // This is Canon's `make_temp_dir()` for hardlink materialization when
+    // CANON_TREE_CACHE_DIR is unset. A separate canon expectation constrains
+    // canon-owned temporary storage to prefer memory-backed parents when the
+    // host provides one; ordinary temp storage remains the fallback.
     if let Some(path) = create_snapshot_root_from_candidates(
         &root,
         crate::platform::memory_backed_staged_snapshot_parent_candidates(),

@@ -96,8 +96,9 @@ impl StagedWorktreeView {
         visible_tree_oid: &str,
     ) -> Result<PathBuf, String> {
         // Lazy hardlink policy mapping:
-        // - `visible_tree_entries` is `visible_tree.entry_paths` after
-        //   applying visible scope and ignore rules to the checked Git tree.
+        // - `visible_tree_entries` is the concrete `visible_tree.entry_paths`
+        //   set for this evaluator-visible Git tree, after scope and ignore
+        //   rules have been applied to the checked tree.
         // - `unpack_missing_files` performs `git_tree.extract` once per
         //   not-yet-unpacked blob into `lazy_tree_dir`.
         // - `hardlink_visible_tree_root` builds the tree under
@@ -119,11 +120,10 @@ impl StagedWorktreeView {
         agent: &AgentConfig,
         scope: &[String],
     ) -> Result<Vec<StagedTrackedFile>, String> {
-        // The lazy hardlink policy is defined over blob-backed
-        // file_entries(git_tree). Canon's TreeSource supplies that Git tree,
-        // whether it is the staged index tree or an explicit `--tree`
-        // revision, then the materializer applies visible-scope and ignore
-        // filters to those file entries.
+        // Build the `visible_tree.entry_paths` set used by the hardlink
+        // materialization policy. `TreeSource` supplies the checked Git tree
+        // (staged index or explicit `--tree` revision); scope and ignore
+        // filters define the evaluator-visible tree over its blob entries.
         Ok(self
             .source_files()?
             .into_iter()
