@@ -339,8 +339,8 @@ fn staged_worktree_view_reuses_restricted_scope_root_by_tree_oid() {
 }
 
 #[test]
-fn staged_worktree_view_full_scope_returns_lazy_tree() {
-    let root = git_project("staged-snapshot-full-returns-lazy");
+fn staged_worktree_view_full_scope_returns_scope_root_by_tree_oid() {
+    let root = git_project("staged-snapshot-full-scope-root");
     fs::write(root.join("a.txt"), "GOOD\n").unwrap();
     Command::new("git")
         .args(["add", "a.txt"])
@@ -353,7 +353,11 @@ fn staged_worktree_view_full_scope_returns_lazy_tree() {
         .materialize_evaluator_scope(&empty_test_agent(), &full_scope())
         .unwrap();
 
-    assert_eq!(full, staged_view.materialization_root().join("lazy"));
+    assert_ne!(full, staged_view.materialization_root().join("lazy"));
+    assert_eq!(
+        full.parent().unwrap().file_name().unwrap().to_str(),
+        Some("scopes")
+    );
     assert_eq!(fs::read_to_string(full.join("a.txt")).unwrap(), "GOOD\n");
     let _ = fs::remove_dir_all(root);
 }
@@ -818,7 +822,7 @@ fn staged_worktree_view_materializes_literal_pathspec_names_from_index() {
 
 #[cfg(unix)]
 #[test]
-fn staged_worktree_view_materializes_symlinks_as_regular_files() {
+fn staged_worktree_view_materializes_symlinks_as_symlinks() {
     use std::os::unix::fs::symlink;
 
     let root = git_project("staged-snapshot-symlink");
@@ -841,11 +845,10 @@ fn staged_worktree_view_materializes_symlinks_as_regular_files() {
             .unwrap();
         let snapshot_link = scope_root.join("outside-link");
         let metadata = fs::symlink_metadata(&snapshot_link).unwrap();
-        assert!(!metadata.file_type().is_symlink());
-        assert!(metadata.file_type().is_file());
+        assert!(metadata.file_type().is_symlink());
         assert_eq!(
-            fs::read_to_string(snapshot_link).unwrap(),
-            "/tmp/canon-outside-target"
+            fs::read_link(snapshot_link).unwrap(),
+            std::path::PathBuf::from("/tmp/canon-outside-target")
         );
     }
 

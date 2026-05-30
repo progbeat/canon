@@ -2,7 +2,6 @@ use crate::config_types::AgentConfig;
 use crate::git::tree_source::TreeSource;
 use crate::git::visible_tree_oid::{visible_tree_oid_for_tracked_files, VisibleTreeOidCache};
 use crate::git::{GitBlobReader, StagedTrackedFile};
-use crate::hash::full_scope;
 use crate::platform;
 use crate::scope::{is_denied_path_bytes, path_bytes_in_scope, sanitize_scope};
 use crate::staged::paths::create_snapshot_root;
@@ -81,19 +80,16 @@ impl StagedWorktreeView {
     ) -> Result<PathBuf, String> {
         let scope = sanitize_scope(scope, agent)?;
         let scope_paths = self.evaluator_visible_git_tree(agent, &scope)?;
-        self.materialize_scope(&scope, &scope_paths)
+        self.materialize_scope(&scope_paths)
     }
 
-    fn materialize_scope(
-        &self,
-        scope: &[String],
-        scope_paths: &[StagedTrackedFile],
-    ) -> Result<PathBuf, String> {
-        self.unpack_missing_files(scope_paths)?;
-        if scope == full_scope() {
-            return Ok(self.lazy_root.clone());
+    fn materialize_scope(&self, scope_paths: &[StagedTrackedFile]) -> Result<PathBuf, String> {
+        let scope_root = self.scope_root_for_files(scope_paths)?;
+        if scope_root.exists() {
+            return Ok(scope_root);
         }
-        self.hardlink_scope_root(scope_paths)
+        self.unpack_missing_files(scope_paths)?;
+        self.hardlink_scope_root(scope_paths, scope_root)
     }
 
     fn evaluator_visible_git_tree(
@@ -163,12 +159,16 @@ impl StagedWorktreeView {
             .read_blobs(object_ids)
     }
 
-    fn hardlink_scope_root(&self, files: &[StagedTrackedFile]) -> Result<PathBuf, String> {
+    fn scope_root_for_files(&self, files: &[StagedTrackedFile]) -> Result<PathBuf, String> {
         let scope_tree_oid = visible_tree_oid_for_tracked_files(&self.source_root, files)?;
-        let scope_root = self.scope_roots.join(scope_tree_oid);
-        if scope_root.exists() {
-            return Ok(scope_root);
-        }
+        Ok(self.scope_roots.join(scope_tree_oid))
+    }
+
+    fn hardlink_scope_root(
+        &self,
+        files: &[StagedTrackedFile],
+        scope_root: PathBuf,
+    ) -> Result<PathBuf, String> {
         if let Err(err) = platform::create_private_dir(&scope_root) {
             if err.kind() == ErrorKind::AlreadyExists {
                 return Ok(scope_root);
@@ -192,14 +192,7 @@ impl StagedWorktreeView {
                     )
                 })?;
             }
-            fs::hard_link(&source, &target).map_err(|err| {
-                format!(
-                    "failed to hardlink evaluator scope file {} to {}: {}",
-                    source.display(),
-                    target.display(),
-                    err
-                )
-            })?;
+            platform::hardlink_file_or_copy_symlink(&source, &target)?;
         }
         Ok(scope_root)
     }
@@ -227,6 +220,9 @@ fn write_materialized_file(
             )
         })?;
     }
+    if file.mode == "120000" {
+        return platform::create_materialized_symlink(blob, &target);
+    }
     fs::write(&target, blob).map_err(|err| {
         format!(
             "failed to write evaluator lazy file {}: {}",
@@ -234,9 +230,6 @@ fn write_materialized_file(
             err
         )
     })?;
-    // Git mode 120000 stores symlink targets as blob bytes. The lazy
-    // materialization policy intentionally writes those bytes as a regular
-    // file so evaluator reads cannot follow links outside the staged tree.
     platform::set_materialized_file_permissions(&target, &file.mode)
 }
 

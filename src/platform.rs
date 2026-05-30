@@ -50,6 +50,14 @@ pub(crate) fn set_materialized_file_permissions(path: &Path, mode: &str) -> Resu
     imp::set_materialized_file_permissions(path, mode)
 }
 
+pub(crate) fn create_materialized_symlink(target: &[u8], link: &Path) -> Result<(), String> {
+    imp::create_materialized_symlink(target, link)
+}
+
+pub(crate) fn hardlink_file_or_copy_symlink(source: &Path, target: &Path) -> Result<(), String> {
+    imp::hardlink_file_or_copy_symlink(source, target)
+}
+
 pub(crate) fn create_private_dir(path: &Path) -> io::Result<()> {
     imp::create_private_dir(path)
 }
@@ -64,10 +72,25 @@ pub(crate) fn open_file_for_append_without_following_symlink(
     imp::open_file_for_append_without_following_symlink(path)
 }
 
+#[cfg(test)]
 pub(crate) fn staged_snapshot_parent_candidates() -> Vec<PathBuf> {
+    let mut parents = memory_backed_staged_snapshot_parent_candidates();
+    for parent in ordinary_staged_snapshot_parent_candidates() {
+        push_unique_path(&mut parents, parent);
+    }
+    parents
+}
+
+pub(crate) fn memory_backed_staged_snapshot_parent_candidates() -> Vec<PathBuf> {
     let mut parents = Vec::new();
     add_common_memory_backed_staged_snapshot_parent_candidates(&mut parents);
-    imp::add_staged_snapshot_parent_candidates(&mut parents);
+    imp::add_memory_backed_staged_snapshot_parent_candidates(&mut parents);
+    parents
+}
+
+pub(crate) fn ordinary_staged_snapshot_parent_candidates() -> Vec<PathBuf> {
+    let mut parents = Vec::new();
+    imp::add_ordinary_staged_snapshot_parent_candidates(&mut parents);
     let temp_dir = std::env::temp_dir();
     if !parents.iter().any(|parent| parent == &temp_dir) {
         parents.push(temp_dir);

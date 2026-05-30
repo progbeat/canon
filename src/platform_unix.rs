@@ -156,6 +156,48 @@ pub(crate) fn set_materialized_file_permissions(path: &Path, mode: &str) -> Resu
         .map_err(|err| format!("failed to chmod {}: {}", path.display(), err))
 }
 
+pub(crate) fn create_materialized_symlink(target: &[u8], link: &Path) -> Result<(), String> {
+    let target = std::ffi::OsStr::from_bytes(target);
+    symlink(target, link).map_err(|err| {
+        format!(
+            "failed to symlink evaluator file {}: {}",
+            link.display(),
+            err
+        )
+    })
+}
+
+pub(crate) fn hardlink_file_or_copy_symlink(source: &Path, target: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(source).map_err(|err| {
+        format!(
+            "failed to inspect evaluator file {}: {}",
+            source.display(),
+            err
+        )
+    })?;
+    if metadata.file_type().is_symlink() {
+        let link_target = fs::read_link(source)
+            .map_err(|err| format!("failed to read symlink {}: {}", source.display(), err))?;
+        symlink(&link_target, target).map_err(|err| {
+            format!(
+                "failed to copy evaluator symlink {} to {}: {}",
+                source.display(),
+                target.display(),
+                err
+            )
+        })
+    } else {
+        fs::hard_link(source, target).map_err(|err| {
+            format!(
+                "failed to hardlink evaluator scope file {} to {}: {}",
+                source.display(),
+                target.display(),
+                err
+            )
+        })
+    }
+}
+
 pub(crate) fn create_private_dir(path: &Path) -> io::Result<()> {
     private_dir_builder(false).create(path)
 }
@@ -181,11 +223,13 @@ pub(crate) fn open_file_for_append_without_following_symlink(
         .map_err(|err| format!("failed to open {}: {}", path.display(), err))
 }
 
-pub(crate) fn add_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
-    add_memory_backed_staged_snapshot_parent_candidates(parents);
+pub(crate) fn add_memory_backed_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
+    add_discovered_memory_backed_staged_snapshot_parent_candidates(parents);
 }
 
-fn add_memory_backed_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
+pub(crate) fn add_ordinary_staged_snapshot_parent_candidates(_parents: &mut Vec<PathBuf>) {}
+
+fn add_discovered_memory_backed_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
     // Prefer memory-backed locations when the host exposes them. Missing
     // candidates are harmless: snapshot creation skips paths that do not exist
     // and later falls back to the ordinary temporary directory.

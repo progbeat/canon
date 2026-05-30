@@ -12,8 +12,37 @@ pub(crate) fn create_snapshot_root(root: &Path) -> Result<PathBuf, String> {
         )
     })?;
     let mut errors = Vec::new();
-    for parent in crate::platform::staged_snapshot_parent_candidates() {
-        if let Err(err) = snapshot_parent_outside_worktree(&root, &parent) {
+    // The lazy hardlink policy prefers memory-backed temporary storage when
+    // the host provides a usable parent. Ordinary temporary storage is tried
+    // only after every discovered memory-backed parent is missing, inside the
+    // worktree, or unusable.
+    if let Some(path) = create_snapshot_root_from_candidates(
+        &root,
+        crate::platform::memory_backed_staged_snapshot_parent_candidates(),
+        &mut errors,
+    ) {
+        return Ok(path);
+    }
+    if let Some(path) = create_snapshot_root_from_candidates(
+        &root,
+        crate::platform::ordinary_staged_snapshot_parent_candidates(),
+        &mut errors,
+    ) {
+        return Ok(path);
+    }
+    Err(format!(
+        "failed to create staged snapshot directory: {}",
+        errors.join("; ")
+    ))
+}
+
+fn create_snapshot_root_from_candidates(
+    root: &Path,
+    parents: Vec<PathBuf>,
+    errors: &mut Vec<String>,
+) -> Option<PathBuf> {
+    for parent in parents {
+        if let Err(err) = snapshot_parent_outside_worktree(root, &parent) {
             errors.push(err);
             continue;
         }
@@ -24,15 +53,12 @@ pub(crate) fn create_snapshot_root(root: &Path) -> Result<PathBuf, String> {
                 continue;
             }
         };
-        match verify_snapshot_root_outside_worktree(&root, path) {
-            Ok(path) => return Ok(path),
+        match verify_snapshot_root_outside_worktree(root, path) {
+            Ok(path) => return Some(path),
             Err(err) => errors.push(err),
         }
     }
-    Err(format!(
-        "failed to create staged snapshot directory: {}",
-        errors.join("; ")
-    ))
+    None
 }
 
 pub(crate) fn snapshot_parent_outside_worktree(root: &Path, parent: &Path) -> Result<(), String> {
