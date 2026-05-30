@@ -18,7 +18,7 @@ presets:
     thinking: xhigh
   docker:
     <<: *default_preset
-    ignore:
+    ignore:  # overrides default_preset.ignore
       - ".canon/**"
       - ".github/**"
       - "AGENTS.md"
