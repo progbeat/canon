@@ -59,7 +59,14 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
     let had_existing_session = existing_session.is_some();
     let lifecycle_log = match existing_session {
         Some(existing) => thread_reuse_log(state, existing, request),
-        None => start_thread_session(runtime, runner, state, &session_key, request)?,
+        None => start_thread_session(
+            runtime,
+            runner,
+            state,
+            &session_key,
+            &visible_tree_oid,
+            request,
+        )?,
     };
     let mut session_id = lifecycle_log.session_id.clone();
     write_thread_lifecycle_event(
@@ -89,8 +96,14 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
                 &lifecycle_log.developer_instructions,
                 err.message_str(),
             )?;
-            let lifecycle_log =
-                start_thread_session(runtime, runner, state, &session_key, request)?;
+            let lifecycle_log = start_thread_session(
+                runtime,
+                runner,
+                state,
+                &session_key,
+                &visible_tree_oid,
+                request,
+            )?;
             session_id = lifecycle_log.session_id.clone();
             write_thread_lifecycle_event(
                 diagnostic_log,
@@ -160,11 +173,12 @@ fn start_thread_session<R: EvaluatorRunner>(
     runner: &mut R,
     state: &mut InterrogationRunState,
     session_key: &str,
+    visible_tree_oid: &str,
     request: ThreadTurnRequest<'_>,
 ) -> Result<ThreadLifecycleLog, EvaluatorError> {
     let developer_instructions = developer_instructions(request.enforced_scope);
     let session_root = runtime
-        .session_root_for_scope(request.agent, request.enforced_scope)
+        .session_root_for_scope(request.agent, request.enforced_scope, visible_tree_oid)
         .map_err(EvaluatorError::message)?;
     let created = match runner.start_session(
         &session_root,

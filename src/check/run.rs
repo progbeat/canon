@@ -2,10 +2,9 @@ use crate::check::cache::{
     cached_result_for_expectation, write_cache_hit, CachedResultLookup, CheckCacheHit,
 };
 use crate::check::interrogation_policy::{
-    interrogate_or_error_record, interrogate_with_full_scope_retry, narrowed_scope_is_accepted,
+    interrogate_with_full_scope_retry, narrowed_scope_is_accepted,
     q_scope_suggestion_should_get_independent_verification, turn_exceeds_break_after_tokens,
-    turn_has_context_compaction, write_scope_narrowing_event, InterrogationCall,
-    ScopedInterrogation,
+    turn_has_context_compaction, write_scope_narrowing_event, ScopedInterrogation,
 };
 use crate::check::interrogation_state::{
     initial_visible_scope_for_expectation, CheckRuntime, InterrogationRunState,
@@ -257,29 +256,31 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             // A q-scope suggestion becomes reusable only when an independent
             // interrogation under that suggested scope returns a valid answer.
             let initial_record = interrogation.record.clone();
-            let verification_scope = run_expectation_try!(sanitize_scope(
+            let proposed_scope = run_expectation_try!(sanitize_scope(
                 initial_record
                     .suggested_q_scope
                     .as_deref()
                     .expect("suggestion was validated before verification"),
                 &expectation.agent,
             ));
-            let narrowed = run_expectation_try!(interrogate_or_error_record(
-                InterrogationCall {
+            let mut verification_scope = proposed_scope.clone();
+            let narrowed = run_expectation_try!(interrogate_with_full_scope_retry(
+                ScopedInterrogation {
                     runtime: &runtime,
                     expectation,
-                    scope: &verification_scope,
+                    enforced_scope: &mut verification_scope,
                 },
                 runner,
                 &mut diagnostic_log,
                 &mut interrogation_run_state,
                 &mut caches.visible_tree_oid,
+                options.break_after_tokens,
             ));
             break_after_tokens_hit |=
                 turn_exceeds_break_after_tokens(&narrowed, options.break_after_tokens);
             context_compaction_hit |= turn_has_context_compaction(&narrowed);
             stop_after_current_expectation |= narrowed.stop_after_current_expectation;
-            let accepted = narrowed_scope_is_accepted(&narrowed.record);
+            let accepted = narrowed_scope_is_accepted(&narrowed.record, &proposed_scope);
             if accepted {
                 narrowing.accepted += 1;
             } else {
@@ -289,7 +290,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 &mut diagnostic_log,
                 &expectation.id,
                 &verified_q_scope,
-                &verification_scope,
+                &proposed_scope,
                 accepted,
                 &initial_record,
                 &narrowed.record,

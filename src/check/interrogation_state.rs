@@ -159,6 +159,7 @@ impl<'a> CheckRuntime<'a> {
         &self,
         agent: &AgentConfig,
         scope: &[String],
+        visible_tree_oid: &str,
     ) -> Result<PathBuf, String> {
         match self.session_roots {
             #[cfg(test)]
@@ -166,7 +167,7 @@ impl<'a> CheckRuntime<'a> {
             CheckSessionRoots::Materialized(staged_view) => {
                 // Configured ignore patterns shape the evaluator-visible Git
                 // tree before the lazy hardlink materialization step.
-                staged_view.materialize_evaluator_scope(agent, scope)
+                staged_view.materialize_evaluator_scope(agent, scope, visible_tree_oid)
             }
         }
     }

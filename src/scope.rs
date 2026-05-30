@@ -440,21 +440,6 @@ pub(crate) fn effective_ignore_patterns(agent: &AgentConfig) -> Vec<String> {
     patterns
 }
 
-pub(crate) fn git_pathspecs_for_visible_scope(
-    agent: &AgentConfig,
-    scope: &[String],
-) -> Vec<String> {
-    let mut pathspecs = if scope == full_scope() {
-        full_scope()
-    } else {
-        scope.to_vec()
-    };
-    for pattern in effective_ignore_patterns(agent) {
-        pathspecs.push(format!(":(exclude){}", pattern));
-    }
-    pathspecs
-}
-
 fn push_unique_pattern(patterns: &mut Vec<String>, pattern: String) {
     if !patterns.iter().any(|existing| existing == &pattern) {
         patterns.push(pattern);

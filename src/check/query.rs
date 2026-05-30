@@ -61,32 +61,17 @@ pub(crate) fn ask_query_with_model<R: EvaluatorRunner>(
     // q-scope suggestions are trusted only after an independent verification
     // turn returns a schema-valid answer under the suggested scope.
     let mut active_scope = query.enforced_scope.to_vec();
-    let mut result = ask_query_once(
+    let mut result = ask_query_with_full_scope_retry(
         runtime,
         query.question,
-        &active_scope,
+        &mut active_scope,
         runner,
         diagnostic_log,
         state,
         model,
     )?;
-    if query_should_retry_full_scope_after_restricted_response(&result.answer, &active_scope) {
-        // Restricted insufficient-evidence is not final for query-mode
-        // interrogations either; retry once with full project scope and let
-        // that response drive narrowing or human review.
-        active_scope = full_scope();
-        result = ask_query_once(
-            runtime,
-            query.question,
-            &active_scope,
-            runner,
-            diagnostic_log,
-            state,
-            model,
-        )?;
-    }
     if query_should_verify_narrowing(runtime, state, &active_scope, &result.answer)? {
-        let verification_scope = sanitize_scope(
+        let proposed_scope = sanitize_scope(
             result
                 .answer
                 .q_scope_suggestion
@@ -94,17 +79,18 @@ pub(crate) fn ask_query_with_model<R: EvaluatorRunner>(
                 .expect("suggestion was validated before verification"),
             &runtime.config.agent,
         )?;
-        let narrowed = ask_query_once(
+        let mut verification_scope = proposed_scope.clone();
+        let narrowed = ask_query_with_full_scope_retry(
             runtime,
             query.question,
-            &verification_scope,
+            &mut verification_scope,
             runner,
             diagnostic_log,
             state,
             model,
         );
         if let Ok(narrowed) = narrowed {
-            if query_narrowed_answer_is_accepted(&narrowed.answer) {
+            if query_narrowed_answer_is_accepted(&narrowed.answer, &proposed_scope) {
                 result = narrowed;
             } else {
                 result.answer.q_scope_suggestion = None;
@@ -121,6 +107,41 @@ pub(crate) fn ask_query_with_model<R: EvaluatorRunner>(
         )));
     }
     write_query_result_event(query.question, diagnostic_log, &result.answer)?;
+    Ok(result)
+}
+
+fn ask_query_with_full_scope_retry<R: EvaluatorRunner>(
+    runtime: &CheckRuntime<'_>,
+    question: &str,
+    enforced_scope: &mut Vec<String>,
+    runner: &mut R,
+    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    state: &mut InterrogationRunState,
+    model: Option<&str>,
+) -> Result<QueryResult, EvaluatorError> {
+    let mut result = ask_query_once(
+        runtime,
+        question,
+        enforced_scope,
+        runner,
+        diagnostic_log,
+        state,
+        model,
+    )?;
+    if query_should_retry_full_scope_after_restricted_response(&result.answer, enforced_scope) {
+        // Restricted insufficient-evidence is not final for query-mode
+        // interrogations either; retry once with full project scope.
+        *enforced_scope = full_scope();
+        result = ask_query_once(
+            runtime,
+            question,
+            enforced_scope,
+            runner,
+            diagnostic_log,
+            state,
+            model,
+        )?;
+    }
     Ok(result)
 }
 
@@ -182,11 +203,11 @@ fn query_should_verify_narrowing(
     .map_err(EvaluatorError::from)
 }
 
-fn query_narrowed_answer_is_accepted(narrowed: &ParsedAnswer) -> bool {
+fn query_narrowed_answer_is_accepted(narrowed: &ParsedAnswer, proposed_scope: &[String]) -> bool {
     matches!(
         ObservedAnswerState::from_error(narrowed.error.as_deref()),
         ObservedAnswerState::Answer
-    )
+    ) && narrowed.scope == proposed_scope
 }
 
 fn query_human_review_reason(result: &QueryResult) -> Option<&'static str> {

@@ -1,6 +1,6 @@
 use crate::config_types::AgentConfig;
 use crate::git::tree_source::TreeSource;
-use crate::git::visible_tree_oid::{visible_tree_oid_for_tracked_files, VisibleTreeOidCache};
+use crate::git::visible_tree_oid::VisibleTreeOidCache;
 use crate::git::{GitBlobReader, StagedTrackedFile};
 use crate::platform;
 use crate::scope::{is_denied_path_bytes, path_bytes_in_scope, sanitize_scope};
@@ -44,7 +44,7 @@ impl StagedWorktreeView {
         source: TreeSource,
         _visible_tree_oid_cache: &mut VisibleTreeOidCache,
     ) -> Result<StagedWorktreeView, String> {
-        let _files = source.tracked_files(root)?;
+        let files = source.tracked_files(root)?;
         let materialization_root = create_snapshot_root(root)?;
         if let Err(err) = platform::create_private_dir(&materialization_root.join("lazy"))
             .and_then(|_| platform::create_private_dir(&materialization_root.join("scopes")))
@@ -62,7 +62,7 @@ impl StagedWorktreeView {
             lazy_root: materialization_root.join("lazy"),
             scope_roots: materialization_root.join("scopes"),
             materialization_root,
-            source_files: RefCell::new(None),
+            source_files: RefCell::new(Some(files)),
             unpacked_paths: RefCell::new(BTreeSet::new()),
             blob_reader: RefCell::new(None),
         })
@@ -77,13 +77,18 @@ impl StagedWorktreeView {
         &self,
         agent: &AgentConfig,
         scope: &[String],
+        visible_tree_oid: &str,
     ) -> Result<PathBuf, String> {
         let scope = sanitize_scope(scope, agent)?;
         let scope_paths = self.scoped_tree_entries(agent, &scope)?;
-        self.materialize_scope(&scope_paths)
+        self.materialize_scope(&scope_paths, visible_tree_oid)
     }
 
-    fn materialize_scope(&self, scope_paths: &[StagedTrackedFile]) -> Result<PathBuf, String> {
+    fn materialize_scope(
+        &self,
+        scope_paths: &[StagedTrackedFile],
+        visible_tree_oid: &str,
+    ) -> Result<PathBuf, String> {
         // Lazy hardlink policy mapping:
         // - `scope_paths` is `git_tree.limit(pathspecs=scope).entry_paths`.
         // - `unpack_missing_files` performs `git_tree.extract` once per
@@ -91,7 +96,10 @@ impl StagedWorktreeView {
         // - `hardlink_scope_root` builds the scoped tree under
         //   `scope_roots/<scoped tree OID>` and then chmods every directory
         //   read-only after its children are linked.
-        let scope_root = self.scope_root_for_files(scope_paths)?;
+        // The scoped tree OID is computed by the run-level VisibleTreeOidCache
+        // before session start, so materialization does not start git per
+        // expectation or per history-derived scope.
+        let scope_root = self.scope_roots.join(visible_tree_oid);
         if scope_root.exists() {
             return Ok(scope_root);
         }
@@ -164,11 +172,6 @@ impl StagedWorktreeView {
             .as_mut()
             .expect("git blob reader was initialized")
             .read_blobs(object_ids)
-    }
-
-    fn scope_root_for_files(&self, files: &[StagedTrackedFile]) -> Result<PathBuf, String> {
-        let scope_tree_oid = visible_tree_oid_for_tracked_files(&self.source_root, files)?;
-        Ok(self.scope_roots.join(scope_tree_oid))
     }
 
     fn hardlink_scope_root(
@@ -348,10 +351,20 @@ mod tests {
             .current_dir(&root)
             .output()
             .unwrap();
-        let staged_view = StagedWorktreeView::apply(&root).unwrap();
+        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
+        let agent = empty_test_agent();
+        let scope = full_scope();
+        let staged_view = StagedWorktreeView::apply_with_visible_tree_oid_cache(
+            &root,
+            &mut visible_tree_oid_cache,
+        )
+        .unwrap();
+        let visible_tree_oid = visible_tree_oid_cache
+            .staged_visible_tree_oid(&root, &agent, &scope)
+            .unwrap();
         let materialization_root = staged_view.materialization_root().to_path_buf();
         let scope_root = staged_view
-            .materialize_evaluator_scope(&empty_test_agent(), &full_scope())
+            .materialize_evaluator_scope(&agent, &scope, &visible_tree_oid)
             .unwrap();
 
         assert_dir_mode(&materialization_root, 0o700);

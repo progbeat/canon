@@ -1,7 +1,4 @@
-use crate::config_types::AgentConfig;
 use crate::git::{staged_tracked_files, tree_tracked_files, StagedTrackedFile};
-use crate::hash::full_scope;
-use crate::scope::{is_denied_path_bytes, path_bytes_in_scope, sanitize_scope_for_hash};
 use std::path::Path;
 
 pub(crate) const STAGED_TREE_ARG: &str = ":staged";
@@ -41,21 +38,6 @@ impl TreeSource {
         }
     }
 
-    pub(crate) fn visible_files(
-        &self,
-        root: &Path,
-        agent: &AgentConfig,
-        scope: &[String],
-    ) -> Result<Vec<StagedTrackedFile>, String> {
-        let scope = sanitize_scope_for_hash(scope)?;
-        Ok(self
-            .tracked_files(root)?
-            .into_iter()
-            .filter(|file| file.is_blob_file_entry())
-            .filter(|file| source_path_in_visible_scope(agent, &file.path, &scope))
-            .collect())
-    }
-
     pub(crate) fn is_default_checked_tree(&self) -> bool {
         matches!(self, TreeSource::Staged)
     }
@@ -73,9 +55,4 @@ pub(crate) fn validate_tree_arg(value: &str, option: &str) -> Result<(), String>
         return Err(format!("{} unsupported pseudo-tree: {}", option, value));
     }
     Ok(())
-}
-
-fn source_path_in_visible_scope(agent: &AgentConfig, path: &[u8], scope: &[String]) -> bool {
-    (scope == full_scope() || path_bytes_in_scope(path, scope))
-        && !is_denied_path_bytes(agent, path)
 }
