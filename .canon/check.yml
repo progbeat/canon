@@ -52,6 +52,7 @@ expectations:
   - q: "Are there any inconsistencies between `README.md` and the current state of the repository?"
     a: "no"
     cooldown: 1d
+    ignore: []
 
   - q: "Are there any inconsistencies between `docs/GLOSSARY.md` and the codebase?"
     a: "no"
