@@ -16,8 +16,6 @@ Options:
       --tree <TREE>            Check this Git tree [default: :staged]
       --against-tree <TREE>    Compare against this Git tree [default: HEAD]
       --keep-going             Continue after failures
-      --ignore-cache           Re-evaluate expectations with cached results
-      --ignore-cooldown        Re-evaluate expectations in cooldown
       --no-sandbox             Disable canon-managed sandboxing; caller is responsible for isolation
   -h, --help                   Print help
 
