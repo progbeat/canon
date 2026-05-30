@@ -232,6 +232,3 @@ mod token_usage_types;
 fn main() {
     cli::main();
 }
-
-#[cfg(test)]
-mod tests;

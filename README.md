@@ -39,6 +39,13 @@ Restart Codex after installing the skills.
 
 3. Iterate.
 
+## Development
+
+Tests that inspect crate internals belong in the implementation module they
+exercise, under an inline `#[cfg(test)]` module. Separate test files are
+reserved for platform-independent intended behavior exercised through public
+interfaces.
+
 ## How It Scales
 
 Each expectation is checked in a sandboxed scope. When a question can be

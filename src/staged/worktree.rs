@@ -318,3 +318,105 @@ fn relative_path_from_git_path(path: &[u8]) -> Result<PathBuf, String> {
     }
     Ok(path)
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::config_types::AgentConfig;
+    use crate::hash::full_scope;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process;
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn materialized_scope_directories_are_read_only() {
+        let root = git_project("staged-snapshot-scope-read-only-dirs");
+        fs::create_dir_all(root.join("dir")).unwrap();
+        fs::write(root.join("dir/secret.txt"), "secret\n").unwrap();
+        Command::new("git")
+            .args(["add", "dir/secret.txt"])
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        let staged_view = StagedWorktreeView::apply(&root).unwrap();
+        let materialization_root = staged_view.materialization_root().to_path_buf();
+        let scope_root = staged_view
+            .materialize_evaluator_scope(&empty_test_agent(), &full_scope())
+            .unwrap();
+
+        assert_dir_mode(&materialization_root, 0o700);
+        assert_dir_mode(&materialization_root.join("lazy"), 0o700);
+        assert_dir_mode(&materialization_root.join("lazy/dir"), 0o700);
+        assert_dir_mode(&materialization_root.join("scopes"), 0o700);
+        assert_dir_mode(&scope_root, 0o555);
+        assert_dir_mode(&scope_root.join("dir"), 0o555);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn empty_test_agent() -> AgentConfig {
+        AgentConfig {
+            models: Vec::new(),
+            thinking: "medium".to_string(),
+            instructions: None,
+            ignore: Vec::new(),
+            plugins: Vec::new(),
+        }
+    }
+
+    fn assert_dir_mode(path: &Path, expected: u32) {
+        let mode = fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode,
+            expected,
+            "{} mode is {:o}, expected {:o}",
+            path.display(),
+            mode,
+            expected
+        );
+    }
+
+    fn git_project(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-tmp")
+            .join(format!("canon-test-{}-{}-{}", name, process::id(), unique));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        Command::new("git")
+            .arg("init")
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        for args in [
+            ["config", "core.autocrlf", "false"],
+            ["config", "core.eol", "lf"],
+        ] {
+            let output = Command::new("git")
+                .args(args)
+                .current_dir(&root)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git config failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        fs::write(root.join("README.md"), "hello").unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        Command::new("git")
+            .arg("add")
+            .arg(".")
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        root
+    }
+}
