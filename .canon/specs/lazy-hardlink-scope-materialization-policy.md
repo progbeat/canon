@@ -17,21 +17,29 @@ The policy materializes one evaluator working tree for each visible scope:
 
 ```python
 def materialize_scope(git_tree, scope):
-    scoped_tree = git_tree.apply_scope(scope)
+    scoped_tree = git_tree.limit(pathspecs=scope)
     scope_root = os.path.join(scopes_dir, scoped_tree.oid)
     if os.path.exists(scope_root):
         return scope_root
     scoped_paths = set(scoped_tree.entry_paths)
     missing_paths = scoped_paths - unpacked_paths
-    if missing_paths:
-        archive = git_tree.archive(missing_paths)
-        archive.extractall(lazy_tree_dir)
-        unpacked_paths.update(missing_paths)
-    os.makedirs(scope_root)
-    for path in scoped_tree.entry_paths:
-        dst_path = scope_root / path
-        ensure_parent_dirs(dst_path)
-        hardlink_file_or_copy_symlink(lazy_tree_dir / path, dst_path)
+    for path in missing_paths:
+        dst_path = lazy_tree_dir / path
+        git_tree.extract(path, dst=dst_path)
+        remove_write_permissions(dst_path, follow_symlinks=False)
+        unpacked_paths.add(path)
+
+    def dfs(prefix):
+        os.makedirs(scope_root / prefix)
+        for name in scoped_tree.children(prefix):
+            path = prefix / name
+            if scoped_tree.is_dir(path):
+                dfs(path)
+            else:
+                hardlink_file_or_copy_symlink(lazy_tree_dir / path, scope_root / path)
+        os.chmod(scope_root / prefix, 0o555)  # to prevent accidental modifications to materialized trees
+
+    dfs(".")
     return scope_root
 ```
 
