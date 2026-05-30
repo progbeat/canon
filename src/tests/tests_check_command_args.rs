@@ -10,12 +10,20 @@ fn check_agent_message_requires_effective_default_inputs() {
     assert!(check_command_writes_agent_message(
         Path::new(CHECK_PATH),
         &staged,
-        &head
+        &head,
+        false
+    ));
+    assert!(!check_command_writes_agent_message(
+        Path::new(CHECK_PATH),
+        &staged,
+        &head,
+        true
     ));
     assert!(!check_command_writes_agent_message(
         Path::new("alt.yml"),
         &staged,
-        &head
+        &head,
+        false
     ));
     assert!(!check_command_writes_agent_message(
         Path::new(CHECK_PATH),
@@ -23,7 +31,8 @@ fn check_agent_message_requires_effective_default_inputs() {
             treeish: "HEAD".to_string(),
             tree_oid: "tree".to_string(),
         },
-        &head
+        &head,
+        false
     ));
 }
 

@@ -59,6 +59,64 @@ expectations:
 }
 
 #[test]
+fn check_command_fails_on_same_tree_cached_failure() {
+    let root = git_project("check-command-cached-failure-exit");
+    let yaml = r#"
+version: 1
+agent:
+  instructions: x
+  ignore: []
+  plugins: []
+expectations:
+  - q: "Question?"
+    a: "yes"
+"#;
+    fs::create_dir_all(root.join(".canon")).unwrap();
+    fs::write(root.join(CHECK_PATH), yaml).unwrap();
+    let output = Command::new("git")
+        .arg("add")
+        .arg(CHECK_PATH)
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let config = parse_check_config(yaml).unwrap();
+    let options = check_options(&config, &[], true, false);
+    let expectation = options.selected[0].clone();
+    let visible_tree_oid = staged_visible_tree_oid(&root, &config.agent, &full_scope()).unwrap();
+    append_history_record(
+        &root,
+        &expectation,
+        &CheckRecord {
+            timestamp: "1970-01-01T00:00:20Z".to_string(),
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
+            number: expectation.number,
+            result: CheckResult::Fail,
+            prompt: Some(expectation.q.clone()),
+            expected: Some(expectation.a.clone()),
+            observed: "no".to_string(),
+            error: None,
+            evidence: "same-tree cached failure".to_string(),
+            scope: full_scope(),
+            suggested_q_scope: None,
+            visible_tree_oid,
+            cache_key: Some(history_cache_key(&config.agent, &expectation)),
+        },
+    )
+    .unwrap();
+
+    let err = run_check_command(&root, &[]).unwrap_err();
+
+    assert_eq!(err.to_string(), "canon check failed");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn check_runner_skips_cached_pass_without_result_output() {
     let root = git_project("check-cache-pass-output");
     let config = parse_check_config(

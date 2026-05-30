@@ -4,13 +4,13 @@ use crate::check_command_args::parse_check_command_args;
 use crate::check_command_finish::{finish_check_report, CheckReportFinishContext};
 use crate::check_interrogation_state::CheckRuntime;
 use crate::check_lazy_reset::apply_scheduled_lazy_full_scope_resets;
-use crate::check_output::write_summary_line;
+use crate::check_output::{summary_outcome_counts, write_summary_line};
 use crate::check_query_command::run_check_query_command;
 use crate::check_reporting::{
     collect_check_token_usage, print_token_usage_summary, write_check_finish_event,
 };
 use crate::check_selection::{expectation_identities, resolve_check_options_with_identities};
-use crate::check_types::{CheckRecord, CheckRunReport};
+use crate::check_types::CheckRunReport;
 use crate::check_validation::check_config_loads_plugins;
 use crate::cli::CommandError;
 use crate::config_types::CheckConfig;
@@ -42,8 +42,12 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             tree_oid: String::new(),
         }
     };
-    let write_agent_message =
-        check_command_writes_agent_message(&command.config_path, &checked_tree, &against_tree);
+    let write_agent_message = check_command_writes_agent_message(
+        &command.config_path,
+        &checked_tree,
+        &against_tree,
+        !command.options.selectors.is_empty(),
+    );
     let mut repo_cache = RepoInspectionCache::new();
     // Runtime logs are canon-owned state under `${CANON_STATE_DIR}/logs`, not
     // project working-tree content. They are created before snapshot evaluation
@@ -209,19 +213,26 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         &completed.report,
         completed.error.as_deref(),
     )?;
-    if completed.error.is_none() && completed.report.records.iter().all(CheckRecord::passed) {
+    if completed.error.is_none() && check_report_passed(&completed.report) {
         Ok(())
     } else {
         Err(CommandError::CheckFailed)
     }
 }
 
+fn check_report_passed(report: &CheckRunReport) -> bool {
+    let counts = summary_outcome_counts(report);
+    counts.failed == 0 && counts.errors == 0
+}
+
 pub(crate) fn check_command_writes_agent_message(
     config_path: &Path,
     checked_tree: &TreeSource,
     against_tree: &TreeSource,
+    selectors_provided: bool,
 ) -> bool {
-    config_path == Path::new(CHECK_PATH)
+    !selectors_provided
+        && config_path == Path::new(CHECK_PATH)
         && checked_tree.is_default_checked_tree()
         && against_tree.is_default_against_tree()
 }
