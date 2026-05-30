@@ -21,7 +21,7 @@ pub(crate) struct RawCheckConfig {
     pub(crate) expectations: Vec<RawExpectationItem>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AgentConfig {
     #[serde(default)]

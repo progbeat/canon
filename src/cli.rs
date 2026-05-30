@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::env;
 use std::ffi::OsString;
+use std::io::{self, Write};
 use std::path::Path;
 use std::process;
 
@@ -11,7 +12,7 @@ use crate::hooks::{run_hook_command, run_init};
 use crate::logs::DiagnosticLogError;
 use crate::notes::cli::{arg_to_string, collect_text_or_stdin, require_key, run_rg};
 use crate::notes::{append_note, delete_note, ensure_note, read_note, write_note};
-use crate::output::{write_stderr_line, write_stdout, write_stdout_line};
+use crate::output::write_stdout_line;
 use crate::project::{git_project_root, print_root, project_root_or_current};
 use crate::project_types::Config;
 use clap::Command as ClapCommand;
@@ -109,9 +110,19 @@ pub(crate) fn run(args: Vec<OsString>) -> Result<(), CommandError> {
 
 fn report_command_error(err: CommandError) -> CommandError {
     if command_error_has_public_diagnostic(&err) {
-        let _ = write_stderr_line(&format!("Error: {}", err));
+        let _ = write_command_error_line(&err);
     }
     err
+}
+
+fn write_command_error_line(err: &CommandError) -> Result<(), String> {
+    let stderr = io::stderr();
+    let mut stderr = stderr.lock();
+    writeln!(stderr, "Error: {}", err)
+        .map_err(|source| format!("failed to write command error to stderr: {}", source))?;
+    stderr
+        .flush()
+        .map_err(|source| format!("failed to flush command error to stderr: {}", source))
 }
 
 fn run_command(args: Vec<OsString>) -> Result<(), CommandError> {
@@ -222,11 +233,52 @@ fn command_help_requested(args: &[OsString]) -> bool {
 }
 
 fn print_clap_help(mut command: ClapCommand) -> Result<(), String> {
-    let mut help = command.render_help().to_string();
-    if !help.ends_with('\n') {
-        help.push('\n');
+    let stdout = io::stdout();
+    let mut stdout = FlushingTrailingByteWriter::new(stdout.lock());
+    command
+        .write_help(&mut stdout)
+        .map_err(|err| format!("failed to write help to stdout: {}", err))?;
+    if stdout.last_byte() != Some(b'\n') {
+        stdout
+            .write_all(b"\n")
+            .map_err(|err| format!("failed to write help newline to stdout: {}", err))?;
     }
-    write_stdout(&help)
+    stdout
+        .flush()
+        .map_err(|err| format!("failed to flush help to stdout: {}", err))
+}
+
+struct FlushingTrailingByteWriter<W> {
+    inner: W,
+    last_byte: Option<u8>,
+}
+
+impl<W> FlushingTrailingByteWriter<W> {
+    fn new(inner: W) -> FlushingTrailingByteWriter<W> {
+        FlushingTrailingByteWriter {
+            inner,
+            last_byte: None,
+        }
+    }
+
+    fn last_byte(&self) -> Option<u8> {
+        self.last_byte
+    }
+}
+
+impl<W: Write> Write for FlushingTrailingByteWriter<W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let written = self.inner.write(bytes)?;
+        if written > 0 {
+            self.last_byte = Some(bytes[written - 1]);
+            self.inner.flush()?;
+        }
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 fn root_help_command() -> ClapCommand {

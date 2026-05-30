@@ -128,8 +128,11 @@ pub(crate) fn q_scope_suggestion_should_get_independent_verification(
     // Glossary-level q-scope suggestions are evaluator-provided claims. This
     // helper implements only the Interrogation Policy gate for whether such a
     // claim is worth an independent verification turn: valid scope syntax and
-    // at least 25% fewer visible files. A false result leaves the evaluator's
-    // claim unverified; it does not redefine what a q-scope suggestion is.
+    // at least 25% fewer visible files. The response JSON Schema does not
+    // require repo-relative or semantically sufficient paths; sufficiency is
+    // established only when the independent verification produces an answer.
+    // A false result leaves the evaluator's claim unverified; it does not
+    // redefine what a q-scope suggestion is.
     let Some(suggestion) = suggestion else {
         return Ok(false);
     };

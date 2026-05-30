@@ -68,12 +68,20 @@ impl ParsedAnswer {
     }
 
     pub(crate) fn error(error: String, evidence: String) -> ParsedAnswer {
+        ParsedAnswer::error_with_q_scope_suggestion(error, evidence, None)
+    }
+
+    pub(crate) fn error_with_q_scope_suggestion(
+        error: String,
+        evidence: String,
+        q_scope_suggestion: Option<Vec<String>>,
+    ) -> ParsedAnswer {
         ParsedAnswer {
             answer: error.clone(),
             error: Some(error),
             evidence,
             scope: Vec::new(),
-            q_scope_suggestion: None,
+            q_scope_suggestion,
         }
     }
 }
@@ -88,21 +96,14 @@ pub(crate) enum ObservedAnswerState {
 }
 
 impl ObservedAnswerState {
-    pub(crate) fn from_observed(observed: &str) -> ObservedAnswerState {
-        match observed {
-            ERROR_INSUFFICIENT_EVIDENCE => ObservedAnswerState::InsufficientEvidence,
-            ERROR_INVALID_QUESTION => ObservedAnswerState::InvalidQuestion,
-            ERROR_UNPARSABLE => ObservedAnswerState::Unparsable,
-            _ if contains_line_break(observed) => ObservedAnswerState::Unknown,
-            _ => ObservedAnswerState::Answer,
+    pub(crate) fn from_error(error: Option<&str>) -> ObservedAnswerState {
+        match error {
+            None => ObservedAnswerState::Answer,
+            Some(ERROR_INSUFFICIENT_EVIDENCE) => ObservedAnswerState::InsufficientEvidence,
+            Some(ERROR_INVALID_QUESTION) => ObservedAnswerState::InvalidQuestion,
+            Some(ERROR_UNPARSABLE) => ObservedAnswerState::Unparsable,
+            Some(_) => ObservedAnswerState::Unknown,
         }
-    }
-
-    pub(crate) fn from_expected_and_observed(
-        _expected: &str,
-        observed: &str,
-    ) -> ObservedAnswerState {
-        ObservedAnswerState::from_observed(observed)
     }
 
     pub(crate) fn requires_human_review(self) -> bool {
@@ -149,6 +150,12 @@ impl EvaluatorResponseJson {
             }
         }
         if let Some(scope) = self.q_scope_suggestion.as_deref() {
+            // This mirrors the Interrogation Policy JSON Schema exactly:
+            // `qScopeSuggestion` is only a non-empty array of non-empty
+            // single-line strings at response-parse time. Repository-relative
+            // scope syntax and semantic sufficiency are intentionally not JSON
+            // Schema constraints; later narrowing policy sanitizes the claim
+            // and accepts it only after an independent answer-producing turn.
             if scope.is_empty() {
                 return Err("qScopeSuggestion must contain at least one path".to_string());
             }
@@ -309,14 +316,9 @@ impl CheckRecord {
     }
 
     pub(crate) fn review_error_text(&self) -> Option<&str> {
-        if let Some(error) = self.error.as_deref() {
-            return Some(error);
-        }
-        let expected = self.expected_text()?;
-        if ObservedAnswerState::from_expected_and_observed(expected, &self.observed)
-            .requires_human_review()
-        {
-            Some(&self.observed)
+        let error = self.error.as_deref()?;
+        if ObservedAnswerState::from_error(Some(error)).requires_human_review() {
+            Some(error)
         } else {
             None
         }

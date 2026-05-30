@@ -363,8 +363,7 @@ fn latest_history_non_pass_timestamp(
 }
 
 fn history_record_is_non_pass(record: &crate::check::types::CheckRecord, expected: &str) -> bool {
-    let observed = ObservedAnswerState::from_expected_and_observed(expected, &record.observed);
-    observed.requires_human_review()
+    ObservedAnswerState::from_error(record.error.as_deref()).requires_human_review()
         || CheckResult::from_expected_answer(expected, &record.observed) == CheckResult::Fail
 }
 

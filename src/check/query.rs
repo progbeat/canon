@@ -156,7 +156,7 @@ fn query_should_retry_full_scope_after_restricted_response(
     scope: &[String],
 ) -> bool {
     scope != full_scope()
-        && ObservedAnswerState::from_observed(&answer.answer)
+        && ObservedAnswerState::from_error(answer.error.as_deref())
             == ObservedAnswerState::InsufficientEvidence
 }
 
@@ -167,7 +167,7 @@ fn query_should_verify_narrowing(
     answer: &ParsedAnswer,
 ) -> Result<bool, EvaluatorError> {
     if !matches!(
-        ObservedAnswerState::from_observed(&answer.answer),
+        ObservedAnswerState::from_error(answer.error.as_deref()),
         ObservedAnswerState::Answer
     ) {
         return Ok(false);
@@ -184,17 +184,17 @@ fn query_should_verify_narrowing(
 
 fn query_narrowed_answer_is_accepted(narrowed: &ParsedAnswer) -> bool {
     matches!(
-        ObservedAnswerState::from_observed(&narrowed.answer),
+        ObservedAnswerState::from_error(narrowed.error.as_deref()),
         ObservedAnswerState::Answer
     )
 }
 
 fn query_human_review_reason(result: &QueryResult) -> Option<&'static str> {
-    match ObservedAnswerState::from_observed(&result.answer.answer) {
+    match ObservedAnswerState::from_error(result.answer.error.as_deref()) {
         ObservedAnswerState::InsufficientEvidence => Some("insufficient evidence"),
         ObservedAnswerState::InvalidQuestion => Some("invalid question"),
         ObservedAnswerState::Unparsable => Some("unparsable evaluator response"),
-        ObservedAnswerState::Unknown => Some("unknown observed answer state"),
+        ObservedAnswerState::Unknown => Some("unknown evaluator error"),
         ObservedAnswerState::Answer => None,
     }
 }

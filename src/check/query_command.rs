@@ -1,32 +1,54 @@
 use crate::check::command::{prepare_check_execution, PrepareCheckExecutionOptions};
-use crate::check::interrogation_state::{CheckRuntime, InterrogationRunState};
+use crate::check::interrogation_state::{
+    initial_visible_scope_for_expectation, CheckRuntime, InterrogationRunState,
+};
 use crate::check::output::write_query_output;
 use crate::check::query::run_query_with_runner;
 use crate::check::reporting::{
     collect_check_token_usage, print_token_usage_summary, write_check_finish_event,
 };
-use crate::config_types::CheckConfig;
+use crate::check::selection::{selected_expectation_at, ExpectationIdentity};
+use crate::check::types::SelectedExpectation;
+use crate::config_types::{CheckConfig, Expectation};
 use crate::git::tree_source::TreeSource;
 use crate::git::visible_tree_oid::VisibleTreeOidCache;
 use crate::hash::full_scope;
+use crate::history::HistoryCache;
 use crate::logs::DiagnosticLogWriter;
 use crate::scope::sanitize_scope;
 use serde_json::json;
+use std::collections::BTreeSet;
 use std::io;
 use std::path::Path;
 
-pub(crate) fn run_check_query_command(
-    root: &Path,
-    config: &CheckConfig,
-    question: &str,
-    query_scope: &[String],
-    tree_source: &TreeSource,
-    no_sandbox: bool,
-    mut diagnostic_log: DiagnosticLogWriter,
-) -> Result<(), String> {
-    // `canon check -q` runs one ad-hoc query, not the selected-expectation loop
-    // that uses persisted history scope seeds. An explicit `--scope` is a hard
-    // query boundary; query mode still verifies narrower reusable scopes.
+pub(crate) struct CheckQueryCommand<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) config: &'a CheckConfig,
+    pub(crate) identities: &'a [ExpectationIdentity],
+    pub(crate) scheduled_full_scope_reset_ids: &'a BTreeSet<String>,
+    pub(crate) question: &'a str,
+    pub(crate) query_scope: &'a [String],
+    pub(crate) tree_source: &'a TreeSource,
+    pub(crate) no_sandbox: bool,
+    pub(crate) diagnostic_log: DiagnosticLogWriter,
+}
+
+pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<(), String> {
+    let CheckQueryCommand {
+        root,
+        config,
+        identities,
+        scheduled_full_scope_reset_ids,
+        question,
+        query_scope,
+        tree_source,
+        no_sandbox,
+        mut diagnostic_log,
+    } = command;
+    // `canon check -q` runs one ad-hoc query. When that query is exactly a
+    // plain q/a expectation, reuse the expectation-mode initial q-scope so the
+    // first evaluator input stays identical. An explicit `--scope` remains a
+    // hard query boundary; query mode still verifies narrower reusable scopes.
     diagnostic_log
         .write_event(
             "info",
@@ -37,7 +59,14 @@ pub(crate) fn run_check_query_command(
             ],
         )
         .map_err(|err| err.to_string())?;
-    let enforced_scope = match query_enforced_scope(config, query_scope) {
+    let matching_expectation = matching_q_a_only_expectation(config, identities, question)?;
+    let enforced_scope = match query_enforced_scope(
+        root,
+        config,
+        query_scope,
+        matching_expectation.as_ref(),
+        scheduled_full_scope_reset_ids,
+    ) {
         Ok(scope) => scope,
         Err(err) => {
             write_query_error_finish(&mut diagnostic_log, &err)?;
@@ -63,7 +92,10 @@ pub(crate) fn run_check_query_command(
     let result = run_query_with_runner(
         &runtime,
         question,
-        query_expected_answer(config, question),
+        matching_expectation
+            .as_ref()
+            .map(|expectation| expectation.a.as_str())
+            .or_else(|| query_expected_answer(config, question)),
         &enforced_scope,
         &mut execution.runner,
         Some(&mut diagnostic_log),
@@ -80,6 +112,8 @@ pub(crate) fn run_check_query_command(
     };
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
+    // The query answer is the only public stdout piece eligible at this point;
+    // `write_query_output` writes and flushes it before usage collection starts.
     if let Err(err) = write_query_output(&mut stdout, &result.answer) {
         write_query_error_finish(&mut diagnostic_log, &err)?;
         return Err(err);
@@ -91,7 +125,7 @@ pub(crate) fn run_check_query_command(
             return Err(err);
         }
     };
-    // Query token usage is the next public stderr piece. It is not computable
+    // Query token usage is the next public stderr piece. It is not eligible
     // until pending app-server usage updates are drained above; once known,
     // `print_token_usage_summary` writes and flushes it immediately.
     print_token_usage_summary(Some(usage))?;
@@ -110,14 +144,26 @@ fn write_query_error_finish(
 }
 
 fn query_enforced_scope(
+    root: &Path,
     config: &CheckConfig,
     query_scope: &[String],
+    matching_expectation: Option<&SelectedExpectation>,
+    scheduled_full_scope_reset_ids: &BTreeSet<String>,
 ) -> Result<Vec<String>, String> {
-    if query_scope.is_empty() {
-        Ok(full_scope())
-    } else {
-        sanitize_scope(query_scope, &config.agent).map_err(|err| format!("--scope: {}", err))
+    if !query_scope.is_empty() {
+        return sanitize_scope(query_scope, &config.agent)
+            .map_err(|err| format!("--scope: {}", err));
     }
+    let Some(expectation) = matching_expectation else {
+        return Ok(full_scope());
+    };
+    let mut history_cache = HistoryCache::new();
+    initial_visible_scope_for_expectation(
+        root,
+        expectation,
+        &mut history_cache,
+        scheduled_full_scope_reset_ids,
+    )
 }
 
 fn query_expected_answer<'a>(config: &'a CheckConfig, question: &str) -> Option<&'a str> {
@@ -131,4 +177,32 @@ fn query_expected_answer<'a>(config: &'a CheckConfig, question: &str) -> Option<
     } else {
         Some(first.a.as_str())
     }
+}
+
+fn matching_q_a_only_expectation(
+    config: &CheckConfig,
+    identities: &[ExpectationIdentity],
+    question: &str,
+) -> Result<Option<SelectedExpectation>, String> {
+    let mut matches = config
+        .expectations
+        .iter()
+        .enumerate()
+        .filter(|(_, expectation)| {
+            expectation.q == question && expectation_defines_only_q_and_a(config, expectation)
+        });
+    let Some((index, _)) = matches.next() else {
+        return Ok(None);
+    };
+    if matches.next().is_some() {
+        return Ok(None);
+    }
+    selected_expectation_at(config, identities, index, false).map(Some)
+}
+
+fn expectation_defines_only_q_and_a(config: &CheckConfig, expectation: &Expectation) -> bool {
+    expectation.prompt_scope.is_empty()
+        && expectation.cooldown.is_none()
+        && expectation.thinking.is_none()
+        && expectation.agent == config.agent
 }

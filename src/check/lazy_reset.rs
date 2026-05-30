@@ -1,10 +1,13 @@
-use crate::check::selection::{selected_expectation_at, ExpectationIdentity};
+use crate::check::selection::ExpectationIdentity;
 use crate::check::types::{CachedExpectation, SelectedExpectation};
 use crate::config_types::{AgentConfig, CheckConfig};
-use crate::fs_util::{for_each_nonempty_line, write_temp_file_then_replace};
+use crate::fs_util::{
+    ensure_dir_without_symlinks, for_each_nonempty_line, write_temp_file_then_replace,
+};
 use crate::git::resolve_git_path;
 use crate::hash::full_scope;
 use crate::logs::DiagnosticLogWriter;
+use crate::CANON_CACHE_DIR_GIT_PATH;
 use serde_json::json;
 use std::collections::BTreeSet;
 use std::fs;
@@ -58,23 +61,36 @@ pub(crate) fn apply_lazy_full_scope_reset(
     Ok(())
 }
 
-pub(crate) fn apply_scheduled_lazy_full_scope_resets(
+pub(crate) fn activate_scheduled_lazy_full_scope_resets(root: &Path) -> Result<(), String> {
+    let ids = read_scheduled_lazy_full_scope_resets(root)?;
+    if !ids.is_empty() {
+        write_active_lazy_full_scope_reset_markers(root, &ids)?;
+        remove_scheduled_lazy_full_scope_resets(root)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn active_lazy_full_scope_reset_ids(
     root: &Path,
-    config: &CheckConfig,
     identities: &[ExpectationIdentity],
 ) -> Result<BTreeSet<String>, String> {
-    // A scheduled reset is run-local selection state. Answer history remains
-    // append-only; the fresh full-scope result, if any, is appended normally.
-    let ids = read_scheduled_lazy_full_scope_resets(root)?;
-    if ids.is_empty() {
-        return Ok(BTreeSet::new());
+    let mut ids = BTreeSet::new();
+    for identity in identities {
+        if active_lazy_full_scope_reset_path(root, &identity.id)?.exists() {
+            ids.insert(identity.id.clone());
+        }
     }
-    let expectations = scheduled_reset_expectations(config, identities, &ids)?;
-    remove_scheduled_lazy_full_scope_resets(root)?;
-    Ok(expectations
-        .into_iter()
-        .map(|expectation| expectation.id)
-        .collect())
+    Ok(ids)
+}
+
+pub(crate) fn clear_active_lazy_full_scope_reset(
+    root: &Path,
+    expectation: &SelectedExpectation,
+) -> Result<(), String> {
+    remove_active_lazy_full_scope_reset_at_path(&active_lazy_full_scope_reset_path(
+        root,
+        &expectation.id,
+    )?)
 }
 
 pub(crate) struct LazyFullScopeResetPlan {
@@ -104,6 +120,35 @@ pub(crate) fn plan_lazy_full_scope_reset(
         candidate_count: candidates.len(),
         expectations: sample_reset_expectations(&candidates, reset_count, seed),
     })
+}
+
+fn write_active_lazy_full_scope_reset_markers(root: &Path, ids: &[String]) -> Result<(), String> {
+    for id in ids {
+        let path = active_lazy_full_scope_reset_path(root, id)?;
+        if let Some(parent) = path.parent() {
+            ensure_dir_without_symlinks(parent)?;
+        }
+        let temp_path = lazy_full_scope_reset_schedule_temp_path(&path)?;
+        write_temp_file_then_replace(&temp_path, &path, |file| {
+            file.write_all(b"full\n")
+                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))
+        })?;
+    }
+    Ok(())
+}
+
+fn active_lazy_full_scope_reset_path(root: &Path, id: &str) -> Result<PathBuf, String> {
+    Ok(resolve_git_path(root, CANON_CACHE_DIR_GIT_PATH)?
+        .join(id)
+        .join("lazy-full-scope-reset"))
+}
+
+fn remove_active_lazy_full_scope_reset_at_path(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(format!("failed to delete {}: {}", path.display(), err)),
+    }
 }
 
 fn cached_passing_expectations_with_scope(
@@ -241,21 +286,6 @@ fn lazy_full_scope_reset_schedule_temp_path(path: &Path) -> Result<PathBuf, Stri
         random_reset_seed()
     ));
     Ok(path.with_file_name(temp_name))
-}
-
-fn scheduled_reset_expectations(
-    config: &CheckConfig,
-    identities: &[ExpectationIdentity],
-    ids: &[String],
-) -> Result<Vec<SelectedExpectation>, String> {
-    let mut expectations = Vec::new();
-    for id in ids {
-        let Some(index) = identities.iter().position(|identity| &identity.id == id) else {
-            continue;
-        };
-        expectations.push(selected_expectation_at(config, identities, index, true)?);
-    }
-    Ok(expectations)
 }
 
 fn random_reset_seed() -> u64 {

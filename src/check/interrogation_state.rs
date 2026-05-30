@@ -23,7 +23,7 @@ pub(crate) fn should_retry_full_scope_after_restricted_response(
     if scope == full_scope() {
         return false;
     }
-    if ObservedAnswerState::from_observed(&record.observed)
+    if ObservedAnswerState::from_error(record.error.as_deref())
         == ObservedAnswerState::InsufficientEvidence
     {
         return true;

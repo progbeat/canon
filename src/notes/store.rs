@@ -451,16 +451,7 @@ pub(crate) fn stream_note_content(
             return Ok(());
         }
         if trimmed == LEGACY_NOTE_LOG_MARKER {
-            let mut rest = String::new();
-            reader
-                .read_to_string(&mut rest)
-                .map_err(|err| format!("failed to read {}: {}", note.path.display(), err))?;
-            if let Some(records) = parse_legacy_note_log_records(&rest) {
-                stream_note_records(note, records, &mut write)?;
-                return Ok(());
-            }
-            write(&decode_note_storage_line(&line))?;
-            write_decoded_note_text(&rest, &mut write)?;
+            stream_legacy_note_log_or_text(note, &mut reader, &mut write, &mut offset, &line)?;
             return Ok(());
         }
         write(&decode_note_storage_line(&line))?;
@@ -529,25 +520,78 @@ fn stream_note_record(
     }
 }
 
-fn stream_note_records(
+fn stream_legacy_note_log_or_text(
     note: &Note,
-    records: Vec<NoteRecord>,
+    reader: &mut impl BufRead,
     write: &mut impl FnMut(&str) -> Result<(), String>,
+    offset: &mut usize,
+    marker_line: &str,
 ) -> Result<(), String> {
-    for (index, record) in records.into_iter().enumerate() {
-        stream_note_record(note, record, write, index == 0)?;
+    let mut pending_text = String::new();
+    let mut first_record = true;
+    let mut saw_record = false;
+    loop {
+        let mut line = String::new();
+        let read = reader
+            .read_line(&mut line)
+            .map_err(|err| format!("failed to read {}: {}", note.path.display(), err))?;
+        if read == 0 {
+            if !saw_record {
+                write(&decode_note_storage_line(marker_line))?;
+                write(&pending_text)?;
+            }
+            return Ok(());
+        }
+        *offset += read;
+        let trimmed = line.trim_end_matches(&['\r', '\n'][..]);
+        if trimmed == LEGACY_NOTE_LOG_MARKER || trimmed.trim().is_empty() {
+            if !saw_record {
+                pending_text.push_str(&decode_note_storage_line(&line));
+            }
+            continue;
+        }
+        match serde_json::from_str::<NoteRecord>(trimmed) {
+            Ok(record) => {
+                saw_record = true;
+                stream_note_record(note, record, write, first_record)?;
+                first_record = false;
+            }
+            Err(_) if !saw_record => {
+                write(&decode_note_storage_line(marker_line))?;
+                write(&pending_text)?;
+                write(&decode_note_storage_line(&line))?;
+                stream_decoded_note_text(note, reader, write, offset)?;
+                return Ok(());
+            }
+            Err(err) if err.is_eof() || note_log_line_is_unfinished(&line) => return Ok(()),
+            Err(err) => {
+                return Err(format!(
+                    "malformed legacy note log record in {}: {}",
+                    note.path.display(),
+                    err
+                ));
+            }
+        }
     }
-    Ok(())
 }
 
-fn write_decoded_note_text(
-    text: &str,
+fn stream_decoded_note_text(
+    note: &Note,
+    reader: &mut impl BufRead,
     write: &mut impl FnMut(&str) -> Result<(), String>,
+    offset: &mut usize,
 ) -> Result<(), String> {
-    for (_, line) in lines_with_starts(text) {
-        write(&decode_note_storage_line(line))?;
+    loop {
+        let mut line = String::new();
+        let read = reader
+            .read_line(&mut line)
+            .map_err(|err| format!("failed to read {}: {}", note.path.display(), err))?;
+        if read == 0 {
+            return Ok(());
+        }
+        *offset += read;
+        write(&decode_note_storage_line(&line))?;
     }
-    Ok(())
 }
 
 fn find_note_log(note: &Note, content: &str) -> Result<Option<(usize, Vec<NoteRecord>)>, String> {

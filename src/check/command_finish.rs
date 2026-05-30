@@ -42,10 +42,11 @@ pub(crate) fn finish_check_report(
     report: &CheckRunReport,
     error: Option<&str>,
 ) -> Result<(), CommandError> {
-    // No earlier public output piece is pending here: per-expectation output
+    // No eligible public output piece is pending here: per-expectation output
     // and the public trailer have already been rendered, written, and flushed
-    // by their own writers. This step computes only the remaining post-trailer
-    // side effects: the agent message, lazy reset, and finish lifecycle log.
+    // by their own writers. This post-trailer step cannot delay stdout/stderr
+    // that was eligible earlier; it computes only the agent message, lazy
+    // reset, and finish lifecycle log.
     let mut post_finish_error = None;
     let mut finish_error = error.map(str::to_string);
     if context.write_agent_message {

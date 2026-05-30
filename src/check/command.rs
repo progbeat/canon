@@ -2,9 +2,11 @@ use crate::app::server::LazyAppServerRunner;
 use crate::check::command_args::parse_check_command_args;
 use crate::check::command_finish::{finish_check_report, CheckReportFinishContext};
 use crate::check::interrogation_state::CheckRuntime;
-use crate::check::lazy_reset::apply_scheduled_lazy_full_scope_resets;
+use crate::check::lazy_reset::{
+    activate_scheduled_lazy_full_scope_resets, active_lazy_full_scope_reset_ids,
+};
 use crate::check::output::{summary_outcome_counts, write_summary_line};
-use crate::check::query_command::run_check_query_command;
+use crate::check::query_command::{run_check_query_command, CheckQueryCommand};
 use crate::check::reporting::{
     collect_check_token_usage, print_token_usage_summary, write_check_finish_event,
 };
@@ -53,25 +55,32 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     // project working-tree content. They are created before snapshot evaluation
     // and are denied to evaluator sessions by the mandatory ignore policy.
     let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
+    let query_mode = command.query.is_some();
+    let query_start_field = if query_mode { Some(true) } else { None };
+    // Scheduled lazy resets take effect at the beginning of the next
+    // `canon check` invocation. Consume the schedule before config-dependent
+    // preflight so a broken config cannot indefinitely defer a scheduled reset.
+    if let Err(err) = activate_scheduled_lazy_full_scope_resets(root) {
+        return fail_check_before_selection(
+            &mut diagnostic_log,
+            query_start_field,
+            query_mode,
+            1,
+            err,
+        );
+    }
     let config = match repo_cache.load_check_config(root, &command.config_path, &checked_tree) {
         Ok(config) => config,
         Err(err) => {
             return fail_check_before_selection(
                 &mut diagnostic_log,
-                Some(command.query.is_some()),
-                command.query.is_some(),
+                query_start_field,
+                query_mode,
                 1,
                 err,
             )
         }
     };
-    let query_mode = command.query.is_some();
-    let query_start_field = if query_mode { Some(true) } else { None };
-    // Scheduled lazy resets take effect at the beginning of the next
-    // `canon check` invocation, including query-mode invocations that return
-    // before normal expectation selection and evaluation. Normal expectation
-    // checks also plan the next lazy reset at the end of this command through
-    // `check_command_finish::finish_check_report`.
     let identities = match expectation_identities(&config) {
         Ok(identities) => identities,
         Err(err) => {
@@ -84,29 +93,30 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             )
         }
     };
-    let scheduled_full_scope_reset_ids =
-        match apply_scheduled_lazy_full_scope_resets(root, &config, &identities) {
-            Ok(ids) => ids,
-            Err(err) => {
-                return fail_check_before_selection(
-                    &mut diagnostic_log,
-                    query_start_field,
-                    query_mode,
-                    0,
-                    err,
-                )
-            }
-        };
+    let scheduled_full_scope_reset_ids = match active_lazy_full_scope_reset_ids(root, &identities) {
+        Ok(ids) => ids,
+        Err(err) => {
+            return fail_check_before_selection(
+                &mut diagnostic_log,
+                query_start_field,
+                query_mode,
+                0,
+                err,
+            )
+        }
+    };
     if let Some(question) = command.query.as_deref() {
-        return run_check_query_command(
+        return run_check_query_command(CheckQueryCommand {
             root,
-            &config,
+            config: &config,
+            identities: &identities,
+            scheduled_full_scope_reset_ids: &scheduled_full_scope_reset_ids,
             question,
-            &command.query_scope,
-            &checked_tree,
-            command.no_sandbox,
+            query_scope: &command.query_scope,
+            tree_source: &checked_tree,
+            no_sandbox: command.no_sandbox,
             diagnostic_log,
-        )
+        })
         .map_err(CommandError::from);
     }
     // Check-specific options are parsed with the active config so selectors can
@@ -172,9 +182,10 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         &execution.tree_source,
         &config,
     );
-    // This expectation loop computes the final `CheckRunReport`. It writes and
-    // flushes each per-expectation stdout record inside the loop; the public
-    // trailer does not exist until the report and final token usage exist.
+    // During the expectation loop, only per-expectation stdout records are
+    // eligible for public output; each one is written and flushed inside the
+    // loop before unrelated later work starts. The trailer is not eligible
+    // until the loop has produced a report and app-server usage can be drained.
     let records_result = run_check_with_runner_and_caches(
         runtime,
         &options,
@@ -316,9 +327,9 @@ fn write_check_trailer(
 ) -> Result<(), String> {
     let usage = collect_check_token_usage(runner)?;
     // The check-output spec orders trailer pieces as token usage, then summary.
-    // Token usage is not known until pending app-server usage updates are
-    // drained here; once known, each trailer line is rendered, written, and
-    // flushed immediately in that order.
+    // The stderr usage line is not eligible before pending app-server usage
+    // updates are drained here; once known, each trailer line is rendered,
+    // written, and flushed immediately in that order.
     print_token_usage_summary(Some(usage))?;
     write_summary_line(result_output, report, started.elapsed())
 }

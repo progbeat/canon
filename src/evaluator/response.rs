@@ -9,10 +9,6 @@ pub(crate) fn parse_evaluator_response(
 ) -> Result<ParsedAnswer, String> {
     let response = parse_evaluator_response_json(text)?;
     response.validate_schema()?;
-    // The Interrogation Policy schema permits qScopeSuggestion on the raw
-    // response object, but narrowing policy only consumes it from schema-valid
-    // answer responses. Error responses are review records and never seed
-    // narrowing, answer history, or q-scope reuse.
     if let Some(answer) = response.answer {
         // Pass/fail comparison happens after parsing against the expectation's
         // current expected answer.
@@ -25,7 +21,14 @@ pub(crate) fn parse_evaluator_response(
     let error = response
         .error
         .expect("one-of validation ensures error is present");
-    Ok(ParsedAnswer::error(error, response.evidence))
+    // The Interrogation Policy schema permits qScopeSuggestion on an error
+    // response too. Preserve it for schema fidelity and diagnostics; narrowing
+    // policy still consumes suggestions only from answer responses.
+    Ok(ParsedAnswer::error_with_q_scope_suggestion(
+        error,
+        response.evidence,
+        response.q_scope_suggestion,
+    ))
 }
 
 pub(crate) fn parse_evaluator_response_json(text: &str) -> Result<EvaluatorResponseJson, String> {

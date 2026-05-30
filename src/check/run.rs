@@ -10,6 +10,7 @@ use crate::check::interrogation_policy::{
 use crate::check::interrogation_state::{
     initial_visible_scope_for_expectation, CheckRuntime, InterrogationRunState,
 };
+use crate::check::lazy_reset::clear_active_lazy_full_scope_reset;
 use crate::check::order_state::{
     write_latest_non_pass_error_with_cache, write_latest_non_pass_record_with_cache,
 };
@@ -128,8 +129,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             root,
             runtime.tree_source,
             options,
-            &mut caches.history,
-            &mut caches.visible_tree_oid,
+            caches,
             scheduled_full_scope_reset_ids,
             run_try!(unix_timestamp()),
             &mut diagnostic_log,
@@ -340,6 +340,9 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             &interrogation.record
         ));
         records.push(interrogation.record);
+        if scheduled_full_scope_reset_ids.contains(&expectation.id) {
+            run_expectation_try!(clear_active_lazy_full_scope_reset(root, expectation));
+        }
         if should_stop {
             let skipped = skipped_count(total_expectations, &records, &cached);
             return Ok(check_run_report(
@@ -386,8 +389,7 @@ fn default_check_selection(
     root: &Path,
     source: &TreeSource,
     options: &CheckOptions,
-    history_cache: &mut HistoryCache,
-    visible_tree_oid_cache: &mut VisibleTreeOidCache,
+    caches: &mut CheckRunCaches,
     scheduled_full_scope_reset_ids: &BTreeSet<String>,
     now: u64,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
@@ -402,8 +404,8 @@ fn default_check_selection(
             source,
             &expectation.agent,
             &expectation,
-            history_cache,
-            visible_tree_oid_cache,
+            &mut caches.history,
+            &mut caches.visible_tree_oid,
             CachedResultLookup {
                 now,
                 include_same_tree: !options.ignore_cache && !scheduled_full_scope_reset,
@@ -421,6 +423,10 @@ fn default_check_selection(
         }
     }
     if cached_failure_seen {
+        // Default selected-expectation logic requires cached failures to be
+        // fixed first, so no expectation is evaluated in this invocation. Any
+        // active lazy-reset marker remains in state and will force full scope
+        // when default selection is no longer blocked by cached failures.
         selected.clear();
         let mut ordered_cached = cached
             .into_iter()
@@ -430,7 +436,7 @@ fn default_check_selection(
                     latest_non_pass: latest_non_pass_timestamp_with_cache(
                         root,
                         &hit.expectation,
-                        history_cache,
+                        &mut caches.history,
                     )?,
                     index,
                     hit,
