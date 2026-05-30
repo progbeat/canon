@@ -64,7 +64,7 @@ COPY --from=canon-builder /build/target/release/canon /usr/local/bin/canon
 COPY --from=codex-downloader /usr/local/bin/codex /usr/local/bin/codex
 COPY docker/entrypoint /usr/local/bin/docker-canon-entrypoint
 
-WORKDIR /work
+WORKDIR /scratch/secret/repository
 
 RUN set -eux; \
     chmod 0755 /usr/local/bin/docker-canon-entrypoint; \
@@ -76,6 +76,8 @@ ENV HOME=/scratch/home \
     TMPDIR=/scratch/tmp \
     TEMP=/scratch/tmp \
     TMP=/scratch/tmp \
+    CANON_SECRET_DIR=/scratch/secret/ \
+    CANON_SANDBOX_DIR=/scratch/sandbox \
     CODEX_HOME=/scratch/codex-home \
     GIT_CONFIG_COUNT=1 \
     GIT_CONFIG_KEY_0=safe.directory \

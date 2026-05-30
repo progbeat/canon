@@ -5,6 +5,7 @@ image="${CANON_DOCKER_IMAGE:-canon:local}"
 project_root="$(git rev-parse --path-format=absolute --show-toplevel)"
 git_dir="${project_root}/.git"
 canon_state="${git_dir}/canon"
+container_repository="/scratch/secret/repository"
 
 mkdir -p "${canon_state}"
 
@@ -16,8 +17,8 @@ exec docker run --rm -i \
   --user "$(id -u):$(id -g)" \
   --read-only \
   --tmpfs "/scratch:mode=1777" \
-  -v "${project_root}:/work:rw" \
-  -v "${git_dir}:/work/.git:ro" \
-  -v "${canon_state}:/work/.git/canon:rw" \
+  -v "${project_root}:${container_repository}:rw" \
+  -v "${git_dir}:${container_repository}/.git:ro" \
+  -v "${canon_state}:${container_repository}/.git/canon:rw" \
   --mount "type=bind,src=${CODEX_HOME:-$HOME/.codex},dst=/codex,readonly" \
   "${image}" "$@"
