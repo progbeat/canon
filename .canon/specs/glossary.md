@@ -6,6 +6,10 @@
 
 **scoped tree** is the logical Git tree induced by applying a scope to a Git-tracked tree. It does not have to exist as a Git tree object.
 
+**scoped tree OID** is the repository-native object ID that a scoped tree would have if stored as a Git tree object.
+It uses the repository's object hash algorithm; it is not a custom digest of rendered metadata.
+Canon may reuse the OID when Git already has it; otherwise canon serializes and hashes a synthetic tree object.
+
 **q-scope** (**question scope**) is a scope complete for a question: if files outside the q-scope change while files inside it stay the same, the correct answer to the question should not change.
 
 **q-scope suggestion** is an evaluator-provided scope claiming to be a narrow scope sufficient to answer the question.

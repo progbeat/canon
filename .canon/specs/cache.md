@@ -24,6 +24,6 @@ visibleTreeOid
 
 `qScope` stores the q-scope used to form the visible tree for this history record.
 
-`visibleTreeOid` is the repository-native object ID that the visible tree would have if stored as a Git tree object. The OID uses the repository's object hash algorithm; it is not a custom digest of rendered metadata. As an optimization, canon reuses the required OID when Git already has it. Otherwise, canon serializes and hashes a synthetic tree object.
+`visibleTreeOid` stores the scoped tree OID of the visible tree.
 
 `canon check` compacts history files with approximately a 1-in-16 chance after appending a record. Compaction keeps at least the latest 8 valid JSON object records.
