@@ -133,7 +133,7 @@ Let:
 - `num_regressions` be the number of expectations that changed from `pass` to any non-pass result compared to HEAD.
 - `num_fixes` be the number of expectations that changed from any non-pass result (including missing) to `pass` compared to HEAD.
 
-Assuming no Ctrl-C or other interruption, when `canon check` uses the default config, checks the `:staged` tree, and compares against `HEAD`, the check run may emit instructions for the agent that ran it like this:
+Assuming no Ctrl-C or other interruption, when `canon check` runs without expectation selectors, with the default config, on the `:staged` tree, and against `HEAD`, it may emit instructions for the agent that ran it like this:
 
 ```text
 def print_agent_messages(num_failed, num_errors, num_fixes, num_regressions):
