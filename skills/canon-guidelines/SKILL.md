@@ -32,6 +32,11 @@ Canon intent comes from the human; these guidelines only describe what makes can
 - A term definition should be self-contained enough to understand the term's meaning.
 - Other expectations should use a term as an interface and should not repeat its definition.
 
+## Review Process
+
+- Do not treat underspecification or canon silence as a finding; report only written text that creates a concrete maintainability issue under these guidelines.
+- Before showing drafted findings to the human, spawn a subagent to independently re-check the findings against these guidelines.
+
 ## Review Questions
 
 - Is this assertion already stated elsewhere?
