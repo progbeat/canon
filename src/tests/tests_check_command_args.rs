@@ -38,6 +38,14 @@ fn check_help_is_detected_with_other_options() {
 }
 
 #[test]
+fn check_help_omits_internal_break_after_tokens_option() {
+    let mut command = check_help_command();
+    let help = command.render_help().to_string();
+
+    assert!(!help.contains("--break-after-tokens"));
+}
+
+#[test]
 fn check_command_accepts_custom_config_option() {
     let parsed = parse_check_command_args(&[
         "--config".into(),

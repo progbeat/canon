@@ -85,6 +85,7 @@ pub(crate) fn add_check_option_args(command: Command) -> Command {
             Arg::new("break_after_tokens")
                 .long("break-after-tokens")
                 .help("Stop after this many evaluator tokens")
+                .hide(true)
                 .num_args(1)
                 .allow_hyphen_values(true)
                 .value_parser(OsStringValueParser::new()),

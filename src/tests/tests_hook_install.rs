@@ -7,6 +7,7 @@ fn hook_install_creates_reusable_pre_commit_hook() {
     let hook_path = managed_pre_commit_hook_path(&root);
     assert!(!root.join(CHECK_PATH).exists());
     assert!(!root.join(".gitignore").exists());
+    assert_eq!(DEFAULT_PRE_COMMIT_HOOK, "#!/usr/bin/env sh\ncanon gate\n");
     assert!(!DEFAULT_PRE_COMMIT_HOOK.contains("git status --porcelain -- .canon/"));
     assert_eq!(
         fs::read_to_string(&hook_path).unwrap(),
