@@ -2,7 +2,6 @@ use crate::platform;
 use std::env;
 use std::fs;
 use std::io::ErrorKind;
-#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -20,7 +19,7 @@ pub(crate) struct NaiveIsolationPolicy {
 
 impl NaiveIsolationPolicy {
     pub(crate) fn from_env() -> Result<NaiveIsolationPolicy, String> {
-        let secret_dir = configured_dir(CANON_SECRET_DIR)
+        let secret_dir = configured_secret_dir()
             .map(|path| canonical_dir(&path, CANON_SECRET_DIR))
             .transpose()?;
         let sandbox_dir = match configured_dir(CANON_SANDBOX_DIR) {
@@ -107,18 +106,17 @@ impl NaiveIsolationPolicy {
 
     fn next_isolated_path(&mut self) -> Result<PathBuf, String> {
         let isolated_path = self.sandbox_dir.join(format!("{:X}", self.counter));
+        // Match the policy order: derive the destination from the current
+        // counter, increment it, then assert that the destination does not
+        // already exist.
         self.counter += 1;
-        match fs::symlink_metadata(&isolated_path) {
-            Ok(_) => Err(format!(
+        if isolated_path.exists() {
+            Err(format!(
                 "counter collision in sandbox isolation: {}",
                 isolated_path.display()
-            )),
-            Err(err) if err.kind() == ErrorKind::NotFound => Ok(isolated_path),
-            Err(err) => Err(format!(
-                "failed to inspect sandbox isolation path {}: {}",
-                isolated_path.display(),
-                err
-            )),
+            ))
+        } else {
+            Ok(isolated_path)
         }
     }
 }
@@ -140,18 +138,27 @@ impl NaiveIsolationGuard {
         if !self.active {
             return Ok(());
         }
+        let mut errors = Vec::new();
         if let (Some(secret_dir), Some(mode)) = (&self.secret_dir, self.secret_dir_mode.clone()) {
-            fs::set_permissions(secret_dir, mode).map_err(|err| {
-                format!(
+            if let Err(err) = fs::set_permissions(secret_dir, mode) {
+                errors.push(format!(
                     "failed to restore secret dir permissions {}: {}",
                     secret_dir.display(),
                     err
-                )
-            })?;
+                ));
+            }
         }
-        platform::move_path(&self.isolated_path, &self.original_path)?;
-        self.active = false;
-        Ok(())
+        match platform::move_path(&self.isolated_path, &self.original_path) {
+            Ok(()) => {
+                self.active = false;
+            }
+            Err(err) => errors.push(err),
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
     }
 }
 
@@ -159,6 +166,10 @@ impl Drop for NaiveIsolationGuard {
     fn drop(&mut self) {
         let _ = self.restore();
     }
+}
+
+fn configured_secret_dir() -> Option<PathBuf> {
+    env::var_os(CANON_SECRET_DIR).map(PathBuf::from)
 }
 
 fn configured_dir(name: &str) -> Option<PathBuf> {
@@ -242,10 +253,7 @@ fn stat_mode(path: &Path) -> Result<fs::Permissions, String> {
 
 fn chmod_secret_dir_no_access(path: &Path) -> Result<(), String> {
     let mut permissions = stat_mode(path)?;
-    #[cfg(unix)]
     permissions.set_mode(0o000);
-    #[cfg(not(unix))]
-    permissions.set_readonly(true);
     fs::set_permissions(path, permissions)
         .map_err(|err| format!("failed to chmod secret dir {}: {}", path.display(), err))
 }
