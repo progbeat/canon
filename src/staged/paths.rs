@@ -3,7 +3,24 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process;
 
-pub(crate) fn create_snapshot_root(root: &Path) -> Result<PathBuf, String> {
+const CANON_TREE_CACHE_DIR: &str = "CANON_TREE_CACHE_DIR";
+
+pub(crate) struct SnapshotRoot {
+    path: PathBuf,
+    remove_on_drop: bool,
+}
+
+impl SnapshotRoot {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn remove_on_drop(&self) -> bool {
+        self.remove_on_drop
+    }
+}
+
+pub(crate) fn create_snapshot_root(root: &Path) -> Result<SnapshotRoot, String> {
     let root = root.canonicalize().map_err(|err| {
         format!(
             "failed to canonicalize project root {}: {}",
@@ -11,6 +28,9 @@ pub(crate) fn create_snapshot_root(root: &Path) -> Result<PathBuf, String> {
             err
         )
     })?;
+    if let Some(path) = configured_tree_cache_dir() {
+        return create_snapshot_root_from_configured_cache_dir(&root, &path);
+    }
     let mut errors = Vec::new();
     // The lazy hardlink policy prefers memory-backed temporary storage when
     // the host provides a usable parent. Platform discovery is centralized in
@@ -24,19 +44,53 @@ pub(crate) fn create_snapshot_root(root: &Path) -> Result<PathBuf, String> {
         crate::platform::memory_backed_staged_snapshot_parent_candidates(),
         &mut errors,
     ) {
-        return Ok(path);
+        return Ok(temporary_snapshot_root(path));
     }
     if let Some(path) = create_snapshot_root_from_candidates(
         &root,
         crate::platform::ordinary_staged_snapshot_parent_candidates(),
         &mut errors,
     ) {
-        return Ok(path);
+        return Ok(temporary_snapshot_root(path));
     }
     Err(format!(
         "failed to create staged snapshot directory: {}",
         errors.join("; ")
     ))
+}
+
+fn configured_tree_cache_dir() -> Option<PathBuf> {
+    let value = std::env::var_os(CANON_TREE_CACHE_DIR)?;
+    if value.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(value))
+}
+
+fn create_snapshot_root_from_configured_cache_dir(
+    root: &Path,
+    path: &Path,
+) -> Result<SnapshotRoot, String> {
+    crate::platform::create_private_dir_all(path).map_err(|err| {
+        format!(
+            "failed to create {} {}: {}",
+            CANON_TREE_CACHE_DIR,
+            path.display(),
+            err
+        )
+    })?;
+    let path = canonical_snapshot_path_outside_worktree(root, path, CANON_TREE_CACHE_DIR, None)?;
+    Ok(SnapshotRoot {
+        path,
+        remove_on_drop: false,
+    })
+}
+
+fn temporary_snapshot_root(path: PathBuf) -> SnapshotRoot {
+    SnapshotRoot {
+        path,
+        remove_on_drop: true,
+    }
 }
 
 fn create_snapshot_root_from_candidates(

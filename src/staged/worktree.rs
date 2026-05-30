@@ -17,8 +17,9 @@ pub(crate) struct StagedWorktreeView {
     source_root: PathBuf,
     source: TreeSource,
     materialization_root: PathBuf,
-    lazy_root: PathBuf,
-    scope_roots: PathBuf,
+    remove_materialization_root_on_drop: bool,
+    lazy_tree_dir: PathBuf,
+    trees_dir: PathBuf,
     source_files: RefCell<Option<Vec<StagedTrackedFile>>>,
     unpacked_paths: RefCell<BTreeSet<Vec<u8>>>,
     blob_reader: RefCell<Option<GitBlobReader>>,
@@ -45,11 +46,15 @@ impl StagedWorktreeView {
         _visible_tree_oid_cache: &mut VisibleTreeOidCache,
     ) -> Result<StagedWorktreeView, String> {
         let files = source.tracked_files(root)?;
-        let materialization_root = create_snapshot_root(root)?;
-        if let Err(err) = platform::create_private_dir(&materialization_root.join("lazy"))
-            .and_then(|_| platform::create_private_dir(&materialization_root.join("scopes")))
+        let snapshot_root = create_snapshot_root(root)?;
+        let materialization_root = snapshot_root.path().to_path_buf();
+        let remove_materialization_root_on_drop = snapshot_root.remove_on_drop();
+        if let Err(err) = platform::create_private_dir_all(&materialization_root.join("lazy"))
+            .and_then(|_| platform::create_private_dir_all(&materialization_root.join("trees")))
         {
-            let _ = fs::remove_dir_all(&materialization_root);
+            if remove_materialization_root_on_drop {
+                let _ = fs::remove_dir_all(&materialization_root);
+            }
             return Err(format!(
                 "failed to initialize evaluator materialization root {}: {}",
                 materialization_root.display(),
@@ -59,8 +64,9 @@ impl StagedWorktreeView {
         Ok(StagedWorktreeView {
             source_root: root.to_path_buf(),
             source,
-            lazy_root: materialization_root.join("lazy"),
-            scope_roots: materialization_root.join("scopes"),
+            remove_materialization_root_on_drop,
+            lazy_tree_dir: materialization_root.join("lazy"),
+            trees_dir: materialization_root.join("trees"),
             materialization_root,
             source_files: RefCell::new(Some(files)),
             unpacked_paths: RefCell::new(BTreeSet::new()),
@@ -80,34 +86,35 @@ impl StagedWorktreeView {
         visible_tree_oid: &str,
     ) -> Result<PathBuf, String> {
         let scope = sanitize_scope(scope, agent)?;
-        let scope_paths = self.scoped_tree_entries(agent, &scope)?;
-        self.materialize_scope(&scope_paths, visible_tree_oid)
+        let visible_tree_entries = self.visible_tree_entries(agent, &scope)?;
+        self.materialize_visible_tree(&visible_tree_entries, visible_tree_oid)
     }
 
-    fn materialize_scope(
+    fn materialize_visible_tree(
         &self,
-        scope_paths: &[StagedTrackedFile],
+        visible_tree_entries: &[StagedTrackedFile],
         visible_tree_oid: &str,
     ) -> Result<PathBuf, String> {
         // Lazy hardlink policy mapping:
-        // - `scope_paths` is `git_tree.limit(pathspecs=scope).entry_paths`.
+        // - `visible_tree_entries` is `visible_tree.entry_paths` after
+        //   applying visible scope and ignore rules to the checked Git tree.
         // - `unpack_missing_files` performs `git_tree.extract` once per
-        //   not-yet-unpacked blob into `lazy_root`.
-        // - `hardlink_scope_root` builds the scoped tree under
-        //   `scope_roots/<scoped tree OID>` and then chmods every directory
+        //   not-yet-unpacked blob into `lazy_tree_dir`.
+        // - `hardlink_visible_tree_root` builds the tree under
+        //   `trees_dir/<visibleTreeOid>` and then chmods every directory
         //   read-only after its children are linked.
-        // The scoped tree OID is computed by the run-level VisibleTreeOidCache
+        // The visible tree OID is computed by the run-level VisibleTreeOidCache
         // before session start, so materialization does not start git per
         // expectation or per history-derived scope.
-        let scope_root = self.scope_roots.join(visible_tree_oid);
-        if scope_root.exists() {
-            return Ok(scope_root);
+        let visible_tree_root = self.trees_dir.join(visible_tree_oid);
+        if visible_tree_root.exists() {
+            return Ok(visible_tree_root);
         }
-        self.unpack_missing_files(scope_paths)?;
-        self.hardlink_scope_root(scope_paths, scope_root)
+        self.unpack_missing_files(visible_tree_entries)?;
+        self.hardlink_visible_tree_root(visible_tree_entries, visible_tree_root)
     }
 
-    fn scoped_tree_entries(
+    fn visible_tree_entries(
         &self,
         agent: &AgentConfig,
         scope: &[String],
@@ -154,7 +161,7 @@ impl StagedWorktreeView {
             .collect::<Vec<_>>();
         let blobs = self.read_missing_blobs(&object_ids)?;
         for (file, blob) in missing.iter().zip(blobs) {
-            write_materialized_file(&self.lazy_root, file, &blob)?;
+            write_materialized_file(&self.lazy_tree_dir, file, &blob)?;
         }
         let mut unpacked = self.unpacked_paths.borrow_mut();
         for file in missing {
@@ -174,29 +181,29 @@ impl StagedWorktreeView {
             .read_blobs(object_ids)
     }
 
-    fn hardlink_scope_root(
+    fn hardlink_visible_tree_root(
         &self,
         files: &[StagedTrackedFile],
-        scope_root: PathBuf,
+        visible_tree_root: PathBuf,
     ) -> Result<PathBuf, String> {
-        if let Err(err) = platform::create_private_dir(&scope_root) {
+        if let Err(err) = platform::create_private_dir(&visible_tree_root) {
             if err.kind() == ErrorKind::AlreadyExists {
-                return Ok(scope_root);
+                return Ok(visible_tree_root);
             }
             return Err(format!(
-                "failed to create evaluator scope root {}: {}",
-                scope_root.display(),
+                "failed to create evaluator visible tree root {}: {}",
+                visible_tree_root.display(),
                 err
             ));
         }
         for file in files {
             let relative = relative_path_from_git_path(&file.path)?;
-            let source = self.lazy_root.join(&relative);
-            let target = scope_root.join(&relative);
+            let source = self.lazy_tree_dir.join(&relative);
+            let target = visible_tree_root.join(&relative);
             if let Some(parent) = target.parent() {
                 platform::create_private_dir_all(parent).map_err(|err| {
                     format!(
-                        "failed to create evaluator scope directory {}: {}",
+                        "failed to create evaluator visible tree directory {}: {}",
                         parent.display(),
                         err
                     )
@@ -206,29 +213,31 @@ impl StagedWorktreeView {
         }
         // Equivalent to the policy's post-order dfs chmod: each directory is
         // made read-only only after every descendant has been created.
-        make_scope_directories_read_only(&scope_root)?;
-        Ok(scope_root)
+        make_visible_tree_directories_read_only(&visible_tree_root)?;
+        Ok(visible_tree_root)
     }
 }
 
 impl Drop for StagedWorktreeView {
     fn drop(&mut self) {
-        let _ = make_materialization_tree_private(&self.scope_roots);
-        let _ = fs::remove_dir_all(&self.materialization_root);
+        if self.remove_materialization_root_on_drop {
+            let _ = make_materialization_tree_private(&self.trees_dir);
+            let _ = fs::remove_dir_all(&self.materialization_root);
+        }
     }
 }
 
-fn make_scope_directories_read_only(path: &Path) -> Result<(), String> {
+fn make_visible_tree_directories_read_only(path: &Path) -> Result<(), String> {
     for entry in fs::read_dir(path).map_err(|err| {
         format!(
-            "failed to read evaluator scope directory {}: {}",
+            "failed to read evaluator visible tree directory {}: {}",
             path.display(),
             err
         )
     })? {
         let entry = entry.map_err(|err| {
             format!(
-                "failed to read evaluator scope directory entry in {}: {}",
+                "failed to read evaluator visible tree directory entry in {}: {}",
                 path.display(),
                 err
             )
@@ -241,7 +250,7 @@ fn make_scope_directories_read_only(path: &Path) -> Result<(), String> {
             )
         })?;
         if file_type.is_dir() {
-            make_scope_directories_read_only(&entry.path())?;
+            make_visible_tree_directories_read_only(&entry.path())?;
         }
     }
     platform::set_materialized_dir_permissions(path)
@@ -297,6 +306,23 @@ fn write_materialized_file(
                 err
             )
         })?;
+    }
+    match fs::symlink_metadata(&target) {
+        Ok(_) => fs::remove_file(&target).map_err(|err| {
+            format!(
+                "failed to replace evaluator lazy file {}: {}",
+                target.display(),
+                err
+            )
+        })?,
+        Err(err) if err.kind() == ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(format!(
+                "failed to inspect evaluator lazy file {}: {}",
+                target.display(),
+                err
+            ));
+        }
     }
     if file.mode == "120000" {
         return platform::create_materialized_symlink(blob, &target);
@@ -370,7 +396,7 @@ mod tests {
         assert_dir_mode(&materialization_root, 0o700);
         assert_dir_mode(&materialization_root.join("lazy"), 0o700);
         assert_dir_mode(&materialization_root.join("lazy/dir"), 0o700);
-        assert_dir_mode(&materialization_root.join("scopes"), 0o700);
+        assert_dir_mode(&materialization_root.join("trees"), 0o700);
         assert_file_mode(&materialization_root.join("lazy/dir/secret.txt"), 0o444);
         assert_dir_mode(&scope_root, 0o555);
         assert_dir_mode(&scope_root.join("dir"), 0o555);
