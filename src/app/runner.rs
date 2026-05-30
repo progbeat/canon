@@ -58,15 +58,20 @@ impl EvaluatorRunner for LazyAppServerRunner {
     fn start_session(
         &mut self,
         session_cwd: &Path,
-        instructions: &str,
+        developer_instructions: &str,
         agent: &AgentConfig,
         model: Option<&str>,
         thinking: &str,
         scope: &[String],
     ) -> Result<String, EvaluatorError> {
-        let result =
-            self.inner()?
-                .start_session(session_cwd, instructions, agent, model, thinking, scope);
+        let result = self.inner()?.start_session(
+            session_cwd,
+            developer_instructions,
+            agent,
+            model,
+            thinking,
+            scope,
+        );
         match result {
             Ok(session_id) => {
                 self.sessions.insert(session_id.clone());
@@ -122,7 +127,7 @@ impl EvaluatorRunner for AppServerRunner {
     fn start_session(
         &mut self,
         session_cwd: &Path,
-        instructions: &str,
+        developer_instructions: &str,
         agent: &AgentConfig,
         model: Option<&str>,
         thinking: &str,
@@ -135,7 +140,7 @@ impl EvaluatorRunner for AppServerRunner {
         let params = ThreadStartParams {
             cwd: session_cwd.display().to_string(),
             base_instructions: EVALUATOR_BASE_INSTRUCTIONS,
-            developer_instructions: instructions,
+            developer_instructions,
             approval_policy: "never",
             sandbox: self.no_sandbox.then_some("danger-full-access"),
             environments: vec![local_environment_params(session_cwd)],

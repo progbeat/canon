@@ -79,11 +79,18 @@ impl StagedWorktreeView {
         scope: &[String],
     ) -> Result<PathBuf, String> {
         let scope = sanitize_scope(scope, agent)?;
-        let scope_paths = self.evaluator_visible_git_tree(agent, &scope)?;
+        let scope_paths = self.scoped_tree_entries(agent, &scope)?;
         self.materialize_scope(&scope_paths)
     }
 
     fn materialize_scope(&self, scope_paths: &[StagedTrackedFile]) -> Result<PathBuf, String> {
+        // Lazy hardlink policy mapping:
+        // - `scope_paths` is `git_tree.limit(pathspecs=scope).entry_paths`.
+        // - `unpack_missing_files` performs `git_tree.extract` once per
+        //   not-yet-unpacked blob into `lazy_root`.
+        // - `hardlink_scope_root` builds the scoped tree under
+        //   `scope_roots/<scoped tree OID>` and then chmods every directory
+        //   read-only after its children are linked.
         let scope_root = self.scope_root_for_files(scope_paths)?;
         if scope_root.exists() {
             return Ok(scope_root);
@@ -92,7 +99,7 @@ impl StagedWorktreeView {
         self.hardlink_scope_root(scope_paths, scope_root)
     }
 
-    fn evaluator_visible_git_tree(
+    fn scoped_tree_entries(
         &self,
         agent: &AgentConfig,
         scope: &[String],
@@ -194,6 +201,8 @@ impl StagedWorktreeView {
             }
             platform::hardlink_file_or_copy_symlink(&source, &target)?;
         }
+        // Equivalent to the policy's post-order dfs chmod: each directory is
+        // made read-only only after every descendant has been created.
         make_scope_directories_read_only(&scope_root)?;
         Ok(scope_root)
     }
@@ -201,7 +210,7 @@ impl StagedWorktreeView {
 
 impl Drop for StagedWorktreeView {
     fn drop(&mut self) {
-        let _ = make_materialization_directories_private(&self.scope_roots);
+        let _ = make_materialization_tree_private(&self.scope_roots);
         let _ = fs::remove_dir_all(&self.materialization_root);
     }
 }
@@ -235,7 +244,7 @@ fn make_scope_directories_read_only(path: &Path) -> Result<(), String> {
     platform::set_materialized_dir_permissions(path)
 }
 
-fn make_materialization_directories_private(path: &Path) -> Result<(), String> {
+fn make_materialization_tree_private(path: &Path) -> Result<(), String> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(()),
@@ -248,7 +257,7 @@ fn make_materialization_directories_private(path: &Path) -> Result<(), String> {
         }
     };
     if !metadata.file_type().is_dir() {
-        return Ok(());
+        return platform::set_private_file_permissions(path);
     }
     platform::set_private_dir_permissions(path)?;
     for entry in fs::read_dir(path).map_err(|err| {
@@ -265,7 +274,7 @@ fn make_materialization_directories_private(path: &Path) -> Result<(), String> {
                 err
             )
         })?;
-        make_materialization_directories_private(&entry.path())?;
+        make_materialization_tree_private(&entry.path())?;
     }
     Ok(())
 }
@@ -330,7 +339,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn materialized_scope_directories_are_read_only() {
+    fn materialized_scope_files_and_directories_are_read_only() {
         let root = git_project("staged-snapshot-scope-read-only-dirs");
         fs::create_dir_all(root.join("dir")).unwrap();
         fs::write(root.join("dir/secret.txt"), "secret\n").unwrap();
@@ -349,8 +358,10 @@ mod tests {
         assert_dir_mode(&materialization_root.join("lazy"), 0o700);
         assert_dir_mode(&materialization_root.join("lazy/dir"), 0o700);
         assert_dir_mode(&materialization_root.join("scopes"), 0o700);
+        assert_file_mode(&materialization_root.join("lazy/dir/secret.txt"), 0o444);
         assert_dir_mode(&scope_root, 0o555);
         assert_dir_mode(&scope_root.join("dir"), 0o555);
+        assert_file_mode(&scope_root.join("dir/secret.txt"), 0o444);
 
         let _ = fs::remove_dir_all(root);
     }
@@ -359,13 +370,24 @@ mod tests {
         AgentConfig {
             models: Vec::new(),
             thinking: "medium".to_string(),
-            instructions: None,
             ignore: Vec::new(),
             plugins: Vec::new(),
         }
     }
 
     fn assert_dir_mode(path: &Path, expected: u32) {
+        let mode = fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode,
+            expected,
+            "{} mode is {:o}, expected {:o}",
+            path.display(),
+            mode,
+            expected
+        );
+    }
+
+    fn assert_file_mode(path: &Path, expected: u32) {
         let mode = fs::metadata(path).unwrap().permissions().mode() & 0o777;
         assert_eq!(
             mode,

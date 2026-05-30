@@ -73,7 +73,6 @@ fn raw_preset_from_legacy_agent(
         extends: None,
         models: (!models.is_empty()).then_some(models),
         thinking: agent.thinking,
-        instructions: agent.instructions,
         ignore: agent.ignore,
         plugins: agent.plugins,
     }
@@ -135,9 +134,6 @@ fn apply_raw_preset(agent: &mut AgentConfig, raw: &RawPresetConfig) {
     if let Some(thinking) = &raw.thinking {
         agent.thinking = thinking.clone();
     }
-    if let Some(instructions) = &raw.instructions {
-        agent.instructions = Some(instructions.clone());
-    }
     if let Some(ignore) = &raw.ignore {
         agent.ignore = ignore.clone();
     }
@@ -155,9 +151,6 @@ fn apply_expectation_settings(
     }
     if let Some(thinking) = &settings.thinking {
         agent.thinking = thinking.clone();
-    }
-    if let Some(instructions) = &settings.instructions {
-        agent.instructions = Some(instructions.clone());
     }
     if let Some(ignore) = &settings.ignore {
         agent.ignore = ignore.clone();
@@ -232,7 +225,7 @@ impl RawExpectationExpansion<'_> {
     ) -> Result<(), String> {
         let item_number = index + 1;
         let files = self.expand_paths(config_path, &item.path, item_number, "path")?;
-        let uses_content = item.q_template.contains("{{content}}");
+        let uses_content = item.question_template.contains("{{content}}");
         for file in files {
             let content = if uses_content {
                 self.read_expanded_file(&file)?
@@ -240,7 +233,7 @@ impl RawExpectationExpansion<'_> {
                 String::new()
             };
             self.expectations.push(Expectation {
-                q: render_generator_question(&item.q_template, &content),
+                q: render_generator_question(&item.question_template, &content),
                 a: item.a.clone(),
                 prompt_scope: if uses_content { vec![file] } else { Vec::new() },
                 agent: self.resolve_expectation_agent(&item.settings)?,
@@ -350,9 +343,10 @@ impl RawExpectationExpansion<'_> {
 }
 
 fn render_generator_question(template: &str, content: &str) -> String {
-    // The expectations spec defines generator rendering as plain
-    // `{{content}}` substitution: no placeholder leaves the template
-    // unchanged, and repeated placeholders all receive the matched file
-    // contents.
+    // The expectations spec defines q_template rendering as plain
+    // `{{content}}` substitution to produce user-authored expectation
+    // questions. This is deliberately separate from Canon-owned evaluator
+    // prompt/instruction templates, which are loaded only by
+    // `evaluator::prompt` from `resources/prompts/`.
     template.replace("{{content}}", content)
 }

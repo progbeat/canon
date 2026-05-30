@@ -29,8 +29,6 @@ pub(crate) struct AgentConfig {
     #[serde(default = "default_thinking")]
     pub(crate) thinking: String,
     #[serde(default)]
-    pub(crate) instructions: Option<String>,
-    #[serde(default)]
     pub(crate) ignore: Vec<String>,
     #[serde(default)]
     pub(crate) plugins: Vec<String>,
@@ -41,14 +39,9 @@ impl AgentConfig {
         AgentConfig {
             models: Vec::new(),
             thinking: default_thinking(),
-            instructions: None,
             ignore: Vec::new(),
             plugins: Vec::new(),
         }
-    }
-
-    pub(crate) fn custom_instructions(&self) -> &str {
-        self.instructions.as_deref().unwrap_or("")
     }
 }
 
@@ -68,8 +61,6 @@ pub(crate) struct RawPresetConfig {
     #[serde(default)]
     pub(crate) thinking: Option<String>,
     #[serde(default)]
-    pub(crate) instructions: Option<String>,
-    #[serde(default)]
     pub(crate) ignore: Option<Vec<String>>,
     #[serde(default)]
     pub(crate) plugins: Option<Vec<String>>,
@@ -82,8 +73,6 @@ pub(crate) struct RawLegacyAgentConfig {
     pub(crate) model: RawLegacyModelConfig,
     #[serde(default)]
     pub(crate) thinking: Option<String>,
-    #[serde(default)]
-    pub(crate) instructions: Option<String>,
     #[serde(default)]
     pub(crate) ignore: Option<Vec<String>>,
     #[serde(default)]
@@ -104,7 +93,6 @@ pub(crate) struct RawExpectationSettings {
     pub(crate) preset: Option<String>,
     pub(crate) models: Option<Vec<String>>,
     pub(crate) thinking: Option<String>,
-    pub(crate) instructions: Option<String>,
     pub(crate) ignore: Option<Vec<String>>,
     pub(crate) plugins: Option<Vec<String>>,
 }
@@ -145,7 +133,11 @@ pub(crate) struct RawExplicitExpectation {
 
 #[derive(Debug, Clone)]
 pub(crate) struct RawGeneratorExpectation {
-    pub(crate) q_template: String,
+    // User-authored generator text that renders an expectation question from a
+    // matched file. It is canon data, not a Canon-owned interrogation prompt
+    // template; runtime evaluator prompt/instruction templates live under
+    // `resources/prompts/`.
+    pub(crate) question_template: String,
     pub(crate) path: String,
     pub(crate) a: String,
     pub(crate) cooldown: Option<String>,
@@ -181,8 +173,6 @@ struct RawExpectationFields {
     #[serde(default)]
     thinking: Option<String>,
     #[serde(default)]
-    instructions: Option<String>,
-    #[serde(default)]
     ignore: Option<Vec<String>>,
     #[serde(default)]
     plugins: Option<Vec<String>>,
@@ -210,7 +200,6 @@ impl RawExpectationItem {
             preset,
             models,
             thinking,
-            instructions,
             ignore,
             plugins,
         } = fields;
@@ -218,7 +207,6 @@ impl RawExpectationItem {
             preset,
             models,
             thinking,
-            instructions,
             ignore,
             plugins,
         };
@@ -231,7 +219,7 @@ impl RawExpectationItem {
             })),
             (None, Some(q_template), Some(path), Some(a)) => {
                 Ok(RawExpectationItem::Generator(RawGeneratorExpectation {
-                    q_template,
+                    question_template: q_template,
                     path,
                     a,
                     cooldown,

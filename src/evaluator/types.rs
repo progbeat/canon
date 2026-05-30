@@ -8,7 +8,7 @@ pub(crate) trait EvaluatorRunner {
     fn start_session(
         &mut self,
         session_cwd: &Path,
-        instructions: &str,
+        developer_instructions: &str,
         agent: &AgentConfig,
         model: Option<&str>,
         thinking: &str,

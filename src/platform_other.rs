@@ -35,16 +35,37 @@ pub(crate) fn make_hook_executable(_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn set_materialized_file_permissions(_path: &Path, _mode: &str) -> Result<(), String> {
-    Ok(())
+pub(crate) fn set_materialized_file_permissions(path: &Path, _mode: &str) -> Result<(), String> {
+    set_readonly(path, true)
 }
 
-pub(crate) fn set_materialized_dir_permissions(_path: &Path) -> Result<(), String> {
-    Ok(())
+pub(crate) fn set_materialized_dir_permissions(path: &Path) -> Result<(), String> {
+    set_readonly(path, true)
 }
 
-pub(crate) fn set_private_dir_permissions(_path: &Path) -> Result<(), String> {
-    Ok(())
+pub(crate) fn set_private_dir_permissions(path: &Path) -> Result<(), String> {
+    set_readonly(path, false)
+}
+
+pub(crate) fn set_private_file_permissions(path: &Path) -> Result<(), String> {
+    set_readonly(path, false)
+}
+
+fn set_readonly(path: &Path, readonly: bool) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
+    if metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+    let mut permissions = metadata.permissions();
+    permissions.set_readonly(readonly);
+    fs::set_permissions(path, permissions).map_err(|err| {
+        format!(
+            "failed to update permissions for {}: {}",
+            path.display(),
+            err
+        )
+    })
 }
 
 pub(crate) fn create_materialized_symlink(target: &[u8], link: &Path) -> Result<(), String> {
@@ -62,13 +83,9 @@ pub(crate) fn create_materialized_symlink(target: &[u8], link: &Path) -> Result<
     }
     #[cfg(not(windows))]
     {
-        fs::write(link, target).map_err(|err| {
-            format!(
-                "failed to write evaluator symlink placeholder {}: {}",
-                link.display(),
-                err
-            )
-        })
+        let _ = target;
+        let _ = link;
+        Err("materialized symlinks require Unix or Windows filesystem support".to_string())
     }
 }
 
@@ -122,7 +139,19 @@ pub(crate) fn open_file_for_append_without_following_symlink(
         .map_err(|err| format!("failed to open {}: {}", path.display(), err))
 }
 
-pub(crate) fn add_memory_backed_staged_snapshot_parent_candidates(_parents: &mut Vec<PathBuf>) {}
+pub(crate) fn add_memory_backed_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
+    // Non-Unix Rust has no portable mount-table API. Treat explicitly
+    // configured RAM-disk temp locations as memory-backed candidates before
+    // falling back to ordinary temp storage.
+    for name in ["CANON_MEMORY_BACKED_TMPDIR", "RAMDISK", "RAMDISK_TMPDIR"] {
+        let Some(value) = std::env::var_os(name) else {
+            continue;
+        };
+        if !value.is_empty() {
+            push_unique_path(parents, PathBuf::from(value));
+        }
+    }
+}
 
 pub(crate) fn add_ordinary_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
     add_environment_temp_parent_candidates(parents);

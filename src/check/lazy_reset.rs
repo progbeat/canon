@@ -264,7 +264,7 @@ fn set_expectation_scope_to_full_for_next_check(
     if !path.exists() {
         return Ok(());
     }
-    let records = read_repository_history_records_from_path(root, &path)?;
+    let records = read_repository_history_records_from_path(root, &path, &expectation.a)?;
     let Some((latest_index, latest_scope)) = latest_reusable_record_scope(&records, expectation)
     else {
         return Ok(());

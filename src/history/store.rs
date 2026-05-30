@@ -66,34 +66,23 @@ pub(crate) fn read_history_records(
     expectation: &SelectedExpectation,
 ) -> Result<Vec<CheckRecord>, String> {
     let path = history_path(root, expectation)?;
-    read_repository_history_records_from_path(root, &path)
-}
-
-pub(crate) fn read_history_records_from_path(path: &Path) -> Result<Vec<CheckRecord>, String> {
-    let mut records = Vec::new();
-    for_each_nonempty_line(path, |line_number, line| {
-        match parse_history_record_line(path, line_number, &line) {
-            Ok(record) => records.push(record),
-            Err(_) => {
-                // History is a reusable cache, not authoritative project data.
-                // Corrupt cache lines are ignored here and dropped by the same
-                // parser during compaction, while real file I/O errors still
-                // propagate from `for_each_nonempty_line`.
-            }
-        }
-        Ok(())
-    })?;
-    Ok(records)
+    read_repository_history_records_from_path(root, &path, &expectation.a)
 }
 
 pub(crate) fn read_repository_history_records_from_path(
     root: &Path,
     path: &Path,
+    expected_answer: &str,
 ) -> Result<Vec<CheckRecord>, String> {
     let native_oid_hex_len = repository_native_object_oid_hex_len(root)?;
     let mut records = Vec::new();
     for_each_nonempty_line(path, |line_number, line| {
-        match parse_history_record_line(path, line_number, &line) {
+        match parse_history_record_line_for_expected(
+            path,
+            line_number,
+            &line,
+            Some(expected_answer),
+        ) {
             Ok(record) => {
                 if git_object_oid_has_hex_len(&record.visible_tree_oid, native_oid_hex_len) {
                     records.push(record);
@@ -120,6 +109,20 @@ pub(crate) fn parse_history_record_line(
     line_number: usize,
     line: &str,
 ) -> Result<CheckRecord, String> {
+    // Shape-only cache maintenance parse. Without a current expectation there
+    // is no current expected answer to compare against, so schema-valid answer
+    // rows parse as neutral passes. Runtime history reads must use
+    // `read_repository_history_records_from_path`, which derives `result` from
+    // the current expectation's expected answer.
+    parse_history_record_line_for_expected(path, line_number, line, None)
+}
+
+fn parse_history_record_line_for_expected(
+    path: &Path,
+    line_number: usize,
+    line: &str,
+    expected_answer: Option<&str>,
+) -> Result<CheckRecord, String> {
     let record = serde_json::from_str::<HistoryReadRecord>(line).map_err(|err| {
         format!(
             "invalid history JSON in {} line {}: {}",
@@ -128,7 +131,7 @@ pub(crate) fn parse_history_record_line(
             err
         )
     })?;
-    let record = record.into_check_record();
+    let record = record.into_check_record(expected_answer);
     validate_schema_valid_answer_history_record(&record).map_err(|message| {
         format!(
             "invalid answer history record in {} line {}: records must be schema-valid responses with answer: {}",
@@ -155,14 +158,17 @@ struct HistoryReadRecord {
 }
 
 impl HistoryReadRecord {
-    fn into_check_record(self) -> CheckRecord {
+    fn into_check_record(self, expected_answer: Option<&str>) -> CheckRecord {
         let has_error_field = self.extra_fields.contains_key("error");
+        let result = expected_answer
+            .map(|expected| CheckResult::from_expected_answer(expected, &self.observed))
+            .unwrap_or(CheckResult::Pass);
         CheckRecord {
             timestamp: self.timestamp,
             number: 0,
-            result: CheckResult::Fail,
+            result,
             prompt: None,
-            expected: None,
+            expected: expected_answer.map(str::to_string),
             observed: self.observed,
             error: has_error_field.then(|| "error".to_string()),
             evidence: self.evidence,
@@ -252,7 +258,7 @@ impl HistoryCache {
         // answer-history rows are checked against the repository-native Git
         // object hash algorithm. The lower-level line parser only validates the
         // portable JSONL shape used by compaction and parser tests.
-        let records = read_repository_history_records_from_path(root, &path)?;
+        let records = read_repository_history_records_from_path(root, &path, &expectation.a)?;
         self.records.insert(path, records.clone());
         Ok(records)
     }
@@ -409,7 +415,7 @@ fn append_history_record_with_cache_inner(
     let compacted = should_compact && compact_repository_history_locked(root, &path).is_ok();
     if had_cached_records {
         if compacted {
-            match read_history_records_from_path(&path) {
+            match read_repository_history_records_from_path(root, &path, &expectation.a) {
                 Ok(records) => {
                     history_cache.records.insert(path, records);
                 }

@@ -5,7 +5,7 @@ use crate::check::interrogation_state::{
 use crate::check::model_fallback::write_model_fallback_events;
 use crate::check::types::{InterrogationResult, SelectedExpectation};
 use crate::config_types::AgentConfig;
-use crate::evaluator::prompt::developer_instructions;
+use crate::evaluator::prompt::{developer_instructions, evaluator_turn_prompt};
 use crate::evaluator::response_cache::EvaluatorResponseParseCache;
 use crate::evaluator::turn::{
     ask_once, effective_thinking, is_context_window_failure, session_failure_invalidates_thread,
@@ -254,10 +254,10 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
 ) -> Result<InterrogationResult, EvaluatorError> {
     // Expectation mode may start from a history-derived restricted scope, but
     // after sanitization this path shares query mode's first-turn construction:
-    // developer instructions are determined by agent config plus enforced
-    // scope, and the task prompt is exactly the expectation question.
+    // developer instructions and the turn prompt are rendered from
+    // `resources/prompts/` plus runtime data.
     let enforced_scope = sanitize_scope(enforced_scope, &expectation.agent)?;
-    let prompt = expectation.q.clone();
+    let prompt = evaluator_turn_prompt(&expectation.q);
     let thinking = effective_thinking(&expectation.agent, expectation);
     let response = ask_with_reused_thread(
         runtime,

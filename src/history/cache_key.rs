@@ -8,7 +8,6 @@ pub(crate) fn history_cache_key(agent: &AgentConfig, expectation: &SelectedExpec
     // remains governed by the history record's q-scope and current visibleTreeOid.
     let mut input = Vec::new();
     push_history_cache_key_part(&mut input, "schema", "2");
-    push_history_cache_key_part(&mut input, "instructions", agent.custom_instructions());
     let mut ignore_patterns = effective_ignore_patterns(agent);
     ignore_patterns.sort();
     for pattern in ignore_patterns {

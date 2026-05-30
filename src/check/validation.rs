@@ -57,16 +57,6 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
 }
 
 fn validate_agent_config(agent: &AgentConfig, label: &str) -> Result<(), String> {
-    // Prompt rendering trims optional custom instructions; reject explicitly
-    // blank-looking values so a configured policy cannot silently disappear.
-    if let Some(instructions) = agent.instructions.as_deref() {
-        if !contains_visible_config_text(instructions) {
-            return Err(format!(
-                "check.yml {}.instructions must contain visible text",
-                label
-            ));
-        }
-    }
     for (index, model) in agent.models.iter().enumerate() {
         validate_optional_model(
             Some(model.as_str()),

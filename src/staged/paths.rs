@@ -13,9 +13,12 @@ pub(crate) fn create_snapshot_root(root: &Path) -> Result<PathBuf, String> {
     })?;
     let mut errors = Vec::new();
     // The lazy hardlink policy prefers memory-backed temporary storage when
-    // the host provides a usable parent. Ordinary temporary storage is tried
-    // only after every discovered memory-backed parent is missing, inside the
-    // worktree, or unusable.
+    // the host provides a usable parent. Platform discovery is centralized in
+    // `platform::memory_backed_staged_snapshot_parent_candidates`: Unix adds
+    // common RAM paths and /proc-discovered tmpfs/ramfs mounts, while other
+    // platforms can expose explicit RAM-disk temp roots. Ordinary temporary
+    // storage is tried only after every discovered memory-backed parent is
+    // missing, inside the worktree, or unusable.
     if let Some(path) = create_snapshot_root_from_candidates(
         &root,
         crate::platform::memory_backed_staged_snapshot_parent_candidates(),
