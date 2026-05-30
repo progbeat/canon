@@ -325,15 +325,16 @@ fn write_materialized_file(
         }
     }
     if file.mode == "120000" {
-        return platform::create_materialized_symlink(blob, &target);
+        platform::create_materialized_symlink(blob, &target)?;
+    } else {
+        fs::write(&target, blob).map_err(|err| {
+            format!(
+                "failed to write evaluator lazy file {}: {}",
+                target.display(),
+                err
+            )
+        })?;
     }
-    fs::write(&target, blob).map_err(|err| {
-        format!(
-            "failed to write evaluator lazy file {}: {}",
-            target.display(),
-            err
-        )
-    })?;
     platform::set_materialized_file_permissions(&target, &file.mode)
 }
 
@@ -362,7 +363,7 @@ mod tests {
     use super::*;
     use crate::config_types::AgentConfig;
     use crate::hash::full_scope;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{symlink, PermissionsExt};
     use std::process;
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -405,6 +406,40 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn materialized_symlink_permissions_do_not_follow_targets() {
+        let root = git_project("staged-snapshot-symlink-no-follow");
+        symlink("missing-target", root.join("link.txt")).unwrap();
+        Command::new("git")
+            .args(["add", "link.txt"])
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
+        let agent = empty_test_agent();
+        let scope = full_scope();
+        let staged_view = StagedWorktreeView::apply_with_visible_tree_oid_cache(
+            &root,
+            &mut visible_tree_oid_cache,
+        )
+        .unwrap();
+        let visible_tree_oid = visible_tree_oid_cache
+            .staged_visible_tree_oid(&root, &agent, &scope)
+            .unwrap();
+        let materialization_root = staged_view.materialization_root().to_path_buf();
+        let scope_root = staged_view
+            .materialize_evaluator_scope(&agent, &scope, &visible_tree_oid)
+            .unwrap();
+
+        assert_symlink_target(
+            &materialization_root.join("lazy/link.txt"),
+            Path::new("missing-target"),
+        );
+        assert_symlink_target(&scope_root.join("link.txt"), Path::new("missing-target"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
     fn empty_test_agent() -> AgentConfig {
         AgentConfig {
             models: Vec::new(),
@@ -436,6 +471,16 @@ mod tests {
             mode,
             expected
         );
+    }
+
+    fn assert_symlink_target(path: &Path, expected: &Path) {
+        let metadata = fs::symlink_metadata(path).unwrap();
+        assert!(
+            metadata.file_type().is_symlink(),
+            "{} should be a symlink",
+            path.display()
+        );
+        assert_eq!(fs::read_link(path).unwrap(), expected);
     }
 
     fn git_project(name: &str) -> PathBuf {

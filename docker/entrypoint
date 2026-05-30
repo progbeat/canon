@@ -10,11 +10,24 @@ if [ "$#" -eq 0 ]; then
 fi
 
 tmpdir="${TMPDIR:-/scratch/tmp}"
+codex_home="${CODEX_HOME:-/scratch/codex-home}"
 mkdir -p \
   "${HOME:-/scratch/home}" \
   "$tmpdir" \
-  "${CODEX_HOME:-/scratch/codex-home}" \
+  "$codex_home" \
   "${CANON_SANDBOX_DIR:-/scratch/sandbox}"
+
+if [ -e /codex/auth.json ]; then
+  for file in auth.json installation_id version.json; do
+    [ ! -e "/codex/$file" ] || cp "/codex/$file" "$codex_home/$file"
+  done
+fi
+
+system_skills_marker="/codex/skills/.system/.codex-system-skills.marker"
+if [ -e "$system_skills_marker" ]; then
+  mkdir -p "$codex_home/skills/.system"
+  cp "$system_skills_marker" "$codex_home/skills/.system/.codex-system-skills.marker"
+fi
 
 case "$1" in
   init|hook|check|gate|help|-*)
@@ -23,12 +36,6 @@ case "$1" in
     exec "$@"
     ;;
 esac
-
-if [ -e /codex/auth.json ]; then
-  for file in auth.json installation_id version.json; do
-    [ ! -e "/codex/$file" ] || cp "/codex/$file" "$CODEX_HOME/$file"
-  done
-fi
 
 if [ "$1" = "check" ]; then
   has_no_sandbox=0
