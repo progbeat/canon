@@ -219,6 +219,89 @@ fn check_agent_message_counts_human_review_as_non_ok() {
 }
 
 #[test]
+fn check_agent_message_counts_cached_failures_as_non_ok() {
+    let root = git_project("check-agent-message-cached-failure");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], true, false);
+    let expectation = options.selected[0].clone();
+    let cached_fail = expectation_record(
+        &config.agent,
+        &expectation,
+        "fail",
+        "no",
+        stale_visible_tree_oid(),
+    );
+    let report = CheckRunReport {
+        records: Vec::new(),
+        non_selected: Vec::new(),
+        cached: vec![CachedExpectation {
+            expectation,
+            record: cached_fail,
+        }],
+        evaluated: 0,
+        selected: 1,
+        skipped: 0,
+        silent: 0,
+        narrowing: NarrowingStats::default(),
+    };
+
+    assert_eq!(
+        check_agent_message(
+            &root,
+            &config,
+            &report,
+            &mut HistoryCache::new(),
+            &mut VisibleTreeOidCache::new(),
+        )
+        .unwrap(),
+        "▷ Fix the issues and run `canon check` again!"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn check_agent_message_counts_cached_human_review_as_non_ok() {
+    let root = git_project("check-agent-message-cached-human-review");
+    let config = parse_check_config(check_config_yaml()).unwrap();
+    let options = check_options(&config, &["1"], true, false);
+    let expectation = options.selected[0].clone();
+    let mut cached_error = expectation_record(
+        &config.agent,
+        &expectation,
+        "fail",
+        ERROR_INSUFFICIENT_EVIDENCE,
+        stale_visible_tree_oid(),
+    );
+    cached_error.error = Some(ERROR_INSUFFICIENT_EVIDENCE.to_string());
+    let report = CheckRunReport {
+        records: Vec::new(),
+        non_selected: Vec::new(),
+        cached: vec![CachedExpectation {
+            expectation,
+            record: cached_error,
+        }],
+        evaluated: 0,
+        selected: 1,
+        skipped: 0,
+        silent: 0,
+        narrowing: NarrowingStats::default(),
+    };
+
+    assert_eq!(
+        check_agent_message(
+            &root,
+            &config,
+            &report,
+            &mut HistoryCache::new(),
+            &mut VisibleTreeOidCache::new(),
+        )
+        .unwrap(),
+        "▷ Fix the issues and run `canon check` again!"
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn staged_pass_notice_counts_missing_head_cache_as_fix() {
     let root = git_project("check-head-pass-notice");
     commit_all(&root, "initial");

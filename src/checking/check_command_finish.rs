@@ -1,6 +1,6 @@
 use crate::check::CheckRunCaches;
 use crate::check_lazy_reset::apply_lazy_full_scope_reset;
-use crate::check_output::{record_requires_human_review, write_stdout_line_record};
+use crate::check_output::{summary_outcome_counts, write_stdout_line_record};
 use crate::check_reporting::write_check_finish_event;
 use crate::check_types::{CheckRecord, CheckRunReport, SelectedExpectation};
 use crate::cli::CommandError;
@@ -197,16 +197,9 @@ pub(crate) fn check_agent_messages(
     // expectation-related `canon gate` failures.
     let num_regressions =
         gate_regression_count_with_config(root, config, history_cache, visible_tree_oid_cache)?;
-    let num_failed = report
-        .records
-        .iter()
-        .filter(|record| !record.passed() && !record_requires_human_review(record))
-        .count();
-    let num_errors = report
-        .records
-        .iter()
-        .filter(|record| !record.passed() && record_requires_human_review(record))
-        .count();
+    let outcome_counts = summary_outcome_counts(report);
+    let num_failed = outcome_counts.failed;
+    let num_errors = outcome_counts.errors;
     let num_non_ok = num_failed + num_errors;
     if num_regressions > 0 || (num_non_ok > 0 && num_fixes == 0) {
         return Ok(vec![FIX_ISSUES_MESSAGE.to_string()]);

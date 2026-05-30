@@ -176,13 +176,13 @@ pub(crate) fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -
     format!("{}\n", pad_summary_line(&inner))
 }
 
-struct SummaryOutcomeCounts {
-    passed: usize,
-    failed: usize,
-    errors: usize,
+pub(crate) struct SummaryOutcomeCounts {
+    pub(crate) passed: usize,
+    pub(crate) failed: usize,
+    pub(crate) errors: usize,
 }
 
-fn summary_outcome_counts(report: &CheckRunReport) -> SummaryOutcomeCounts {
+pub(crate) fn summary_outcome_counts(report: &CheckRunReport) -> SummaryOutcomeCounts {
     let mut counts = SummaryOutcomeCounts {
         passed: 0,
         failed: 0,

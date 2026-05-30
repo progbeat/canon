@@ -33,6 +33,10 @@ When `canon` writes an instruction, execute it. If the instruction says to commi
 When you are already making project changes and the canon is violated, whether detected by `canon check` or after a human updates the canon, proactively fix the implementation to match the canon without waiting for a separate human command.
 Continue until there are no remaining issues that you are allowed and able to fix. When a fix causes a regression, improve the readability of the fragile logic before retrying.
 
+When a test fails, compare the behavior asserted by the test with the canon.
+If the behavior follows from the canon, fix the implementation.
+If the behavior contradicts the canon, delete the test.
+
 Do not take `canon check` evidence on trust.
 Before acting on a result, verify that the evidence actually supports the observed answer and answers the expectation question.
 If `canon check` gives a wrong answer, unsupported evidence, or evidence that is irrelevant to the question while the project satisfies the expectation, treat that as a readability issue.
