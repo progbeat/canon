@@ -1,6 +1,6 @@
 use crate::check::selection::ExpectationIdentity;
 use crate::check::types::{CachedExpectation, SelectedExpectation};
-use crate::config_types::{AgentConfig, CheckConfig};
+use crate::config_types::CheckConfig;
 use crate::fs_util::{
     ensure_dir_without_symlinks, for_each_nonempty_line, write_temp_file_then_replace,
 };
@@ -17,18 +17,22 @@ use std::path::{Path, PathBuf};
 
 pub(crate) fn apply_lazy_full_scope_reset(
     root: &Path,
-    config: &CheckConfig,
+    _config: &CheckConfig,
     evaluated_expectations: usize,
     cached: &[CachedExpectation],
     diagnostic_log: &mut DiagnosticLogWriter,
 ) -> Result<(), String> {
-    let reset = plan_lazy_full_scope_reset(
-        root,
-        &config.agent,
-        evaluated_expectations,
-        cached,
-        random_reset_seed(),
-    )?;
+    apply_lazy_full_scope_reset_for_cached(root, evaluated_expectations, cached, diagnostic_log)
+}
+
+pub(crate) fn apply_lazy_full_scope_reset_for_cached(
+    root: &Path,
+    evaluated_expectations: usize,
+    cached: &[CachedExpectation],
+    diagnostic_log: &mut DiagnosticLogWriter,
+) -> Result<(), String> {
+    let reset =
+        plan_lazy_full_scope_reset(root, evaluated_expectations, cached, random_reset_seed())?;
     diagnostic_log
         .write_event(
             "info",
@@ -87,10 +91,21 @@ pub(crate) fn clear_active_lazy_full_scope_reset(
     root: &Path,
     expectation: &SelectedExpectation,
 ) -> Result<(), String> {
-    remove_active_lazy_full_scope_reset_at_path(&active_lazy_full_scope_reset_path(
-        root,
-        &expectation.id,
-    )?)
+    clear_active_lazy_full_scope_reset_id(root, &expectation.id)
+}
+
+pub(crate) fn clear_active_lazy_full_scope_reset_ids(
+    root: &Path,
+    ids: &BTreeSet<String>,
+) -> Result<(), String> {
+    for id in ids {
+        clear_active_lazy_full_scope_reset_id(root, id)?;
+    }
+    Ok(())
+}
+
+fn clear_active_lazy_full_scope_reset_id(root: &Path, id: &str) -> Result<(), String> {
+    remove_active_lazy_full_scope_reset_at_path(&active_lazy_full_scope_reset_path(root, id)?)
 }
 
 pub(crate) struct LazyFullScopeResetPlan {
@@ -107,7 +122,6 @@ struct CachedPassingExpectation {
 
 pub(crate) fn plan_lazy_full_scope_reset(
     _root: &Path,
-    _agent: &AgentConfig,
     evaluated_expectations: usize,
     cached: &[CachedExpectation],
     seed: u64,

@@ -2,6 +2,9 @@ use crate::check::command::{prepare_check_execution, PrepareCheckExecutionOption
 use crate::check::interrogation_state::{
     initial_visible_scope_for_expectation, CheckRuntime, InterrogationRunState,
 };
+use crate::check::lazy_reset::{
+    apply_lazy_full_scope_reset_for_cached, clear_active_lazy_full_scope_reset_ids,
+};
 use crate::check::output::write_query_output;
 use crate::check::query::run_query_with_runner;
 use crate::check::reporting::{
@@ -45,6 +48,7 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
         no_sandbox,
         mut diagnostic_log,
     } = command;
+    let no_applied_lazy_full_scope_reset_ids = BTreeSet::new();
     // `canon check -q` runs one ad-hoc query. When that query is exactly a
     // plain q/a expectation, reuse the expectation-mode initial q-scope so the
     // first evaluator input stays identical. An explicit `--scope` remains a
@@ -69,10 +73,20 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
     ) {
         Ok(scope) => scope,
         Err(err) => {
-            write_query_error_finish(&mut diagnostic_log, &err)?;
+            write_query_error_finish(
+                root,
+                &no_applied_lazy_full_scope_reset_ids,
+                &mut diagnostic_log,
+                &err,
+            )?;
             return Err(err);
         }
     };
+    let applied_lazy_full_scope_reset_ids = query_applied_lazy_full_scope_reset_ids(
+        query_scope,
+        matching_expectation.as_ref(),
+        scheduled_full_scope_reset_ids,
+    );
     let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
     let mut execution = prepare_check_execution(
         root,
@@ -86,9 +100,25 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
         },
         &mut visible_tree_oid_cache,
     )?;
-    let runtime =
-        CheckRuntime::materialized(root, &execution.staged_view, &execution.tree_source, config);
-    let mut interrogation_run_state = InterrogationRunState::new();
+    let runtime = CheckRuntime::materialized(
+        root,
+        &execution.staged_view,
+        &execution.tree_source,
+        config,
+        no_sandbox,
+    );
+    let mut interrogation_run_state = match InterrogationRunState::new(runtime.no_sandbox()) {
+        Ok(state) => state,
+        Err(err) => {
+            write_query_error_finish(
+                root,
+                &applied_lazy_full_scope_reset_ids,
+                &mut diagnostic_log,
+                &err,
+            )?;
+            return Err(err);
+        }
+    };
     let result = run_query_with_runner(
         &runtime,
         question,
@@ -106,7 +136,12 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
         Err(err) => {
             let usage = collect_check_token_usage(&mut execution.runner)?;
             print_token_usage_summary(Some(usage))?;
-            write_query_error_finish(&mut diagnostic_log, &err)?;
+            write_query_error_finish(
+                root,
+                &applied_lazy_full_scope_reset_ids,
+                &mut diagnostic_log,
+                &err,
+            )?;
             return Err(err);
         }
     };
@@ -115,13 +150,23 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
     // The query answer is the only public stdout piece eligible at this point;
     // `write_query_output` writes and flushes it before usage collection starts.
     if let Err(err) = write_query_output(&mut stdout, &result.answer) {
-        write_query_error_finish(&mut diagnostic_log, &err)?;
+        write_query_error_finish(
+            root,
+            &applied_lazy_full_scope_reset_ids,
+            &mut diagnostic_log,
+            &err,
+        )?;
         return Err(err);
     }
     let usage = match collect_check_token_usage(&mut execution.runner) {
         Ok(usage) => usage,
         Err(err) => {
-            write_query_error_finish(&mut diagnostic_log, &err)?;
+            write_query_error_finish(
+                root,
+                &applied_lazy_full_scope_reset_ids,
+                &mut diagnostic_log,
+                &err,
+            )?;
             return Err(err);
         }
     };
@@ -129,18 +174,67 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
     // until pending app-server usage updates are drained above; once known,
     // `print_token_usage_summary` writes and flushes it immediately.
     print_token_usage_summary(Some(usage))?;
-    // Query mode is ad-hoc and has no selected/cached expectation set; for the
-    // lazy reset algorithm it is equivalent to `cached_expectations = []`.
-    // Scheduled resets were already applied by `run_check_command`, but this
-    // path must not plan a new reset from an empty query-only expectation set.
-    write_check_finish_event(&mut diagnostic_log, true, None)
+    write_query_finish(
+        root,
+        &applied_lazy_full_scope_reset_ids,
+        &mut diagnostic_log,
+        None,
+    )
 }
 
 fn write_query_error_finish(
+    root: &Path,
+    applied_lazy_full_scope_reset_ids: &BTreeSet<String>,
     diagnostic_log: &mut DiagnosticLogWriter,
     err: &str,
 ) -> Result<(), String> {
-    write_check_finish_event(diagnostic_log, true, Some(err))
+    write_query_finish(
+        root,
+        applied_lazy_full_scope_reset_ids,
+        diagnostic_log,
+        Some(err),
+    )
+}
+
+fn write_query_finish(
+    root: &Path,
+    applied_lazy_full_scope_reset_ids: &BTreeSet<String>,
+    diagnostic_log: &mut DiagnosticLogWriter,
+    err: Option<&str>,
+) -> Result<(), String> {
+    // Query mode is ad-hoc and has no selected/cached expectation set; for the
+    // lazy reset algorithm it is equivalent to `cached_expectations = []`.
+    let mut finish_error = err.map(str::to_string);
+    if let Err(reset_err) = apply_lazy_full_scope_reset_for_cached(root, 0, &[], diagnostic_log) {
+        finish_error.get_or_insert(reset_err);
+    }
+    // A query can consume only the matching expectation's active reset, and
+    // only when its implicit scope actually used that reset. Unrelated active
+    // reset markers remain for a later expectation run.
+    if let Err(reset_err) =
+        clear_active_lazy_full_scope_reset_ids(root, applied_lazy_full_scope_reset_ids)
+    {
+        finish_error.get_or_insert(reset_err);
+    }
+    write_check_finish_event(diagnostic_log, true, finish_error.as_deref())
+}
+
+fn query_applied_lazy_full_scope_reset_ids(
+    query_scope: &[String],
+    matching_expectation: Option<&SelectedExpectation>,
+    scheduled_full_scope_reset_ids: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let mut ids = BTreeSet::new();
+    if !query_scope.is_empty() {
+        return ids;
+    }
+    let Some(expectation) = matching_expectation else {
+        return ids;
+    };
+    if scheduled_full_scope_reset_ids.contains(&expectation.id) {
+        ids.insert(expectation.id.clone());
+    }
+    ids
 }
 
 fn query_enforced_scope(

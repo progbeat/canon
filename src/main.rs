@@ -177,6 +177,7 @@ mod history {
     #[path = "reuse.rs"]
     pub(crate) mod reuse;
 }
+mod isolation;
 // Cache answer history is implemented end-to-end in `history::store`: path/read
 // cache, answer-only durable JSONL writes, required field order, and
 // probabilistic retention. The append module below is a thin import wrapper;

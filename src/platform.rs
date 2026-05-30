@@ -4,14 +4,17 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
+compile_error!("canon requires Unix or Windows filesystem support");
+
+#[cfg(windows)]
 #[path = "platform_other.rs"]
 mod platform_other;
 #[cfg(unix)]
 #[path = "platform_unix.rs"]
 mod platform_unix;
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 use platform_other as imp;
 #[cfg(unix)]
 use platform_unix as imp;
@@ -40,6 +43,10 @@ pub(crate) fn terminate_app_server_child(child: &mut Child) -> Result<(), String
 
 pub(crate) fn mirror_evaluator_codex_home_file(source: &Path, target: &Path) -> Result<(), String> {
     imp::mirror_evaluator_codex_home_file(source, target)
+}
+
+pub(crate) fn move_path(source: &Path, target: &Path) -> Result<(), String> {
+    imp::move_path(source, target)
 }
 
 pub(crate) fn make_hook_executable(path: &Path) -> Result<(), String> {

@@ -134,6 +134,48 @@ pub(crate) fn mirror_evaluator_codex_home_file(source: &Path, target: &Path) -> 
     })
 }
 
+pub(crate) fn move_path(source: &Path, target: &Path) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        move_path_preserving_permissions(source, target)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        fs::rename(source, target).map_err(|err| {
+            format!(
+                "failed to move isolated path {} to {}: {}",
+                source.display(),
+                target.display(),
+                err
+            )
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn move_path_preserving_permissions(source: &Path, target: &Path) -> Result<(), String> {
+    let mode = fs::symlink_metadata(source)
+        .map_err(|err| format!("failed to inspect {}: {}", source.display(), err))?
+        .permissions();
+    set_directory_permissions(source, 0o700)?;
+    fs::rename(source, target).map_err(|err| {
+        let _ = fs::set_permissions(source, mode.clone());
+        format!(
+            "failed to move isolated path {} to {}: {}",
+            source.display(),
+            target.display(),
+            err
+        )
+    })?;
+    fs::set_permissions(target, mode).map_err(|err| {
+        format!(
+            "failed to restore moved path permissions {}: {}",
+            target.display(),
+            err
+        )
+    })
+}
+
 pub(crate) fn make_hook_executable(path: &Path) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;

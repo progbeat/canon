@@ -1,7 +1,6 @@
 use super::wait_for_app_server_child;
 use std::ffi::OsString;
 use std::fs;
-#[cfg(windows)]
 use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
@@ -26,6 +25,17 @@ pub(crate) fn mirror_evaluator_codex_home_file(source: &Path, target: &Path) -> 
             "failed to copy evaluator CODEX_HOME file {} from {}: {}",
             target.display(),
             source.display(),
+            err
+        )
+    })
+}
+
+pub(crate) fn move_path(source: &Path, target: &Path) -> Result<(), String> {
+    fs::rename(source, target).map_err(|err| {
+        format!(
+            "failed to move isolated path {} to {}: {}",
+            source.display(),
+            target.display(),
             err
         )
     })
@@ -69,48 +79,36 @@ fn set_readonly(path: &Path, readonly: bool) -> Result<(), String> {
 }
 
 pub(crate) fn create_materialized_symlink(target: &[u8], link: &Path) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        let target = PathBuf::from(git_bytes_os_string(target.to_vec())?);
-        std::os::windows::fs::symlink_file(&target, link).map_err(|err| {
-            format!(
-                "failed to symlink evaluator file {} to {}: {}",
-                link.display(),
-                target.display(),
-                err
-            )
-        })
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = target;
-        let _ = link;
-        Err("materialized symlinks require Unix or Windows filesystem support".to_string())
-    }
+    let target = PathBuf::from(git_bytes_os_string(target.to_vec())?);
+    std::os::windows::fs::symlink_file(&target, link).map_err(|err| {
+        format!(
+            "failed to symlink evaluator file {} to {}: {}",
+            link.display(),
+            target.display(),
+            err
+        )
+    })
 }
 
 pub(crate) fn hardlink_file_or_copy_symlink(source: &Path, target: &Path) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        let metadata = fs::symlink_metadata(source).map_err(|err| {
+    let metadata = fs::symlink_metadata(source).map_err(|err| {
+        format!(
+            "failed to inspect evaluator file {}: {}",
+            source.display(),
+            err
+        )
+    })?;
+    if metadata.file_type().is_symlink() {
+        let link_target = fs::read_link(source)
+            .map_err(|err| format!("failed to read symlink {}: {}", source.display(), err))?;
+        return std::os::windows::fs::symlink_file(&link_target, target).map_err(|err| {
             format!(
-                "failed to inspect evaluator file {}: {}",
+                "failed to copy evaluator symlink {} to {}: {}",
                 source.display(),
+                target.display(),
                 err
             )
-        })?;
-        if metadata.file_type().is_symlink() {
-            let link_target = fs::read_link(source)
-                .map_err(|err| format!("failed to read symlink {}: {}", source.display(), err))?;
-            return std::os::windows::fs::symlink_file(&link_target, target).map_err(|err| {
-                format!(
-                    "failed to copy evaluator symlink {} to {}: {}",
-                    source.display(),
-                    target.display(),
-                    err
-                )
-            });
-        }
+        });
     }
     fs::hard_link(source, target).map_err(|err| {
         format!(
@@ -194,7 +192,6 @@ pub(crate) fn os_string_from_bytes(bytes: Vec<u8>) -> Result<OsString, String> {
     git_bytes_os_string(bytes)
 }
 
-#[cfg(windows)]
 fn git_bytes_os_string(bytes: Vec<u8>) -> Result<OsString, String> {
     if bytes.contains(&0) {
         return Err("Git paths must not contain NUL bytes".to_string());
@@ -207,7 +204,6 @@ fn git_bytes_os_string(bytes: Vec<u8>) -> Result<OsString, String> {
     }
 }
 
-#[cfg(windows)]
 fn surrogate_escaped_git_path(bytes: &[u8]) -> Vec<u16> {
     bytes
         .iter()
@@ -217,23 +213,4 @@ fn surrogate_escaped_git_path(bytes: &[u8]) -> Vec<u16> {
             byte => 0xDC00 | u16::from(byte),
         })
         .collect()
-}
-
-#[cfg(not(windows))]
-fn git_bytes_os_string(bytes: Vec<u8>) -> Result<OsString, String> {
-    String::from_utf8(bytes).map(OsString::from).map_err(|err| {
-        format!(
-            "Git path bytes are not UTF-8: 0x{}",
-            hex_bytes(err.as_bytes())
-        )
-    })
-}
-
-#[cfg(not(windows))]
-fn hex_bytes(bytes: &[u8]) -> String {
-    bytes.iter().fold(String::new(), |mut hex, byte| {
-        use std::fmt::Write as _;
-        let _ = write!(hex, "{byte:02x}");
-        hex
-    })
 }

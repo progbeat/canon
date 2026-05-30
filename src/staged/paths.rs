@@ -29,7 +29,7 @@ pub(crate) fn create_snapshot_root(root: &Path) -> Result<SnapshotRoot, String> 
         )
     })?;
     if let Some(path) = configured_tree_cache_dir() {
-        return create_snapshot_root_from_configured_cache_dir(&root, &path);
+        return create_snapshot_root_from_configured_cache_dir(&path);
     }
     let mut errors = Vec::new();
     // The lazy hardlink policy prefers memory-backed temporary storage when
@@ -67,10 +67,7 @@ fn configured_tree_cache_dir() -> Option<PathBuf> {
     Some(PathBuf::from(value))
 }
 
-fn create_snapshot_root_from_configured_cache_dir(
-    root: &Path,
-    path: &Path,
-) -> Result<SnapshotRoot, String> {
+fn create_snapshot_root_from_configured_cache_dir(path: &Path) -> Result<SnapshotRoot, String> {
     crate::platform::create_private_dir_all(path).map_err(|err| {
         format!(
             "failed to create {} {}: {}",
@@ -79,7 +76,14 @@ fn create_snapshot_root_from_configured_cache_dir(
             err
         )
     })?;
-    let path = canonical_snapshot_path_outside_worktree(root, path, CANON_TREE_CACHE_DIR, None)?;
+    let path = path.canonicalize().map_err(|err| {
+        format!(
+            "failed to canonicalize {} {}: {}",
+            CANON_TREE_CACHE_DIR,
+            path.display(),
+            err
+        )
+    })?;
     Ok(SnapshotRoot {
         path,
         remove_on_drop: false,

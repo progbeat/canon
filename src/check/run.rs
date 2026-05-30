@@ -93,12 +93,6 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     let mut narrowing = NarrowingStats::default();
     let non_selected = options.non_selected.clone();
     let root = runtime.root;
-    // This is shared run state, not a shared evaluator thread. Evaluator
-    // threads are stored in a pool keyed by model plus visibleTreeOid (and
-    // stricter instruction inputs), so full-scope retries and narrowed-scope
-    // verifications start different app-server sessions when they see
-    // different visible trees.
-    let mut interrogation_run_state = InterrogationRunState::new();
     macro_rules! current_error {
         ($error:expr) => {
             check_run_error(
@@ -123,6 +117,12 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             $expr.map_err(|err| current_error!(err.to_string()))?
         };
     }
+    // This is shared run state, not a shared evaluator thread. Evaluator
+    // threads are stored in a pool keyed by model plus visibleTreeOid (and
+    // stricter instruction inputs), so full-scope retries and narrowed-scope
+    // verifications start different app-server sessions when they see
+    // different visible trees.
+    let mut interrogation_run_state = run_try!(InterrogationRunState::new(runtime.no_sandbox()));
     let check_work_queue = if !options.selectors_provided {
         let selection = run_try!(default_check_selection(
             root,
@@ -144,7 +144,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 record,
             });
         }
-        if selection.cached_failure_seen {
+        if selection.cached_failure_seen && selection.selected.is_empty() {
             let skipped = skipped_count(total_expectations, &records, &cached);
             return Ok(check_run_report(
                 records,
@@ -424,10 +424,9 @@ fn default_check_selection(
         }
     }
     if cached_failure_seen {
-        // Default selected-expectation logic requires cached failures to be
-        // fixed first, so no expectation is evaluated in this invocation. Any
-        // active lazy-reset marker remains in state and will force full scope
-        // when default selection is no longer blocked by cached failures.
+        // Default selection stops at cached failures. Active lazy full-scope
+        // reset markers are consumed only when their expectation is actually
+        // selected in a later invocation.
         selected.clear();
         let mut ordered_cached = cached
             .into_iter()

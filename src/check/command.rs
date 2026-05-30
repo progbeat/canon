@@ -181,6 +181,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         &execution.staged_view,
         &execution.tree_source,
         &config,
+        command.no_sandbox,
     );
     // During the expectation loop, only per-expectation stdout records are
     // eligible for public output; each one is written and flushed inside the
@@ -195,10 +196,6 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         Some(&mut result_output),
         &mut check_caches,
     );
-    if let Err(err) = result_output.flush() {
-        let err = format!("failed to flush check result to stdout: {}", err);
-        return fail_check_after_start(&mut diagnostic_log, false, 1, err);
-    }
     let completed = match records_result {
         Ok(report) => CompletedCheckRun {
             report,
@@ -209,13 +206,33 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             error: Some(err.error),
         },
     };
+    if let Err(err) = result_output.flush() {
+        let err = format!("failed to flush check result to stdout: {}", err);
+        return finish_check_error_report(CheckErrorReportFinish {
+            root,
+            config: &config,
+            diagnostic_log: &mut diagnostic_log,
+            result_output: &mut *result_output,
+            check_caches: &mut check_caches,
+            report: &completed.report,
+            error: err,
+        });
+    }
     if let Err(err) = write_check_trailer(
         &mut execution.runner,
         &mut *result_output,
         &completed.report,
         started,
     ) {
-        return fail_check_after_start(&mut diagnostic_log, false, 1, err);
+        return finish_check_error_report(CheckErrorReportFinish {
+            root,
+            config: &config,
+            diagnostic_log: &mut diagnostic_log,
+            result_output: &mut *result_output,
+            check_caches: &mut check_caches,
+            report: &completed.report,
+            error: err,
+        });
     }
     finish_check_report(
         CheckReportFinishContext {
@@ -256,6 +273,33 @@ pub(crate) fn check_command_writes_agent_message(
 struct CompletedCheckRun {
     report: CheckRunReport,
     error: Option<String>,
+}
+
+struct CheckErrorReportFinish<'a, 'b> {
+    root: &'a Path,
+    config: &'a CheckConfig,
+    diagnostic_log: &'b mut DiagnosticLogWriter,
+    result_output: &'b mut dyn Write,
+    check_caches: &'b mut CheckRunCaches,
+    report: &'b CheckRunReport,
+    error: String,
+}
+
+fn finish_check_error_report(context: CheckErrorReportFinish<'_, '_>) -> Result<(), CommandError> {
+    let error = context.error;
+    finish_check_report(
+        CheckReportFinishContext {
+            root: context.root,
+            config: context.config,
+            diagnostic_log: context.diagnostic_log,
+            result_output: context.result_output,
+            check_caches: context.check_caches,
+            write_agent_message: false,
+        },
+        context.report,
+        Some(&error),
+    )?;
+    Err(error.into())
 }
 
 fn write_check_start_event(

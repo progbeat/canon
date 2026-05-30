@@ -180,8 +180,15 @@ fn start_thread_session<R: EvaluatorRunner>(
     let session_root = runtime
         .session_root_for_scope(request.agent, request.enforced_scope, visible_tree_oid)
         .map_err(EvaluatorError::message)?;
+    let session_isolation = state
+        .isolate_session_root(&session_root)
+        .map_err(EvaluatorError::message)?;
+    let session_cwd = session_isolation
+        .as_ref()
+        .map(|isolation| isolation.path())
+        .unwrap_or(session_root.as_path());
     let created = match runner.start_session(
-        &session_root,
+        session_cwd,
         &developer_instructions,
         request.agent,
         request.model,
@@ -194,6 +201,9 @@ fn start_thread_session<R: EvaluatorRunner>(
     state
         .session_instructions
         .insert(created.clone(), developer_instructions.clone());
+    if let Some(isolation) = session_isolation {
+        state.session_isolations.insert(created.clone(), isolation);
+    }
     state
         .thread_sessions_by_reuse_key
         .insert(session_key.to_string(), created.clone());
@@ -243,6 +253,9 @@ fn retire_thread_sessions_after_turn(
         .retain(|_, session_id| !retired_sessions.contains(session_id));
     state
         .session_instructions
+        .retain(|session_id, _| !retired_sessions.contains(session_id));
+    state
+        .session_isolations
         .retain(|session_id, _| !retired_sessions.contains(session_id));
     retired_sessions.contains(active_session_id)
 }

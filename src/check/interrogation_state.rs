@@ -8,6 +8,7 @@ use crate::git::visible_tree_oid::VisibleTreeOidCache;
 use crate::hash::full_scope;
 use crate::history::reuse::latest_stored_q_scope_with_cache;
 use crate::history::HistoryCache;
+use crate::isolation::{NaiveIsolationGuard, NaiveIsolationPolicy};
 use crate::scope::effective_ignore_patterns;
 use crate::staged::StagedWorktreeView;
 use std::collections::{BTreeMap, BTreeSet};
@@ -99,6 +100,7 @@ pub(crate) struct CheckRuntime<'a> {
     pub(crate) root: &'a Path,
     pub(crate) config: &'a CheckConfig,
     pub(crate) tree_source: &'a TreeSource,
+    no_sandbox: bool,
     session_roots: CheckSessionRoots<'a>,
 }
 
@@ -119,6 +121,7 @@ impl<'a> CheckRuntime<'a> {
             root,
             config,
             tree_source: &STAGED_RUNTIME_TREE_SOURCE,
+            no_sandbox: true,
             session_roots: CheckSessionRoots::Fixed(snapshot_root),
         }
     }
@@ -128,13 +131,19 @@ impl<'a> CheckRuntime<'a> {
         staged_view: &'a StagedWorktreeView,
         tree_source: &'a TreeSource,
         config: &'a CheckConfig,
+        no_sandbox: bool,
     ) -> CheckRuntime<'a> {
         CheckRuntime {
             root,
             config,
             tree_source,
+            no_sandbox,
             session_roots: CheckSessionRoots::Materialized(staged_view),
         }
+    }
+
+    pub(crate) fn no_sandbox(&self) -> bool {
+        self.no_sandbox
     }
 
     pub(crate) fn visible_tree_oid(
@@ -174,6 +183,7 @@ impl<'a> CheckRuntime<'a> {
 }
 
 pub(crate) struct InterrogationRunState {
+    pub(crate) session_isolations: BTreeMap<String, NaiveIsolationGuard>,
     // This is a run-level pool of evaluator threads, not one thread. The
     // reuse key starts with evaluator model and visibleTreeOid, so a changed
     // visible tree cannot look up an existing session from another tree.
@@ -182,17 +192,25 @@ pub(crate) struct InterrogationRunState {
     pub(crate) unavailable_models: BTreeSet<String>,
     pub(crate) visible_tree_oid_cache: VisibleTreeOidCache,
     pub(crate) parse_cache: EvaluatorResponseParseCache,
+    isolation_policy: Option<NaiveIsolationPolicy>,
 }
 
 impl InterrogationRunState {
-    pub(crate) fn new() -> InterrogationRunState {
-        InterrogationRunState {
+    pub(crate) fn new(no_sandbox: bool) -> Result<InterrogationRunState, String> {
+        let isolation_policy = if no_sandbox {
+            None
+        } else {
+            Some(NaiveIsolationPolicy::from_env()?)
+        };
+        Ok(InterrogationRunState {
+            session_isolations: BTreeMap::new(),
             thread_sessions_by_reuse_key: BTreeMap::new(),
             session_instructions: BTreeMap::new(),
             unavailable_models: BTreeSet::new(),
             visible_tree_oid_cache: VisibleTreeOidCache::new(),
             parse_cache: EvaluatorResponseParseCache::new(),
-        }
+            isolation_policy,
+        })
     }
 
     pub(crate) fn available_models(&self, agent: &AgentConfig) -> Vec<Option<String>> {
@@ -212,7 +230,18 @@ impl InterrogationRunState {
     }
 
     pub(crate) fn clear_thread_sessions(&mut self) {
+        self.session_isolations.clear();
         self.thread_sessions_by_reuse_key.clear();
         self.session_instructions.clear();
+    }
+
+    pub(crate) fn isolate_session_root(
+        &mut self,
+        session_root: &Path,
+    ) -> Result<Option<NaiveIsolationGuard>, String> {
+        self.isolation_policy
+            .as_mut()
+            .map(|policy| policy.isolate(session_root))
+            .transpose()
     }
 }
