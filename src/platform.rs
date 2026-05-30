@@ -72,7 +72,7 @@ pub(crate) fn open_file_for_append_without_following_symlink(
     imp::open_file_for_append_without_following_symlink(path)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn staged_snapshot_parent_candidates() -> Vec<PathBuf> {
     let mut parents = memory_backed_staged_snapshot_parent_candidates();
     for parent in ordinary_staged_snapshot_parent_candidates() {
