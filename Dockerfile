@@ -16,7 +16,7 @@ RUN cargo build --release --locked
 
 FROM alpine:${ALPINE_VERSION} AS codex-downloader
 ARG TARGETARCH
-ARG CODEX_RELEASE=latest
+ARG CODEX_RELEASE=rust-v0.134.0
 RUN apk add --no-cache ca-certificates curl gzip tar
 RUN set -eux; \
     target_arch="${TARGETARCH:-}"; \
