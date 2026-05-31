@@ -516,17 +516,15 @@ mod tests {
 
     #[test]
     fn working_tree_permissions_read_session_root_and_children() {
-        let session_root = Path::new("/canon/materialized/tree");
-        let permissions = evaluator_working_tree_permissions(session_root);
+        let session_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("canon-materialized-tree");
+        let permissions = evaluator_working_tree_permissions(&session_root);
+        let root_key = session_root.display().to_string();
+        let children_key = session_root.join("**").display().to_string();
 
-        assert_eq!(
-            permissions.get("/canon/materialized/tree"),
-            Some(&"read".to_string())
-        );
-        assert_eq!(
-            permissions.get("/canon/materialized/tree/**"),
-            Some(&"read".to_string())
-        );
+        assert_eq!(permissions.get(&root_key), Some(&"read".to_string()));
+        assert_eq!(permissions.get(&children_key), Some(&"read".to_string()));
     }
 
     #[test]
