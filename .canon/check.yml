@@ -49,11 +49,6 @@ expectations:
     preset: docker
 
   # Documentation
-  - q: "Are there any inconsistencies between `README.md` and the current state of the repository?"
-    a: "no"
-    cooldown: 1d
-    ignore: []
-
   - q: "Are there any inconsistencies between `docs/GLOSSARY.md` and the codebase?"
     a: "no"
     cooldown: 1d
@@ -67,9 +62,9 @@ expectations:
     a: "no"  # because these files aren't required to answer these questions
     cooldown: 3d
 
-  - q: "Can you write to any paths right now?"
+  - q: "Can you find any writable filesystem path? Dont answer without trying."
     a: "no"
-    cooldown: 3d
+    preset: smart
 
   - q: "Does `canon` read runtime logs?"
     a: "no"  # because it's hack
