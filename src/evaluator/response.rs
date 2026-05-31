@@ -15,7 +15,7 @@ pub(crate) fn parse_evaluator_response(
         return Ok(ParsedAnswer::answer(
             answer,
             response.evidence,
-            response.q_scope_suggestion,
+            Some(response.q_scope_suggestion),
         ));
     }
     let error = response
@@ -27,7 +27,7 @@ pub(crate) fn parse_evaluator_response(
     Ok(ParsedAnswer::error_with_q_scope_suggestion(
         error,
         response.evidence,
-        response.q_scope_suggestion,
+        Some(response.q_scope_suggestion),
     ))
 }
 
@@ -67,4 +67,28 @@ pub(crate) fn evaluator_response_json_payload(text: &str) -> Result<&str, String
         return Err("evaluator response must be a JSON object".to_string());
     }
     Ok(trimmed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_evaluator_response_json;
+
+    #[test]
+    fn evaluator_response_requires_q_scope_suggestion() {
+        let error = parse_evaluator_response_json(r#"{"answer":"yes","evidence":"`src/main.rs`"}"#)
+            .unwrap_err();
+
+        assert!(error.contains("qScopeSuggestion"));
+    }
+
+    #[test]
+    fn evaluator_response_accepts_required_q_scope_suggestion() {
+        let response = parse_evaluator_response_json(
+            r#"{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":["src/main.rs"]}"#,
+        )
+        .unwrap();
+
+        response.validate_schema().unwrap();
+        assert_eq!(response.q_scope_suggestion, vec!["src/main.rs"]);
+    }
 }

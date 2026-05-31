@@ -53,7 +53,6 @@ impl NaiveIsolationPolicy {
                 err
             )
         })?;
-        let secret_dir = secret_dir;
         let secret_dir_mode = secret_dir.as_deref().map(stat_mode).transpose()?;
         Ok(NaiveIsolationPolicy {
             secret_dir,

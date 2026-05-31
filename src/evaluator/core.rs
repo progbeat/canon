@@ -38,7 +38,7 @@ pub(crate) fn evaluator_response_output_schema() -> Value {
                 }
             }
         },
-        "required": ["evidence"],
+        "required": ["evidence", "qScopeSuggestion"],
         "oneOf": [
             {"required": ["answer"], "not": { "required": ["error"] }},
             {"required": ["error"], "not": { "required": ["answer"] }}

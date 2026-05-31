@@ -206,7 +206,10 @@ fn validate_history_answer_response_schema(record: &CheckRecord) -> Result<(), S
         answer: Some(record.observed.clone()),
         error: None,
         evidence: record.evidence.clone(),
-        q_scope_suggestion: None,
+        // History rows store the cache-required answer fields, not the full
+        // evaluator response. Use a schema-valid placeholder so this check
+        // continues to validate the persisted answer/evidence contract.
+        q_scope_suggestion: vec![".".to_string()],
     };
     response.validate_schema().map_err(|message| {
         format!("observed must match evaluator response answer schema: {message}")

@@ -120,11 +120,10 @@ pub(crate) struct EvaluatorResponseJson {
     pub(crate) error: Option<String>,
     pub(crate) evidence: String,
     #[serde(
-        default,
         rename = "qScopeSuggestion",
-        deserialize_with = "deserialize_optional_q_scope_suggestion"
+        deserialize_with = "deserialize_q_scope_suggestion"
     )]
-    pub(crate) q_scope_suggestion: Option<Vec<String>>,
+    pub(crate) q_scope_suggestion: Vec<String>,
 }
 
 impl EvaluatorResponseJson {
@@ -149,22 +148,20 @@ impl EvaluatorResponseJson {
                 return Err(format!("unsupported evaluator error: {}", error));
             }
         }
-        if let Some(scope) = self.q_scope_suggestion.as_deref() {
-            // This mirrors the Interrogation Policy JSON Schema exactly:
-            // `qScopeSuggestion` is only a non-empty array of non-empty
-            // single-line strings at response-parse time. Repository-relative
-            // scope syntax and semantic sufficiency are intentionally not JSON
-            // Schema constraints; later narrowing policy sanitizes the claim
-            // and accepts it only after an independent answer-producing turn.
-            if scope.is_empty() {
-                return Err("qScopeSuggestion must contain at least one path".to_string());
-            }
-            for item in scope {
-                if item.is_empty() || contains_schema_line_break(item) {
-                    return Err(
-                        "qScopeSuggestion items must be non-empty single-line strings".to_string(),
-                    );
-                }
+        // This mirrors the Interrogation Policy JSON Schema exactly:
+        // `qScopeSuggestion` is a required non-empty array of non-empty
+        // single-line strings at response-parse time. Repository-relative scope
+        // syntax and semantic sufficiency are intentionally not JSON Schema
+        // constraints; later narrowing policy sanitizes the claim and accepts it
+        // only after an independent answer-producing turn.
+        if self.q_scope_suggestion.is_empty() {
+            return Err("qScopeSuggestion must contain at least one path".to_string());
+        }
+        for item in &self.q_scope_suggestion {
+            if item.is_empty() || contains_schema_line_break(item) {
+                return Err(
+                    "qScopeSuggestion items must be non-empty single-line strings".to_string(),
+                );
             }
         }
         Ok(())
@@ -211,9 +208,7 @@ where
         .map_err(de::Error::custom)
 }
 
-fn deserialize_optional_q_scope_suggestion<'de, D>(
-    deserializer: D,
-) -> Result<Option<Vec<String>>, D::Error>
+fn deserialize_q_scope_suggestion<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: de::Deserializer<'de>,
 {
@@ -221,9 +216,7 @@ where
     if value.is_null() {
         return Err(de::Error::custom("qScopeSuggestion must not be null"));
     }
-    Vec::<String>::deserialize(value)
-        .map(Some)
-        .map_err(de::Error::custom)
+    Vec::<String>::deserialize(value).map_err(de::Error::custom)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
