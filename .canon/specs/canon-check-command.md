@@ -26,9 +26,6 @@ Examples:
   canon check a7F K9m
       Check canon expectations selected by ID prefix.
 
-  canon check --ignore-cache a7F
-      Freshly check one canon expectation.
-
   canon check --tree HEAD --against-tree HEAD~1 a7F
       Check one canon expectation on HEAD with comparison against the previous commit.
 
