@@ -4,14 +4,23 @@
 [![Audit Status](https://github.com/progbeat/canon/actions/workflows/audit.yml/badge.svg)](https://github.com/progbeat/canon/actions/workflows/audit.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-When an AI agent misses the mark, there is always a human expectation it
-failed to meet. `canon` lets the human write those expectations down and make
-AI agents iterate until all of them are satisfied.
+When an AI agent misses the mark, there is always a human expectation it failed
+to meet. `canon` lets the human write those expectations down and make AI agents
+iterate until all of them are satisfied.
 
-That is how this project was built: no human-written implementation code,
-just Codex working against `canon` until the repo satisfied its own canon.
+That is how this project was built: no human-written implementation code, just
+Codex working against `canon` until the repository satisfied its own canon.
 
 ## Install
+
+### Docker
+
+Requires Git, Docker, and the Codex CLI.
+
+Install the Docker [wrapper](https://github.com/progbeat/canon/tree/master/.canon/docker/scripts/canon)
+as `canon` somewhere on `PATH`.
+
+### Cargo
 
 Requires Git, Rust/Cargo, and the Codex CLI.
 
@@ -22,10 +31,12 @@ cargo install --git https://github.com/progbeat/canon
 Cargo is the recommended install path on macOS, Linux, and Windows. Prebuilt
 release binaries are not published yet.
 
+## Codex Skills
+
 To install the Codex skills, ask Codex:
 
 ```text
-Install the Codex skills published with https://github.com/progbeat/canon.
+Install the Codex skills from `https://github.com/progbeat/canon/tree/master/skills`.
 ```
 
 Restart Codex after installing the skills.
@@ -34,34 +45,10 @@ Restart Codex after installing the skills.
 
 1. Ask Codex to implement a feature using `$canon-warden`.
 
-2. If something is off, add the unmet expectation to `.canon/check.yml`,
-   then ask Codex to fix the project against the updated canon.
+2. If something is off, add the unmet expectation to `.canon/check.yml`, then
+   ask Codex to fix the project against the updated canon.
 
 3. Iterate.
-
-## Development
-
-Tests that inspect crate internals belong in the implementation module they
-exercise, under an inline `#[cfg(test)]` module. Separate test files are
-reserved for platform-independent intended behavior exercised through public
-interfaces.
-
-## How It Scales
-
-Each expectation is checked in a sandboxed scope. When a question can be
-answered from a smaller part of the repository, `canon` narrows and verifies
-that scope. The scope is enforced with filesystem permissions, so the evaluator
-cannot read project files outside the allowed scope.
-
-That keeps larger canons practical: a same-tree result can be reused when the
-expectation's `visibleTreeOid` still matches the evaluator-visible tree, while
-`cooldown` gives broad review expectations, such as dead files, dirty hacks, or
-idiomaticity, their own review cadence. A cached result is the newer of those
-two reusable results.
-
-When `canon check` is run with no selectors, cached failures are reported first
-and must be fixed before fresh evaluation continues. If every cached result is a
-pass, only expectations without a cached result are selected for evaluator work.
 
 ## Commands
 
@@ -69,7 +56,19 @@ pass, only expectations without a cached result are selected for evaluator work.
 canon init
 ```
 
-Create `.canon/check.yml` from canon's embedded default template.
+Create `.canon/check.yml` from `canon`'s embedded default template.
+
+```sh
+canon hook install
+```
+
+Install the local pre-commit hook.
+
+```sh
+canon hook uninstall
+```
+
+Remove the local pre-commit hook.
 
 ```sh
 canon check
@@ -86,46 +85,16 @@ Explicitly evaluate selected expectations by unique ID prefix.
 
 ```sh
 canon check -q "Can you find any practically exploitable security vulnerability?"
-canon check -q "Does README.md sound clear?" -s README.md
 ```
 
-Ask one uncached ad-hoc question. Add one or more `-s`/`--scope` paths to
-debug the same question under a narrower evaluator scope.
-
-```sh
-canon check --ignore-cache
-canon check --ignore-cooldown
-canon check --keep-going
-canon check --tree HEAD --against-tree HEAD~1
-canon check --no-sandbox
-canon check --config other-check.yml
-canon check -c other-check.yml
-```
-
-Bypass same-tree cached results, bypass cooldown results, explicitly evaluate
-all configured expectations and continue after non-pass results, check an
-explicit Git tree with a separate comparison tree, mark an externally isolated
-runner as responsible for host sandboxing while Canon still materializes the
-staged snapshot, or use another config. By default, fresh evaluation stops
-after the first non-pass result.
+Ask one uncached ad-hoc question. Add one or more `-s`/`--scope` paths to debug
+the same question under a narrower evaluator scope.
 
 ```sh
 canon gate
 ```
 
 Run the pre-commit gate manually.
-
-```sh
-canon hook install
-```
-
-Install the local pre-commit hook.
-
-```sh
-canon hook uninstall
-```
-
-Remove the local pre-commit hook.
 
 ## License
 
