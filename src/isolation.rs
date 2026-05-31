@@ -2,6 +2,7 @@ use crate::platform;
 use std::env;
 use std::fs;
 use std::io::ErrorKind;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -258,16 +259,25 @@ fn stat_mode(path: &Path) -> Result<fs::Permissions, String> {
 }
 
 fn chmod_secret_dir_no_access(path: &Path) -> Result<(), String> {
-    let mut permissions = stat_mode(path)?;
-    permissions.set_mode(0o000);
-    fs::set_permissions(path, permissions)
-        .map_err(|err| format!("failed to chmod secret dir {}: {}", path.display(), err))
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        Err("naive isolation requires Unix chmod support for CANON_SECRET_DIR".to_string())
+    }
+    #[cfg(unix)]
+    {
+        let mut permissions = stat_mode(path)?;
+        permissions.set_mode(0o000);
+        fs::set_permissions(path, permissions)
+            .map_err(|err| format!("failed to chmod secret dir {}: {}", path.display(), err))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn naive_isolation_moves_path_to_sandbox_and_restores_on_drop() {
         let root = test_root("naive-isolation-restore");
@@ -294,6 +304,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[cfg(unix)]
     #[test]
     fn naive_isolation_preserves_read_only_root_permissions() {
         let root = test_root("naive-isolation-read-only-root");

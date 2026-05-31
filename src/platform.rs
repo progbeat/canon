@@ -4,13 +4,18 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-#[cfg(not(unix))]
-compile_error!("canon requires Unix filesystem support");
+#[cfg(not(any(unix, windows)))]
+compile_error!("canon requires Unix or Windows filesystem support");
 
+#[cfg(windows)]
+#[path = "platform_other.rs"]
+mod platform_other;
 #[cfg(unix)]
 #[path = "platform_unix.rs"]
 mod platform_unix;
 
+#[cfg(windows)]
+use platform_other as imp;
 #[cfg(unix)]
 use platform_unix as imp;
 
