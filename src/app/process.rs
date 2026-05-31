@@ -133,6 +133,7 @@ impl AppServerRunner {
         let (messages, reader) = spawn_app_server_reader(stdout);
         let (stderr, stderr_reader) = spawn_app_server_stderr_reader(stderr);
         let mut runner = AppServerRunner {
+            app_server_root: root.to_path_buf(),
             child,
             stdin,
             messages,

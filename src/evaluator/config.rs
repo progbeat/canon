@@ -1,6 +1,7 @@
 use crate::check::validation::codex_reasoning_effort;
 use crate::config_types::AgentConfig;
 use crate::fs_util::write_temp_file_then_replace;
+use crate::git::resolve_git_path;
 use crate::logs::config::{thread_reuse_config, ThreadReuseConfig};
 use crate::platform;
 use serde_json::{json, Map, Value};
@@ -44,9 +45,18 @@ pub(crate) fn evaluator_thread_config(
     scope: &[String],
     model: Option<&str>,
     thinking: &str,
+    app_server_root: &Path,
     session_root: &Path,
 ) -> Value {
-    evaluator_thread_config_with_no_sandbox(agent, scope, model, thinking, session_root, false)
+    evaluator_thread_config_with_no_sandbox(
+        agent,
+        scope,
+        model,
+        thinking,
+        app_server_root,
+        session_root,
+        false,
+    )
 }
 
 pub(crate) fn evaluator_thread_config_with_no_sandbox(
@@ -54,6 +64,7 @@ pub(crate) fn evaluator_thread_config_with_no_sandbox(
     _scope: &[String],
     model: Option<&str>,
     thinking: &str,
+    app_server_root: &Path,
     session_root: &Path,
     no_sandbox: bool,
 ) -> Value {
@@ -61,7 +72,7 @@ pub(crate) fn evaluator_thread_config_with_no_sandbox(
     // working tree. App-server permissions only sandbox that already-filtered
     // cwd, so they must not encode scoped project paths.
     let mut config = evaluator_base_config(FILESYSTEM_DENY, codex_reasoning_effort(thinking));
-    add_evaluator_working_tree_permissions(&mut config, session_root);
+    add_evaluator_working_tree_permissions(&mut config, app_server_root, session_root);
     if no_sandbox {
         config["sandbox_mode"] = json!("danger-full-access");
     }
@@ -74,12 +85,19 @@ pub(crate) fn evaluator_thread_config_with_no_sandbox(
     config
 }
 
-fn add_evaluator_working_tree_permissions(config: &mut Value, session_root: &Path) {
+fn add_evaluator_working_tree_permissions(
+    config: &mut Value,
+    app_server_root: &Path,
+    session_root: &Path,
+) {
     let Some(filesystem) = config["permissions"]["canon_check"]["filesystem"].as_object_mut()
     else {
         return;
     };
     for (path, permission) in evaluator_working_tree_permissions(session_root) {
+        filesystem.insert(path, Value::String(permission));
+    }
+    for (path, permission) in evaluator_state_dir_permissions(app_server_root) {
         filesystem.insert(path, Value::String(permission));
     }
 }
@@ -92,6 +110,26 @@ pub(crate) fn evaluator_working_tree_permissions(session_root: &Path) -> BTreeMa
         "read".to_string(),
     );
     permissions
+}
+
+pub(crate) fn evaluator_state_dir_permissions(app_server_root: &Path) -> BTreeMap<String, String> {
+    let mut permissions = BTreeMap::new();
+    let Ok(state_root) = resolve_git_path(app_server_root, crate::CANON_STATE_DIR_GIT_PATH) else {
+        return permissions;
+    };
+    insert_tree_permission(&mut permissions, &state_root, FILESYSTEM_DENY);
+    permissions
+}
+
+fn insert_tree_permission(
+    permissions: &mut BTreeMap<String, String>,
+    path: &Path,
+    permission: &str,
+) {
+    let path = path.display().to_string();
+    let path = path.trim_end_matches('/').to_string();
+    permissions.insert(path.clone(), permission.to_string());
+    permissions.insert(format!("{}/**", path), permission.to_string());
 }
 
 fn absolute_session_path(session_root: &Path, path: &str) -> String {
@@ -454,4 +492,66 @@ pub(crate) fn toml_string(value: &str) -> String {
         encoded = encoded.replace(ch, &format!("\\u{:04X}", ch as u32));
     }
     encoded
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_permissions_deny_common_temp_entry_points() {
+        let permissions = evaluator_runtime_permissions();
+
+        for path in [
+            ":tmpdir",
+            ":slash_tmp",
+            "/tmp",
+            "/tmp/**",
+            "/private/tmp",
+            "/private/tmp/**",
+        ] {
+            assert_permission(&permissions, path, FILESYSTEM_DENY);
+        }
+    }
+
+    #[test]
+    fn working_tree_permissions_read_session_root_and_children() {
+        let session_root = Path::new("/canon/materialized/tree");
+        let permissions = evaluator_working_tree_permissions(session_root);
+
+        assert_eq!(
+            permissions.get("/canon/materialized/tree"),
+            Some(&"read".to_string())
+        );
+        assert_eq!(
+            permissions.get("/canon/materialized/tree/**"),
+            Some(&"read".to_string())
+        );
+    }
+
+    #[test]
+    fn state_dir_permissions_deny_canon_state_tree() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let state_root = resolve_git_path(root, crate::CANON_STATE_DIR_GIT_PATH).unwrap();
+        let state_root = state_root.display().to_string();
+        let permissions = evaluator_state_dir_permissions(root);
+
+        assert_eq!(
+            permissions.get(&state_root),
+            Some(&FILESYSTEM_DENY.to_string())
+        );
+        assert_eq!(
+            permissions.get(&format!("{}/**", state_root)),
+            Some(&FILESYSTEM_DENY.to_string())
+        );
+    }
+
+    fn assert_permission(permissions: &[(String, String)], path: &str, expected: &str) {
+        assert!(
+            permissions
+                .iter()
+                .any(|(candidate, permission)| candidate == path && permission == expected),
+            "missing permission {path}={expected}"
+        );
+    }
 }

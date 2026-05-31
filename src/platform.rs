@@ -69,6 +69,20 @@ pub(crate) fn set_private_file_permissions(path: &Path) -> Result<(), String> {
     imp::set_private_file_permissions(path)
 }
 
+pub(crate) type SecretDirMode = imp::SecretDirMode;
+
+pub(crate) fn secret_dir_mode(path: &Path) -> Result<SecretDirMode, String> {
+    imp::secret_dir_mode(path)
+}
+
+pub(crate) fn chmod_secret_dir_no_access(path: &Path) -> Result<(), String> {
+    imp::chmod_secret_dir_no_access(path)
+}
+
+pub(crate) fn restore_secret_dir_mode(path: &Path, mode: &SecretDirMode) -> Result<(), String> {
+    imp::restore_secret_dir_mode(path, mode)
+}
+
 pub(crate) fn create_materialized_symlink(target: &[u8], link: &Path) -> Result<(), String> {
     imp::create_materialized_symlink(target, link)
 }

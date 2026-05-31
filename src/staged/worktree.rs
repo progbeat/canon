@@ -25,6 +25,14 @@ pub(crate) struct StagedWorktreeView {
     blob_reader: RefCell<Option<GitBlobReader>>,
 }
 
+struct VisibleTree {
+    oid: String,
+    // The hardlink materialization spec names this `visible_tree.entry_paths`.
+    // Each value is the evaluator-visible Git blob entry for that path, carrying
+    // the mode and object id needed to extract and materialize the file.
+    entry_paths: Vec<StagedTrackedFile>,
+}
+
 impl StagedWorktreeView {
     #[cfg(test)]
     pub(crate) fn apply(root: &Path) -> Result<StagedWorktreeView, String> {
@@ -86,19 +94,12 @@ impl StagedWorktreeView {
         visible_tree_oid: &str,
     ) -> Result<PathBuf, String> {
         let scope = sanitize_scope(scope, agent)?;
-        let visible_tree_entries = self.visible_tree_entries(agent, &scope)?;
-        self.materialize_visible_tree(&visible_tree_entries, visible_tree_oid)
+        let visible_tree = self.visible_tree(agent, &scope, visible_tree_oid)?;
+        self.materialize_visible_tree(&visible_tree)
     }
 
-    fn materialize_visible_tree(
-        &self,
-        visible_tree_entries: &[StagedTrackedFile],
-        visible_tree_oid: &str,
-    ) -> Result<PathBuf, String> {
+    fn materialize_visible_tree(&self, visible_tree: &VisibleTree) -> Result<PathBuf, String> {
         // Lazy hardlink policy mapping:
-        // - `visible_tree_entries` is the concrete `visible_tree.entry_paths`
-        //   set for this evaluator-visible Git tree, after scope and ignore
-        //   rules have been applied to the checked tree.
         // - `unpack_missing_files` performs `git_tree.extract` once per
         //   not-yet-unpacked blob into `lazy_tree_dir`.
         // - `hardlink_visible_tree_root` builds the tree under
@@ -107,30 +108,35 @@ impl StagedWorktreeView {
         // The visible tree OID is computed by the run-level VisibleTreeOidCache
         // before session start, so materialization does not start git per
         // expectation or per history-derived scope.
-        let visible_tree_root = self.trees_dir.join(visible_tree_oid);
+        let visible_tree_root = self.trees_dir.join(&visible_tree.oid);
         if visible_tree_root.exists() {
             return Ok(visible_tree_root);
         }
-        self.unpack_missing_files(visible_tree_entries)?;
-        self.hardlink_visible_tree_root(visible_tree_entries, visible_tree_root)
+        self.unpack_missing_files(&visible_tree.entry_paths)?;
+        self.hardlink_visible_tree_root(&visible_tree.entry_paths, visible_tree_root)
     }
 
-    fn visible_tree_entries(
+    fn visible_tree(
         &self,
         agent: &AgentConfig,
         scope: &[String],
-    ) -> Result<Vec<StagedTrackedFile>, String> {
+        visible_tree_oid: &str,
+    ) -> Result<VisibleTree, String> {
         // Build the `visible_tree.entry_paths` set used by the hardlink
         // materialization policy. `TreeSource` supplies the checked Git tree
         // (staged index or explicit `--tree` revision); scope and ignore
         // filters define the evaluator-visible tree over its blob entries.
-        Ok(self
+        let entry_paths = self
             .source_files()?
             .into_iter()
             .filter(|file| file.is_blob_file_entry())
             .filter(|file| path_bytes_in_scope(&file.path, scope))
             .filter(|file| !is_denied_path_bytes(agent, &file.path))
-            .collect())
+            .collect();
+        Ok(VisibleTree {
+            oid: visible_tree_oid.to_string(),
+            entry_paths,
+        })
     }
 
     fn source_files(&self) -> Result<Vec<StagedTrackedFile>, String> {

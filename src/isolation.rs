@@ -1,9 +1,6 @@
 use crate::platform;
 use std::env;
-use std::fs;
 use std::io::ErrorKind;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -15,14 +12,12 @@ pub(crate) struct NaiveIsolationPolicy {
     secret_dir: Option<PathBuf>,
     sandbox_dir: PathBuf,
     counter: u64,
-    secret_dir_mode: Option<fs::Permissions>,
+    secret_dir_mode: Option<platform::SecretDirMode>,
 }
 
 impl NaiveIsolationPolicy {
     pub(crate) fn from_env() -> Result<NaiveIsolationPolicy, String> {
-        let secret_dir = configured_secret_dir()
-            .map(|path| canonical_dir(&path, CANON_SECRET_DIR))
-            .transpose()?;
+        let secret_dir = configured_secret_dir();
         let sandbox_dir = match configured_dir(CANON_SANDBOX_DIR) {
             Some(path) => {
                 platform::create_private_dir_all(&path).map_err(|err| {
@@ -33,7 +28,7 @@ impl NaiveIsolationPolicy {
                         err
                     )
                 })?;
-                canonical_dir(&path, CANON_SANDBOX_DIR)?
+                path
             }
             None => make_temp_dir()?,
         };
@@ -58,13 +53,11 @@ impl NaiveIsolationPolicy {
                 err
             )
         })?;
-        let secret_dir = secret_dir
-            .map(|path| canonical_dir(&path, "test secret dir"))
-            .transpose()?;
+        let secret_dir = secret_dir;
         let secret_dir_mode = secret_dir.as_deref().map(stat_mode).transpose()?;
         Ok(NaiveIsolationPolicy {
             secret_dir,
-            sandbox_dir: canonical_dir(&sandbox_dir, "test sandbox dir")?,
+            sandbox_dir,
             counter: 0,
             secret_dir_mode,
         })
@@ -126,7 +119,7 @@ pub(crate) struct NaiveIsolationGuard {
     original_path: PathBuf,
     isolated_path: PathBuf,
     secret_dir: Option<PathBuf>,
-    secret_dir_mode: Option<fs::Permissions>,
+    secret_dir_mode: Option<platform::SecretDirMode>,
     active: bool,
 }
 
@@ -141,7 +134,7 @@ impl NaiveIsolationGuard {
         }
         let mut errors = Vec::new();
         if let (Some(secret_dir), Some(mode)) = (&self.secret_dir, self.secret_dir_mode.clone()) {
-            if let Err(err) = fs::set_permissions(secret_dir, mode) {
+            if let Err(err) = platform::restore_secret_dir_mode(secret_dir, &mode) {
                 errors.push(format!(
                     "failed to restore secret dir permissions {}: {}",
                     secret_dir.display(),
@@ -188,40 +181,7 @@ fn configured_dir(name: &str) -> Option<PathBuf> {
 }
 
 fn is_subpath(path: &Path, dir: &Path) -> Result<bool, String> {
-    let path = path.canonicalize().map_err(|err| {
-        format!(
-            "failed to canonicalize isolation path {}: {}",
-            path.display(),
-            err
-        )
-    })?;
-    let dir = dir.canonicalize().map_err(|err| {
-        format!(
-            "failed to canonicalize secret dir {}: {}",
-            dir.display(),
-            err
-        )
-    })?;
     Ok(path.starts_with(dir))
-}
-
-fn canonical_dir(path: &Path, description: &str) -> Result<PathBuf, String> {
-    let canonical = path.canonicalize().map_err(|err| {
-        format!(
-            "failed to canonicalize {} {}: {}",
-            description,
-            path.display(),
-            err
-        )
-    })?;
-    if !canonical.is_dir() {
-        return Err(format!(
-            "{} {} is not a directory",
-            description,
-            canonical.display()
-        ));
-    }
-    Ok(canonical)
 }
 
 fn make_temp_dir() -> Result<PathBuf, String> {
@@ -249,33 +209,20 @@ fn make_temp_dir() -> Result<PathBuf, String> {
     ))
 }
 
-fn stat_mode(path: &Path) -> Result<fs::Permissions, String> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|err| format!("failed to stat secret dir {}: {}", path.display(), err))?;
-    if !metadata.file_type().is_dir() {
-        return Err(format!("secret dir {} is not a directory", path.display()));
-    }
-    Ok(metadata.permissions())
+fn stat_mode(path: &Path) -> Result<platform::SecretDirMode, String> {
+    platform::secret_dir_mode(path)
 }
 
 fn chmod_secret_dir_no_access(path: &Path) -> Result<(), String> {
-    #[cfg(not(unix))]
-    {
-        let _ = path;
-        Err("naive isolation requires Unix chmod support for CANON_SECRET_DIR".to_string())
-    }
-    #[cfg(unix)]
-    {
-        let mut permissions = stat_mode(path)?;
-        permissions.set_mode(0o000);
-        fs::set_permissions(path, permissions)
-            .map_err(|err| format!("failed to chmod secret dir {}: {}", path.display(), err))
-    }
+    platform::chmod_secret_dir_no_access(path)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     #[cfg(unix)]
     #[test]

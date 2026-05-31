@@ -142,13 +142,14 @@ impl EvaluatorRunner for AppServerRunner {
             base_instructions: EVALUATOR_BASE_INSTRUCTIONS,
             developer_instructions,
             approval_policy: "never",
-            sandbox: self.no_sandbox.then_some("danger-full-access"),
+            sandbox: Some(thread_start_sandbox_mode(self.no_sandbox)),
             environments: vec![local_environment_params(session_cwd)],
             config: evaluator_thread_config_with_no_sandbox(
                 agent,
                 scope,
                 model,
                 thinking,
+                &self.app_server_root,
                 session_cwd,
                 self.no_sandbox,
             ),
@@ -224,9 +225,7 @@ pub(crate) fn turn_start_request(
         request["cwd"] = Value::String(cwd.display().to_string());
         request["environments"] = json!([local_environment_params(cwd)]);
     }
-    if no_sandbox {
-        request["sandboxPolicy"] = json!({ "type": "dangerFullAccess" });
-    }
+    request["sandboxPolicy"] = turn_sandbox_policy(no_sandbox);
     if let Some(model) = model {
         request["model"] = Value::String(model.to_string());
     }
@@ -234,6 +233,22 @@ pub(crate) fn turn_start_request(
         request["effort"] = Value::String(effort.to_string());
     }
     Ok(request)
+}
+
+fn thread_start_sandbox_mode(no_sandbox: bool) -> &'static str {
+    if no_sandbox {
+        "danger-full-access"
+    } else {
+        "read-only"
+    }
+}
+
+fn turn_sandbox_policy(no_sandbox: bool) -> Value {
+    if no_sandbox {
+        json!({ "type": "dangerFullAccess" })
+    } else {
+        json!({ "type": "readOnly", "networkAccess": false })
+    }
 }
 
 #[derive(Serialize)]
@@ -265,6 +280,53 @@ fn local_environment_params(cwd: &Path) -> TurnEnvironmentParams {
     TurnEnvironmentParams {
         environment_id: LOCAL_ENVIRONMENT_ID,
         cwd: cwd.display().to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_evaluator_turn_uses_read_only_sandbox_policy() {
+        let request = turn_start_request(
+            "thread",
+            "question",
+            None,
+            "low",
+            Some(Path::new("/tmp/cwd")),
+            false,
+        )
+        .expect("turn request");
+
+        assert_eq!(
+            request["sandboxPolicy"],
+            json!({ "type": "readOnly", "networkAccess": false })
+        );
+    }
+
+    #[test]
+    fn no_sandbox_evaluator_turn_uses_danger_full_access_policy() {
+        let request = turn_start_request(
+            "thread",
+            "question",
+            None,
+            "low",
+            Some(Path::new("/tmp/cwd")),
+            true,
+        )
+        .expect("turn request");
+
+        assert_eq!(
+            request["sandboxPolicy"],
+            json!({ "type": "dangerFullAccess" })
+        );
+    }
+
+    #[test]
+    fn thread_start_sandbox_mode_matches_no_sandbox_flag() {
+        assert_eq!(thread_start_sandbox_mode(false), "read-only");
+        assert_eq!(thread_start_sandbox_mode(true), "danger-full-access");
     }
 }
 

@@ -147,6 +147,7 @@ pub(crate) struct RawGeneratorExpectation {
 #[derive(Debug, Clone)]
 pub(crate) struct RawIncludeExpectation {
     pub(crate) include: String,
+    pub(crate) cooldown: Option<String>,
     pub(crate) settings: RawExpectationSettings,
 }
 
@@ -211,14 +212,15 @@ impl RawExpectationItem {
             ignore,
             plugins,
         };
-        match (q, q_template, path, a) {
-            (Some(q), _, _, Some(a)) => Ok(RawExpectationItem::Explicit(RawExplicitExpectation {
-                q,
-                a,
+        if let Some(include) = include {
+            return Ok(RawExpectationItem::Include(RawIncludeExpectation {
+                include,
                 cooldown,
                 settings,
-            })),
-            (None, Some(q_template), Some(path), Some(a)) => {
+            }));
+        }
+        match (q, q_template, path, a) {
+            (_, Some(q_template), Some(path), Some(a)) => {
                 Ok(RawExpectationItem::Generator(RawGeneratorExpectation {
                     question_template: q_template,
                     path,
@@ -227,23 +229,69 @@ impl RawExpectationItem {
                     settings,
                 }))
             }
-            fields => {
-                if let Some(include) = include {
-                    return Ok(RawExpectationItem::Include(RawIncludeExpectation {
-                        include,
-                        settings,
-                    }));
-                }
-                match fields {
-                    (Some(_), _, _, None) => Err("must contain a"),
-                    (None, Some(_), None, _) => Err("generator must contain path"),
-                    (None, Some(_), Some(_), None) => Err("must contain a"),
-                    (None, None, Some(_), _) => Err("generator must contain q_template"),
-                    (None, None, None, Some(_)) => Err("must contain q or q_template"),
-                    (None, None, None, None) => Err("must contain q, q_template, or include"),
-                    _ => Err("invalid expectation item"),
-                }
+            (Some(q), _, _, Some(a)) => Ok(RawExpectationItem::Explicit(RawExplicitExpectation {
+                q,
+                a,
+                cooldown,
+                settings,
+            })),
+            fields => match fields {
+                (Some(_), _, _, None) => Err("must contain a"),
+                (None, Some(_), None, _) => Err("generator must contain path"),
+                (None, Some(_), Some(_), None) => Err("must contain a"),
+                (None, None, Some(_), _) => Err("generator must contain q_template"),
+                (None, None, None, Some(_)) => Err("must contain q or q_template"),
+                (None, None, None, None) => Err("must contain q, q_template, or include"),
+                _ => Err("invalid expectation item"),
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generator_shape_wins_over_extra_q_field() {
+        let item: RawExpectationItem = serde_saphyr::from_str(
+            r#"
+q: ignored annotation
+path: "specs/*.md"
+q_template: "{{content}}"
+a: "yes"
+"#,
+        )
+        .expect("parse expectation item");
+
+        match item {
+            RawExpectationItem::Generator(item) => {
+                assert_eq!(item.path, "specs/*.md");
+                assert_eq!(item.question_template, "{{content}}");
+                assert_eq!(item.a, "yes");
             }
+            RawExpectationItem::Explicit(_) => panic!("generator item parsed as explicit"),
+            RawExpectationItem::Include(_) => panic!("generator item parsed as include"),
+        }
+    }
+
+    #[test]
+    fn include_shape_wins_over_extra_question_fields() {
+        let item: RawExpectationItem = serde_saphyr::from_str(
+            r#"
+include: "expects/*.yml"
+q: ignored annotation
+a: "yes"
+"#,
+        )
+        .expect("parse expectation item");
+
+        match item {
+            RawExpectationItem::Include(item) => {
+                assert_eq!(item.include, "expects/*.yml");
+            }
+            RawExpectationItem::Explicit(_) => panic!("include item parsed as explicit"),
+            RawExpectationItem::Generator(_) => panic!("include item parsed as generator"),
         }
     }
 }

@@ -13,6 +13,7 @@ use crate::token_usage_types::{
 };
 
 pub(crate) struct AppServerRunner {
+    pub(crate) app_server_root: PathBuf,
     pub(crate) child: Child,
     pub(crate) stdin: ChildStdin,
     pub(crate) messages: Receiver<Result<Value, String>>,

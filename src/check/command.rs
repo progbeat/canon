@@ -93,7 +93,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             )
         }
     };
-    let scheduled_full_scope_reset_ids = match active_lazy_full_scope_reset_ids(root, &identities) {
+    let active_reset_ids = match active_lazy_full_scope_reset_ids(root, &identities) {
         Ok(ids) => ids,
         Err(err) => {
             return fail_check_before_selection(
@@ -110,7 +110,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             root,
             config: &config,
             identities: &identities,
-            scheduled_full_scope_reset_ids: &scheduled_full_scope_reset_ids,
+            active_lazy_full_scope_reset_ids: &active_reset_ids,
             question,
             query_scope: &command.query_scope,
             tree_source: &checked_tree,
@@ -190,7 +190,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     let records_result = run_check_with_runner_and_caches(
         runtime,
         &options,
-        &scheduled_full_scope_reset_ids,
+        &active_reset_ids,
         &mut execution.runner,
         Some(&mut diagnostic_log),
         Some(&mut result_output),

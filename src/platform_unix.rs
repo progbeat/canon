@@ -220,6 +220,34 @@ pub(crate) fn set_private_file_permissions(path: &Path) -> Result<(), String> {
         .map_err(|err| format!("failed to chmod {}: {}", path.display(), err))
 }
 
+pub(crate) type SecretDirMode = fs::Permissions;
+
+pub(crate) fn secret_dir_mode(path: &Path) -> Result<SecretDirMode, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|err| format!("failed to stat secret dir {}: {}", path.display(), err))?;
+    if !metadata.file_type().is_dir() {
+        return Err(format!("secret dir {} is not a directory", path.display()));
+    }
+    Ok(metadata.permissions())
+}
+
+pub(crate) fn chmod_secret_dir_no_access(path: &Path) -> Result<(), String> {
+    let mut permissions = secret_dir_mode(path)?;
+    permissions.set_mode(0o000);
+    fs::set_permissions(path, permissions)
+        .map_err(|err| format!("failed to chmod secret dir {}: {}", path.display(), err))
+}
+
+pub(crate) fn restore_secret_dir_mode(path: &Path, mode: &SecretDirMode) -> Result<(), String> {
+    fs::set_permissions(path, mode.clone()).map_err(|err| {
+        format!(
+            "failed to restore secret dir permissions {}: {}",
+            path.display(),
+            err
+        )
+    })
+}
+
 fn set_directory_permissions(path: &Path, mode: u32) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;

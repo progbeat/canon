@@ -36,7 +36,7 @@ pub(crate) fn initial_visible_scope_for_expectation(
     root: &Path,
     expectation: &SelectedExpectation,
     history_cache: &mut HistoryCache,
-    scheduled_full_scope_reset_ids: &BTreeSet<String>,
+    active_lazy_full_scope_reset_ids: &BTreeSet<String>,
 ) -> Result<Vec<String>, String> {
     // Glossary visible-scope selection starts from the latest verified q-scope
     // stored in answer history. If no q-scope is stored, fresh interrogation
@@ -48,7 +48,13 @@ pub(crate) fn initial_visible_scope_for_expectation(
     // q-scope verification. Even if a stored q-scope's paths are absent in the
     // current tree, the first interrogation still uses that q-scope; restricted
     // insufficient-evidence is the only policy that widens it to full scope.
-    if scheduled_full_scope_reset_ids.contains(&expectation.id) {
+    //
+    // An active lazy full-scope reset is the reset policy's invocation-start
+    // state transition: it makes the effective stored q-scope full project
+    // scope for this fresh interrogation without writing synthetic answer
+    // history. After the full-scope answer, ordinary qScopeSuggestion
+    // verification can still store a newly verified narrower scope.
+    if active_lazy_full_scope_reset_ids.contains(&expectation.id) {
         return Ok(full_scope());
     }
     Ok(

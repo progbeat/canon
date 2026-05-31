@@ -260,7 +260,7 @@ impl RawExpectationExpansion<'_> {
             let result = (|| {
                 let content = self.read_expanded_file(&file)?;
                 let mut included = self.parse_included_items(&file, &content)?;
-                inherit_include_settings(&mut included, &item.settings);
+                inherit_include_fields(&mut included, &item.settings, &item.cooldown);
                 self.expand_items(Path::new(&file), included)
             })();
             self.include_stack.pop();
@@ -343,17 +343,24 @@ impl RawExpectationExpansion<'_> {
     }
 }
 
-fn inherit_include_settings(items: &mut [RawExpectationItem], inherited: &RawExpectationSettings) {
+fn inherit_include_fields(
+    items: &mut [RawExpectationItem],
+    inherited_settings: &RawExpectationSettings,
+    inherited_cooldown: &Option<String>,
+) {
     for item in items {
         match item {
             RawExpectationItem::Explicit(item) => {
-                inherit_expectation_settings(&mut item.settings, inherited);
+                inherit_expectation_settings(&mut item.settings, inherited_settings);
+                inherit_expectation_cooldown(&mut item.cooldown, inherited_cooldown);
             }
             RawExpectationItem::Generator(item) => {
-                inherit_expectation_settings(&mut item.settings, inherited);
+                inherit_expectation_settings(&mut item.settings, inherited_settings);
+                inherit_expectation_cooldown(&mut item.cooldown, inherited_cooldown);
             }
             RawExpectationItem::Include(item) => {
-                inherit_expectation_settings(&mut item.settings, inherited);
+                inherit_expectation_settings(&mut item.settings, inherited_settings);
+                inherit_expectation_cooldown(&mut item.cooldown, inherited_cooldown);
             }
         }
     }
@@ -380,6 +387,12 @@ fn inherit_expectation_settings(
     }
 }
 
+fn inherit_expectation_cooldown(cooldown: &mut Option<String>, inherited: &Option<String>) {
+    if cooldown.is_none() {
+        *cooldown = inherited.clone();
+    }
+}
+
 fn render_generator_question(template: &str, content: &str) -> String {
     // The expectations spec defines q_template rendering as plain
     // `{{content}}` substitution to produce user-authored expectation
@@ -387,4 +400,68 @@ fn render_generator_question(template: &str, content: &str) -> String {
     // prompt/instruction templates, which are loaded only by
     // `evaluator::prompt` from `resources/prompts/`.
     template.replace("{{content}}", content)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::process;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn include_cooldown_is_inherited_without_overriding_child_cooldown() {
+        let root = test_root("include-cooldown-inheritance");
+        fs::create_dir_all(root.join("expects")).unwrap();
+        fs::write(
+            root.join("expects/included.yml"),
+            r#"
+- q: "Does the include cooldown apply?"
+  a: "yes"
+- q: "Does the child cooldown win?"
+  a: "yes"
+  cooldown: 1d
+"#,
+        )
+        .unwrap();
+        let raw: RawCheckConfig = serde_saphyr::from_str(
+            r#"
+version: 1
+presets:
+  default: {}
+expectations:
+  - include: "expects/*.yml"
+    cooldown: 7d
+"#,
+        )
+        .expect("parse raw check config");
+
+        let config = expand_raw_check_config(
+            Some(&root),
+            Path::new("check.yml"),
+            raw,
+            None,
+            CheckConfigSource::Worktree,
+        )
+        .expect("expand config");
+
+        assert_eq!(config.expectations.len(), 2);
+        assert_eq!(config.expectations[0].cooldown.as_deref(), Some("7d"));
+        assert_eq!(config.expectations[1].cooldown.as_deref(), Some("1d"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn test_root(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-tmp")
+            .join(format!("canon-test-{}-{}-{}", name, process::id(), unique));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
 }

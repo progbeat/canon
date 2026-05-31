@@ -63,11 +63,11 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
 ) -> Result<CheckRunReport, CheckRunError> {
     let mut caches = CheckRunCaches::new();
     let runtime = CheckRuntime::fixed(root, snapshot_root, config);
-    let scheduled_full_scope_reset_ids = BTreeSet::new();
+    let active_lazy_full_scope_reset_ids = BTreeSet::new();
     run_check_with_runner_and_caches(
         runtime,
         options,
-        &scheduled_full_scope_reset_ids,
+        &active_lazy_full_scope_reset_ids,
         runner,
         diagnostic_log,
         result_output,
@@ -78,7 +78,7 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
 pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     runtime: CheckRuntime<'_>,
     options: &CheckOptions,
-    scheduled_full_scope_reset_ids: &BTreeSet<String>,
+    active_lazy_full_scope_reset_ids: &BTreeSet<String>,
     runner: &mut R,
     mut diagnostic_log: Option<&mut DiagnosticLogWriter>,
     mut result_output: Option<&mut dyn Write>,
@@ -129,7 +129,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             runtime.tree_source,
             options,
             caches,
-            scheduled_full_scope_reset_ids,
+            active_lazy_full_scope_reset_ids,
             run_try!(unix_timestamp()),
             &mut diagnostic_log,
         ));
@@ -202,12 +202,13 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             return_expectation_error!("interrupted");
         }
 
-        let lazy_full_scope_reset = scheduled_full_scope_reset_ids.contains(&expectation.id);
+        let active_lazy_full_scope_reset =
+            active_lazy_full_scope_reset_ids.contains(&expectation.id);
         let mut verified_q_scope = run_expectation_try!(initial_visible_scope_for_expectation(
             root,
             expectation,
             &mut caches.history,
-            scheduled_full_scope_reset_ids,
+            active_lazy_full_scope_reset_ids,
         ));
         // Response-format problems and evaluator runner/model failures are
         // handled inside this call: they become non-pass review records that
@@ -244,11 +245,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         // signals in default mode; they do not skip the independent
         // verification needed to trust a strictly narrower cache scope for
         // this expectation's final record.
-        // A lazy full-scope reset must persist a full-project q-scope for this
-        // run; accepting a fresh narrower suggestion immediately would undo
-        // the reset before it takes effect.
-        if !lazy_full_scope_reset
-            && !record_requires_human_review(&interrogation.record)
+        if !record_requires_human_review(&interrogation.record)
             && run_expectation_try!(q_scope_suggestion_should_get_independent_verification(
                 &runtime,
                 &expectation.agent,
@@ -346,7 +343,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             &interrogation.record
         ));
         records.push(interrogation.record);
-        if lazy_full_scope_reset {
+        if active_lazy_full_scope_reset {
             run_expectation_try!(clear_active_lazy_full_scope_reset(root, expectation));
         }
         if should_stop {
@@ -396,7 +393,7 @@ fn default_check_selection(
     source: &TreeSource,
     options: &CheckOptions,
     caches: &mut CheckRunCaches,
-    scheduled_full_scope_reset_ids: &BTreeSet<String>,
+    active_lazy_full_scope_reset_ids: &BTreeSet<String>,
     now: u64,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
 ) -> Result<CachedSelection, String> {
@@ -404,7 +401,8 @@ fn default_check_selection(
     let mut cached = Vec::new();
     let mut cached_failure_seen = false;
     for expectation in options.selected.clone() {
-        let scheduled_full_scope_reset = scheduled_full_scope_reset_ids.contains(&expectation.id);
+        let active_lazy_full_scope_reset =
+            active_lazy_full_scope_reset_ids.contains(&expectation.id);
         match cached_result_for_expectation(
             root,
             source,
@@ -414,8 +412,8 @@ fn default_check_selection(
             &mut caches.visible_tree_oid,
             CachedResultLookup {
                 now,
-                include_same_tree: !options.ignore_cache && !scheduled_full_scope_reset,
-                include_cooldown: !options.ignore_cooldown && !scheduled_full_scope_reset,
+                include_same_tree: !options.ignore_cache && !active_lazy_full_scope_reset,
+                include_cooldown: !options.ignore_cooldown && !active_lazy_full_scope_reset,
             },
         )? {
             Some(hit) => {
@@ -430,9 +428,10 @@ fn default_check_selection(
     }
     if cached_failure_seen {
         // Default selection stops at cached failures. Active lazy full-scope
-        // reset markers remain active and keep their expectations from using
-        // narrow cached results until a full-scope interrogation can persist a
-        // replacement record.
+        // reset markers have already taken effect by disabling cache reuse
+        // above; if cached failures block fresh evaluation, those markers stay
+        // active until a later invocation can write the replacement full-scope
+        // record.
         selected.clear();
         let mut ordered_cached = cached
             .into_iter()

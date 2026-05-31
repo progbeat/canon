@@ -26,7 +26,7 @@ pub(crate) struct CheckQueryCommand<'a> {
     pub(crate) root: &'a Path,
     pub(crate) config: &'a CheckConfig,
     pub(crate) identities: &'a [ExpectationIdentity],
-    pub(crate) scheduled_full_scope_reset_ids: &'a BTreeSet<String>,
+    pub(crate) active_lazy_full_scope_reset_ids: &'a BTreeSet<String>,
     pub(crate) question: &'a str,
     pub(crate) query_scope: &'a [String],
     pub(crate) tree_source: &'a TreeSource,
@@ -39,7 +39,7 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
         root,
         config,
         identities,
-        scheduled_full_scope_reset_ids,
+        active_lazy_full_scope_reset_ids,
         question,
         query_scope,
         tree_source,
@@ -67,7 +67,7 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
         config,
         query_scope,
         matching_expectation.as_ref(),
-        scheduled_full_scope_reset_ids,
+        active_lazy_full_scope_reset_ids,
     ) {
         Ok(scope) => scope,
         Err(err) => {
@@ -83,7 +83,7 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
     let applied_lazy_full_scope_reset_ids = query_applied_lazy_full_scope_reset_ids(
         query_scope,
         matching_expectation.as_ref(),
-        scheduled_full_scope_reset_ids,
+        active_lazy_full_scope_reset_ids,
     );
     let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
     let mut execution = prepare_check_execution(
@@ -215,7 +215,7 @@ fn write_query_finish(
 fn query_applied_lazy_full_scope_reset_ids(
     query_scope: &[String],
     matching_expectation: Option<&SelectedExpectation>,
-    scheduled_full_scope_reset_ids: &BTreeSet<String>,
+    active_lazy_full_scope_reset_ids: &BTreeSet<String>,
 ) -> BTreeSet<String> {
     let mut ids = BTreeSet::new();
     if !query_scope.is_empty() {
@@ -224,7 +224,7 @@ fn query_applied_lazy_full_scope_reset_ids(
     let Some(expectation) = matching_expectation else {
         return ids;
     };
-    if scheduled_full_scope_reset_ids.contains(&expectation.id) {
+    if active_lazy_full_scope_reset_ids.contains(&expectation.id) {
         ids.insert(expectation.id.clone());
     }
     ids
@@ -235,7 +235,7 @@ fn query_enforced_scope(
     config: &CheckConfig,
     query_scope: &[String],
     matching_expectation: Option<&SelectedExpectation>,
-    scheduled_full_scope_reset_ids: &BTreeSet<String>,
+    active_lazy_full_scope_reset_ids: &BTreeSet<String>,
 ) -> Result<Vec<String>, String> {
     if !query_scope.is_empty() {
         return sanitize_scope(query_scope, &config.agent)
@@ -249,7 +249,7 @@ fn query_enforced_scope(
         root,
         expectation,
         &mut history_cache,
-        scheduled_full_scope_reset_ids,
+        active_lazy_full_scope_reset_ids,
     )
 }
 
