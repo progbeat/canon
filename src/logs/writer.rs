@@ -5,6 +5,7 @@ use crate::logs::config::{
 };
 use crate::logs::error::{external_log_error, DiagnosticLogResult};
 use crate::logs::lock::acquire_diagnostic_log_lock;
+use crate::logs::render::render_runtime_log_event;
 use crate::logs::rotation::{
     active_log_size, append_runtime_log_event_to_file, open_runtime_log_file,
     prune_diagnostic_logs_to_limit, rotate_active_diagnostic_logs,
@@ -15,33 +16,34 @@ use crate::{DiagnosticLogConfig, CANON_LOG_DIR_GIT_PATH};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-#[cfg(test)]
-pub(crate) use crate::history::render_answer_history_record;
 pub(crate) use crate::logs::config::diagnostic_log_config;
 pub(crate) use crate::logs::error::DiagnosticLogError;
-#[cfg(test)]
-pub(crate) use crate::logs::lock::{
-    stale_diagnostic_log_lock_age, write_diagnostic_log_lock_token,
-};
-pub(crate) use crate::logs::render::{push_json_control_escape, render_runtime_log_event};
-
-#[cfg(test)]
-pub(crate) fn write_diagnostic_log(
-    root: &Path,
-    records: &[CheckRecord],
-) -> DiagnosticLogResult<PathBuf> {
-    let mut writer = DiagnosticLogWriter::create(root)?;
-    for record in records {
-        writer.write_record(record)?;
-    }
-    let path = writer.path.clone();
-    Ok(path)
-}
 
 pub(crate) struct DiagnosticLogWriter {
     path: PathBuf,
     log_dir: PathBuf,
     config: DiagnosticLogConfig,
+}
+
+pub(crate) enum DiagnosticRecordEvent {
+    Expectation,
+    Interrogation,
+}
+
+impl DiagnosticRecordEvent {
+    fn result_event(&self) -> &'static str {
+        match self {
+            DiagnosticRecordEvent::Expectation => "expectation.result",
+            DiagnosticRecordEvent::Interrogation => "interrogation.result",
+        }
+    }
+
+    fn review_event(&self) -> &'static str {
+        match self {
+            DiagnosticRecordEvent::Expectation => "expectation.review_required",
+            DiagnosticRecordEvent::Interrogation => "interrogation.review_required",
+        }
+    }
 }
 
 impl DiagnosticLogWriter {
@@ -74,27 +76,15 @@ impl DiagnosticLogWriter {
         &self.path
     }
 
-    pub(crate) fn write_record(&mut self, record: &CheckRecord) -> DiagnosticLogResult<()> {
-        self.write_record_event("expectation.result", record)
-    }
-
-    pub(crate) fn write_interrogation_record(
+    pub(crate) fn write_record_event(
         &mut self,
+        event: DiagnosticRecordEvent,
         record: &CheckRecord,
     ) -> DiagnosticLogResult<()> {
-        self.write_record_event("interrogation.result", record)
-    }
-
-    fn write_record_event(&mut self, event: &str, record: &CheckRecord) -> DiagnosticLogResult<()> {
         let fields = record_log_fields(record);
-        self.write_event("info", event, &fields)?;
-        if record_requires_human_review(record) {
-            let review_event = match event {
-                "expectation.result" => "expectation.review_required",
-                "interrogation.result" => "interrogation.review_required",
-                _ => return Ok(()),
-            };
-            self.write_event("warn", review_event, &fields)?;
+        self.write_event("info", event.result_event(), &fields)?;
+        if record.review_error_text().is_some() {
+            self.write_event("warn", event.review_event(), &fields)?;
         }
         Ok(())
     }
@@ -126,29 +116,6 @@ fn record_log_fields(record: &CheckRecord) -> Vec<(&'static str, Value)> {
         ("prompt", json!(record.prompt_text())),
         ("expected", json!(record.expected_text())),
     ]
-}
-
-fn record_requires_human_review(record: &CheckRecord) -> bool {
-    record.review_error_text().is_some()
-}
-
-#[cfg(test)]
-pub(crate) fn append_runtime_log_event(
-    root: &Path,
-    level: &str,
-    event: &str,
-    fields: &[(&str, Value)],
-) -> DiagnosticLogResult<()> {
-    let mut cache = RepoInspectionCache::new();
-    let prepared = prepare_diagnostic_log(root, &mut cache)?;
-    write_runtime_log_event_with_rotation(
-        &prepared.log_dir,
-        &prepared.path,
-        &prepared.config,
-        level,
-        event,
-        fields,
-    )
 }
 
 struct PreparedDiagnosticLog {

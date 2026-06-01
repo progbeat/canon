@@ -54,19 +54,54 @@ pub(crate) fn make_hook_executable(path: &Path) -> Result<(), String> {
 }
 
 pub(crate) fn set_materialized_file_permissions(path: &Path, mode: &str) -> Result<(), String> {
-    imp::set_materialized_file_permissions(path, mode)
+    set_materialized_permissions(path, Some(mode))
 }
 
 pub(crate) fn set_materialized_dir_permissions(path: &Path) -> Result<(), String> {
-    imp::set_materialized_dir_permissions(path)
+    set_materialized_permissions(path, None)
+}
+
+fn set_materialized_permissions(path: &Path, file_mode: Option<&str>) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        match file_mode {
+            Some(mode) => imp::set_materialized_file_permissions(path, mode),
+            None => imp::set_materialized_dir_permissions(path),
+        }
+    }
+    #[cfg(windows)]
+    {
+        let _ = file_mode;
+        imp::set_materialized_permissions(path)
+    }
 }
 
 pub(crate) fn set_private_dir_permissions(path: &Path) -> Result<(), String> {
-    imp::set_private_dir_permissions(path)
+    set_private_permissions(path, PrivatePathKind::Directory)
 }
 
 pub(crate) fn set_private_file_permissions(path: &Path) -> Result<(), String> {
-    imp::set_private_file_permissions(path)
+    set_private_permissions(path, PrivatePathKind::File)
+}
+
+enum PrivatePathKind {
+    Directory,
+    File,
+}
+
+fn set_private_permissions(path: &Path, kind: PrivatePathKind) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        match kind {
+            PrivatePathKind::Directory => imp::set_private_dir_permissions(path),
+            PrivatePathKind::File => imp::set_private_file_permissions(path),
+        }
+    }
+    #[cfg(windows)]
+    {
+        let _ = kind;
+        imp::set_private_permissions(path)
+    }
 }
 
 pub(crate) type SecretDirMode = imp::SecretDirMode;
@@ -123,6 +158,7 @@ pub(crate) fn memory_backed_staged_snapshot_parent_candidates() -> Vec<PathBuf> 
 
 pub(crate) fn ordinary_staged_snapshot_parent_candidates() -> Vec<PathBuf> {
     let mut parents = Vec::new();
+    #[cfg(windows)]
     imp::add_ordinary_staged_snapshot_parent_candidates(&mut parents);
     let temp_dir = std::env::temp_dir();
     if !parents.iter().any(|parent| parent == &temp_dir) {

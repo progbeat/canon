@@ -355,24 +355,6 @@ fn trim_dot_slash_bytes(mut path: &[u8]) -> &[u8] {
     path
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn is_strict_scope_subset(proposed: &[String], current: &[String]) -> bool {
-    let Some(proposed) = normalize_scope_for_comparison(proposed) else {
-        return false;
-    };
-    let Some(current) = normalize_scope_for_comparison(current) else {
-        return false;
-    };
-    if proposed == current {
-        return false;
-    }
-    proposed.iter().all(|path| {
-        current
-            .iter()
-            .any(|base| normalized_scope_contains(base, path))
-    })
-}
-
 pub(crate) fn scope_is_within(proposed: &[String], current: &[String]) -> bool {
     let Some(proposed) = normalize_scope_for_comparison(proposed) else {
         return false;

@@ -60,13 +60,6 @@ fn write_stdout_record(
         .map_err(|err| format!("failed to flush {} to stdout: {}", description, err))
 }
 
-pub(crate) fn report_output_skipped_count(report: &CheckRunReport) -> usize {
-    // `skipped` is the count of expectations outside the summary categories.
-    // Cached passes have no per-expectation stdout line, but they are still
-    // pass results and therefore are not skipped in the summary.
-    report.skipped
-}
-
 pub(crate) fn render_query_output(answer: &ParsedAnswer) -> String {
     let mut output = String::new();
     if let Some(error) = answer.error.as_deref() {
@@ -165,7 +158,10 @@ pub(crate) fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -
     if passed > 0 {
         outcomes.push(format!("{} passed", passed));
     }
-    let skipped = report_output_skipped_count(report);
+    // `skipped` is the count of expectations outside the summary categories.
+    // Cached passes have no per-expectation stdout line, but they are still
+    // pass results and therefore are not skipped in the summary.
+    let skipped = report.skipped;
     if skipped > 0 {
         outcomes.push(format!("{} skipped", skipped));
     }

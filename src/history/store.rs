@@ -35,9 +35,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 // `check_interrogation_records::finalize_parsed_answer`, using
 // `VisibleTreeOidCache::staged_visible_tree_oid` for the enforced q-scope; this
 // layer preserves that native Git tree OID instead of deriving a second
-// fingerprint while writing JSONL. `history_append.rs`,
-// `history_compaction.rs`, and `logging::render_answer_history_record` are thin
-// import-compatibility wrappers around these functions.
+// fingerprint while writing JSONL.
 
 static HISTORY_COMPACT_CHANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static HISTORY_COMPACT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -341,37 +339,6 @@ struct HistoryLogRecord<'a> {
     visible_tree_oid: &'a str,
 }
 
-#[cfg(test)]
-pub(crate) fn append_history_record(
-    root: &Path,
-    expectation: &SelectedExpectation,
-    record: &CheckRecord,
-) -> Result<(), String> {
-    let mut cache = HistoryCache::new();
-    append_history_record_with_cache(root, expectation, record, &mut cache)
-}
-
-#[cfg(test)]
-pub(crate) fn append_history_record_with_cache(
-    root: &Path,
-    expectation: &SelectedExpectation,
-    record: &CheckRecord,
-    history_cache: &mut HistoryCache,
-) -> Result<(), String> {
-    // The check pipeline exposes human-readable String errors, but this module
-    // keeps I/O failures structured until the boundary so action, path, kind,
-    // and source error stay tied together while the append is assembled.
-    let native_oid_hex_len = repository_native_object_oid_hex_len(root)?;
-    append_history_record_with_cache_inner(
-        root,
-        expectation,
-        record,
-        history_cache,
-        native_oid_hex_len,
-    )
-    .map_err(|err| err.to_string())
-}
-
 pub(crate) fn append_current_history_record_with_cache(
     root: &Path,
     source: &TreeSource,
@@ -554,18 +521,6 @@ fn compaction_chance_seed() -> u64 {
         .map(|duration| duration.as_nanos() as u64)
         .unwrap_or(0);
     nanos ^ counter.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ process::id() as u64
-}
-
-#[cfg(test)]
-pub(crate) fn compact_history(path: &Path) -> Result<(), String> {
-    let _lock = lock_history_file(path).map_err(|err| err.to_string())?;
-    compact_history_locked_with_native_oid_len(path, None)
-}
-
-#[cfg(test)]
-pub(crate) fn compact_repository_history(root: &Path, path: &Path) -> Result<(), String> {
-    let _lock = lock_history_file(path).map_err(|err| err.to_string())?;
-    compact_repository_history_locked(root, path)
 }
 
 fn compact_repository_history_locked(root: &Path, path: &Path) -> Result<(), String> {

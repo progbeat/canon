@@ -1,4 +1,4 @@
-use super::{wait_for_app_server_child, CHECK_INTERRUPTED};
+use super::{push_unique_path, wait_for_app_server_child, CHECK_INTERRUPTED};
 use std::ffi::OsString;
 use std::fs;
 use std::io;
@@ -334,8 +334,6 @@ pub(crate) fn add_memory_backed_staged_snapshot_parent_candidates(parents: &mut 
     add_discovered_memory_backed_staged_snapshot_parent_candidates(parents);
 }
 
-pub(crate) fn add_ordinary_staged_snapshot_parent_candidates(_parents: &mut Vec<PathBuf>) {}
-
 fn add_discovered_memory_backed_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
     // Prefer memory-backed locations when the host exposes them. Missing
     // candidates are harmless: snapshot creation skips paths that do not exist
@@ -415,12 +413,6 @@ fn octal_escape_byte(digits: &[u8]) -> Option<u8> {
         + u16::from(digits[1] - b'0') * 8
         + u16::from(digits[2] - b'0');
     u8::try_from(value).ok()
-}
-
-fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
-    if !paths.iter().any(|existing| existing == &path) {
-        paths.push(path);
-    }
 }
 
 pub(crate) fn path_from_git_bytes(bytes: Vec<u8>) -> Result<PathBuf, String> {

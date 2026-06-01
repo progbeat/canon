@@ -7,7 +7,7 @@ use crate::history::reuse::{
     CachedHistoryRecord,
 };
 use crate::history::HistoryCache;
-use crate::logs::DiagnosticLogWriter;
+use crate::logs::{DiagnosticLogWriter, DiagnosticRecordEvent};
 use serde_json::json;
 use std::path::Path;
 
@@ -85,6 +85,6 @@ pub(crate) fn write_cache_hit(
         )
         .map_err(|err| err.to_string())?;
     writer
-        .write_record(&hit.record)
+        .write_record_event(DiagnosticRecordEvent::Expectation, &hit.record)
         .map_err(|err| err.to_string())
 }
