@@ -201,6 +201,10 @@ mod logs {
 mod notes {
     #[path = "lock.rs"]
     pub(crate) mod lock;
+    #[path = "note_lock.rs"]
+    pub(crate) mod note_lock;
+    #[path = "note_log.rs"]
+    pub(crate) mod note_log;
     #[path = "store.rs"]
     pub(crate) mod store;
     pub(crate) use store::*;
