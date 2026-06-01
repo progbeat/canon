@@ -15,7 +15,7 @@ Codex working against `canon` until the repository satisfied its own canon.
 
 ### Docker
 
-Requires Git, Docker, and Codex Desktop/CLI.
+Requires Git, Docker, curl, and Codex (Desktop or CLI).
 
 This is the recommended install path for most users. `canon` itself was built
 by AI agents and has not been reviewed line by line by a human. The Docker
