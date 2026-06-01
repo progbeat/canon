@@ -19,10 +19,20 @@ use platform_other as imp;
 #[cfg(unix)]
 use platform_unix as imp;
 
+#[cfg(unix)]
+fn platform_error(error: imp::PlatformError) -> String {
+    error.to_string()
+}
+
+#[cfg(windows)]
+fn platform_error(error: String) -> String {
+    error
+}
+
 static CHECK_INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
 pub(crate) fn install_check_signal_handlers() -> Result<(), String> {
-    imp::install_check_signal_handlers()
+    imp::install_check_signal_handlers().map_err(platform_error)
 }
 
 pub(crate) fn reset_check_interrupted() {
@@ -38,19 +48,19 @@ pub(crate) fn prepare_app_server_command(command: &mut Command) {
 }
 
 pub(crate) fn terminate_app_server_child(child: &mut Child) -> Result<(), String> {
-    imp::terminate_app_server_child(child)
+    imp::terminate_app_server_child(child).map_err(platform_error)
 }
 
 pub(crate) fn mirror_evaluator_codex_home_file(source: &Path, target: &Path) -> Result<(), String> {
-    imp::mirror_evaluator_codex_home_file(source, target)
+    imp::mirror_evaluator_codex_home_file(source, target).map_err(platform_error)
 }
 
 pub(crate) fn move_path(source: &Path, target: &Path) -> Result<(), String> {
-    imp::move_path(source, target)
+    imp::move_path(source, target).map_err(platform_error)
 }
 
 pub(crate) fn make_hook_executable(path: &Path) -> Result<(), String> {
-    imp::make_hook_executable(path)
+    imp::make_hook_executable(path).map_err(platform_error)
 }
 
 pub(crate) fn set_materialized_file_permissions(path: &Path, mode: &str) -> Result<(), String> {
@@ -68,6 +78,7 @@ fn set_materialized_permissions(path: &Path, file_mode: Option<&str>) -> Result<
             Some(mode) => imp::set_materialized_file_permissions(path, mode),
             None => imp::set_materialized_dir_permissions(path),
         }
+        .map_err(platform_error)
     }
     #[cfg(windows)]
     {
@@ -96,6 +107,7 @@ fn set_private_permissions(path: &Path, kind: PrivatePathKind) -> Result<(), Str
             PrivatePathKind::Directory => imp::set_private_dir_permissions(path),
             PrivatePathKind::File => imp::set_private_file_permissions(path),
         }
+        .map_err(platform_error)
     }
     #[cfg(windows)]
     {
@@ -107,23 +119,23 @@ fn set_private_permissions(path: &Path, kind: PrivatePathKind) -> Result<(), Str
 pub(crate) type SecretDirMode = imp::SecretDirMode;
 
 pub(crate) fn secret_dir_mode(path: &Path) -> Result<SecretDirMode, String> {
-    imp::secret_dir_mode(path)
+    imp::secret_dir_mode(path).map_err(platform_error)
 }
 
 pub(crate) fn chmod_secret_dir_no_access(path: &Path) -> Result<(), String> {
-    imp::chmod_secret_dir_no_access(path)
+    imp::chmod_secret_dir_no_access(path).map_err(platform_error)
 }
 
 pub(crate) fn restore_secret_dir_mode(path: &Path, mode: &SecretDirMode) -> Result<(), String> {
-    imp::restore_secret_dir_mode(path, mode)
+    imp::restore_secret_dir_mode(path, mode).map_err(platform_error)
 }
 
 pub(crate) fn create_materialized_symlink(target: &[u8], link: &Path) -> Result<(), String> {
-    imp::create_materialized_symlink(target, link)
+    imp::create_materialized_symlink(target, link).map_err(platform_error)
 }
 
 pub(crate) fn hardlink_file_or_copy_symlink(source: &Path, target: &Path) -> Result<(), String> {
-    imp::hardlink_file_or_copy_symlink(source, target)
+    imp::hardlink_file_or_copy_symlink(source, target).map_err(platform_error)
 }
 
 pub(crate) fn create_private_dir(path: &Path) -> io::Result<()> {
@@ -137,7 +149,7 @@ pub(crate) fn create_private_dir_all(path: &Path) -> io::Result<()> {
 pub(crate) fn open_file_for_append_without_following_symlink(
     path: &Path,
 ) -> Result<std::fs::File, String> {
-    imp::open_file_for_append_without_following_symlink(path)
+    imp::open_file_for_append_without_following_symlink(path).map_err(platform_error)
 }
 
 #[cfg(all(test, unix))]
@@ -184,11 +196,25 @@ pub(crate) fn path_from_git_stdout(mut bytes: Vec<u8>) -> Result<PathBuf, String
     while matches!(bytes.last(), Some(b'\n' | b'\r')) {
         bytes.pop();
     }
-    imp::path_from_git_bytes(bytes)
+    #[cfg(unix)]
+    {
+        Ok(imp::path_from_git_bytes(bytes))
+    }
+    #[cfg(windows)]
+    {
+        imp::path_from_git_bytes(bytes)
+    }
 }
 
 pub(crate) fn git_path_bytes(path: &Path) -> Result<Vec<u8>, String> {
-    imp::git_path_bytes(path)
+    #[cfg(unix)]
+    {
+        Ok(imp::git_path_bytes(path))
+    }
+    #[cfg(windows)]
+    {
+        imp::git_path_bytes(path)
+    }
 }
 
 #[cfg(all(test, unix))]
@@ -200,15 +226,22 @@ pub(crate) fn checkout_index_prefix_arg(path: &Path) -> Result<OsString, String>
     }
     let mut arg = b"--prefix=".to_vec();
     arg.extend(prefix);
-    imp::os_string_from_bytes(arg)
+    Ok(imp::os_string_from_bytes(arg))
 }
 
 pub(crate) fn os_string_from_bytes(bytes: Vec<u8>) -> Result<OsString, String> {
-    imp::os_string_from_bytes(bytes)
+    #[cfg(unix)]
+    {
+        Ok(imp::os_string_from_bytes(bytes))
+    }
+    #[cfg(windows)]
+    {
+        imp::os_string_from_bytes(bytes)
+    }
 }
 
 #[cfg(all(test, unix))]
-pub(crate) fn git_path_from_raw_bytes(path: &[u8]) -> Result<std::ffi::OsString, String> {
+pub(crate) fn git_path_from_raw_bytes(path: &[u8]) -> std::ffi::OsString {
     imp::git_path_from_raw_bytes(path)
 }
 

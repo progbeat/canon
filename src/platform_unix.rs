@@ -2,45 +2,152 @@ use super::{push_unique_path, wait_for_app_server_child, CHECK_INTERRUPTED};
 use std::ffi::OsString;
 use std::fs;
 use std::io;
+use std::mem;
+use std::os::fd::AsRawFd;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::{symlink, DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
-
-const SIGHUP: i32 = 1;
-const SIGINT: i32 = 2;
-const SIGTERM: i32 = 15;
-const SIGKILL: i32 = 9;
-const SIGNAL_ERROR: usize = usize::MAX;
-
-unsafe extern "C" {
-    fn signal(signum: i32, handler: extern "C" fn(i32)) -> usize;
-    fn kill(pid: i32, sig: i32) -> i32;
-}
 
 extern "C" fn handle_check_signal(_: i32) {
     CHECK_INTERRUPTED.store(true, Ordering::SeqCst);
 }
 
-pub(crate) fn install_check_signal_handlers() -> Result<(), String> {
-    for signal_number in [SIGHUP, SIGINT, SIGTERM] {
+#[derive(Debug)]
+pub(crate) enum PlatformError {
+    Context {
+        context: String,
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
+    Related {
+        context: &'static str,
+        sources: Box<RelatedErrorSource>,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) struct RelatedErrorSource {
+    error: PlatformError,
+    next: Option<Box<RelatedErrorSource>>,
+}
+
+type PlatformResult<T> = Result<T, PlatformError>;
+
+impl PlatformError {
+    fn message(context: impl Into<String>) -> Self {
+        PlatformError::Context {
+            context: context.into(),
+            source: None,
+        }
+    }
+
+    fn io(context: impl Into<String>, source: io::Error) -> Self {
+        PlatformError::Context {
+            context: context.into(),
+            source: Some(Box::new(source)),
+        }
+    }
+
+    fn with_source(context: impl Into<String>, source: PlatformError) -> Self {
+        PlatformError::Context {
+            context: context.into(),
+            source: Some(Box::new(source)),
+        }
+    }
+
+    fn chain(mut errors: Vec<PlatformError>) -> Self {
+        if errors.len() <= 1 {
+            return errors
+                .pop()
+                .unwrap_or_else(|| PlatformError::message("unknown platform error"));
+        }
+        let mut sources = None;
+        while let Some(error) = errors.pop() {
+            sources = Some(Box::new(RelatedErrorSource {
+                error,
+                next: sources,
+            }));
+        }
+        PlatformError::Related {
+            context: "multiple platform errors",
+            sources: sources.expect("multiple errors produced at least one source"),
+        }
+    }
+}
+
+impl std::fmt::Display for PlatformError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PlatformError::Context { context, source } => match source {
+                Some(source) => write!(formatter, "{}: {}", context, source),
+                None => formatter.write_str(context),
+            },
+            PlatformError::Related { context, sources } => {
+                write!(formatter, "{}: {}", context, sources)
+            }
+        }
+    }
+}
+
+impl std::error::Error for PlatformError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            PlatformError::Context { source, .. } => source
+                .as_deref()
+                .map(|source| source as &(dyn std::error::Error + 'static)),
+            PlatformError::Related { sources, .. } => Some(sources),
+        }
+    }
+}
+
+impl std::fmt::Display for RelatedErrorSource {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.error)?;
+        if let Some(next) = &self.next {
+            write!(formatter, "; {}", next)?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for RelatedErrorSource {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.next
+            .as_deref()
+            .map(|source| source as &(dyn std::error::Error + 'static))
+    }
+}
+
+pub(crate) fn install_check_signal_handlers() -> PlatformResult<()> {
+    for signal_number in [libc::SIGHUP, libc::SIGINT, libc::SIGTERM] {
         install_signal_handler(signal_number)?;
     }
     Ok(())
 }
 
-fn install_signal_handler(signal_number: i32) -> Result<(), String> {
-    // SAFETY: `handle_check_signal` has C ABI and only stores to an atomic
-    // flag; the platform sentinel is checked immediately after registration.
-    let previous = unsafe { signal(signal_number, handle_check_signal) };
-    if previous == SIGNAL_ERROR {
-        Err(format!(
-            "failed to install signal handler for signal {}",
-            signal_number
+fn install_signal_handler(signal_number: libc::c_int) -> PlatformResult<()> {
+    // SAFETY: `sigaction` is initialized before use, the handler has C ABI and
+    // only stores to an atomic flag, and libc reports failure via the return
+    // value checked immediately below.
+    let result = unsafe {
+        let mut action: libc::sigaction = mem::zeroed();
+        action.sa_flags = 0;
+        action.sa_sigaction = handle_check_signal as *const () as usize;
+        libc::sigemptyset(&mut action.sa_mask);
+        libc::sigaction(signal_number, &action, std::ptr::null_mut())
+    };
+    if result == -1 {
+        Err(PlatformError::io(
+            format!(
+                "failed to install signal handler for signal {}",
+                signal_number
+            ),
+            io::Error::last_os_error(),
         ))
     } else {
         Ok(())
@@ -51,52 +158,84 @@ pub(crate) fn prepare_app_server_command(command: &mut Command) {
     command.process_group(0);
 }
 
-pub(crate) fn terminate_app_server_child(child: &mut Child) -> Result<(), String> {
+pub(crate) fn terminate_app_server_child(child: &mut Child) -> PlatformResult<()> {
     if poll_app_server_child(child)?.is_some() {
         return Ok(());
     }
-    let process_group = child.id() as i32;
+    let process_group = app_server_process_group(child)?;
     let mut errors = Vec::new();
-    signal_process_group_or_kill_child(child, process_group, SIGTERM, &mut errors);
+    signal_process_group_or_kill_child(child, process_group, libc::SIGTERM, &mut errors);
     if wait_for_child_exit(child, Duration::from_secs(2))? {
         return finish_app_server_cleanup(errors);
     }
-    signal_process_group_or_kill_child(child, process_group, SIGKILL, &mut errors);
-    wait_for_app_server_child(child)?;
+    signal_process_group_or_kill_child(child, process_group, libc::SIGKILL, &mut errors);
+    if let Err(err) = wait_for_app_server_child(child) {
+        errors.push(PlatformError::message(err));
+    }
     finish_app_server_cleanup(errors)
 }
 
-fn signal_process_group(process_group: i32, signal_number: i32) -> Result<(), String> {
+fn app_server_process_group(child: &Child) -> PlatformResult<libc::pid_t> {
+    let pid = child.id();
+    libc::pid_t::try_from(pid).map_err(|_| {
+        PlatformError::message(format!(
+            "app-server child pid {} does not fit Unix process group id",
+            pid
+        ))
+    })
+}
+
+fn signal_process_group(
+    process_group: libc::pid_t,
+    signal_number: libc::c_int,
+) -> PlatformResult<()> {
     // SAFETY: POSIX `kill` uses a negative pid to address a process group.
     // The app-server child is spawned in its own process group first.
-    let result = unsafe { kill(-process_group, signal_number) };
+    let result = unsafe { libc::kill(-process_group, signal_number) };
     if result == 0 {
         Ok(())
     } else {
-        Err(format!(
-            "failed to send signal {} to app-server process group {}: {}",
-            signal_number,
-            process_group,
-            io::Error::last_os_error()
+        Err(PlatformError::io(
+            format!(
+                "failed to send signal {} to app-server process group {}",
+                signal_number, process_group
+            ),
+            io::Error::last_os_error(),
         ))
     }
 }
 
 fn signal_process_group_or_kill_child(
     child: &mut Child,
-    process_group: i32,
-    signal_number: i32,
-    errors: &mut Vec<String>,
+    process_group: libc::pid_t,
+    signal_number: libc::c_int,
+    errors: &mut Vec<PlatformError>,
 ) {
     if let Err(err) = signal_process_group(process_group, signal_number) {
+        if child_already_exited(child, errors) {
+            return;
+        }
         errors.push(err);
         if let Err(err) = child.kill() {
-            errors.push(format!("failed to kill app-server child: {}", err));
+            if !child_already_exited(child, errors) {
+                errors.push(PlatformError::io("failed to kill app-server child", err));
+            }
         }
     }
 }
 
-fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> Result<bool, String> {
+fn child_already_exited(child: &mut Child, errors: &mut Vec<PlatformError>) -> bool {
+    match child.try_wait() {
+        Ok(Some(_)) => true,
+        Ok(None) => false,
+        Err(err) => {
+            errors.push(PlatformError::io("failed to poll app-server child", err));
+            false
+        }
+    }
+}
+
+fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> PlatformResult<bool> {
     let deadline = Instant::now() + timeout;
     loop {
         if poll_app_server_child(child)?.is_some() {
@@ -109,197 +248,326 @@ fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> Result<bool, Str
     }
 }
 
-fn poll_app_server_child(child: &mut Child) -> Result<Option<ExitStatus>, String> {
+fn poll_app_server_child(child: &mut Child) -> PlatformResult<Option<ExitStatus>> {
     child
         .try_wait()
-        .map_err(|err| format!("failed to poll app-server child: {}", err))
+        .map_err(|err| PlatformError::io("failed to poll app-server child", err))
 }
 
-fn finish_app_server_cleanup(errors: Vec<String>) -> Result<(), String> {
+fn finish_app_server_cleanup(errors: Vec<PlatformError>) -> PlatformResult<()> {
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(errors.join("; "))
+        Err(PlatformError::chain(errors))
     }
 }
 
-pub(crate) fn mirror_evaluator_codex_home_file(source: &Path, target: &Path) -> Result<(), String> {
+pub(crate) fn mirror_evaluator_codex_home_file(source: &Path, target: &Path) -> PlatformResult<()> {
     symlink(source, target).map_err(|err| {
-        format!(
-            "failed to symlink evaluator CODEX_HOME file {} to {}: {}",
-            target.display(),
-            source.display(),
-            err
+        PlatformError::io(
+            format!(
+                "failed to symlink evaluator CODEX_HOME file {} to {}",
+                target.display(),
+                source.display()
+            ),
+            err,
         )
     })
 }
 
-pub(crate) fn move_path(source: &Path, target: &Path) -> Result<(), String> {
+pub(crate) fn move_path(source: &Path, target: &Path) -> PlatformResult<()> {
     move_path_preserving_directory_permissions(source, target)
 }
 
-fn move_path_preserving_directory_permissions(source: &Path, target: &Path) -> Result<(), String> {
-    let metadata = fs::symlink_metadata(source)
-        .map_err(|err| format!("failed to inspect {}: {}", source.display(), err))?;
-    if !metadata.file_type().is_dir() {
+fn move_path_preserving_directory_permissions(source: &Path, target: &Path) -> PlatformResult<()> {
+    let Some(directory) = open_source_directory_for_move(source)? else {
         return rename_path(source, target);
+    };
+    let mode = directory_permissions(source, &directory)?.mode();
+    fchmod_open_path(source, &directory, 0o700)?;
+    if let Err(rename_err) = rename_path(source, target) {
+        return Err(restore_source_directory_permissions_after_failed_move(
+            source, &directory, mode, rename_err,
+        ));
     }
-    let mode = metadata.permissions();
-    set_directory_permissions(source, 0o700)?;
-    rename_path(source, target).inspect_err(|_err| {
-        let _ = fs::set_permissions(source, mode.clone());
-    })?;
-    fs::set_permissions(target, mode).map_err(|err| {
-        format!(
-            "failed to restore moved path permissions {}: {}",
-            target.display(),
-            err
-        )
-    })
+    if let Err(restore_err) = fchmod_open_path(target, &directory, mode) {
+        return Err(rollback_moved_directory_after_restore_failure(
+            source,
+            target,
+            &directory,
+            mode,
+            restore_err,
+        ));
+    }
+    Ok(())
 }
 
-fn rename_path(source: &Path, target: &Path) -> Result<(), String> {
+fn restore_source_directory_permissions_after_failed_move(
+    source: &Path,
+    directory: &fs::File,
+    mode: u32,
+    rename_err: PlatformError,
+) -> PlatformError {
+    match fchmod_open_path(source, directory, mode) {
+        Ok(()) => rename_err,
+        Err(restore_err) => PlatformError::chain(vec![rename_err, restore_err]),
+    }
+}
+
+fn rollback_moved_directory_after_restore_failure(
+    source: &Path,
+    target: &Path,
+    directory: &fs::File,
+    mode: u32,
+    restore_err: PlatformError,
+) -> PlatformError {
+    let mut errors = vec![restore_err];
+    match rename_path(target, source) {
+        Ok(()) => {
+            if let Err(source_restore_err) = fchmod_open_path(source, directory, mode) {
+                errors.push(source_restore_err);
+            }
+        }
+        Err(rollback_err) => errors.push(PlatformError::with_source(
+            "failed to roll back moved directory",
+            rollback_err,
+        )),
+    }
+    PlatformError::chain(errors)
+}
+
+fn rename_path(source: &Path, target: &Path) -> PlatformResult<()> {
     fs::rename(source, target).map_err(|err| {
-        format!(
-            "failed to move isolated path {} to {}: {}",
-            source.display(),
-            target.display(),
-            err
+        PlatformError::io(
+            format!(
+                "failed to move isolated path {} to {}",
+                source.display(),
+                target.display()
+            ),
+            err,
         )
     })
 }
 
-pub(crate) fn make_hook_executable(path: &Path) -> Result<(), String> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
-    if metadata.file_type().is_symlink() {
-        return Err(format!("refusing to chmod symlink {}", path.display()));
-    }
-    let mut permissions = metadata.permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(path, permissions)
-        .map_err(|err| format!("failed to chmod {}: {}", path.display(), err))
+pub(crate) fn make_hook_executable(path: &Path) -> PlatformResult<()> {
+    let Some(file) = open_file_for_chmod(path, ChmodSymlink::Reject)? else {
+        return Err(PlatformError::message(format!(
+            "refusing to chmod symlink {}",
+            path.display()
+        )));
+    };
+    fchmod_open_path(path, &file, 0o755)
 }
 
-pub(crate) fn set_materialized_file_permissions(path: &Path, mode: &str) -> Result<(), String> {
-    let unix_mode = if mode == "100755" { 0o555 } else { 0o444 };
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
-    if metadata.file_type().is_symlink() {
+pub(crate) fn set_materialized_file_permissions(path: &Path, mode: &str) -> PlatformResult<()> {
+    let Some(file) = open_file_for_chmod(path, ChmodSymlink::Ignore)? else {
         return Ok(());
-    }
-    if !metadata.file_type().is_file() {
-        return Err(format!("refusing to chmod non-file {}", path.display()));
-    }
-    let mut permissions = metadata.permissions();
-    permissions.set_mode(unix_mode);
-    fs::set_permissions(path, permissions)
-        .map_err(|err| format!("failed to chmod {}: {}", path.display(), err))
+    };
+    let unix_mode = match mode {
+        "100644" => 0o444,
+        "100755" => 0o555,
+        _ => {
+            return Err(PlatformError::message(format!(
+                "unsupported materialized file mode {} for {}",
+                mode,
+                path.display()
+            )));
+        }
+    };
+    fchmod_open_path(path, &file, unix_mode)
 }
 
-pub(crate) fn set_materialized_dir_permissions(path: &Path) -> Result<(), String> {
+pub(crate) fn set_materialized_dir_permissions(path: &Path) -> PlatformResult<()> {
     set_directory_permissions(path, 0o555)
 }
 
-pub(crate) fn set_private_dir_permissions(path: &Path) -> Result<(), String> {
+pub(crate) fn set_private_dir_permissions(path: &Path) -> PlatformResult<()> {
     set_directory_permissions(path, 0o700)
 }
 
-pub(crate) fn set_private_file_permissions(path: &Path) -> Result<(), String> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
-    if metadata.file_type().is_symlink() {
+pub(crate) fn set_private_file_permissions(path: &Path) -> PlatformResult<()> {
+    let Some(file) = open_file_for_chmod(path, ChmodSymlink::Ignore)? else {
         return Ok(());
-    }
-    if !metadata.file_type().is_file() {
-        return Err(format!("refusing to chmod non-file {}", path.display()));
-    }
-    let mut permissions = metadata.permissions();
-    permissions.set_mode(0o600);
-    fs::set_permissions(path, permissions)
-        .map_err(|err| format!("failed to chmod {}: {}", path.display(), err))
+    };
+    fchmod_open_path(path, &file, 0o600)
 }
 
-pub(crate) type SecretDirMode = fs::Permissions;
-
-pub(crate) fn secret_dir_mode(path: &Path) -> Result<SecretDirMode, String> {
-    let metadata = fs::metadata(path)
-        .map_err(|err| format!("failed to stat secret dir {}: {}", path.display(), err))?;
-    if !metadata.file_type().is_dir() {
-        return Err(format!("secret dir {} is not a directory", path.display()));
-    }
-    Ok(metadata.permissions())
+#[derive(Clone)]
+pub(crate) struct SecretDirMode {
+    permissions: fs::Permissions,
+    directory: Arc<fs::File>,
 }
 
-pub(crate) fn chmod_secret_dir_no_access(path: &Path) -> Result<(), String> {
-    let mut permissions = secret_dir_mode(path)?;
-    permissions.set_mode(0o000);
-    fs::set_permissions(path, permissions)
-        .map_err(|err| format!("failed to chmod secret dir {}: {}", path.display(), err))
-}
-
-pub(crate) fn restore_secret_dir_mode(path: &Path, mode: &SecretDirMode) -> Result<(), String> {
-    fs::set_permissions(path, mode.clone()).map_err(|err| {
-        format!(
-            "failed to restore secret dir permissions {}: {}",
-            path.display(),
-            err
-        )
+pub(crate) fn secret_dir_mode(path: &Path) -> PlatformResult<SecretDirMode> {
+    let directory = open_directory_for_chmod(path)?;
+    Ok(SecretDirMode {
+        permissions: directory_permissions(path, &directory)?,
+        directory: Arc::new(directory),
     })
 }
 
-fn set_directory_permissions(path: &Path, mode: u32) -> Result<(), String> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
+pub(crate) fn chmod_secret_dir_no_access(path: &Path) -> PlatformResult<()> {
+    set_directory_permissions(path, 0o000)
+}
+
+pub(crate) fn restore_secret_dir_mode(path: &Path, mode: &SecretDirMode) -> PlatformResult<()> {
+    fchmod_open_path(path, &mode.directory, mode.permissions.mode())
+}
+
+fn set_directory_permissions(path: &Path, mode: u32) -> PlatformResult<()> {
+    let directory = open_directory_for_chmod(path)?;
+    fchmod_open_path(path, &directory, mode)
+}
+
+enum ChmodSymlink {
+    Ignore,
+    Reject,
+}
+
+fn open_source_directory_for_move(path: &Path) -> PlatformResult<Option<fs::File>> {
+    match open_directory_no_follow(path) {
+        Ok(directory) => Ok(Some(directory)),
+        Err(err) if path_error_is_not_directory_or_is_symlink(&err) => Ok(None),
+        Err(err) => Err(PlatformError::io(
+            format!("failed to open directory {}", path.display()),
+            err,
+        )),
+    }
+}
+
+fn open_directory_for_chmod(path: &Path) -> PlatformResult<fs::File> {
+    let directory = open_directory_no_follow(path).map_err(|err| {
+        if path_error_is_symlink(&err) {
+            PlatformError::message(format!("refusing to chmod symlink {}", path.display()))
+        } else {
+            PlatformError::io(format!("failed to open directory {}", path.display()), err)
+        }
+    })?;
+    let metadata = directory.metadata().map_err(|err| {
+        PlatformError::io(format!("failed to inspect opened {}", path.display()), err)
+    })?;
     if !metadata.file_type().is_dir() {
-        return Err(format!(
+        return Err(PlatformError::message(format!(
             "refusing to chmod non-directory {}",
             path.display()
-        ));
+        )));
     }
-    let mut permissions = metadata.permissions();
-    permissions.set_mode(mode);
-    fs::set_permissions(path, permissions)
-        .map_err(|err| format!("failed to chmod {}: {}", path.display(), err))
+    Ok(directory)
 }
 
-pub(crate) fn create_materialized_symlink(target: &[u8], link: &Path) -> Result<(), String> {
+fn open_file_for_chmod(path: &Path, symlink: ChmodSymlink) -> PlatformResult<Option<fs::File>> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true).custom_flags(libc::O_NOFOLLOW);
+    let file = match options.open(path) {
+        Ok(file) => file,
+        Err(err) if path_error_is_symlink(&err) && matches!(symlink, ChmodSymlink::Ignore) => {
+            return Ok(None);
+        }
+        Err(err) if path_error_is_symlink(&err) => {
+            return Err(PlatformError::message(format!(
+                "refusing to chmod symlink {}",
+                path.display()
+            )));
+        }
+        Err(err) => {
+            return Err(PlatformError::io(
+                format!("failed to open {}", path.display()),
+                err,
+            ));
+        }
+    };
+    let metadata = file.metadata().map_err(|err| {
+        PlatformError::io(format!("failed to inspect opened {}", path.display()), err)
+    })?;
+    if !metadata.file_type().is_file() {
+        return Err(PlatformError::message(format!(
+            "refusing to chmod non-file {}",
+            path.display()
+        )));
+    }
+    Ok(Some(file))
+}
+
+fn open_directory_no_follow(path: &Path) -> io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY);
+    options.open(path)
+}
+
+fn directory_permissions(path: &Path, directory: &fs::File) -> PlatformResult<fs::Permissions> {
+    directory
+        .metadata()
+        .map(|metadata| metadata.permissions())
+        .map_err(|err| {
+            PlatformError::io(format!("failed to inspect opened {}", path.display()), err)
+        })
+}
+
+fn fchmod_open_path(path: &Path, file: &fs::File, mode: u32) -> PlatformResult<()> {
+    let result = unsafe { libc::fchmod(file.as_raw_fd(), mode as libc::mode_t) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(PlatformError::io(
+            format!("failed to chmod {}", path.display()),
+            io::Error::last_os_error(),
+        ))
+    }
+}
+
+fn path_error_is_not_directory_or_is_symlink(err: &io::Error) -> bool {
+    matches!(
+        err.raw_os_error(),
+        Some(code) if code == libc::ENOTDIR || code == libc::ELOOP
+    )
+}
+
+fn path_error_is_symlink(err: &io::Error) -> bool {
+    err.raw_os_error() == Some(libc::ELOOP)
+}
+
+pub(crate) fn create_materialized_symlink(target: &[u8], link: &Path) -> PlatformResult<()> {
     let target = std::ffi::OsStr::from_bytes(target);
     symlink(target, link).map_err(|err| {
-        format!(
-            "failed to symlink evaluator file {}: {}",
-            link.display(),
-            err
+        PlatformError::io(
+            format!("failed to symlink evaluator file {}", link.display()),
+            err,
         )
     })
 }
 
-pub(crate) fn hardlink_file_or_copy_symlink(source: &Path, target: &Path) -> Result<(), String> {
+pub(crate) fn hardlink_file_or_copy_symlink(source: &Path, target: &Path) -> PlatformResult<()> {
     let metadata = fs::symlink_metadata(source).map_err(|err| {
-        format!(
-            "failed to inspect evaluator file {}: {}",
-            source.display(),
-            err
+        PlatformError::io(
+            format!("failed to inspect evaluator file {}", source.display()),
+            err,
         )
     })?;
     if metadata.file_type().is_symlink() {
-        let link_target = fs::read_link(source)
-            .map_err(|err| format!("failed to read symlink {}: {}", source.display(), err))?;
+        let link_target = fs::read_link(source).map_err(|err| {
+            PlatformError::io(format!("failed to read symlink {}", source.display()), err)
+        })?;
         symlink(&link_target, target).map_err(|err| {
-            format!(
-                "failed to copy evaluator symlink {} to {}: {}",
-                source.display(),
-                target.display(),
-                err
+            PlatformError::io(
+                format!(
+                    "failed to copy evaluator symlink {} to {}",
+                    source.display(),
+                    target.display()
+                ),
+                err,
             )
         })
     } else {
         fs::hard_link(source, target).map_err(|err| {
-            format!(
-                "failed to hardlink evaluator scope file {} to {}: {}",
-                source.display(),
-                target.display(),
-                err
+            PlatformError::io(
+                format!(
+                    "failed to hardlink evaluator scope file {} to {}",
+                    source.display(),
+                    target.display()
+                ),
+                err,
             )
         })
     }
@@ -322,12 +590,12 @@ fn private_dir_builder(recursive: bool) -> fs::DirBuilder {
 
 pub(crate) fn open_file_for_append_without_following_symlink(
     path: &Path,
-) -> Result<fs::File, String> {
+) -> PlatformResult<fs::File> {
     fs::OpenOptions::new()
         .append(true)
         .custom_flags(libc::O_NOFOLLOW)
         .open(path)
-        .map_err(|err| format!("failed to open {}: {}", path.display(), err))
+        .map_err(|err| PlatformError::io(format!("failed to open {}", path.display()), err))
 }
 
 pub(crate) fn add_memory_backed_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
@@ -415,19 +683,19 @@ fn octal_escape_byte(digits: &[u8]) -> Option<u8> {
     u8::try_from(value).ok()
 }
 
-pub(crate) fn path_from_git_bytes(bytes: Vec<u8>) -> Result<PathBuf, String> {
-    Ok(PathBuf::from(OsString::from_vec(bytes)))
+pub(crate) fn path_from_git_bytes(bytes: Vec<u8>) -> PathBuf {
+    PathBuf::from(OsString::from_vec(bytes))
 }
 
-pub(crate) fn git_path_bytes(path: &Path) -> Result<Vec<u8>, String> {
-    Ok(path.as_os_str().as_bytes().to_vec())
+pub(crate) fn git_path_bytes(path: &Path) -> Vec<u8> {
+    path.as_os_str().as_bytes().to_vec()
 }
 
-pub(crate) fn os_string_from_bytes(bytes: Vec<u8>) -> Result<OsString, String> {
-    Ok(OsString::from_vec(bytes))
+pub(crate) fn os_string_from_bytes(bytes: Vec<u8>) -> OsString {
+    OsString::from_vec(bytes)
 }
 
 #[cfg(test)]
-pub(crate) fn git_path_from_raw_bytes(path: &[u8]) -> Result<OsString, String> {
-    Ok(std::ffi::OsStr::from_bytes(path).to_os_string())
+pub(crate) fn git_path_from_raw_bytes(path: &[u8]) -> OsString {
+    std::ffi::OsStr::from_bytes(path).to_os_string()
 }

@@ -11,6 +11,9 @@ use std::slice;
 
 #[cfg(windows)]
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::os::windows::fs::OpenOptionsExt;
+
+const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 
 pub(crate) fn install_check_signal_handlers() -> Result<(), String> {
     Ok(())
@@ -169,10 +172,31 @@ pub(crate) fn create_private_dir_all(path: &Path) -> std::io::Result<()> {
 pub(crate) fn open_file_for_append_without_following_symlink(
     path: &Path,
 ) -> Result<fs::File, String> {
-    fs::OpenOptions::new()
+    reject_append_symlink(path)?;
+    let file = fs::OpenOptions::new()
         .append(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)
-        .map_err(|err| format!("failed to open {}: {}", path.display(), err))
+        .map_err(|err| format!("failed to open {}: {}", path.display(), err))?;
+    let metadata = file
+        .metadata()
+        .map_err(|err| format!("failed to inspect opened {}: {}", path.display(), err))?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!("refusing to open symlink {}", path.display()));
+    }
+    if !metadata.file_type().is_file() {
+        return Err(format!("refusing to open non-file {}", path.display()));
+    }
+    Ok(file)
+}
+
+fn reject_append_symlink(path: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!("refusing to open symlink {}", path.display()));
+    }
+    Ok(())
 }
 
 pub(crate) fn add_memory_backed_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
@@ -202,11 +226,50 @@ pub(crate) fn path_from_git_bytes(bytes: Vec<u8>) -> Result<PathBuf, String> {
 }
 
 pub(crate) fn git_path_bytes(path: &Path) -> Result<Vec<u8>, String> {
-    Ok(path
-        .to_str()
-        .ok_or_else(|| format!("git path must be valid UTF-8: {}", path.display()))?
-        .as_bytes()
-        .to_vec())
+    let mut bytes = Vec::new();
+    let units: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let mut index = 0;
+    while index < units.len() {
+        let unit = units[index];
+        if unit == 0 {
+            return Err(format!("git path must not contain NUL: {}", path.display()));
+        } else if is_windows_separator(unit) {
+            bytes.push(b'/');
+            index += 1;
+        } else if let Some(byte) = surrogate_escaped_byte(unit) {
+            if byte == 0 {
+                return Err(format!("git path must not contain NUL: {}", path.display()));
+            }
+            bytes.push(byte);
+            index += 1;
+        } else if is_high_surrogate(unit) {
+            let Some(&low) = units.get(index + 1) else {
+                return Err(format!(
+                    "git path contains unpaired surrogate: {}",
+                    path.display()
+                ));
+            };
+            bytes.extend(
+                utf16_surrogate_pair_to_char(unit, low, path)?
+                    .encode_utf8(&mut [0; 4])
+                    .as_bytes(),
+            );
+            index += 2;
+        } else if is_low_surrogate(unit) {
+            return Err(format!(
+                "git path contains unpaired surrogate: {}",
+                path.display()
+            ));
+        } else {
+            bytes.extend(
+                utf16_unit_to_char(unit, path)?
+                    .encode_utf8(&mut [0; 4])
+                    .as_bytes(),
+            );
+            index += 1;
+        }
+    }
+    Ok(bytes)
 }
 
 pub(crate) fn os_string_from_bytes(bytes: Vec<u8>) -> Result<OsString, String> {
@@ -551,4 +614,65 @@ fn surrogate_escaped_git_path(bytes: &[u8]) -> Vec<u16> {
             byte => 0xDC00 | u16::from(byte),
         })
         .collect()
+}
+
+fn is_windows_separator(unit: u16) -> bool {
+    unit == b'/' as u16 || unit == b'\\' as u16
+}
+
+fn surrogate_escaped_byte(unit: u16) -> Option<u8> {
+    (0xDC00..=0xDCFF)
+        .contains(&unit)
+        .then_some((unit & 0x00FF) as u8)
+}
+
+fn is_high_surrogate(unit: u16) -> bool {
+    (0xD800..=0xDBFF).contains(&unit)
+}
+
+fn is_low_surrogate(unit: u16) -> bool {
+    (0xDC00..=0xDFFF).contains(&unit)
+}
+
+fn utf16_surrogate_pair_to_char(high: u16, low: u16, path: &Path) -> Result<char, String> {
+    if !is_low_surrogate(low) {
+        return Err(format!(
+            "git path contains unpaired surrogate: {}",
+            path.display()
+        ));
+    }
+    let codepoint = 0x1_0000 + ((((high - 0xD800) as u32) << 10) | ((low - 0xDC00) as u32));
+    char::from_u32(codepoint).ok_or_else(|| {
+        format!(
+            "git path contains invalid UTF-16 scalar: {}",
+            path.display()
+        )
+    })
+}
+
+fn utf16_unit_to_char(unit: u16, path: &Path) -> Result<char, String> {
+    char::from_u32(unit as u32).ok_or_else(|| {
+        format!(
+            "git path contains invalid UTF-16 scalar: {}",
+            path.display()
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn git_path_bytes_round_trips_surrogate_escaped_git_bytes() {
+        let original = b"dir/\xFF/name with spaces/\x80.bin".to_vec();
+        let path = path_from_git_bytes(original.clone()).unwrap();
+        assert_eq!(git_path_bytes(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn git_path_bytes_uses_git_separators() {
+        let path = PathBuf::from(r"dir\file.txt");
+        assert_eq!(git_path_bytes(&path).unwrap(), b"dir/file.txt");
+    }
 }
