@@ -2,14 +2,13 @@ use crate::fs_util::{
     crossed_size_compaction_bucket, ensure_dir_without_symlinks, for_each_nonempty_line,
     reject_symlink, replace_file_with_temp,
 };
-use crate::notes::cli::INDEX_LOCK_STALE_AFTER_SECS;
 use crate::notes::header::validate_note_key;
+use crate::notes::lock::{create_lock_file, remove_stale_lock, stale_lock_age};
 use crate::project_types::Config;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process;
-use std::time::Duration;
 
 pub(crate) const INDEX_COMPACT_MIN_BYTES: u64 = 64 * 1024;
 
@@ -39,10 +38,6 @@ impl Drop for IndexLock {
     }
 }
 
-pub(crate) fn stale_index_lock_age(age: Duration) -> bool {
-    age >= Duration::from_secs(INDEX_LOCK_STALE_AFTER_SECS)
-}
-
 pub(crate) fn index_lock_is_stale(path: &Path) -> Result<bool, String> {
     reject_symlink(path)?;
     let metadata = fs::metadata(path)
@@ -53,27 +48,11 @@ pub(crate) fn index_lock_is_stale(path: &Path) -> Result<bool, String> {
     let age = modified
         .elapsed()
         .map_err(|err| format!("failed to inspect age for {}: {}", path.display(), err))?;
-    Ok(stale_index_lock_age(age))
+    Ok(stale_lock_age(age))
 }
 
 pub(crate) fn create_index_lock(path: &Path) -> Result<(), io::Error> {
-    fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map(|_| ())
-}
-
-pub(crate) fn remove_stale_index_lock(path: &Path) -> Result<(), String> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(format!(
-            "failed to remove stale lock {}: {}",
-            path.display(),
-            err
-        )),
-    }
+    create_lock_file(path).map(|_| ())
 }
 
 pub(crate) fn lock_index(config: &Config) -> Result<IndexLock, String> {
@@ -88,7 +67,7 @@ pub(crate) fn lock_index(config: &Config) -> Result<IndexLock, String> {
                     path.display()
                 ));
             }
-            remove_stale_index_lock(&path)?;
+            remove_stale_lock(&path)?;
             create_index_lock(&path)
                 .map_err(|err| format!("failed to lock {}: {}", path.display(), err))?;
             Ok(IndexLock { path })

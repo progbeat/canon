@@ -201,6 +201,8 @@ mod logs {
     pub(crate) mod rotation;
 }
 mod notes {
+    #[path = "lock.rs"]
+    pub(crate) mod lock;
     #[path = "store.rs"]
     pub(crate) mod store;
     pub(crate) use store::*;
