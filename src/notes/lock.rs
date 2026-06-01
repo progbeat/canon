@@ -1,11 +1,11 @@
-use crate::notes::cli::INDEX_LOCK_STALE_AFTER_SECS;
+use crate::notes::cli::LOCK_STALE_AFTER_SECS;
 use std::fs;
 use std::io;
 use std::path::Path;
 use std::time::Duration;
 
 pub(crate) fn stale_lock_age(age: Duration) -> bool {
-    age >= Duration::from_secs(INDEX_LOCK_STALE_AFTER_SECS)
+    age >= Duration::from_secs(LOCK_STALE_AFTER_SECS)
 }
 
 pub(crate) fn create_lock_file(path: &Path) -> Result<fs::File, io::Error> {
