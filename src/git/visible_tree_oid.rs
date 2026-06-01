@@ -99,6 +99,13 @@ impl VisibleTreeOidCache {
         }
     }
 
+    pub(crate) fn repository_native_object_oid_hex_len(
+        &mut self,
+        root: &Path,
+    ) -> Result<usize, String> {
+        Ok(git_object_oid_hex_len(self.object_hash_algorithm(root)?))
+    }
+
     fn staged_visible_tree_oid_option(
         &mut self,
         root: &Path,
@@ -344,16 +351,6 @@ pub(crate) fn git_object_oid_has_known_shape(object_id: &str) -> bool {
     [GitObjectHashAlgorithm::Sha1, GitObjectHashAlgorithm::Sha256]
         .into_iter()
         .any(|algorithm| git_object_oid_matches_algorithm(object_id, algorithm))
-}
-
-pub(crate) fn repository_native_object_oid_is_valid(
-    root: &Path,
-    object_id: &str,
-) -> Result<bool, String> {
-    Ok(git_object_oid_has_hex_len(
-        object_id,
-        repository_native_object_oid_hex_len(root)?,
-    ))
 }
 
 pub(crate) fn repository_native_object_oid_hex_len(root: &Path) -> Result<usize, String> {

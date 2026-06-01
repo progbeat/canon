@@ -7,8 +7,7 @@ use crate::git::resolve_git_path;
 use crate::git::tree_source::TreeSource;
 use crate::git::visible_tree_oid::{
     git_object_oid_has_hex_len, git_object_oid_has_known_shape,
-    repository_native_object_oid_hex_len, repository_native_object_oid_is_valid,
-    VisibleTreeOidCache,
+    repository_native_object_oid_hex_len, VisibleTreeOidCache,
 };
 use crate::logs::error::{external_log_error, DiagnosticLogError, DiagnosticLogResult};
 use crate::path_io_error::PathIoError;
@@ -217,8 +216,8 @@ fn validate_history_answer_response_schema(record: &CheckRecord) -> Result<(), S
 }
 
 fn validate_appendable_answer_history_record(
-    root: &Path,
     record: &CheckRecord,
+    native_oid_hex_len: usize,
 ) -> Result<(), String> {
     // Append-time validation checks that a runtime-produced record is a valid
     // answer-history row and that its `visibleTreeOid` uses the repository's
@@ -227,7 +226,7 @@ fn validate_appendable_answer_history_record(
     // qScope may describe an older Git state, and cache reuse is the layer that
     // compares stored OIDs with freshly computed current OIDs.
     validate_schema_valid_answer_history_record(record)?;
-    if !repository_native_object_oid_is_valid(root, &record.visible_tree_oid)? {
+    if !git_object_oid_has_hex_len(&record.visible_tree_oid, native_oid_hex_len) {
         return Err(
             "visibleTreeOid must match this repository's Git object hash algorithm".to_string(),
         );
@@ -239,9 +238,11 @@ fn validate_appendable_answer_history_record(
 pub(crate) struct HistoryCache {
     pub(crate) cache_dirs: BTreeMap<PathBuf, PathBuf>,
     pub(crate) paths: BTreeMap<(PathBuf, String), PathBuf>,
-    pub(crate) records: BTreeMap<PathBuf, Vec<CheckRecord>>,
+    pub(crate) records: BTreeMap<HistoryRecordsKey, Vec<CheckRecord>>,
     pub(crate) latest_non_pass: BTreeMap<PathBuf, Option<u64>>,
 }
+
+type HistoryRecordsKey = (PathBuf, String);
 
 impl HistoryCache {
     pub(crate) fn new() -> HistoryCache {
@@ -254,7 +255,8 @@ impl HistoryCache {
         expectation: &SelectedExpectation,
     ) -> Result<Vec<CheckRecord>, String> {
         let path = self.path(root, expectation)?;
-        if let Some(records) = self.records.get(&path) {
+        let records_key = history_records_key(&path, &expectation.a);
+        if let Some(records) = self.records.get(&records_key) {
             return Ok(records.clone());
         }
         // Runtime cache reads know the repository root, so this is where
@@ -262,8 +264,16 @@ impl HistoryCache {
         // object hash algorithm. The lower-level line parser only validates the
         // portable JSONL shape used by compaction and parser tests.
         let records = read_repository_history_records_from_path(root, &path, &expectation.a)?;
-        self.records.insert(path, records.clone());
+        self.records.insert(records_key, records.clone());
         Ok(records)
+    }
+
+    fn record_keys_for_path(&self, path: &Path) -> Vec<HistoryRecordsKey> {
+        self.records
+            .keys()
+            .filter(|(cached_path, _)| cached_path == path)
+            .cloned()
+            .collect()
     }
 
     pub(crate) fn path(
@@ -341,6 +351,7 @@ pub(crate) fn append_history_record(
     append_history_record_with_cache(root, expectation, record, &mut cache)
 }
 
+#[cfg(test)]
 pub(crate) fn append_history_record_with_cache(
     root: &Path,
     expectation: &SelectedExpectation,
@@ -350,8 +361,15 @@ pub(crate) fn append_history_record_with_cache(
     // The check pipeline exposes human-readable String errors, but this module
     // keeps I/O failures structured until the boundary so action, path, kind,
     // and source error stay tied together while the append is assembled.
-    append_history_record_with_cache_inner(root, expectation, record, history_cache)
-        .map_err(|err| err.to_string())
+    let native_oid_hex_len = repository_native_object_oid_hex_len(root)?;
+    append_history_record_with_cache_inner(
+        root,
+        expectation,
+        record,
+        history_cache,
+        native_oid_hex_len,
+    )
+    .map_err(|err| err.to_string())
 }
 
 pub(crate) fn append_current_history_record_with_cache(
@@ -363,7 +381,15 @@ pub(crate) fn append_current_history_record_with_cache(
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<(), String> {
     validate_current_visible_tree_oid(root, source, expectation, record, visible_tree_oid_cache)?;
-    append_history_record_with_cache(root, expectation, record, history_cache)
+    let native_oid_hex_len = visible_tree_oid_cache.repository_native_object_oid_hex_len(root)?;
+    append_history_record_with_cache_inner(
+        root,
+        expectation,
+        record,
+        history_cache,
+        native_oid_hex_len,
+    )
+    .map_err(|err| err.to_string())
 }
 
 fn validate_current_visible_tree_oid(
@@ -388,6 +414,7 @@ fn append_history_record_with_cache_inner(
     expectation: &SelectedExpectation,
     record: &CheckRecord,
     history_cache: &mut HistoryCache,
+    native_oid_hex_len: usize,
 ) -> Result<(), HistoryAppendError> {
     // Cache spec answer history is JSON Lines containing only schema-valid
     // evaluator responses with `answer`. `render_answer_history_record` writes
@@ -395,7 +422,7 @@ fn append_history_record_with_cache_inner(
     // qScope, visibleTreeOid. `should_compact_history` implements the
     // approximate 1-in-16 trigger, and `compact_history` retains the latest 8
     // valid JSON object records.
-    validate_appendable_answer_history_record(root, record).map_err(|message| {
+    validate_appendable_answer_history_record(record, native_oid_hex_len).map_err(|message| {
         HistoryAppendError::Message(format!(
             "answer history records must be schema-valid responses with answer: {message}"
         ))
@@ -410,27 +437,44 @@ fn append_history_record_with_cache_inner(
     write_history_line(&mut file, &path, &line)?;
     flush_history_file(&mut file, &path)?;
     drop(file);
-    let had_cached_records = history_cache.records.contains_key(&path);
+    let cached_record_keys = history_cache.record_keys_for_path(&path);
     let should_compact = should_compact_history();
     // Once the line is flushed, the append has succeeded. Compaction and cache
     // refresh are maintenance steps, so failures there must not invite callers
     // to retry the append and duplicate the durable history record.
     let compacted = should_compact && compact_repository_history_locked(root, &path).is_ok();
-    if had_cached_records {
+    if !cached_record_keys.is_empty() {
         if compacted {
-            match read_repository_history_records_from_path(root, &path, &expectation.a) {
-                Ok(records) => {
-                    history_cache.records.insert(path, records);
-                }
-                Err(_) => {
-                    history_cache.records.remove(&path);
+            for records_key in cached_record_keys {
+                match read_repository_history_records_from_path(root, &path, &records_key.1) {
+                    Ok(records) => {
+                        history_cache.records.insert(records_key, records);
+                    }
+                    Err(_) => {
+                        history_cache.records.remove(&records_key);
+                    }
                 }
             }
-        } else if let Some(records) = history_cache.records.get_mut(&path) {
-            records.push(record.clone());
+        } else {
+            for records_key in cached_record_keys {
+                if let Some(records) = history_cache.records.get_mut(&records_key) {
+                    records.push(record_for_expected_answer(record, &records_key.1));
+                }
+            }
         }
     }
     Ok(())
+}
+
+fn history_records_key(path: &Path, expected_answer: &str) -> HistoryRecordsKey {
+    (path.to_path_buf(), expected_answer.to_string())
+}
+
+fn record_for_expected_answer(record: &CheckRecord, expected_answer: &str) -> CheckRecord {
+    let mut record = record.clone();
+    record.result = CheckResult::from_expected_answer(expected_answer, &record.observed);
+    record.expected = Some(expected_answer.to_string());
+    record
 }
 
 fn open_history_append_file(path: &Path) -> Result<fs::File, PathIoError> {
