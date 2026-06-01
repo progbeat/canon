@@ -16,6 +16,10 @@ presets:
     <<: *default_preset
     models: ["gpt-5.5"]
     thinking: xhigh
+  spark:
+    <<: *default_preset
+    models: ["gpt-5.3-codex-spark"]
+    thinking: high
   docker:
     <<: *default_preset
     ignore:  # overrides default_preset.ignore
