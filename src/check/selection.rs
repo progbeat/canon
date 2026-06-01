@@ -2,7 +2,7 @@ use crate::check::order_state::latest_recorded_non_pass_timestamp_with_cache;
 use crate::check::types::{
     CheckOptions, CheckResult, Cooldown, ObservedAnswerState, RawCheckOptions, SelectedExpectation,
 };
-use crate::config_types::CheckConfig;
+use crate::config_types::{CheckConfig, CooldownConfig};
 use crate::hash::expectation_id;
 use crate::history::HistoryCache;
 use crate::time::parse_record_timestamp;
@@ -245,7 +245,7 @@ pub(crate) fn selected_expectation_at(
     let cooldown = if include_cooldown {
         expectation
             .cooldown
-            .as_deref()
+            .as_ref()
             .map(parse_cooldown)
             .transpose()?
     } else {
@@ -383,7 +383,35 @@ pub(crate) fn latest_non_pass_timestamp_with_cache(
     Ok(latest.unwrap_or(UNIX_EPOCH_TIMESTAMP))
 }
 
-pub(crate) fn parse_cooldown(value: &str) -> Result<Cooldown, String> {
+pub(crate) fn parse_cooldown(value: &CooldownConfig) -> Result<Cooldown, String> {
+    match value {
+        CooldownConfig::Compact(value) => Ok(Cooldown {
+            pass_seconds: Some(parse_cooldown_duration(value)?),
+            fail_seconds: None,
+        }),
+        CooldownConfig::Mapping(mapping) => {
+            if mapping.pass.is_none() && mapping.fail.is_none() {
+                return Err("mapping must contain pass or fail".to_string());
+            }
+            Ok(Cooldown {
+                pass_seconds: mapping
+                    .pass
+                    .as_deref()
+                    .map(parse_cooldown_duration)
+                    .transpose()
+                    .map_err(|err| format!("pass: {}", err))?,
+                fail_seconds: mapping
+                    .fail
+                    .as_deref()
+                    .map(parse_cooldown_duration)
+                    .transpose()
+                    .map_err(|err| format!("fail: {}", err))?,
+            })
+        }
+    }
+}
+
+fn parse_cooldown_duration(value: &str) -> Result<u64, String> {
     if value.trim() != value {
         return Err("must use compact duration syntax without surrounding whitespace".to_string());
     }
@@ -414,5 +442,5 @@ pub(crate) fn parse_cooldown(value: &str) -> Result<Cooldown, String> {
     let seconds = amount
         .checked_mul(multiplier)
         .ok_or_else(|| "duration is too large".to_string())?;
-    Ok(Cooldown { seconds })
+    Ok(seconds)
 }

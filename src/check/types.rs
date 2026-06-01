@@ -43,7 +43,31 @@ pub(crate) struct SelectedExpectation {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Cooldown {
-    pub(crate) seconds: u64,
+    pub(crate) pass_seconds: Option<u64>,
+    pub(crate) fail_seconds: Option<u64>,
+}
+
+impl Cooldown {
+    pub(crate) fn duration_for(self, result: CheckResult) -> Option<u64> {
+        match result {
+            CheckResult::Pass => self.pass_seconds,
+            CheckResult::Fail => self.fail_seconds,
+        }
+    }
+
+    pub(crate) fn cache_key(self) -> String {
+        format!(
+            "pass={};fail={}",
+            cooldown_key_part(self.pass_seconds),
+            cooldown_key_part(self.fail_seconds)
+        )
+    }
+}
+
+fn cooldown_key_part(seconds: Option<u64>) -> String {
+    seconds
+        .map(|seconds| seconds.to_string())
+        .unwrap_or_else(|| "none".to_string())
 }
 
 #[derive(Debug, Clone)]
@@ -139,7 +163,7 @@ impl EvaluatorResponseJson {
             );
         }
         if let Some(answer) = self.answer.as_deref() {
-            if answer.is_empty() || contains_schema_line_break(answer) {
+            if answer.is_empty() || contains_schema_single_line_violation(answer) {
                 return Err("answer must be a non-empty single-line string".to_string());
             }
         }
@@ -151,17 +175,16 @@ impl EvaluatorResponseJson {
                 return Err(format!("unsupported evaluator error: {}", error));
             }
         }
-        // This mirrors the Interrogation Policy JSON Schema exactly:
         // `qScopeSuggestion` is a required non-empty array of non-empty
         // single-line strings at response-parse time. Repository-relative scope
-        // syntax and semantic sufficiency are intentionally not JSON Schema
-        // constraints; later narrowing policy sanitizes the claim and accepts it
-        // only after an independent answer-producing turn.
+        // syntax and semantic sufficiency are intentionally later narrowing
+        // policy checks, which accept a claim only after an independent
+        // answer-producing turn.
         if self.q_scope_suggestion.is_empty() {
             return Err("qScopeSuggestion must contain at least one path".to_string());
         }
         for item in &self.q_scope_suggestion {
-            if item.is_empty() || contains_schema_line_break(item) {
+            if item.is_empty() || contains_schema_single_line_violation(item) {
                 return Err(
                     "qScopeSuggestion items must be non-empty single-line strings".to_string(),
                 );
@@ -171,11 +194,10 @@ impl EvaluatorResponseJson {
     }
 }
 
-fn contains_schema_line_break(value: &str) -> bool {
+fn contains_schema_single_line_violation(value: &str) -> bool {
     value
-        .as_bytes()
-        .iter()
-        .any(|byte| matches!(byte, b'\r' | b'\n'))
+        .chars()
+        .any(|char| is_line_break_char(char) || char.is_control())
 }
 
 fn deserialize_optional_answer<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>

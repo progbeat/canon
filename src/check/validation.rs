@@ -48,7 +48,7 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
                 number
             ));
         }
-        if let Some(cooldown) = expectation.cooldown.as_deref() {
+        if let Some(cooldown) = expectation.cooldown.as_ref() {
             parse_cooldown(cooldown)
                 .map_err(|err| format!("expectation {} cooldown: {}", number, err))?;
         }

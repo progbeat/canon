@@ -25,7 +25,7 @@ pub(crate) fn history_cache_key(agent: &AgentConfig, expectation: &SelectedExpec
     push_history_cache_key_part(&mut input, "thinking", &expectation.agent.thinking);
     let cooldown = expectation
         .cooldown
-        .map(|cooldown| cooldown.seconds.to_string())
+        .map(|cooldown| cooldown.cache_key())
         .unwrap_or_else(|| "none".to_string());
     push_history_cache_key_part(&mut input, "cooldown", &cooldown);
     hash_120(&input)

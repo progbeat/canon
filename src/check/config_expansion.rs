@@ -1,7 +1,7 @@
 use crate::check::generator_paths::expand_generator_paths;
 use crate::check::validation::normalize_agent_ignore_pattern_for_config;
 use crate::config_types::{
-    AgentConfig, CheckConfig, Expectation, RawCheckConfig, RawExpectationItem,
+    AgentConfig, CheckConfig, CooldownConfig, Expectation, RawCheckConfig, RawExpectationItem,
     RawExpectationSettings, RawGeneratorExpectation, RawIncludeExpectation, RawPresetConfig,
 };
 use crate::git::TreeSource;
@@ -346,7 +346,7 @@ impl RawExpectationExpansion<'_> {
 fn inherit_include_fields(
     items: &mut [RawExpectationItem],
     inherited_settings: &RawExpectationSettings,
-    inherited_cooldown: &Option<String>,
+    inherited_cooldown: &Option<CooldownConfig>,
 ) {
     for item in items {
         match item {
@@ -387,7 +387,10 @@ fn inherit_expectation_settings(
     }
 }
 
-fn inherit_expectation_cooldown(cooldown: &mut Option<String>, inherited: &Option<String>) {
+fn inherit_expectation_cooldown(
+    cooldown: &mut Option<CooldownConfig>,
+    inherited: &Option<CooldownConfig>,
+) {
     if cooldown.is_none() {
         *cooldown = inherited.clone();
     }
@@ -446,8 +449,14 @@ expectations:
         .expect("expand config");
 
         assert_eq!(config.expectations.len(), 2);
-        assert_eq!(config.expectations[0].cooldown.as_deref(), Some("7d"));
-        assert_eq!(config.expectations[1].cooldown.as_deref(), Some("1d"));
+        assert_eq!(
+            config.expectations[0].cooldown,
+            Some(CooldownConfig::Compact("7d".to_string()))
+        );
+        assert_eq!(
+            config.expectations[1].cooldown,
+            Some(CooldownConfig::Compact("1d".to_string()))
+        );
         let _ = fs::remove_dir_all(root);
     }
 
