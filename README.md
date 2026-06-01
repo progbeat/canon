@@ -13,36 +13,37 @@ Codex working against `canon` until the repository satisfied its own canon.
 
 ## Install
 
-### Docker (recommended)
+### Docker
 
-Requires Git, Docker, and Codex authentication on the host.
+Requires Git, Docker, and Codex Desktop/CLI.
 
-This is the recommended install path for normal use. `canon` itself was built
-by AI agents and has not been line-reviewed by a human. The Docker wrapper is
-the small human-reviewed trust boundary: it runs the published image in an
-unprivileged container, drops Linux capabilities, disables new privileges, uses
-a read-only container filesystem, keeps Codex credentials read-only on the host,
-and only gives the container the repository access needed for `canon` commands.
+This is the recommended install path for most users. `canon` itself was built
+by AI agents and has not been reviewed line by line by a human. The Docker
+[wrapper](https://github.com/progbeat/canon/tree/master/.canon/docker/scripts/canon) is the small human-reviewed trust boundary: it runs the published
+Docker image in an unprivileged container, drops Linux capabilities, disables
+new privileges, uses a read-only container filesystem, keeps Codex credentials
+read-only on the host, and only gives the container the repository access needed
+for `canon` commands.
 
 Install the Docker [wrapper](https://github.com/progbeat/canon/tree/master/.canon/docker/scripts/canon)
-as the `canon` executable in a directory your shell searches for commands. For
-example, to install it in `~/bin`:
+as the `canon` executable in a directory on your `PATH`. For example, to install
+it in `~/.local/bin`:
 
 ```sh
-mkdir -p "$HOME/bin"
-curl -fsSL https://raw.githubusercontent.com/progbeat/canon/master/.canon/docker/scripts/canon -o "$HOME/bin/canon"
-chmod +x "$HOME/bin/canon"
+mkdir -p "$HOME/.local/bin"
+curl -fsSL https://raw.githubusercontent.com/progbeat/canon/master/.canon/docker/scripts/canon -o "$HOME/.local/bin/canon"
+chmod +x "$HOME/.local/bin/canon"
 ```
 
-If `~/bin` is not already on `PATH`, add it to your shell configuration:
+If `~/.local/bin` is not already on `PATH`, add it to your shell configuration:
 
 ```sh
-export PATH="$HOME/bin:$PATH"
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
-After that, `command -v canon` should print `$HOME/bin/canon`.
+After that, `command -v canon` should print a path under `$HOME/.local/bin`.
 
-### Cargo (development)
+### Cargo
 
 Requires Git, Rust/Cargo, and the Codex CLI.
 
