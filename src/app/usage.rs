@@ -1,6 +1,6 @@
 use crate::app::protocol::{context_compaction_event, token_usage_update};
 use crate::app::server::AppServerRunner;
-use crate::evaluator::types::EvaluatorError;
+use crate::evaluator::EvaluatorError;
 use crate::token_usage_types::{
     ContextCompactionEvent, EvaluatorTurnUsage, TokenUsage, TokenUsageUpdate,
 };

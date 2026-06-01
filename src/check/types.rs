@@ -1,16 +1,19 @@
 use crate::config_types::AgentConfig;
-use crate::history::cache_key::history_cache_key;
+use crate::history::history_cache_key;
 use crate::time::{format_record_timestamp, unix_timestamp};
 use crate::token_usage_types::TokenUsage;
-use crate::{
-    ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION, ERROR_UNPARSABLE, RESULT_FAIL, RESULT_PASS,
-};
 use serde::{de, Deserialize, Serialize};
 use serde_json::Value;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
 // Shared check data types and answer-state classification.
+
+pub(crate) const RESULT_PASS: &str = "pass";
+pub(crate) const RESULT_FAIL: &str = "fail";
+pub(crate) const ERROR_INSUFFICIENT_EVIDENCE: &str = "insufficient-evidence";
+pub(crate) const ERROR_INVALID_QUESTION: &str = "invalid-question";
+pub(crate) const ERROR_UNPARSABLE: &str = "unparsable";
 
 pub(crate) fn contains_line_break(value: &str) -> bool {
     value.chars().any(is_line_break_char)

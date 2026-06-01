@@ -1,13 +1,9 @@
 use crate::check::types::{CheckRecord, ObservedAnswerState, SelectedExpectation};
 use crate::config_types::{AgentConfig, CheckConfig};
-use crate::evaluator::config::app_server_model_key;
-use crate::evaluator::response_cache::EvaluatorResponseParseCache;
-use crate::evaluator::turn::evaluator_models;
-use crate::git::tree_source::TreeSource;
-use crate::git::visible_tree_oid::VisibleTreeOidCache;
+use crate::evaluator::{app_server_model_key, evaluator_models, EvaluatorResponseParseCache};
+use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::hash::full_scope;
-use crate::history::reuse::latest_stored_q_scope_with_cache;
-use crate::history::HistoryCache;
+use crate::history::{latest_stored_q_scope_with_cache, HistoryCache};
 use crate::isolation::{NaiveIsolationGuard, NaiveIsolationPolicy};
 use crate::scope::effective_ignore_patterns;
 use crate::staged::StagedWorktreeView;

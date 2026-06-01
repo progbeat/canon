@@ -1,4 +1,4 @@
-use crate::app::server::LazyAppServerRunner;
+use crate::app::LazyAppServerRunner;
 use crate::check::command_args::parse_check_command_args;
 use crate::check::command_finish::{finish_check_report, CheckReportFinishContext};
 use crate::check::interrogation_state::CheckRuntime;
@@ -13,17 +13,16 @@ use crate::check::reporting::{
 use crate::check::selection::{expectation_identities, resolve_check_options_with_identities};
 use crate::check::types::CheckRunReport;
 use crate::check::validation::check_config_loads_plugins;
-use crate::check::{run_check_with_runner_and_caches, CheckRunCaches};
+use crate::check::{run_check_with_runner_and_caches, CheckRunCaches, CHECK_PATH};
 use crate::cli::CommandError;
 use crate::config_types::CheckConfig;
-use crate::git::tree_source::TreeSource;
-use crate::git::visible_tree_oid::VisibleTreeOidCache;
-use crate::history::cleanup::{active_expectation_ids_from_identities, cleanup_stale_cache_dirs};
+use crate::git::{TreeSource, VisibleTreeOidCache};
+use crate::history::{active_expectation_ids_from_identities, cleanup_stale_cache_dirs};
 use crate::logs::DiagnosticLogWriter;
 use crate::platform::{install_check_signal_handlers, reset_check_interrupted};
 use crate::repo_inspection::RepoInspectionCache;
 use crate::staged::StagedWorktreeView;
-use crate::{CANON_CACHE_DIR_GIT_PATH, CHECK_PATH};
+use crate::state_paths::CANON_CACHE_DIR_GIT_PATH;
 use serde_json::json;
 use std::ffi::OsString;
 use std::io::{self, Write};

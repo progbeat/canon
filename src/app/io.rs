@@ -1,5 +1,5 @@
 use crate::app::server::AppServerRunner;
-use crate::evaluator::types::EvaluatorError;
+use crate::evaluator::EvaluatorError;
 use crate::platform::check_interrupted;
 use serde_json::{json, Value};
 use std::io::Write;

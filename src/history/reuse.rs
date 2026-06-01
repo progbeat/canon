@@ -1,9 +1,8 @@
 // Answer-history lookup for the Cache spec: newest-to-oldest history scanning
 // plus current visibleTreeOid matching.
-use crate::check::types::{CheckRecord, CheckResult, SelectedExpectation};
+use crate::check::{CheckRecord, CheckResult, SelectedExpectation};
 use crate::config_types::AgentConfig;
-use crate::git::tree_source::TreeSource;
-use crate::git::visible_tree_oid::VisibleTreeOidCache;
+use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::history::HistoryCache;
 use crate::scope::sanitize_scope_for_hash;
 use crate::time::parse_record_timestamp;

@@ -11,8 +11,7 @@ use crate::check::reporting::{
 use crate::check::selection::{selected_expectation_at, ExpectationIdentity};
 use crate::check::types::SelectedExpectation;
 use crate::config_types::{CheckConfig, Expectation};
-use crate::git::tree_source::TreeSource;
-use crate::git::visible_tree_oid::VisibleTreeOidCache;
+use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::hash::full_scope;
 use crate::history::HistoryCache;
 use crate::logs::DiagnosticLogWriter;

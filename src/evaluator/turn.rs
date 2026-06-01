@@ -1,5 +1,6 @@
-use crate::check::types::{
+use crate::check::{
     CheckRecord, CheckRecordOutcome, CheckResult, ParsedAnswer, SelectedExpectation,
+    ERROR_UNPARSABLE,
 };
 use crate::config_types::AgentConfig;
 use crate::evaluator::prompt::EVALUATOR_BASE_INSTRUCTIONS;
@@ -7,7 +8,6 @@ use crate::evaluator::response_cache::{response_excerpt, EvaluatorResponseParseC
 use crate::evaluator::types::{EvaluatorError, EvaluatorRunner};
 use crate::logs::DiagnosticLogWriter;
 use crate::token_usage_types::{EvaluatorTurnUsage, TokenUsage};
-use crate::ERROR_UNPARSABLE;
 use serde::Serialize;
 use serde_json::{json, Value};
 

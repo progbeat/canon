@@ -1,7 +1,6 @@
-use crate::evaluator::turn::EvaluatorFailureKind;
-use crate::evaluator::types::EvaluatorError;
+use crate::app::APP_SERVER_TURN_TIMEOUT_SECS;
+use crate::evaluator::{EvaluatorError, EvaluatorFailureKind};
 use crate::token_usage_types::{ContextCompactionEvent, TokenUsage, TokenUsageUpdate};
-use crate::APP_SERVER_TURN_TIMEOUT_SECS;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};

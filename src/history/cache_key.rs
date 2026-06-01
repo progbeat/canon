@@ -1,4 +1,4 @@
-use crate::check::types::SelectedExpectation;
+use crate::check::SelectedExpectation;
 use crate::config_types::AgentConfig;
 use crate::hash::hash_120;
 use crate::scope::effective_ignore_patterns;

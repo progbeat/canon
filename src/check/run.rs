@@ -23,12 +23,11 @@ use crate::check::types::{
 };
 #[cfg(test)]
 use crate::config_types::CheckConfig;
-use crate::evaluator::types::EvaluatorRunner;
-use crate::git::tree_source::TreeSource;
-use crate::git::visible_tree_oid::VisibleTreeOidCache;
-use crate::history::append_current_history_record_with_cache;
-use crate::history::reuse::is_reusable_history_record;
-use crate::history::HistoryCache;
+use crate::evaluator::EvaluatorRunner;
+use crate::git::{TreeSource, VisibleTreeOidCache};
+use crate::history::{
+    append_current_history_record_with_cache, is_reusable_history_record, HistoryCache,
+};
 use crate::logs::{DiagnosticLogWriter, DiagnosticRecordEvent};
 use crate::platform::check_interrupted;
 use crate::scope::{sanitize_scope, scope_is_within};

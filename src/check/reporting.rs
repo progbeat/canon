@@ -1,4 +1,4 @@
-use crate::app::server::LazyAppServerRunner;
+use crate::app::LazyAppServerRunner;
 use crate::check::output::render_token_usage_summary;
 use crate::logs::DiagnosticLogWriter;
 use crate::output::write_stderr_line;

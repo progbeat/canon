@@ -1,7 +1,8 @@
-use crate::check::types::CheckRecord;
+use crate::check::CheckRecord;
 use crate::fs_util::ensure_dir_without_symlinks;
 use crate::logs::config::{
     active_log_file_name, diagnostic_log_files, diagnostic_logs_explicitly_disabled,
+    DiagnosticLogConfig,
 };
 use crate::logs::error::{external_log_error, DiagnosticLogResult};
 use crate::logs::lock::acquire_diagnostic_log_lock;
@@ -12,7 +13,7 @@ use crate::logs::rotation::{
     rotate_diagnostic_logs_with_config,
 };
 use crate::repo_inspection::RepoInspectionCache;
-use crate::{DiagnosticLogConfig, CANON_LOG_DIR_GIT_PATH};
+use crate::state_paths::CANON_LOG_DIR_GIT_PATH;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 

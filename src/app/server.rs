@@ -7,7 +7,7 @@ use std::thread::JoinHandle;
 use serde_json::Value;
 
 use crate::config_types::AgentConfig;
-use crate::evaluator::types::EvaluatorError;
+use crate::evaluator::EvaluatorError;
 use crate::token_usage_types::{
     ContextCompactionEvent, EvaluatorTurnUsage, TokenUsage, TokenUsageUpdate,
 };

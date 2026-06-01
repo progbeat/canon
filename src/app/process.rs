@@ -1,7 +1,6 @@
 use crate::app::server::AppServerRunner;
 use crate::config_types::AgentConfig;
-use crate::evaluator::config::app_server_args_with_no_sandbox;
-use crate::evaluator::types::EvaluatorError;
+use crate::evaluator::{app_server_args_with_no_sandbox, EvaluatorError};
 use crate::fs_util::ensure_dir_without_symlinks;
 use crate::git::resolve_git_path;
 use crate::platform;

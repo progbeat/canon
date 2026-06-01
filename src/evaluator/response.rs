@@ -1,4 +1,4 @@
-use crate::check::types::{EvaluatorResponseJson, ParsedAnswer};
+use crate::check::{EvaluatorResponseJson, ParsedAnswer};
 use crate::config_types::AgentConfig;
 use serde::Deserialize;
 use serde_json::Value;

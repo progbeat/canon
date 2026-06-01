@@ -9,7 +9,7 @@ use crate::gate::{
     gate_cached_result_for_tree, gate_regression_count_with_config, GateCacheResult,
     GateComparisonTree,
 };
-use crate::git::visible_tree_oid::VisibleTreeOidCache;
+use crate::git::VisibleTreeOidCache;
 use crate::history::HistoryCache;
 use std::io::Write;
 use std::path::Path;

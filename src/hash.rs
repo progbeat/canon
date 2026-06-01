@@ -1,6 +1,7 @@
-use crate::{B64_URL, FNV_OFFSET, FNV_PRIME};
-
 const B62: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+const B64_URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+const FNV_PRIME: u64 = 0x100000001b3;
 
 pub(crate) fn full_scope() -> Vec<String> {
     vec![".".to_string()]

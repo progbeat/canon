@@ -1,4 +1,5 @@
 use crate::check::types::{is_line_break_char, CheckRecord, CheckRunReport, ParsedAnswer};
+use crate::json_util::compact_json_string_array;
 use crate::logs::push_json_control_escape;
 use crate::token_usage_types::TokenUsage;
 use std::collections::BTreeSet;
@@ -226,10 +227,6 @@ pub(crate) fn pad_summary_line(inner: &str) -> String {
 
 pub(crate) fn record_requires_human_review(record: &CheckRecord) -> bool {
     record.review_error_text().is_some()
-}
-
-pub(crate) fn compact_json_string_array(values: &[String]) -> String {
-    serde_json::to_string(values).expect("serializing a JSON string array cannot fail")
 }
 
 pub(crate) fn escape_check_output_text(value: &str) -> String {

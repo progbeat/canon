@@ -1,7 +1,6 @@
 use crate::config_types::AgentConfig;
-use crate::git::tree_source::TreeSource;
-use crate::git::visible_tree_oid::VisibleTreeOidCache;
 use crate::git::{GitBlobReader, StagedTrackedFile};
+use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::platform;
 use crate::scope::{is_denied_path_bytes, path_bytes_in_scope, sanitize_scope};
 use crate::staged::paths::create_snapshot_root;

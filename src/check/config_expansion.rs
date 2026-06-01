@@ -4,7 +4,7 @@ use crate::config_types::{
     AgentConfig, CheckConfig, Expectation, RawCheckConfig, RawExpectationItem,
     RawExpectationSettings, RawGeneratorExpectation, RawIncludeExpectation, RawPresetConfig,
 };
-use crate::git::tree_source::TreeSource;
+use crate::git::TreeSource;
 use crate::repo_inspection::RepoInspectionCache;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;

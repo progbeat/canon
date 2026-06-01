@@ -1,12 +1,14 @@
-use crate::check::config::parse_tree_check_config_content_with_root;
 #[cfg(test)]
-use crate::check::generator_paths::expand_generator_paths;
-use crate::check::generator_paths::expand_staged_generator_paths_from_listing;
+use crate::check::expand_generator_paths;
+use crate::check::{
+    expand_staged_generator_paths_from_listing, parse_tree_check_config_content_with_root,
+    CHECK_PATH,
+};
 use crate::config_types::{CheckConfig, RawExpectationItem};
-use crate::git::tree_source::TreeSource;
-use crate::git::{read_git_blobs, resolve_git_path, staged_tracked_files, StagedTrackedFile};
+use crate::git::{
+    read_git_blobs, resolve_git_path, staged_tracked_files, StagedTrackedFile, TreeSource,
+};
 use crate::platform::git_path_bytes;
-use crate::CHECK_PATH;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 

@@ -1,20 +1,17 @@
-use crate::check::types::{CheckRecord, CheckResult, EvaluatorResponseJson, SelectedExpectation};
+use crate::check::{CheckRecord, CheckResult, EvaluatorResponseJson, SelectedExpectation};
 use crate::fs_util::{
     ensure_dir_without_symlinks, for_each_nonempty_line, reject_symlink,
     write_temp_file_then_replace,
 };
 use crate::git::resolve_git_path;
-use crate::git::tree_source::TreeSource;
-use crate::git::visible_tree_oid::{
+use crate::git::{
     git_object_oid_has_hex_len, git_object_oid_has_known_shape,
-    repository_native_object_oid_hex_len, VisibleTreeOidCache,
+    repository_native_object_oid_hex_len, TreeSource, VisibleTreeOidCache,
 };
-use crate::logs::error::{external_log_error, DiagnosticLogError, DiagnosticLogResult};
+use crate::logs::{external_log_error, DiagnosticLogError, DiagnosticLogResult};
 use crate::path_io_error::PathIoError;
+use crate::state_paths::CANON_CACHE_DIR_GIT_PATH;
 use crate::time::parse_record_timestamp;
-use crate::{
-    CANON_CACHE_DIR_GIT_PATH, HISTORY_COMPACT_CHANCE_DENOMINATOR, HISTORY_COMPACT_KEEP_RECORDS,
-};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -39,6 +36,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 static HISTORY_COMPACT_CHANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static HISTORY_COMPACT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+const HISTORY_COMPACT_KEEP_RECORDS: usize = 8;
+const HISTORY_COMPACT_CHANCE_DENOMINATOR: u64 = 16;
 const HISTORY_LOCK_RETRY_COUNT: usize = 100;
 const HISTORY_LOCK_RETRY_SLEEP: Duration = Duration::from_millis(10);
 const HISTORY_LOCK_STALE_AFTER: Duration = Duration::from_secs(60);

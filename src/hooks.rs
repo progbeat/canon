@@ -1,13 +1,10 @@
+use crate::check::CHECK_PATH;
 use crate::fs_util::ensure_dir_without_symlinks;
 use crate::git::resolve_git_path;
-use crate::notes::cli::arg_to_string;
+use crate::notes::arg_to_string;
 use crate::output::write_stdout_line;
 use crate::platform;
 use crate::project::command_output_trimmed;
-use crate::{
-    CHECK_PATH, DEFAULT_CHECK_CONFIG_SOURCE, DEFAULT_PRE_COMMIT_HOOK, GIT_HOOKS_PATH,
-    PRE_COMMIT_HOOK_PATH,
-};
 use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write};
@@ -20,6 +17,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 // directory, and `core.hooksPath` points Git at that resolved hook directory.
 const DEFAULT_GIT_PRE_COMMIT_HOOK_PATH: &str = ".git/hooks/pre-commit";
 const DEFAULT_PRE_COMMIT_GIT_PATH: &str = "hooks/pre-commit";
+// The `canon init` seed is compiled into the binary from a check-config source
+// file, not loaded at runtime as an evaluator interrogation prompt/instruction.
+// Interrogation texts live under `resources/prompts/`.
+const DEFAULT_CHECK_CONFIG_SOURCE: &str = include_str!("../.canon/templates/default/check.yml");
+// `${CANON_STATE_DIR}/hooks`, resolved through `git rev-parse --git-path`.
+const GIT_HOOKS_PATH: &str = "canon/hooks";
+// `${CANON_STATE_DIR}/hooks/pre-commit`, resolved through `git rev-parse --git-path`.
+const PRE_COMMIT_HOOK_PATH: &str = "canon/hooks/pre-commit";
+const DEFAULT_PRE_COMMIT_HOOK: &str = include_str!("../resources/git-hooks/pre-commit");
 const UNINSTALL_FALLBACK_PRE_COMMIT_HOOK_MARKER: &str =
     "# canon temporary uninstall fallback; safe to remove on retry\n";
 const PRE_COMMIT_HOOK_MANUAL_ADVICE: &str =

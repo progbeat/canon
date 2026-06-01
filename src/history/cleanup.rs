@@ -1,4 +1,4 @@
-use crate::check::selection::ExpectationIdentity;
+use crate::check::ExpectationIdentity;
 #[cfg(test)]
 use crate::config_types::CheckConfig;
 #[cfg(test)]

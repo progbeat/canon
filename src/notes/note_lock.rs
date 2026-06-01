@@ -1,7 +1,5 @@
 #[cfg(not(unix))]
-use crate::notes::lock::{
-    create_lock_file, remove_stale_lock, remove_stale_lock_for_retry, stale_lock_age,
-};
+use self::lock::remove_stale_lock_for_retry;
 use crate::project_types::Note;
 use std::fs;
 use std::io;
@@ -20,6 +18,11 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 #[cfg(not(unix))]
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+#[path = "lock.rs"]
+mod lock;
+
+pub(super) use self::lock::{create_lock_file, remove_stale_lock, stale_lock_age};
 
 #[cfg(not(unix))]
 const NOTE_LOCK_HEARTBEAT_SECS: u64 = 60;

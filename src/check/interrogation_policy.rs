@@ -6,10 +6,10 @@ use crate::check::model_fallback::interrogate_expectation_with_model_fallbacks;
 use crate::check::narrowing::scope_narrowing_log_fields;
 use crate::check::types::{CheckRecord, InterrogationResult, SelectedExpectation};
 use crate::config_types::AgentConfig;
-use crate::evaluator::types::EvaluatorRunner;
-use crate::git::visible_tree_oid::VisibleTreeOidCache;
+use crate::evaluator::EvaluatorRunner;
+use crate::git::VisibleTreeOidCache;
 use crate::hash::full_scope;
-use crate::history::reuse::is_reusable_history_record;
+use crate::history::is_reusable_history_record;
 use crate::logs::DiagnosticLogWriter;
 use crate::scope::sanitize_scope;
 

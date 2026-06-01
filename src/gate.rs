@@ -1,22 +1,19 @@
-use crate::check::preflight::{
-    is_canon_only_staged_change_bytes, is_canon_project_path_bytes, staged_changed_path_bytes,
-};
 #[cfg(test)]
-use crate::check::selection::ExpectationIdentity;
-use crate::check::selection::{expectation_identities, select_expectations_with_identities};
-use crate::check::types::{CheckRecord, SelectedExpectation};
+use crate::check::ExpectationIdentity;
+use crate::check::{
+    expectation_identities, is_canon_only_staged_change_bytes, is_canon_project_path_bytes,
+    select_expectations_with_identities, staged_changed_path_bytes, CheckRecord,
+    SelectedExpectation, CHECK_PATH,
+};
 use crate::cli::CommandError;
 use crate::config_types::{AgentConfig, CheckConfig};
-use crate::git::tree_source::TreeSource;
-use crate::git::visible_tree_oid::VisibleTreeOidCache;
-use crate::history::reuse::{
-    cooldown_history_record, latest_history_record_matching_visible_tree_oid,
+use crate::git::{TreeSource, VisibleTreeOidCache};
+use crate::history::{
+    cooldown_history_record, latest_history_record_matching_visible_tree_oid, HistoryCache,
 };
-use crate::history::HistoryCache;
 use crate::output::write_stderr_line;
 use crate::repo_inspection::RepoInspectionCache;
 use crate::time::unix_timestamp;
-use crate::CHECK_PATH;
 use std::ffi::OsString;
 use std::path::Path;
 

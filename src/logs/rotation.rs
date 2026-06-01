@@ -1,10 +1,10 @@
 use crate::fs_util::reject_symlink;
 use crate::logs::config::{
     active_log_max_bytes, diagnostic_log_files, diagnostic_logs_explicitly_disabled,
+    DiagnosticLogConfig,
 };
 use crate::logs::error::{log_io_error, log_rename_error, DiagnosticLogError, DiagnosticLogResult};
 use crate::logs::fs::remove_file_if_exists;
-use crate::DiagnosticLogConfig;
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;

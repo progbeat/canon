@@ -1,12 +1,10 @@
 use crate::check::types::{CheckRecord, SelectedExpectation};
 use crate::config_types::AgentConfig;
-use crate::git::tree_source::TreeSource;
-use crate::git::visible_tree_oid::VisibleTreeOidCache;
-use crate::history::reuse::{
+use crate::git::{TreeSource, VisibleTreeOidCache};
+use crate::history::{
     cooldown_history_record, newer_cached_history_record, same_tree_history_record_with_cache,
-    CachedHistoryRecord,
+    CachedHistoryRecord, HistoryCache,
 };
-use crate::history::HistoryCache;
 use crate::logs::{DiagnosticLogWriter, DiagnosticRecordEvent};
 use serde_json::json;
 use std::path::Path;
