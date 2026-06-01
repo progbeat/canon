@@ -13,6 +13,7 @@ Options:
   -c, --config <PATH>          Read expectations from this config file [default: .canon/check.yml]
   -q <QUESTION>                Ask one question
   -s, --scope <PATHSPEC>       Set the visible scope for the question
+      --preset <PRESET>        Select a preset by name for the question [default: default]
       --tree <TREE>            Check this Git tree [default: :staged]
       --against-tree <TREE>    Compare against this Git tree [default: HEAD]
       --keep-going             Continue after failures
