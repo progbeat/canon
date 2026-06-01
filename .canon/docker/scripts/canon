@@ -3,7 +3,7 @@ set -euo pipefail
 
 image="${CANON_DOCKER_IMAGE:-ghcr.io/progbeat/canon:latest}"
 project_root="$(git rev-parse --path-format=absolute --show-toplevel)"
-git_dir="${project_root}/.git"  # worktrees are not supported now
+git_dir="${project_root}/.git"  # worktrees are not currently supported
 canon_state="${git_dir}/canon"
 container_repository="/scratch/secret/repository"
 

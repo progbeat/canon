@@ -15,10 +15,37 @@ Codex working against `canon` until the repository satisfied its own canon.
 
 ### Docker
 
-Requires Git, Docker, and the Codex CLI.
+Requires Git, Docker, curl, and Codex (Desktop or CLI).
 
-Install the Docker [wrapper](https://github.com/progbeat/canon/tree/master/.canon/docker/scripts/canon)
-as `canon` somewhere on `PATH`.
+This is the recommended install path for most users. `canon` itself was built
+by AI agents and has not been reviewed line by line by a human. The Docker
+[wrapper](https://github.com/progbeat/canon/tree/master/.canon/docker/scripts/canon) is the small human-reviewed trust boundary: it runs the published
+Docker image in an unprivileged container, drops Linux capabilities, disables
+new privileges, uses a read-only container filesystem, keeps Codex credentials
+read-only on the host, and only gives the container the repository access needed
+for `canon` commands.
+
+Before installing, review the Docker
+[wrapper](https://github.com/progbeat/canon/tree/master/.canon/docker/scripts/canon)
+on GitHub. Install it only if you are comfortable trusting that wrapper as the
+host-side boundary.
+
+After reviewing the wrapper, install it as the `canon` executable in a directory
+on your `PATH`. For example, to install it in `~/.local/bin`:
+
+```sh
+mkdir -p "$HOME/.local/bin"
+curl -fsSL https://raw.githubusercontent.com/progbeat/canon/master/.canon/docker/scripts/canon -o "$HOME/.local/bin/canon"
+chmod +x "$HOME/.local/bin/canon"
+```
+
+If `~/.local/bin` is not already on `PATH`, add it to your shell configuration:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+After that, `command -v canon` should print a path under `$HOME/.local/bin`.
 
 ### Cargo
 
@@ -28,8 +55,8 @@ Requires Git, Rust/Cargo, and the Codex CLI.
 cargo install --git https://github.com/progbeat/canon
 ```
 
-Cargo is the recommended install path on macOS, Linux, and Windows. Prebuilt
-release binaries are not published yet.
+Use Cargo when developing `canon` or when you intentionally want a host-native
+binary. Prebuilt release binaries are not published yet.
 
 ## Codex Skills
 
