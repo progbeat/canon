@@ -48,6 +48,16 @@ pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommand
         }
         None => None,
     };
+    let query_preset = match matches.get_one::<OsString>("preset") {
+        Some(value) => {
+            let value = arg_to_string(value)?;
+            if value.trim().is_empty() {
+                return Err("--preset name must not be empty".to_string());
+            }
+            Some(value)
+        }
+        None => None,
+    };
 
     let mut query_scope = Vec::new();
     for value in matched_os_values(&matches, "scope") {
@@ -58,6 +68,9 @@ pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommand
 
     if query.is_none() && !query_scope.is_empty() {
         return Err("canon check -s/--scope requires -q".to_string());
+    }
+    if query.is_none() && query_preset.is_some() {
+        return Err("canon check --preset requires -q".to_string());
     }
     if query.is_some() && !options.is_empty() {
         return Err(
@@ -72,6 +85,7 @@ pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommand
         against_tree_explicit,
         no_sandbox: matches.get_flag("no_sandbox"),
         query,
+        query_preset,
         query_scope,
         options,
     })
@@ -94,6 +108,11 @@ pub(crate) fn check_help_command() -> Command {
                 .help("Read expectations from this config file [default: .canon/check.yml]"),
         )
         .arg(check_value_arg("query").short('q').help("Ask one question"))
+        .arg(
+            check_value_arg("preset")
+                .long("preset")
+                .help("Select a preset by name for the question [default: default]"),
+        )
         .arg(
             check_value_arg("scope")
                 .short('s')
@@ -152,4 +171,42 @@ fn normalize_check_config_path(value: &str) -> Result<PathBuf, String> {
 
 fn normalize_query_scope_path(option: &str, value: &str) -> Result<String, String> {
     normalize_repo_path(value).map_err(|err| format!("{} path: {}", option, err))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<CheckCommandArgs, String> {
+        let args = args.iter().map(OsString::from).collect::<Vec<_>>();
+        parse_check_command_args(&args)
+    }
+
+    #[test]
+    fn query_accepts_preset() {
+        let command = parse(&["-q", "Can this pass?", "--preset", "smart"]).unwrap();
+
+        assert_eq!(command.query.as_deref(), Some("Can this pass?"));
+        assert_eq!(command.query_preset.as_deref(), Some("smart"));
+    }
+
+    #[test]
+    fn preset_requires_query() {
+        let err = match parse(&["--preset", "smart"]) {
+            Ok(_) => panic!("expected --preset without -q to fail"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err, "canon check --preset requires -q");
+    }
+
+    #[test]
+    fn preset_name_must_not_be_empty() {
+        let err = match parse(&["-q", "Can this pass?", "--preset", ""]) {
+            Ok(_) => panic!("expected empty --preset to fail"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err, "--preset name must not be empty");
+    }
 }
