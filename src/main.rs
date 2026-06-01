@@ -168,8 +168,6 @@ mod history {
     #[path = "store.rs"]
     pub(crate) mod store;
     pub(crate) use store::*;
-    #[path = "append.rs"]
-    pub(crate) mod append;
     #[path = "cache_key.rs"]
     pub(crate) mod cache_key;
     #[path = "cleanup.rs"]
@@ -180,8 +178,7 @@ mod history {
 mod isolation;
 // Cache answer history is implemented end-to-end in `history::store`: path/read
 // cache, answer-only durable JSONL writes, required field order, and
-// probabilistic retention. The append module below is a thin import wrapper;
-// `history::reuse` owns same-tree/cooldown lookup.
+// probabilistic retention. `history::reuse` owns same-tree/cooldown lookup.
 mod hooks;
 mod logs {
     #[path = "writer.rs"]
@@ -197,10 +194,17 @@ mod logs {
     pub(crate) mod lock;
     #[path = "render.rs"]
     pub(crate) mod render;
+    pub(crate) use render::push_json_control_escape;
     #[path = "rotation.rs"]
     pub(crate) mod rotation;
 }
 mod notes {
+    #[path = "lock.rs"]
+    pub(crate) mod lock;
+    #[path = "note_lock.rs"]
+    pub(crate) mod note_lock;
+    #[path = "note_log.rs"]
+    pub(crate) mod note_log;
     #[path = "store.rs"]
     pub(crate) mod store;
     pub(crate) use store::*;

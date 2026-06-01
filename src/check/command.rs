@@ -106,9 +106,28 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         }
     };
     if let Some(question) = command.query.as_deref() {
+        let query_config_override;
+        let query_config = match command.query_preset.as_deref() {
+            Some(preset) => match check_config_with_query_preset(&config, preset) {
+                Ok(config) => {
+                    query_config_override = config;
+                    &query_config_override
+                }
+                Err(err) => {
+                    return fail_check_before_selection(
+                        &mut diagnostic_log,
+                        query_start_field,
+                        query_mode,
+                        0,
+                        err,
+                    )
+                }
+            },
+            None => &config,
+        };
         return run_check_query_command(CheckQueryCommand {
             root,
-            config: &config,
+            config: query_config,
             identities: &identities,
             active_lazy_full_scope_reset_ids: &active_reset_ids,
             question,
@@ -251,6 +270,20 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     } else {
         Err(CommandError::CheckFailed)
     }
+}
+
+fn check_config_with_query_preset(
+    config: &CheckConfig,
+    preset: &str,
+) -> Result<CheckConfig, String> {
+    let agent = config
+        .presets
+        .get(preset)
+        .cloned()
+        .ok_or_else(|| format!("unknown preset: {}", preset))?;
+    let mut query_config = config.clone();
+    query_config.agent = agent;
+    Ok(query_config)
 }
 
 fn check_report_passed(report: &CheckRunReport) -> bool {
@@ -428,4 +461,57 @@ fn write_prepare_check_failure(
     err: &str,
 ) -> Result<(), String> {
     write_check_error_finish_event(diagnostic_log, query, errors_on_failure, err)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config_types::AgentConfig;
+    use std::collections::BTreeMap;
+
+    fn agent(model: &str, thinking: &str) -> AgentConfig {
+        AgentConfig {
+            models: vec![model.to_string()],
+            thinking: thinking.to_string(),
+            ignore: Vec::new(),
+            plugins: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn query_preset_overrides_default_agent() {
+        let default_agent = agent("default-model", "low");
+        let smart_agent = agent("smart-model", "high");
+        let mut presets = BTreeMap::new();
+        presets.insert("default".to_string(), default_agent.clone());
+        presets.insert("smart".to_string(), smart_agent.clone());
+        let config = CheckConfig {
+            version: 1,
+            presets,
+            agent: default_agent.clone(),
+            expectations: Vec::new(),
+        };
+
+        let query_config = check_config_with_query_preset(&config, "smart").unwrap();
+
+        assert_eq!(query_config.agent, smart_agent);
+        assert_eq!(config.agent, default_agent);
+    }
+
+    #[test]
+    fn query_preset_rejects_unknown_name() {
+        let default_agent = agent("default-model", "low");
+        let mut presets = BTreeMap::new();
+        presets.insert("default".to_string(), default_agent.clone());
+        let config = CheckConfig {
+            version: 1,
+            presets,
+            agent: default_agent,
+            expectations: Vec::new(),
+        };
+
+        let err = check_config_with_query_preset(&config, "missing").unwrap_err();
+
+        assert_eq!(err, "unknown preset: missing");
+    }
 }

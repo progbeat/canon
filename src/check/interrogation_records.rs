@@ -2,7 +2,7 @@ use crate::check::interrogation_state::{CheckRuntime, InterrogationRunState};
 use crate::check::types::{InterrogationResult, ParsedAnswer, QueryResult, SelectedExpectation};
 use crate::evaluator::turn::{record_from_response, ParsedTurnResponse};
 use crate::evaluator::types::EvaluatorError;
-use crate::logs::DiagnosticLogWriter;
+use crate::logs::{DiagnosticLogWriter, DiagnosticRecordEvent};
 use crate::scope::sanitize_scope;
 use serde_json::json;
 
@@ -29,7 +29,7 @@ pub(crate) fn finalize_interrogation_response(
         finalized.visible_tree_oid,
     )?;
     if let Some(writer) = diagnostic_log.as_deref_mut() {
-        writer.write_interrogation_record(&record)?;
+        writer.write_record_event(DiagnosticRecordEvent::Interrogation, &record)?;
     }
     Ok(InterrogationResult {
         record,

@@ -213,6 +213,7 @@ pub(crate) fn evaluator_runtime_permissions() -> Vec<(String, String)> {
     .collect::<Vec<_>>();
     deny_runtime_path(&mut permissions, ":tmpdir");
     deny_runtime_path(&mut permissions, ":slash_tmp");
+    deny_runtime_path(&mut permissions, "/dev/null");
     deny_runtime_tree(&mut permissions, "/tmp");
     deny_runtime_tree(&mut permissions, "/private/tmp");
     deny_runtime_tree(&mut permissions, "~/.codex/sessions");
@@ -505,6 +506,7 @@ mod tests {
         for path in [
             ":tmpdir",
             ":slash_tmp",
+            "/dev/null",
             "/tmp",
             "/tmp/**",
             "/private/tmp",

@@ -26,4 +26,5 @@ fn check_help_lists_public_options() {
     assert!(stdout.contains("--ignore-cache"));
     assert!(stdout.contains("--ignore-cooldown"));
     assert!(stdout.contains("--keep-going"));
+    assert!(stdout.contains("--preset"));
 }

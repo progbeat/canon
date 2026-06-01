@@ -26,10 +26,10 @@ use crate::config_types::CheckConfig;
 use crate::evaluator::types::EvaluatorRunner;
 use crate::git::tree_source::TreeSource;
 use crate::git::visible_tree_oid::VisibleTreeOidCache;
-use crate::history::append::append_current_history_record_with_cache;
+use crate::history::append_current_history_record_with_cache;
 use crate::history::reuse::is_reusable_history_record;
 use crate::history::HistoryCache;
-use crate::logs::DiagnosticLogWriter;
+use crate::logs::{DiagnosticLogWriter, DiagnosticRecordEvent};
 use crate::platform::check_interrupted;
 use crate::scope::{sanitize_scope, scope_is_within};
 use crate::time::unix_timestamp;
@@ -329,7 +329,8 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             &mut caches.history
         ));
         if let Some(writer) = diagnostic_log.as_deref_mut() {
-            run_expectation_try!(writer.write_record(&interrogation.record));
+            run_expectation_try!(writer
+                .write_record_event(DiagnosticRecordEvent::Expectation, &interrogation.record));
         }
         let run_stop_signal_hit =
             break_after_tokens_hit || context_compaction_hit || stop_after_current_expectation;

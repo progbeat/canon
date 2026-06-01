@@ -1,4 +1,4 @@
-use super::wait_for_app_server_child;
+use super::{push_unique_path, wait_for_app_server_child};
 use std::ffi::c_void;
 use std::ffi::OsString;
 use std::fs;
@@ -11,6 +11,9 @@ use std::slice;
 
 #[cfg(windows)]
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
+use std::os::windows::fs::OpenOptionsExt;
+
+const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 
 pub(crate) fn install_check_signal_handlers() -> Result<(), String> {
     Ok(())
@@ -52,19 +55,11 @@ pub(crate) fn make_hook_executable(_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn set_materialized_file_permissions(path: &Path, _mode: &str) -> Result<(), String> {
+pub(crate) fn set_materialized_permissions(path: &Path) -> Result<(), String> {
     set_readonly(path, true)
 }
 
-pub(crate) fn set_materialized_dir_permissions(path: &Path) -> Result<(), String> {
-    set_readonly(path, true)
-}
-
-pub(crate) fn set_private_dir_permissions(path: &Path) -> Result<(), String> {
-    set_readonly(path, false)
-}
-
-pub(crate) fn set_private_file_permissions(path: &Path) -> Result<(), String> {
+pub(crate) fn set_private_permissions(path: &Path) -> Result<(), String> {
     set_readonly(path, false)
 }
 
@@ -95,17 +90,17 @@ pub(crate) fn secret_dir_mode(path: &Path) -> Result<SecretDirMode, String> {
     let metadata = secret_dir_metadata(path)?;
     Ok(SecretDirMode {
         permissions: metadata.permissions(),
-        dacl: current_windows_dacl(path)?,
+        dacl: windows_dacl(path)?,
     })
 }
 
 pub(crate) fn chmod_secret_dir_no_access(path: &Path) -> Result<(), String> {
     secret_dir_metadata(path)?;
-    set_windows_dacl_no_access(path)
+    windows_set_no_access_dacl(path)
 }
 
 pub(crate) fn restore_secret_dir_mode(path: &Path, mode: &SecretDirMode) -> Result<(), String> {
-    restore_windows_dacl(path, mode.dacl.as_deref())?;
+    windows_restore_dacl(path, mode.dacl.as_deref())?;
     fs::set_permissions(path, mode.permissions.clone()).map_err(|err| {
         format!(
             "failed to restore secret dir permissions {}: {}",
@@ -125,18 +120,15 @@ fn secret_dir_metadata(path: &Path) -> Result<fs::Metadata, String> {
 }
 
 pub(crate) fn create_materialized_symlink(target: &[u8], link: &Path) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        let target = PathBuf::from(git_bytes_os_string(target.to_vec())?);
-        std::os::windows::fs::symlink_file(&target, link).map_err(|err| {
-            format!(
-                "failed to symlink evaluator file {} to {}: {}",
-                link.display(),
-                target.display(),
-                err
-            )
-        })
-    }
+    let target = PathBuf::from(git_bytes_os_string(target.to_vec())?);
+    std::os::windows::fs::symlink_file(&target, link).map_err(|err| {
+        format!(
+            "failed to symlink evaluator file {} to {}: {}",
+            link.display(),
+            target.display(),
+            err
+        )
+    })
 }
 
 pub(crate) fn hardlink_file_or_copy_symlink(source: &Path, target: &Path) -> Result<(), String> {
@@ -180,37 +172,52 @@ pub(crate) fn create_private_dir_all(path: &Path) -> std::io::Result<()> {
 pub(crate) fn open_file_for_append_without_following_symlink(
     path: &Path,
 ) -> Result<fs::File, String> {
-    fs::OpenOptions::new()
+    reject_append_symlink(path)?;
+    let file = fs::OpenOptions::new()
         .append(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
         .open(path)
-        .map_err(|err| format!("failed to open {}: {}", path.display(), err))
+        .map_err(|err| format!("failed to open {}: {}", path.display(), err))?;
+    let metadata = file
+        .metadata()
+        .map_err(|err| format!("failed to inspect opened {}: {}", path.display(), err))?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!("refusing to open symlink {}", path.display()));
+    }
+    if !metadata.file_type().is_file() {
+        return Err(format!("refusing to open non-file {}", path.display()));
+    }
+    Ok(file)
+}
+
+fn reject_append_symlink(path: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!("refusing to open symlink {}", path.display()));
+    }
+    Ok(())
 }
 
 pub(crate) fn add_memory_backed_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
-    for name in ["CANON_MEMORY_BACKED_TMPDIR", "RAMDISK", "RAMDISK_TMPDIR"] {
-        let Some(value) = std::env::var_os(name) else {
-            continue;
-        };
-        if !value.is_empty() {
-            push_unique_path(parents, PathBuf::from(value));
-        }
-    }
+    add_env_staged_snapshot_parent_candidates(
+        parents,
+        &["CANON_MEMORY_BACKED_TMPDIR", "RAMDISK", "RAMDISK_TMPDIR"],
+    );
 }
 
 pub(crate) fn add_ordinary_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
-    for name in ["TMPDIR", "TEMP", "TMP"] {
+    add_env_staged_snapshot_parent_candidates(parents, &["TMPDIR", "TEMP", "TMP"]);
+}
+
+fn add_env_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>, names: &[&str]) {
+    for name in names {
         let Some(value) = std::env::var_os(name) else {
             continue;
         };
         if !value.is_empty() {
             push_unique_path(parents, PathBuf::from(value));
         }
-    }
-}
-
-fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
-    if !paths.iter().any(|existing| existing == &path) {
-        paths.push(path);
     }
 }
 
@@ -219,11 +226,50 @@ pub(crate) fn path_from_git_bytes(bytes: Vec<u8>) -> Result<PathBuf, String> {
 }
 
 pub(crate) fn git_path_bytes(path: &Path) -> Result<Vec<u8>, String> {
-    Ok(path
-        .to_str()
-        .ok_or_else(|| format!("git path must be valid UTF-8: {}", path.display()))?
-        .as_bytes()
-        .to_vec())
+    let mut bytes = Vec::new();
+    let units: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let mut index = 0;
+    while index < units.len() {
+        let unit = units[index];
+        if unit == 0 {
+            return Err(format!("git path must not contain NUL: {}", path.display()));
+        } else if is_windows_separator(unit) {
+            bytes.push(b'/');
+            index += 1;
+        } else if let Some(byte) = surrogate_escaped_byte(unit) {
+            if byte == 0 {
+                return Err(format!("git path must not contain NUL: {}", path.display()));
+            }
+            bytes.push(byte);
+            index += 1;
+        } else if is_high_surrogate(unit) {
+            let Some(&low) = units.get(index + 1) else {
+                return Err(format!(
+                    "git path contains unpaired surrogate: {}",
+                    path.display()
+                ));
+            };
+            bytes.extend(
+                utf16_surrogate_pair_to_char(unit, low, path)?
+                    .encode_utf8(&mut [0; 4])
+                    .as_bytes(),
+            );
+            index += 2;
+        } else if is_low_surrogate(unit) {
+            return Err(format!(
+                "git path contains unpaired surrogate: {}",
+                path.display()
+            ));
+        } else {
+            bytes.extend(
+                utf16_unit_to_char(unit, path)?
+                    .encode_utf8(&mut [0; 4])
+                    .as_bytes(),
+            );
+            index += 1;
+        }
+    }
+    Ok(bytes)
 }
 
 pub(crate) fn os_string_from_bytes(bytes: Vec<u8>) -> Result<OsString, String> {
@@ -232,18 +278,6 @@ pub(crate) fn os_string_from_bytes(bytes: Vec<u8>) -> Result<OsString, String> {
 
 fn wide_path(path: &Path) -> Vec<u16> {
     path.as_os_str().encode_wide().chain(Some(0)).collect()
-}
-
-fn current_windows_dacl(path: &Path) -> Result<Option<Vec<u8>>, String> {
-    windows_dacl(path)
-}
-
-fn set_windows_dacl_no_access(path: &Path) -> Result<(), String> {
-    windows_set_no_access_dacl(path)
-}
-
-fn restore_windows_dacl(path: &Path, dacl: Option<&[u8]>) -> Result<(), String> {
-    windows_restore_dacl(path, dacl)
 }
 
 type Dword = u32;
@@ -580,4 +614,65 @@ fn surrogate_escaped_git_path(bytes: &[u8]) -> Vec<u16> {
             byte => 0xDC00 | u16::from(byte),
         })
         .collect()
+}
+
+fn is_windows_separator(unit: u16) -> bool {
+    unit == b'/' as u16 || unit == b'\\' as u16
+}
+
+fn surrogate_escaped_byte(unit: u16) -> Option<u8> {
+    (0xDC00..=0xDCFF)
+        .contains(&unit)
+        .then_some((unit & 0x00FF) as u8)
+}
+
+fn is_high_surrogate(unit: u16) -> bool {
+    (0xD800..=0xDBFF).contains(&unit)
+}
+
+fn is_low_surrogate(unit: u16) -> bool {
+    (0xDC00..=0xDFFF).contains(&unit)
+}
+
+fn utf16_surrogate_pair_to_char(high: u16, low: u16, path: &Path) -> Result<char, String> {
+    if !is_low_surrogate(low) {
+        return Err(format!(
+            "git path contains unpaired surrogate: {}",
+            path.display()
+        ));
+    }
+    let codepoint = 0x1_0000 + ((((high - 0xD800) as u32) << 10) | ((low - 0xDC00) as u32));
+    char::from_u32(codepoint).ok_or_else(|| {
+        format!(
+            "git path contains invalid UTF-16 scalar: {}",
+            path.display()
+        )
+    })
+}
+
+fn utf16_unit_to_char(unit: u16, path: &Path) -> Result<char, String> {
+    char::from_u32(unit as u32).ok_or_else(|| {
+        format!(
+            "git path contains invalid UTF-16 scalar: {}",
+            path.display()
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn git_path_bytes_round_trips_surrogate_escaped_git_bytes() {
+        let original = b"dir/\xFF/name with spaces/\x80.bin".to_vec();
+        let path = path_from_git_bytes(original.clone()).unwrap();
+        assert_eq!(git_path_bytes(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn git_path_bytes_uses_git_separators() {
+        let path = PathBuf::from(r"dir\file.txt");
+        assert_eq!(git_path_bytes(&path).unwrap(), b"dir/file.txt");
+    }
 }
