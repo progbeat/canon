@@ -26,13 +26,16 @@ read-only on the host, and only gives the container the repository access needed
 for `canon` commands.
 
 Install the Docker [wrapper](https://github.com/progbeat/canon/tree/master/.canon/docker/scripts/canon)
-as the `canon` executable in a directory on your `PATH`. For example, to install
-it in `~/.local/bin`:
+as the `canon` executable in a directory on your `PATH`. For example, to
+download the wrapper, review it, and install it in `~/.local/bin`:
 
 ```sh
 mkdir -p "$HOME/.local/bin"
-curl -fsSL https://raw.githubusercontent.com/progbeat/canon/master/.canon/docker/scripts/canon -o "$HOME/.local/bin/canon"
-chmod +x "$HOME/.local/bin/canon"
+tmp="$(mktemp)"
+curl -fsSL https://raw.githubusercontent.com/progbeat/canon/master/.canon/docker/scripts/canon -o "$tmp"
+less "$tmp"
+install -m 0755 "$tmp" "$HOME/.local/bin/canon"
+rm -f "$tmp"
 ```
 
 If `~/.local/bin` is not already on `PATH`, add it to your shell configuration:
