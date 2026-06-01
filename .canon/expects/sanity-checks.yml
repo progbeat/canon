@@ -6,7 +6,7 @@
   a: "no"
   cooldown: 20d
 
-- q: "Is the number of direct `git` subprocesses started by `canon check` bounded by a constant?"
+- q: "Is the number of direct `git` subprocesses started by `canon check` per selected expectation bounded by a constant?"
   a: "yes"
   cooldown: 20d
 

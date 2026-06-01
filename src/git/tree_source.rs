@@ -1,0 +1,58 @@
+use crate::git::{staged_tracked_files, tree_tracked_files, StagedTrackedFile};
+use std::path::Path;
+
+pub(crate) const STAGED_TREE_ARG: &str = ":staged";
+pub(crate) const DEFAULT_AGAINST_TREE_ARG: &str = "HEAD";
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum TreeSource {
+    Staged,
+    Git { treeish: String, tree_oid: String },
+}
+
+impl TreeSource {
+    pub(crate) fn resolve(root: &Path, value: &str, option: &str) -> Result<TreeSource, String> {
+        validate_tree_arg(value, option)?;
+        if value == STAGED_TREE_ARG {
+            return Ok(TreeSource::Staged);
+        }
+        let tree_oid = crate::git::resolve_tree_oid(root, value)
+            .map_err(|err| format!("{} {}: {}", option, value, err))?;
+        Ok(TreeSource::Git {
+            treeish: value.to_string(),
+            tree_oid,
+        })
+    }
+
+    pub(crate) fn cache_key(&self) -> String {
+        match self {
+            TreeSource::Staged => STAGED_TREE_ARG.to_string(),
+            TreeSource::Git { tree_oid, .. } => tree_oid.clone(),
+        }
+    }
+
+    pub(crate) fn tracked_files(&self, root: &Path) -> Result<Vec<StagedTrackedFile>, String> {
+        match self {
+            TreeSource::Staged => staged_tracked_files(root),
+            TreeSource::Git { tree_oid, .. } => tree_tracked_files(root, tree_oid),
+        }
+    }
+
+    pub(crate) fn is_default_checked_tree(&self) -> bool {
+        matches!(self, TreeSource::Staged)
+    }
+
+    pub(crate) fn is_default_against_tree(&self) -> bool {
+        matches!(self, TreeSource::Git { treeish, .. } if treeish == DEFAULT_AGAINST_TREE_ARG)
+    }
+}
+
+pub(crate) fn validate_tree_arg(value: &str, option: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err(format!("{} value must not be empty", option));
+    }
+    if value.starts_with(':') && value != STAGED_TREE_ARG {
+        return Err(format!("{} unsupported pseudo-tree: {}", option, value));
+    }
+    Ok(())
+}

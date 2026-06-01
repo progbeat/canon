@@ -1,0 +1,63 @@
+#!/usr/bin/env sh
+set -eu
+
+if [ "${1:-}" = "canon" ]; then
+  shift
+fi
+
+if [ "$#" -eq 0 ]; then
+  set -- help
+fi
+
+tmpdir="${TMPDIR:-/scratch/tmp}"
+codex_home="${CODEX_HOME:-/scratch/codex-home}"
+mkdir -p \
+  "${HOME:-/scratch/home}" \
+  "$tmpdir" \
+  "$codex_home" \
+  "${CANON_SANDBOX_DIR:-/scratch/sandbox}"
+
+if [ -e /codex/auth.json ]; then
+  for file in auth.json installation_id version.json; do
+    [ ! -e "/codex/$file" ] || cp "/codex/$file" "$codex_home/$file"
+  done
+fi
+
+system_skills_marker="/codex/skills/.system/.codex-system-skills.marker"
+if [ -e "$system_skills_marker" ]; then
+  mkdir -p "$codex_home/skills/.system"
+  cp "$system_skills_marker" "$codex_home/skills/.system/.codex-system-skills.marker"
+fi
+
+case "$1" in
+  init|hook|check|gate|help|-*)
+    ;;
+  *)
+    exec "$@"
+    ;;
+esac
+
+if [ "$1" = "check" ]; then
+  has_no_sandbox=0
+  for arg in "$@"; do
+    [ "$arg" != "--no-sandbox" ] || has_no_sandbox=1
+  done
+  if [ "$has_no_sandbox" -eq 0 ]; then
+    shift
+    set -- check --no-sandbox "$@"
+  fi
+fi
+
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  host_index="$(git rev-parse --path-format=absolute --git-path index)"
+  if [ -e "$host_index" ]; then
+    git_common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
+    export GIT_INDEX_FILE="$tmpdir/canon-git/index"
+    export GIT_OBJECT_DIRECTORY="$tmpdir/canon-git/objects"
+    export GIT_ALTERNATE_OBJECT_DIRECTORIES="${git_common_dir}/objects"
+    mkdir -p "$(dirname "$GIT_INDEX_FILE")" "$GIT_OBJECT_DIRECTORY"
+    cp "$host_index" "$GIT_INDEX_FILE"
+  fi
+fi
+
+exec canon "$@"

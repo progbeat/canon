@@ -1,6 +1,6 @@
 # Configuration
 
-`canon` uses Git config to store configuration parameters.
+`canon` uses Git config to store the following configuration parameters:
 
 | Parameter | Default | Meaning |
 | --- | --- | --- |

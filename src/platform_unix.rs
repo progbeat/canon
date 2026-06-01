@@ -134,6 +134,41 @@ pub(crate) fn mirror_evaluator_codex_home_file(source: &Path, target: &Path) -> 
     })
 }
 
+pub(crate) fn move_path(source: &Path, target: &Path) -> Result<(), String> {
+    move_path_preserving_directory_permissions(source, target)
+}
+
+fn move_path_preserving_directory_permissions(source: &Path, target: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(source)
+        .map_err(|err| format!("failed to inspect {}: {}", source.display(), err))?;
+    if !metadata.file_type().is_dir() {
+        return rename_path(source, target);
+    }
+    let mode = metadata.permissions();
+    set_directory_permissions(source, 0o700)?;
+    rename_path(source, target).inspect_err(|_err| {
+        let _ = fs::set_permissions(source, mode.clone());
+    })?;
+    fs::set_permissions(target, mode).map_err(|err| {
+        format!(
+            "failed to restore moved path permissions {}: {}",
+            target.display(),
+            err
+        )
+    })
+}
+
+fn rename_path(source: &Path, target: &Path) -> Result<(), String> {
+    fs::rename(source, target).map_err(|err| {
+        format!(
+            "failed to move isolated path {} to {}: {}",
+            source.display(),
+            target.display(),
+            err
+        )
+    })
+}
+
 pub(crate) fn make_hook_executable(path: &Path) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
@@ -147,13 +182,127 @@ pub(crate) fn make_hook_executable(path: &Path) -> Result<(), String> {
 }
 
 pub(crate) fn set_materialized_file_permissions(path: &Path, mode: &str) -> Result<(), String> {
-    let unix_mode = if mode == "100755" { 0o755 } else { 0o644 };
-    let mut permissions = fs::metadata(path)
-        .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?
-        .permissions();
+    let unix_mode = if mode == "100755" { 0o555 } else { 0o444 };
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
+    if metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+    if !metadata.file_type().is_file() {
+        return Err(format!("refusing to chmod non-file {}", path.display()));
+    }
+    let mut permissions = metadata.permissions();
     permissions.set_mode(unix_mode);
     fs::set_permissions(path, permissions)
         .map_err(|err| format!("failed to chmod {}: {}", path.display(), err))
+}
+
+pub(crate) fn set_materialized_dir_permissions(path: &Path) -> Result<(), String> {
+    set_directory_permissions(path, 0o555)
+}
+
+pub(crate) fn set_private_dir_permissions(path: &Path) -> Result<(), String> {
+    set_directory_permissions(path, 0o700)
+}
+
+pub(crate) fn set_private_file_permissions(path: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
+    if metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+    if !metadata.file_type().is_file() {
+        return Err(format!("refusing to chmod non-file {}", path.display()));
+    }
+    let mut permissions = metadata.permissions();
+    permissions.set_mode(0o600);
+    fs::set_permissions(path, permissions)
+        .map_err(|err| format!("failed to chmod {}: {}", path.display(), err))
+}
+
+pub(crate) type SecretDirMode = fs::Permissions;
+
+pub(crate) fn secret_dir_mode(path: &Path) -> Result<SecretDirMode, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|err| format!("failed to stat secret dir {}: {}", path.display(), err))?;
+    if !metadata.file_type().is_dir() {
+        return Err(format!("secret dir {} is not a directory", path.display()));
+    }
+    Ok(metadata.permissions())
+}
+
+pub(crate) fn chmod_secret_dir_no_access(path: &Path) -> Result<(), String> {
+    let mut permissions = secret_dir_mode(path)?;
+    permissions.set_mode(0o000);
+    fs::set_permissions(path, permissions)
+        .map_err(|err| format!("failed to chmod secret dir {}: {}", path.display(), err))
+}
+
+pub(crate) fn restore_secret_dir_mode(path: &Path, mode: &SecretDirMode) -> Result<(), String> {
+    fs::set_permissions(path, mode.clone()).map_err(|err| {
+        format!(
+            "failed to restore secret dir permissions {}: {}",
+            path.display(),
+            err
+        )
+    })
+}
+
+fn set_directory_permissions(path: &Path, mode: u32) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
+    if !metadata.file_type().is_dir() {
+        return Err(format!(
+            "refusing to chmod non-directory {}",
+            path.display()
+        ));
+    }
+    let mut permissions = metadata.permissions();
+    permissions.set_mode(mode);
+    fs::set_permissions(path, permissions)
+        .map_err(|err| format!("failed to chmod {}: {}", path.display(), err))
+}
+
+pub(crate) fn create_materialized_symlink(target: &[u8], link: &Path) -> Result<(), String> {
+    let target = std::ffi::OsStr::from_bytes(target);
+    symlink(target, link).map_err(|err| {
+        format!(
+            "failed to symlink evaluator file {}: {}",
+            link.display(),
+            err
+        )
+    })
+}
+
+pub(crate) fn hardlink_file_or_copy_symlink(source: &Path, target: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(source).map_err(|err| {
+        format!(
+            "failed to inspect evaluator file {}: {}",
+            source.display(),
+            err
+        )
+    })?;
+    if metadata.file_type().is_symlink() {
+        let link_target = fs::read_link(source)
+            .map_err(|err| format!("failed to read symlink {}: {}", source.display(), err))?;
+        symlink(&link_target, target).map_err(|err| {
+            format!(
+                "failed to copy evaluator symlink {} to {}: {}",
+                source.display(),
+                target.display(),
+                err
+            )
+        })
+    } else {
+        fs::hard_link(source, target).map_err(|err| {
+            format!(
+                "failed to hardlink evaluator scope file {} to {}: {}",
+                source.display(),
+                target.display(),
+                err
+            )
+        })
+    }
 }
 
 pub(crate) fn create_private_dir(path: &Path) -> io::Result<()> {
@@ -181,11 +330,13 @@ pub(crate) fn open_file_for_append_without_following_symlink(
         .map_err(|err| format!("failed to open {}: {}", path.display(), err))
 }
 
-pub(crate) fn add_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
-    add_memory_backed_staged_snapshot_parent_candidates(parents);
+pub(crate) fn add_memory_backed_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
+    add_discovered_memory_backed_staged_snapshot_parent_candidates(parents);
 }
 
-fn add_memory_backed_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
+pub(crate) fn add_ordinary_staged_snapshot_parent_candidates(_parents: &mut Vec<PathBuf>) {}
+
+fn add_discovered_memory_backed_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
     // Prefer memory-backed locations when the host exposes them. Missing
     // candidates are harmless: snapshot creation skips paths that do not exist
     // and later falls back to the ordinary temporary directory.

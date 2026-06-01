@@ -151,3 +151,36 @@ q-scope is stored, with configured ignore patterns applied last.
 ## Visible tree
 
 The scoped tree induced by a visible scope.
+
+## Implementation Map
+
+`config_types::Expectation` and `check::selection::SelectedExpectation` carry
+expectation questions and expected answers from config loading into check runs.
+
+`scope.rs` keeps scopes as Git pathspec lists: it normalizes repository paths,
+matches tracked paths against scope entries, and applies configured ignore
+patterns as exclusions through `effective_ignore_patterns`.
+
+`git::visible_tree_oid` implements scoped tree and visible tree identity. It
+collects the tracked entries induced by a scope, then computes the
+repository-native Git tree object ID for those entries. When a scoped directory
+already has a Git tree object, the implementation can reuse that object ID;
+otherwise it serializes and hashes a synthetic tree object with the
+repository's object hash algorithm. `staged::worktree` uses that same OID when
+materializing evaluator-visible trees.
+
+`check::interrogation_state::initial_visible_scope_for_expectation` forms the
+visible scope from the latest stored q-scope, or full project scope when none is
+available. `staged::worktree::materialize_evaluator_scope` then applies that
+scope and the agent ignore rules before creating the evaluator working tree.
+
+`check::types::EvaluatorResponseJson` parses evaluator evidence and optional
+`qScopeSuggestion` values. `check::interrogation_policy` treats suggestions as
+unverified claims until an independent verification turn accepts them.
+`history::store` persists accepted answer records with `qScope` and
+`visibleTreeOid`; `history::reuse` reads only reusable answer history when
+seeding future q-scopes or same-tree cached results.
+
+`check::interrogation::ask_with_reused_thread` enforces evaluator-thread reuse.
+Its lookup key begins with evaluator model and `visibleTreeOid`, so a different
+model or visible tree cannot reuse an existing evaluator thread.

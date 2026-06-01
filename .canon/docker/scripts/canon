@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+image="${CANON_DOCKER_IMAGE:-ghcr.io/progbeat/canon:latest}"
+project_root="$(git rev-parse --path-format=absolute --show-toplevel)"
+git_dir="${project_root}/.git"  # worktrees are not supported now
+canon_state="${git_dir}/canon"
+container_repository="/scratch/secret/repository"
+
+mkdir -p "${canon_state}"
+
+# Host-side trust boundary:
+# - project files are writable so `canon init` can create .canon/check.yml;
+# - repository Git metadata is read-only except Canon-owned persistent state;
+# - one scratch tmpfs holds auth, Git locks, and evaluator files.
+exec docker run --rm -i \
+  --user "$(id -u):$(id -g)" \
+  --cap-drop=ALL \
+  --security-opt=no-new-privileges \
+  --read-only \
+  --tmpfs "/scratch:mode=1777" \
+  -v "${project_root}:${container_repository}:rw" \
+  -v "${git_dir}:${container_repository}/.git:ro" \
+  -v "${canon_state}:${container_repository}/.git/canon:rw" \
+  --mount "type=bind,src=${CODEX_HOME:-$HOME/.codex},dst=/codex,readonly" \
+  "${image}" "$@"

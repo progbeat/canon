@@ -1,20 +1,21 @@
-use crate::check_preflight::{
+use crate::check::preflight::{
     is_canon_only_staged_change_bytes, is_canon_project_path_bytes, staged_changed_path_bytes,
 };
 #[cfg(test)]
-use crate::check_selection::ExpectationIdentity;
-use crate::check_selection::{expectation_identities, select_expectations_with_identities};
-use crate::check_types::{CheckRecord, SelectedExpectation};
+use crate::check::selection::ExpectationIdentity;
+use crate::check::selection::{expectation_identities, select_expectations_with_identities};
+use crate::check::types::{CheckRecord, SelectedExpectation};
 use crate::cli::CommandError;
 use crate::config_types::{AgentConfig, CheckConfig};
-use crate::history::HistoryCache;
-use crate::history_reuse::{
+use crate::git::tree_source::TreeSource;
+use crate::git::visible_tree_oid::VisibleTreeOidCache;
+use crate::history::reuse::{
     cooldown_history_record, latest_history_record_matching_visible_tree_oid,
 };
+use crate::history::HistoryCache;
 use crate::output::write_stderr_line;
 use crate::repo_inspection::RepoInspectionCache;
 use crate::time::unix_timestamp;
-use crate::visible_tree_oid::VisibleTreeOidCache;
 use crate::CHECK_PATH;
 use std::ffi::OsString;
 use std::path::Path;
@@ -27,16 +28,20 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
             "canon gate does not accept arguments\n▷ Run `canon gate` without arguments.".into(),
         );
     }
+    // `canon check` prints "Commit the staged changes NOW!" only when this
+    // same HEAD-vs-staged regression count is zero. In that same-tree commit
+    // case, remaining expectation failures are not gate failures; only a
+    // staged regression from HEAD pass to staged fail blocks the hook.
+    let num_regressions = gate_result_or_failure(gate_regression_count(root))?;
+    if num_regressions > 0 {
+        write_gate_failure_event(GateFailureEvent::Regressed)?;
+        return Err(CommandError::GateFailed);
+    }
     if gate_result_or_failure(has_mixed_canon_and_non_canon_changes(root))? {
         write_stderr_line(
             "canon gate: .canon/** changes must not be mixed with non-.canon changes",
         )?;
         write_stderr_line("▷ Ask human to handle .canon/ changes.")?;
-        return Err(CommandError::GateFailed);
-    }
-    let num_regressions = gate_result_or_failure(gate_regression_count(root))?;
-    if num_regressions > 0 {
-        write_gate_failure_event(GateFailureEvent::Regressed)?;
         return Err(CommandError::GateFailed);
     }
     Ok(())
@@ -55,7 +60,7 @@ fn gate_result_or_failure<T>(result: Result<T, String>) -> Result<T, CommandErro
 
 fn gate_regression_count(root: &Path) -> Result<usize, String> {
     let mut repo_cache = RepoInspectionCache::new();
-    let config = repo_cache.load_check_config(root, Path::new(CHECK_PATH))?;
+    let config = repo_cache.load_check_config(root, Path::new(CHECK_PATH), &TreeSource::Staged)?;
     let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
     let mut history_cache = HistoryCache::new();
     gate_regression_count_with_config(
@@ -214,6 +219,10 @@ pub(crate) struct GateCaches<'a> {
 fn write_gate_failure_event(event: GateFailureEvent) -> Result<(), String> {
     match event {
         GateFailureEvent::Regressed => {
+            // Gate output stays generic by canon: even expectation-related
+            // failures are reported without expectation IDs or per-expectation
+            // lines. `canon check` is the command that prints individual
+            // expectation records.
             write_stderr_line("canon gate: staged changes regress cached canon results")?;
             write_stderr_line(gate_regression_advice())
         }

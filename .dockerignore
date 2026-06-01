@@ -1,0 +1,21 @@
+# Ignore everything, then allow only files used by Dockerfile COPY.
+*
+
+!Dockerfile
+!.dockerignore
+!Cargo.*
+
+!src/
+!src/**
+!resources/
+!resources/**
+!docker/
+!docker/canon
+!docker/entrypoint
+
+!.canon/
+!.canon/templates/
+!.canon/templates/**
+
+# Still drop local junk even inside included directories.
+**/.DS_Store

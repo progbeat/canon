@@ -1,0 +1,6 @@
+- q: |
+    Does the Dockerfile set these container environment variables?
+    - CANON_SECRET_DIR=/scratch/secret/
+    - CANON_SANDBOX_DIR=/scratch/sandbox
+    - CODEX_HOME=/scratch/codex-home
+  a: "yes"

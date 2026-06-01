@@ -61,9 +61,25 @@
   a: "no"
   cooldown: 7d
 
-# - q: "Are there obvious removable naming redundancies in source paths or module/import paths that make navigation noisier?"
+- q: "Do `canon --help` and every `canon <command> --help` output render through clap?"
+  a: "yes"
+
+- q: "Are there obvious removable naming redundancies in source paths or module/import paths that make navigation noisier?"
+  a: "no"
+  cooldown: 7d
+
+- q: "Are tests outside implementation files limited to platform-independent intended behavior through public interfaces?"
+  a: "yes"
+
+- q: "Are there dedicated test files?"
+  a: "yes"
+  # forbidden_evidence_substrings: "`README.md`"
+
+# TODO: Uncomment after implementing cooldown on fail or something similar to limit noise.
+
+# - q: "Are there any places where code outside a type's owning module rewrites fields that define the type's identity, provenance, result, or invariants instead of using a constructor or transformation owned by that module?"
 #   a: "no"
-#   cooldown: 7d
+#   cooldown: {"pass": 7d, "fail": 1d}
 
 # - q: "Can you find a critical high-confidence bug with a concrete failing scenario?"
 #   a: "no"

@@ -1,6 +1,6 @@
 use crate::fs_util::ensure_dir_without_symlinks;
 use crate::git::resolve_git_path;
-use crate::notes_cli::arg_to_string;
+use crate::notes::cli::arg_to_string;
 use crate::output::write_stdout_line;
 use crate::platform;
 use crate::project::command_output_trimmed;

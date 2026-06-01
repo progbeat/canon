@@ -1,19 +1,21 @@
 use std::borrow::Cow;
 use std::env;
 use std::ffi::OsString;
+use std::io::{self, Write};
 use std::path::Path;
 use std::process;
 
-use crate::check_command::run_check_command;
-use crate::evaluator::print_help;
+use crate::check::command::run_check_command;
+use crate::check::command_args::{check_help_command, check_help_requested};
 use crate::gate::run_gate_command;
 use crate::hooks::{run_hook_command, run_init};
-use crate::logging::DiagnosticLogError;
+use crate::logs::DiagnosticLogError;
+use crate::notes::cli::{arg_to_string, collect_text_or_stdin, require_key, run_rg};
 use crate::notes::{append_note, delete_note, ensure_note, read_note, write_note};
-use crate::notes_cli::{arg_to_string, collect_text_or_stdin, require_key, run_rg};
-use crate::output::{write_stderr_line, write_stdout_line};
+use crate::output::write_stdout_line;
 use crate::project::{git_project_root, print_root, project_root_or_current};
 use crate::project_types::Config;
+use clap::Command as ClapCommand;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CommandError {
@@ -108,9 +110,19 @@ pub(crate) fn run(args: Vec<OsString>) -> Result<(), CommandError> {
 
 fn report_command_error(err: CommandError) -> CommandError {
     if command_error_has_public_diagnostic(&err) {
-        let _ = write_stderr_line(&format!("Error: {}", err));
+        let _ = write_command_error_line(&err);
     }
     err
+}
+
+fn write_command_error_line(err: &CommandError) -> Result<(), String> {
+    let stderr = io::stderr();
+    let mut stderr = stderr.lock();
+    writeln!(stderr, "Error: {}", err)
+        .map_err(|source| format!("failed to write command error to stderr: {}", source))?;
+    stderr
+        .flush()
+        .map_err(|source| format!("failed to flush command error to stderr: {}", source))
 }
 
 fn run_command(args: Vec<OsString>) -> Result<(), CommandError> {
@@ -123,6 +135,10 @@ fn run_command(args: Vec<OsString>) -> Result<(), CommandError> {
     let first = arg_to_string(&args[0])?;
     let note_command = match first.as_str() {
         "init" => {
+            if command_help_requested(&args[1..]) {
+                print_clap_help(init_help_command())?;
+                return Ok(());
+            }
             if args.len() != 1 {
                 return Err(CommandError::InitDoesNotAcceptArguments);
             }
@@ -130,23 +146,39 @@ fn run_command(args: Vec<OsString>) -> Result<(), CommandError> {
             return run_init(&root).map_err(CommandError::from);
         }
         "hook" => {
+            if command_help_requested(&args[1..]) {
+                print_clap_help(hook_help_command())?;
+                return Ok(());
+            }
             let root = git_project_root(Path::new("."))?;
             return run_hook_command(&root, &args[1..]).map_err(CommandError::from);
         }
         "check" => {
+            if check_help_requested(&args[1..]) {
+                print_clap_help(check_help_command())?;
+                return Ok(());
+            }
             let root = git_project_root(Path::new("."))?;
             return run_check_command(&root, &args[1..]);
         }
         "gate" => {
+            if command_help_requested(&args[1..]) {
+                print_clap_help(gate_help_command())?;
+                return Ok(());
+            }
             let root = git_project_root(Path::new("."))?;
             return run_gate_command(&root, &args[1..]);
         }
         "-h" | "--help" | "help" => {
-            print_help()?;
+            print_clap_help(root_help_command())?;
             return Ok(());
         }
         value => {
             if let Some(command) = NoteCommand::parse(value) {
+                if command_help_requested(&args[1..]) {
+                    print_clap_help(note_help_command(value))?;
+                    return Ok(());
+                }
                 command
             } else if first.starts_with('-') {
                 return Err(CommandError::UnknownOption(first));
@@ -193,4 +225,120 @@ fn run_command(args: Vec<OsString>) -> Result<(), CommandError> {
     }
 
     Ok(())
+}
+
+fn command_help_requested(args: &[OsString]) -> bool {
+    args.iter()
+        .any(|arg| arg == std::ffi::OsStr::new("-h") || arg == std::ffi::OsStr::new("--help"))
+}
+
+fn print_clap_help(mut command: ClapCommand) -> Result<(), String> {
+    let stdout = io::stdout();
+    let mut stdout = FlushingTrailingByteWriter::new(stdout.lock());
+    command
+        .write_help(&mut stdout)
+        .map_err(|err| format!("failed to write help to stdout: {}", err))?;
+    if stdout.last_byte() != Some(b'\n') {
+        stdout
+            .write_all(b"\n")
+            .map_err(|err| format!("failed to write help newline to stdout: {}", err))?;
+    }
+    stdout
+        .flush()
+        .map_err(|err| format!("failed to flush help to stdout: {}", err))
+}
+
+struct FlushingTrailingByteWriter<W> {
+    inner: W,
+    last_byte: Option<u8>,
+}
+
+impl<W> FlushingTrailingByteWriter<W> {
+    fn new(inner: W) -> FlushingTrailingByteWriter<W> {
+        FlushingTrailingByteWriter {
+            inner,
+            last_byte: None,
+        }
+    }
+
+    fn last_byte(&self) -> Option<u8> {
+        self.last_byte
+    }
+}
+
+impl<W: Write> Write for FlushingTrailingByteWriter<W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let written = self.inner.write(bytes)?;
+        if written > 0 {
+            self.last_byte = Some(bytes[written - 1]);
+            self.inner.flush()?;
+        }
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+fn root_help_command() -> ClapCommand {
+    ClapCommand::new("canon")
+        .about("AI linter for project expectations")
+        .subcommand(init_help_command())
+        .subcommand(hook_help_command())
+        .subcommand(check_help_command())
+        .subcommand(gate_help_command())
+        .subcommand(note_help_command("pwd"))
+        .subcommand(note_help_command("path"))
+        .subcommand(note_help_command("read"))
+        .subcommand(note_help_command("write"))
+        .subcommand(note_help_command("append"))
+        .subcommand(note_help_command("delete"))
+        .subcommand(note_help_command("rg"))
+}
+
+fn init_help_command() -> ClapCommand {
+    ClapCommand::new("init")
+        .bin_name("canon init")
+        .about("Create the default canon configuration")
+}
+
+fn hook_help_command() -> ClapCommand {
+    ClapCommand::new("hook")
+        .bin_name("canon hook")
+        .about("Manage the canon Git hook")
+        .subcommand(ClapCommand::new("install").about("Install the canon Git hook"))
+        .subcommand(ClapCommand::new("uninstall").about("Uninstall the canon Git hook"))
+}
+
+fn gate_help_command() -> ClapCommand {
+    ClapCommand::new("gate")
+        .bin_name("canon gate")
+        .about("Fail when staged canon expectations regress")
+}
+
+fn note_help_command(name: &str) -> ClapCommand {
+    match name {
+        "p" | "path" => ClapCommand::new("path")
+            .bin_name("canon path")
+            .about("Print the path for a canon note"),
+        "r" | "read" => ClapCommand::new("read")
+            .bin_name("canon read")
+            .about("Read a canon note"),
+        "w" | "write" => ClapCommand::new("write")
+            .bin_name("canon write")
+            .about("Write a canon note"),
+        "a" | "append" => ClapCommand::new("append")
+            .bin_name("canon append")
+            .about("Append to a canon note"),
+        "d" | "del" | "delete" | "rm" => ClapCommand::new("delete")
+            .bin_name("canon delete")
+            .about("Delete a canon note"),
+        "rg" | "g" => ClapCommand::new("rg")
+            .bin_name("canon rg")
+            .about("Search canon notes with ripgrep"),
+        _ => ClapCommand::new("pwd")
+            .bin_name("canon pwd")
+            .about("Print the canon project root"),
+    }
 }

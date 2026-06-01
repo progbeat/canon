@@ -4,12 +4,11 @@ use std::path::Path;
 
 // Glossary implementation map: this module owns scope path normalization,
 // Git pathspec matching, and ignore matching. Visible-scope selection lives in
-// `check_interrogation_state`; visible-tree hashing/materialization live in
-// `git_runtime::visible_tree_oid` and `staged_snapshot::staged_worktree`;
-// q-scope verification/storage/reuse live in `checking::check`,
-// `check_interrogation_policy`, `history_store::history`, and
-// `history_store::history_reuse`; evaluator-thread reuse invariants live in
-// `check_interrogation_state` and `check_interrogation`.
+// `check::interrogation_state`; visible-tree hashing/materialization live in
+// `git::visible_tree_oid` and `staged::worktree`; q-scope
+// verification/storage/reuse live in `check::interrogation_policy`,
+// `history::store`, and `history::reuse`; evaluator-thread reuse invariants
+// live in `check::interrogation_state` and `check::interrogation`.
 
 pub(crate) fn sanitize_scope(
     scope: &[String],
@@ -439,21 +438,6 @@ pub(crate) fn effective_ignore_patterns(agent: &AgentConfig) -> Vec<String> {
         }
     }
     patterns
-}
-
-pub(crate) fn git_pathspecs_for_visible_scope(
-    agent: &AgentConfig,
-    scope: &[String],
-) -> Vec<String> {
-    let mut pathspecs = if scope == full_scope() {
-        full_scope()
-    } else {
-        scope.to_vec()
-    };
-    for pattern in effective_ignore_patterns(agent) {
-        pathspecs.push(format!(":(exclude){}", pattern));
-    }
-    pathspecs
 }
 
 fn push_unique_pattern(patterns: &mut Vec<String>, pattern: String) {

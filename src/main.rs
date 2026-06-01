@@ -1,3 +1,5 @@
+#![cfg_attr(test, allow(dead_code, unused_imports))]
+
 const FNV_OFFSET: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
 const B64_URL: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -20,9 +22,9 @@ const DEFAULT_DIAGNOSTIC_LOG_CONFIG: DiagnosticLogConfig = DiagnosticLogConfig {
 const HISTORY_COMPACT_KEEP_RECORDS: usize = 8;
 const HISTORY_COMPACT_CHANCE_DENOMINATOR: u64 = 16;
 const APP_SERVER_TURN_TIMEOUT_SECS: u64 = 300;
-// The `canon init` seed is a check-config source file, not an evaluator
-// interrogation prompt/instruction. Interrogation texts live under
-// `resources/prompts/`.
+// The `canon init` seed is compiled into the binary from a check-config source
+// file, not loaded at runtime as an evaluator interrogation prompt/instruction.
+// Interrogation texts live under `resources/prompts/`.
 const DEFAULT_CHECK_CONFIG_SOURCE: &str = include_str!("../.canon/templates/default/check.yml");
 // `${CANON_STATE_DIR}/hooks`, resolved through `git rev-parse --git-path`.
 const GIT_HOOKS_PATH: &str = "canon/hooks";
@@ -41,155 +43,176 @@ pub(crate) struct DiagnosticLogConfig {
     pub(crate) files: &'static [&'static str],
 }
 
-#[path = "app/app_server.rs"]
-mod app_server;
-#[path = "app/app_server_io.rs"]
-mod app_server_io;
-#[path = "app/app_server_process.rs"]
-mod app_server_process;
-#[path = "app/app_server_protocol.rs"]
-mod app_server_protocol;
-#[path = "app/app_server_runner.rs"]
-mod app_server_runner;
-#[path = "app/app_server_transport.rs"]
-mod app_server_transport;
-#[path = "app/app_server_usage.rs"]
-mod app_server_usage;
-#[path = "checking/check.rs"]
-mod check;
+mod app {
+    #[path = "io.rs"]
+    pub(crate) mod io;
+    #[path = "process.rs"]
+    pub(crate) mod process;
+    #[path = "protocol.rs"]
+    pub(crate) mod protocol;
+    #[path = "runner.rs"]
+    pub(crate) mod runner;
+    #[path = "server.rs"]
+    pub(crate) mod server;
+    #[path = "transport.rs"]
+    pub(crate) mod transport;
+    #[path = "usage.rs"]
+    pub(crate) mod usage;
+}
+
 // Glossary implementation map for `canon check`:
-// - expectation collection/identity: `check_config_expansion`, `check_selection`, `hash`.
-// - scope and scoped tree semantics: `scope`, `visible_tree_oid`, `staged_worktree`.
-// - q-scope storage/reuse: `history` writes `qScope`, `history_reuse` seeds the next
+// - expectation collection/identity: `check::config_expansion`, `check::selection`, `hash`.
+// - scope and scoped tree semantics: `scope`, `git::visible_tree_oid`, `staged::worktree`.
+// - q-scope storage/reuse: `history::store` writes `qScope`, `history::reuse` seeds the next
 //   visible scope from the latest answer-history q-scope.
-// - q-scope suggestion lifecycle: `evaluator_response` parses the evaluator claim,
-//   `check_interrogation_policy` verifies whether it becomes a reusable q-scope,
-//   and `check` records only verified answer scopes in history.
-// - visible scope/tree formation: `check_interrogation_state` chooses the stored
+// - q-scope suggestion lifecycle: `evaluator::response` parses the evaluator claim,
+//   `check::interrogation_policy` verifies whether it becomes a reusable q-scope,
+//   and `check::run` records only verified answer scopes in history.
+// - visible scope/tree formation: `check::interrogation_state` chooses the stored
 //   q-scope or full scope, `scope::effective_ignore_patterns` applies configured
-//   ignore rules, and `staged_worktree` materializes the resulting visible tree.
-// - evidence and answer/error records: `evaluator_response`,
-//   `check_interrogation_records`, `check_types`, and `check_output`.
-// - evaluator thread reuse: `check_interrogation_state::evaluator_thread_reuse_key`
-//   and `check_interrogation` keep reusable threads scoped by model, visible tree,
+//   ignore rules, and `staged::worktree` materializes the resulting visible tree.
+// - evidence and answer/error records: `evaluator::response`,
+//   `check::interrogation_records`, `check::types`, and `check::output`.
+// - evaluator thread reuse: `check::interrogation_state::evaluator_thread_reuse_key`
+//   and `check::interrogation` keep reusable threads scoped by model, visible tree,
 //   and developer-instruction inputs.
-#[path = "checking/check_cache.rs"]
-mod check_cache;
-#[path = "checking/check_command.rs"]
-mod check_command;
-#[path = "checking/check_command_args.rs"]
-mod check_command_args;
-#[path = "checking/check_command_finish.rs"]
-mod check_command_finish;
-#[path = "checking/check_config.rs"]
-mod check_config;
-// Implementation files live under domain subdirectories. The crate root keeps
-// stable module names with `#[path]` so existing internal imports do not churn
-// when files move between navigation groups.
-#[path = "checking/check_config_expansion.rs"]
-mod check_config_expansion;
-#[path = "checking/check_errors.rs"]
-mod check_errors;
-#[path = "checking/check_generator_paths.rs"]
-mod check_generator_paths;
-#[path = "checking/check_interrogation.rs"]
-mod check_interrogation;
-#[path = "checking/check_interrogation_policy.rs"]
-mod check_interrogation_policy;
-#[path = "checking/check_interrogation_records.rs"]
-mod check_interrogation_records;
-#[path = "checking/check_interrogation_state.rs"]
-mod check_interrogation_state;
-#[path = "checking/check_lazy_reset.rs"]
-mod check_lazy_reset;
-#[path = "checking/check_model_fallback.rs"]
-mod check_model_fallback;
-#[path = "checking/check_narrowing.rs"]
-mod check_narrowing;
-#[path = "checking/check_order_state.rs"]
-mod check_order_state;
-#[path = "checking/check_output.rs"]
-mod check_output;
-#[path = "checking/check_preflight.rs"]
-mod check_preflight;
-#[path = "checking/check_query.rs"]
-mod check_query;
-#[path = "checking/check_query_command.rs"]
-mod check_query_command;
-#[path = "checking/check_reporting.rs"]
-mod check_reporting;
-#[path = "checking/check_selection.rs"]
-mod check_selection;
-#[path = "checking/check_types.rs"]
-mod check_types;
-#[path = "checking/check_validation.rs"]
-mod check_validation;
+mod check {
+    #[path = "run.rs"]
+    pub(crate) mod run;
+    pub(crate) use run::*;
+    #[path = "cache.rs"]
+    pub(crate) mod cache;
+    #[path = "command.rs"]
+    pub(crate) mod command;
+    #[path = "command_args.rs"]
+    pub(crate) mod command_args;
+    #[path = "command_finish.rs"]
+    pub(crate) mod command_finish;
+    #[path = "config.rs"]
+    pub(crate) mod config;
+    #[path = "config_expansion.rs"]
+    pub(crate) mod config_expansion;
+    #[path = "errors.rs"]
+    pub(crate) mod errors;
+    #[path = "generator_paths.rs"]
+    pub(crate) mod generator_paths;
+    #[path = "interrogation.rs"]
+    pub(crate) mod interrogation;
+    #[path = "interrogation_policy.rs"]
+    pub(crate) mod interrogation_policy;
+    #[path = "interrogation_records.rs"]
+    pub(crate) mod interrogation_records;
+    #[path = "interrogation_state.rs"]
+    pub(crate) mod interrogation_state;
+    #[path = "lazy_reset.rs"]
+    pub(crate) mod lazy_reset;
+    #[path = "model_fallback.rs"]
+    pub(crate) mod model_fallback;
+    #[path = "narrowing.rs"]
+    pub(crate) mod narrowing;
+    #[path = "order_state.rs"]
+    pub(crate) mod order_state;
+    #[path = "output.rs"]
+    pub(crate) mod output;
+    #[path = "preflight.rs"]
+    pub(crate) mod preflight;
+    #[path = "query.rs"]
+    pub(crate) mod query;
+    #[path = "query_command.rs"]
+    pub(crate) mod query_command;
+    #[path = "reporting.rs"]
+    pub(crate) mod reporting;
+    #[path = "selection.rs"]
+    pub(crate) mod selection;
+    #[path = "types.rs"]
+    pub(crate) mod types;
+    #[path = "validation.rs"]
+    pub(crate) mod validation;
+}
 mod cli;
 mod config_types;
-#[path = "evaluator_runtime/evaluator.rs"]
-mod evaluator;
-#[path = "evaluator_runtime/evaluator_config.rs"]
-mod evaluator_config;
-#[path = "evaluator_runtime/evaluator_prompt.rs"]
-mod evaluator_prompt;
-#[path = "evaluator_runtime/evaluator_response.rs"]
-mod evaluator_response;
-#[path = "evaluator_runtime/evaluator_response_cache.rs"]
-mod evaluator_response_cache;
-#[path = "evaluator_runtime/evaluator_scope.rs"]
-mod evaluator_scope;
-#[path = "evaluator_runtime/evaluator_turn.rs"]
-mod evaluator_turn;
-#[path = "evaluator_runtime/evaluator_types.rs"]
-mod evaluator_types;
+mod evaluator {
+    #[path = "core.rs"]
+    pub(crate) mod core;
+    pub(crate) use core::*;
+    #[path = "config.rs"]
+    pub(crate) mod config;
+    #[path = "prompt.rs"]
+    pub(crate) mod prompt;
+    #[path = "response.rs"]
+    pub(crate) mod response;
+    #[path = "response_cache.rs"]
+    pub(crate) mod response_cache;
+    #[path = "scope.rs"]
+    pub(crate) mod scope;
+    #[path = "turn.rs"]
+    pub(crate) mod turn;
+    #[path = "types.rs"]
+    pub(crate) mod types;
+}
 mod fs_util;
 mod gate;
-#[path = "git_runtime/git.rs"]
-mod git;
-#[path = "git_runtime/git_config.rs"]
-mod git_config;
+mod git {
+    #[path = "program.rs"]
+    pub(crate) mod program;
+    pub(crate) use program::*;
+    #[path = "config.rs"]
+    pub(crate) mod config;
+    #[path = "tree_source.rs"]
+    pub(crate) mod tree_source;
+    #[path = "visible_tree_oid.rs"]
+    pub(crate) mod visible_tree_oid;
+}
 mod hash;
-#[path = "history_store/history.rs"]
-mod history;
-// Cache answer history is implemented end-to-end in `history`: path/read
+mod history {
+    #[path = "store.rs"]
+    pub(crate) mod store;
+    pub(crate) use store::*;
+    #[path = "append.rs"]
+    pub(crate) mod append;
+    #[path = "cache_key.rs"]
+    pub(crate) mod cache_key;
+    #[path = "cleanup.rs"]
+    pub(crate) mod cleanup;
+    #[path = "reuse.rs"]
+    pub(crate) mod reuse;
+}
+mod isolation;
+// Cache answer history is implemented end-to-end in `history::store`: path/read
 // cache, answer-only durable JSONL writes, required field order, and
-// probabilistic retention. The append/compaction modules below are thin import
-// wrappers; `history_reuse` owns same-tree/cooldown lookup.
-#[path = "history_store/history_append.rs"]
-mod history_append;
-#[path = "history_store/history_cache_key.rs"]
-mod history_cache_key;
-#[path = "history_store/history_cleanup.rs"]
-mod history_cleanup;
-#[path = "history_store/history_compaction.rs"]
-mod history_compaction;
-#[path = "history_store/history_reuse.rs"]
-mod history_reuse;
+// probabilistic retention. The append module below is a thin import wrapper;
+// `history::reuse` owns same-tree/cooldown lookup.
 mod hooks;
-#[path = "runtime_logs/logging.rs"]
-mod logging;
-#[path = "runtime_logs/logging_config.rs"]
-mod logging_config;
-#[path = "runtime_logs/logging_error.rs"]
-mod logging_error;
-#[path = "runtime_logs/logging_fs.rs"]
-mod logging_fs;
-#[path = "runtime_logs/logging_lock.rs"]
-mod logging_lock;
-#[path = "runtime_logs/logging_render.rs"]
-mod logging_render;
-#[path = "runtime_logs/logging_rotation.rs"]
-mod logging_rotation;
-#[path = "notes_store/notes.rs"]
-mod notes;
-#[path = "notes_store/notes_cli.rs"]
-mod notes_cli;
-#[path = "notes_store/notes_header.rs"]
-mod notes_header;
-#[path = "notes_store/notes_index.rs"]
-mod notes_index;
-#[path = "notes_store/notes_restore.rs"]
-mod notes_restore;
+mod logs {
+    #[path = "writer.rs"]
+    pub(crate) mod writer;
+    pub(crate) use writer::*;
+    #[path = "config.rs"]
+    pub(crate) mod config;
+    #[path = "error.rs"]
+    pub(crate) mod error;
+    #[path = "fs.rs"]
+    pub(crate) mod fs;
+    #[path = "lock.rs"]
+    pub(crate) mod lock;
+    #[path = "render.rs"]
+    pub(crate) mod render;
+    #[path = "rotation.rs"]
+    pub(crate) mod rotation;
+}
+mod notes {
+    #[path = "store.rs"]
+    pub(crate) mod store;
+    pub(crate) use store::*;
+    #[path = "cli.rs"]
+    pub(crate) mod cli;
+    #[path = "header.rs"]
+    pub(crate) mod header;
+    #[path = "index.rs"]
+    pub(crate) mod index;
+    #[path = "restore.rs"]
+    pub(crate) mod restore;
+}
 mod output;
 mod path_io_error;
 mod platform;
@@ -197,18 +220,16 @@ mod project;
 mod project_types;
 mod repo_inspection;
 mod scope;
-#[path = "staged_snapshot/staged_worktree.rs"]
-mod staged_worktree;
-#[path = "staged_snapshot/staged_worktree_paths.rs"]
-mod staged_worktree_paths;
+mod staged {
+    #[path = "worktree.rs"]
+    pub(crate) mod worktree;
+    pub(crate) use worktree::*;
+    #[path = "paths.rs"]
+    pub(crate) mod paths;
+}
 mod time;
 mod token_usage_types;
-#[path = "git_runtime/visible_tree_oid.rs"]
-mod visible_tree_oid;
 
 fn main() {
     cli::main();
 }
-
-#[cfg(test)]
-mod tests;

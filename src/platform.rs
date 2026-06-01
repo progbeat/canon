@@ -4,14 +4,17 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
+compile_error!("canon requires Unix or Windows filesystem support");
+
+#[cfg(windows)]
 #[path = "platform_other.rs"]
 mod platform_other;
 #[cfg(unix)]
 #[path = "platform_unix.rs"]
 mod platform_unix;
 
-#[cfg(not(unix))]
+#[cfg(windows)]
 use platform_other as imp;
 #[cfg(unix)]
 use platform_unix as imp;
@@ -42,12 +45,50 @@ pub(crate) fn mirror_evaluator_codex_home_file(source: &Path, target: &Path) -> 
     imp::mirror_evaluator_codex_home_file(source, target)
 }
 
+pub(crate) fn move_path(source: &Path, target: &Path) -> Result<(), String> {
+    imp::move_path(source, target)
+}
+
 pub(crate) fn make_hook_executable(path: &Path) -> Result<(), String> {
     imp::make_hook_executable(path)
 }
 
 pub(crate) fn set_materialized_file_permissions(path: &Path, mode: &str) -> Result<(), String> {
     imp::set_materialized_file_permissions(path, mode)
+}
+
+pub(crate) fn set_materialized_dir_permissions(path: &Path) -> Result<(), String> {
+    imp::set_materialized_dir_permissions(path)
+}
+
+pub(crate) fn set_private_dir_permissions(path: &Path) -> Result<(), String> {
+    imp::set_private_dir_permissions(path)
+}
+
+pub(crate) fn set_private_file_permissions(path: &Path) -> Result<(), String> {
+    imp::set_private_file_permissions(path)
+}
+
+pub(crate) type SecretDirMode = imp::SecretDirMode;
+
+pub(crate) fn secret_dir_mode(path: &Path) -> Result<SecretDirMode, String> {
+    imp::secret_dir_mode(path)
+}
+
+pub(crate) fn chmod_secret_dir_no_access(path: &Path) -> Result<(), String> {
+    imp::chmod_secret_dir_no_access(path)
+}
+
+pub(crate) fn restore_secret_dir_mode(path: &Path, mode: &SecretDirMode) -> Result<(), String> {
+    imp::restore_secret_dir_mode(path, mode)
+}
+
+pub(crate) fn create_materialized_symlink(target: &[u8], link: &Path) -> Result<(), String> {
+    imp::create_materialized_symlink(target, link)
+}
+
+pub(crate) fn hardlink_file_or_copy_symlink(source: &Path, target: &Path) -> Result<(), String> {
+    imp::hardlink_file_or_copy_symlink(source, target)
 }
 
 pub(crate) fn create_private_dir(path: &Path) -> io::Result<()> {
@@ -64,10 +105,25 @@ pub(crate) fn open_file_for_append_without_following_symlink(
     imp::open_file_for_append_without_following_symlink(path)
 }
 
+#[cfg(all(test, unix))]
 pub(crate) fn staged_snapshot_parent_candidates() -> Vec<PathBuf> {
+    let mut parents = memory_backed_staged_snapshot_parent_candidates();
+    for parent in ordinary_staged_snapshot_parent_candidates() {
+        push_unique_path(&mut parents, parent);
+    }
+    parents
+}
+
+pub(crate) fn memory_backed_staged_snapshot_parent_candidates() -> Vec<PathBuf> {
     let mut parents = Vec::new();
     add_common_memory_backed_staged_snapshot_parent_candidates(&mut parents);
-    imp::add_staged_snapshot_parent_candidates(&mut parents);
+    imp::add_memory_backed_staged_snapshot_parent_candidates(&mut parents);
+    parents
+}
+
+pub(crate) fn ordinary_staged_snapshot_parent_candidates() -> Vec<PathBuf> {
+    let mut parents = Vec::new();
+    imp::add_ordinary_staged_snapshot_parent_candidates(&mut parents);
     let temp_dir = std::env::temp_dir();
     if !parents.iter().any(|parent| parent == &temp_dir) {
         parents.push(temp_dir);
