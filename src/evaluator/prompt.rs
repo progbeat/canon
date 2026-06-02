@@ -36,8 +36,9 @@ mod tests {
 
     #[test]
     fn base_instructions_prohibit_status_text() {
-        assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("do not announce skills"));
+        assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("Do not announce skills"));
         assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("only the JSON object"));
+        assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("I'll inspect"));
     }
 
     #[test]
@@ -47,6 +48,7 @@ mod tests {
         assert!(instructions.contains("stale/misleading docs/comments"));
         assert!(instructions.contains("no concrete mismatch"));
         assert!(instructions.contains("do not require exhaustive proof"));
+        assert!(instructions.contains("text before or after the JSON is invalid"));
         assert!(instructions.contains("first non-whitespace character must be `{`"));
     }
 }

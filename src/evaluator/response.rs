@@ -82,6 +82,32 @@ mod tests {
     }
 
     #[test]
+    fn evaluator_response_rejects_empty_q_scope_suggestion() {
+        let response = parse_evaluator_response_json(
+            r#"{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":[]}"#,
+        )
+        .unwrap();
+
+        assert!(response
+            .validate_schema()
+            .unwrap_err()
+            .contains("qScopeSuggestion"));
+    }
+
+    #[test]
+    fn evaluator_response_rejects_empty_q_scope_suggestion_item() {
+        let response = parse_evaluator_response_json(
+            r#"{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":[""]}"#,
+        )
+        .unwrap();
+
+        assert!(response
+            .validate_schema()
+            .unwrap_err()
+            .contains("qScopeSuggestion"));
+    }
+
+    #[test]
     fn evaluator_response_accepts_required_q_scope_suggestion() {
         let response = parse_evaluator_response_json(
             r#"{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":["src/main.rs"]}"#,

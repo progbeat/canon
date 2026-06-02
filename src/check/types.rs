@@ -180,9 +180,13 @@ impl EvaluatorResponseJson {
         // syntax is not part of response-schema validity; syntax and semantic
         // sufficiency are later narrowing policy checks, which accept a claim
         // only after an independent answer-producing turn.
+        // Interrogation Policy's JSON Schema sets `minItems: 1` for
+        // `qScopeSuggestion`, so an empty array is a response-schema error.
         if self.q_scope_suggestion.is_empty() {
             return Err("qScopeSuggestion must contain at least one path".to_string());
         }
+        // Each item follows the schema's `minLength: 1` and
+        // `pattern: "^[^\\r\\n]*$"` constraints.
         for item in &self.q_scope_suggestion {
             if item.is_empty() || contains_schema_single_line_violation(item) {
                 return Err(
