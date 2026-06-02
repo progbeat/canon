@@ -83,19 +83,17 @@
   a: "no"
   preset: smart
   cooldown: 7d
-  # cooldown: { fail: 1d, pass: 7d }
 
-# TODO: Uncomment after implementing cooldown on fail or something similar to limit noise.
+- q: "Are there misleading or stale comments or documentation that no longer match the implementation?"
+  a: "no"
+  cooldown: 7d
 
-# - q: "Are there any places where code outside a type's owning module rewrites fields that define the type's identity, provenance, result, or invariants instead of using a constructor or transformation owned by that module?"
-#   a: "no"
-#   cooldown: {"pass": 7d, "fail": 1d}
+- q: "Can you find a critical high-confidence bug with a concrete failing scenario?"
+  a: "no"
+  preset: smart
+  cooldown: {"pass": 7d, "fail": 1d}
 
-# - q: "Can you find a critical high-confidence bug with a concrete failing scenario?"
-#   a: "no"
-#   preset: smart
-
-# - q: "Can you find any high-confidence, practically exploitable security vulnerability?"
-#   a: "no"
-#   cooldown: 7d
-#   thinking: xhigh
+- q: "Can you find any high-confidence, practically exploitable security vulnerability?"
+  a: "no"
+  preset: smart
+  cooldown: {"pass": 7d, "fail": 1d}
