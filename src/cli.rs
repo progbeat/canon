@@ -5,13 +5,14 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::process;
 
-use crate::check::command::run_check_command;
-use crate::check::command_args::{check_help_command, check_help_requested};
+use crate::check::{check_help_command, check_help_requested, run_check_command};
 use crate::gate::run_gate_command;
 use crate::hooks::{run_hook_command, run_init};
 use crate::logs::DiagnosticLogError;
-use crate::notes::cli::{arg_to_string, collect_text_or_stdin, require_key, run_rg};
-use crate::notes::{append_note, delete_note, ensure_note, read_note, write_note};
+use crate::notes::{
+    append_note, arg_to_string, collect_text_or_stdin, delete_note, ensure_note, read_note,
+    require_key, run_rg, write_note,
+};
 use crate::output::write_stdout_line;
 use crate::project::{git_project_root, print_root, project_root_or_current};
 use crate::project_types::Config;

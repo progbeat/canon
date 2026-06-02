@@ -4,9 +4,9 @@ The **same-tree record** for an expectation is the latest answer history record 
 
 The **same-tree result** derived from that record is `pass` if its `observed` value matches the expectation’s current expected answer, and `fail` otherwise.
 
-A **cooldown result** for an expectation exists when the expectation has a `cooldown`, its latest **answer history record** has `observed` equal to the current expected answer, and its `timestamp` is younger than the configured cooldown duration. The cooldown result is `pass`.
+A **cooldown result** for an expectation exists when the expectation has a `cooldown`, its latest **answer history record** has a `pass` or `fail` result with a configured cooldown duration, and its `timestamp` is younger than that duration. The history record's result is `pass` if its `observed` value matches the expectation’s current expected answer, and `fail` otherwise. The cooldown result is `pass`.
 
-A **cached result** for an expectation and Git state is the result value from the newer of the expectation's **same-tree result** and **cooldown result**, if either exists.
+A **cached result** for an expectation and Git state is the expectation's **same-tree result**, if one exists. Otherwise, it is the expectation's **cooldown result**, if one exists.
 
 If neither exists, the expectation has no **cached result**.
 
@@ -23,4 +23,4 @@ expectations:
 
 `cooldown` is optional and intended only for project quality or other expensive expectations where frequent re-proving is not necessary.
 
-`cooldown` values use compact positive duration syntax with exactly one integer and one unit. Supported units are `s`, `m`, `h`, `d`, and `w`, for seconds, minutes, hours, days, and weeks. Examples include `30m`, `4h`, `3d`, and `2w`.
+`cooldown` may be a compact duration or a mapping with `pass` or `fail` durations. A compact duration is equivalent to `pass: <duration>`. Cooldown durations use compact positive duration syntax with exactly one integer and one unit. Supported units are `s`, `m`, `h`, `d`, and `w`, for seconds, minutes, hours, days, and weeks. Examples include `30m`, `4h`, `3d`, `2w`, and `cooldown: { fail: 21h, pass: 7d }`.

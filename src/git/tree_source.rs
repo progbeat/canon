@@ -1,4 +1,6 @@
-use crate::git::{staged_tracked_files, tree_tracked_files, StagedTrackedFile};
+use super::program::{
+    resolve_tree_oid, staged_tracked_files, tree_tracked_files, StagedTrackedFile,
+};
 use std::path::Path;
 
 pub(crate) const STAGED_TREE_ARG: &str = ":staged";
@@ -16,7 +18,7 @@ impl TreeSource {
         if value == STAGED_TREE_ARG {
             return Ok(TreeSource::Staged);
         }
-        let tree_oid = crate::git::resolve_tree_oid(root, value)
+        let tree_oid = resolve_tree_oid(root, value)
             .map_err(|err| format!("{} {}: {}", option, value, err))?;
         Ok(TreeSource::Git {
             treeish: value.to_string(),

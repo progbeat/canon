@@ -1,8 +1,9 @@
 use crate::check::selection::parse_cooldown;
-use crate::check::types::contains_line_break;
+use crate::check::types::{
+    contains_line_break, ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION, ERROR_UNPARSABLE,
+};
 use crate::config_types::{AgentConfig, CheckConfig};
 use crate::scope::normalize_repo_path;
-use crate::{ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION, ERROR_UNPARSABLE};
 
 pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> {
     if config.version != 1 {
@@ -47,7 +48,7 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
                 number
             ));
         }
-        if let Some(cooldown) = expectation.cooldown.as_deref() {
+        if let Some(cooldown) = expectation.cooldown.as_ref() {
             parse_cooldown(cooldown)
                 .map_err(|err| format!("expectation {} cooldown: {}", number, err))?;
         }

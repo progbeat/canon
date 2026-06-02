@@ -1,12 +1,12 @@
 use crate::check::config_expansion::{expand_raw_check_config, CheckConfigSource};
 use crate::check::validation::validate_check_config;
 use crate::config_types::{CheckConfig, RawCheckConfig};
-use crate::git::tree_source::TreeSource;
+use crate::git::TreeSource;
 use crate::repo_inspection::RepoInspectionCache;
 use std::path::Path;
 
 #[cfg(test)]
-use crate::CHECK_PATH;
+use crate::check::CHECK_PATH;
 
 #[cfg(test)]
 pub(crate) fn parse_check_config_content(

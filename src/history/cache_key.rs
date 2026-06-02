@@ -1,4 +1,4 @@
-use crate::check::types::SelectedExpectation;
+use crate::check::SelectedExpectation;
 use crate::config_types::AgentConfig;
 use crate::hash::hash_120;
 use crate::scope::effective_ignore_patterns;
@@ -25,7 +25,7 @@ pub(crate) fn history_cache_key(agent: &AgentConfig, expectation: &SelectedExpec
     push_history_cache_key_part(&mut input, "thinking", &expectation.agent.thinking);
     let cooldown = expectation
         .cooldown
-        .map(|cooldown| cooldown.seconds.to_string())
+        .map(|cooldown| cooldown.cache_key())
         .unwrap_or_else(|| "none".to_string());
     push_history_cache_key_part(&mut input, "cooldown", &cooldown);
     hash_120(&input)

@@ -3,7 +3,7 @@ use crate::fs_util::{
     reject_symlink, replace_file_with_temp,
 };
 use crate::notes::header::validate_note_key;
-use crate::notes::lock::{create_lock_file, remove_stale_lock, stale_lock_age};
+use crate::notes::note_lock::{create_lock_file, remove_stale_lock, stale_lock_age};
 use crate::project_types::Config;
 use std::fs;
 use std::io::{self, Write};

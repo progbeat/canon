@@ -1,9 +1,8 @@
 // Answer-history lookup for the Cache spec: newest-to-oldest history scanning
 // plus current visibleTreeOid matching.
-use crate::check::types::{CheckRecord, CheckResult, SelectedExpectation};
+use crate::check::{CheckRecord, CheckResult, SelectedExpectation};
 use crate::config_types::AgentConfig;
-use crate::git::tree_source::TreeSource;
-use crate::git::visible_tree_oid::VisibleTreeOidCache;
+use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::history::HistoryCache;
 use crate::scope::sanitize_scope_for_hash;
 use crate::time::parse_record_timestamp;
@@ -82,7 +81,7 @@ pub(crate) fn cooldown_history_record(
         // Cooldown keys off the latest answer history record, unlike same-tree
         // lookup which searches for the latest visibleTreeOid match. Invalid
         // scopes are skipped here, while a newer fail, bad timestamp, or
-        // expired pass deliberately blocks cooldown reuse of an older pass.
+        // expired result deliberately blocks cooldown reuse of an older result.
         let Ok(scope) = sanitize_scope_for_hash(&record.scope) else {
             return Ok(HistoryRecordScan::Continue);
         };
@@ -90,18 +89,19 @@ pub(crate) fn cooldown_history_record(
         let Some(timestamp) = parse_record_timestamp(&record.timestamp) else {
             return Ok(HistoryRecordScan::Done(None));
         };
-        if current_result_for_history_record(&record, expectation) != CheckResult::Pass {
+        let result = current_result_for_history_record(&record, expectation);
+        let Some(duration) = cooldown.duration_for(result) else {
+            return Ok(HistoryRecordScan::Done(None));
+        };
+        if now.saturating_sub(timestamp) >= duration {
             return Ok(HistoryRecordScan::Done(None));
         }
-        if now.saturating_sub(timestamp) >= cooldown.seconds {
-            return Ok(HistoryRecordScan::Done(None));
-        }
-        // Cooldown is not a same-tree lookup: a fresh latest pass can be the
-        // cached result even when its visibleTreeOid differs from the current
+        // Cooldown is not a same-tree lookup: a fresh latest configured result
+        // can be reused even when its visibleTreeOid differs from the current
         // evaluator-visible tree.
         Ok(HistoryRecordScan::Done(Some(record)))
     })?;
-    Ok(record.map(|record| record_with_current_expectation(record, expectation)))
+    Ok(record.map(|record| cooldown_record_with_current_expectation(record, expectation)))
 }
 
 pub(crate) enum CachedHistoryRecord {
@@ -113,18 +113,10 @@ pub(crate) fn newer_cached_history_record(
     same_tree: Option<CheckRecord>,
     cooldown: Option<CheckRecord>,
 ) -> Option<CachedHistoryRecord> {
-    // Cached Result combines the same-tree and cooldown candidates by record
-    // timestamp. The newer candidate wins; equal or unparsable timestamps keep
-    // the same-tree result deterministic.
+    // Cached Result gives same-tree records priority; cooldown is only a
+    // fallback when no same-tree record exists.
     match (same_tree, cooldown) {
-        (Some(same_tree), Some(cooldown)) => {
-            if record_timestamp_sort_key(&cooldown) > record_timestamp_sort_key(&same_tree) {
-                Some(CachedHistoryRecord::Cooldown(cooldown))
-            } else {
-                Some(CachedHistoryRecord::SameTree(same_tree))
-            }
-        }
-        (Some(record), None) => Some(CachedHistoryRecord::SameTree(record)),
+        (Some(record), _) => Some(CachedHistoryRecord::SameTree(record)),
         (None, Some(record)) => Some(CachedHistoryRecord::Cooldown(record)),
         (None, None) => None,
     }
@@ -191,6 +183,17 @@ fn record_with_current_expectation(
     record
 }
 
+fn cooldown_record_with_current_expectation(
+    record: CheckRecord,
+    expectation: &SelectedExpectation,
+) -> CheckRecord {
+    let mut record = record_with_current_expectation(record, expectation);
+    record.result = CheckResult::Pass;
+    record.observed = expectation.a.clone();
+    record.error = None;
+    record
+}
+
 pub(crate) fn is_reusable_history_record(record: &CheckRecord) -> bool {
     // Runtime persistence uses "reusable" to mean "schema-valid answer
     // response". Fail answers are reusable cache records; evaluator errors and
@@ -203,8 +206,4 @@ fn current_result_for_history_record(
     expectation: &SelectedExpectation,
 ) -> CheckResult {
     CheckResult::from_expected_answer(&expectation.a, &record.observed)
-}
-
-fn record_timestamp_sort_key(record: &CheckRecord) -> u64 {
-    parse_record_timestamp(&record.timestamp).unwrap_or(0)
 }

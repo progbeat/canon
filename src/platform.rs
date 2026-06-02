@@ -116,10 +116,15 @@ fn set_private_permissions(path: &Path, kind: PrivatePathKind) -> Result<(), Str
     }
 }
 
-pub(crate) type SecretDirMode = imp::SecretDirMode;
+#[derive(Clone)]
+pub(crate) struct SecretDirMode {
+    inner: imp::SecretDirMode,
+}
 
 pub(crate) fn secret_dir_mode(path: &Path) -> Result<SecretDirMode, String> {
-    imp::secret_dir_mode(path).map_err(platform_error)
+    imp::secret_dir_mode(path)
+        .map(|inner| SecretDirMode { inner })
+        .map_err(platform_error)
 }
 
 pub(crate) fn chmod_secret_dir_no_access(path: &Path) -> Result<(), String> {
@@ -127,7 +132,7 @@ pub(crate) fn chmod_secret_dir_no_access(path: &Path) -> Result<(), String> {
 }
 
 pub(crate) fn restore_secret_dir_mode(path: &Path, mode: &SecretDirMode) -> Result<(), String> {
-    imp::restore_secret_dir_mode(path, mode).map_err(platform_error)
+    imp::restore_secret_dir_mode(path, &mode.inner).map_err(platform_error)
 }
 
 pub(crate) fn create_materialized_symlink(target: &[u8], link: &Path) -> Result<(), String> {

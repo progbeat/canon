@@ -1,8 +1,9 @@
 use crate::check::interrogation_state::CheckRuntime;
-use crate::check::types::{CheckRecord, CheckRecordOutcome, CheckResult, SelectedExpectation};
+use crate::check::types::{
+    CheckRecord, CheckRecordOutcome, CheckResult, SelectedExpectation, ERROR_UNPARSABLE,
+};
 use crate::config_types::AgentConfig;
-use crate::git::visible_tree_oid::VisibleTreeOidCache;
-use crate::ERROR_UNPARSABLE;
+use crate::git::VisibleTreeOidCache;
 
 pub(crate) fn error_record_from_interrogation_error(
     runtime: &CheckRuntime<'_>,

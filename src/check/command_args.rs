@@ -2,10 +2,10 @@ use crate::check::selection::{
     add_check_option_args, matched_os_values, raw_check_options_from_matches,
 };
 use crate::check::types::CheckCommandArgs;
-use crate::git::tree_source::{validate_tree_arg, DEFAULT_AGAINST_TREE_ARG, STAGED_TREE_ARG};
-use crate::notes::cli::arg_to_string;
+use crate::check::CHECK_PATH;
+use crate::git::{validate_tree_arg, DEFAULT_AGAINST_TREE_ARG, STAGED_TREE_ARG};
+use crate::notes::arg_to_string;
 use crate::scope::normalize_repo_path;
-use crate::CHECK_PATH;
 use clap::builder::OsStringValueParser;
 use clap::{Arg, ArgAction, Command};
 use std::ffi::OsString;

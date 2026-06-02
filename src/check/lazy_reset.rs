@@ -7,7 +7,7 @@ use crate::fs_util::{
 use crate::git::resolve_git_path;
 use crate::hash::full_scope;
 use crate::logs::DiagnosticLogWriter;
-use crate::CANON_CACHE_DIR_GIT_PATH;
+use crate::state_paths::CANON_CACHE_DIR_GIT_PATH;
 use serde_json::json;
 use std::collections::BTreeSet;
 use std::fs;

@@ -1,12 +1,26 @@
-use crate::git::config::{git_config_get, git_config_get_or_else, GitConfigGetError};
+use crate::git::{git_config_get, git_config_get_or_else, GitConfigGetError};
 use crate::logs::error::{external_log_error, DiagnosticLogError, DiagnosticLogResult};
-use crate::{DiagnosticLogConfig, DEFAULT_DIAGNOSTIC_LOG_CONFIG};
 use std::path::Path;
 
 const LOG_MAX_SIZE_CONFIG_KEY: &str = "canon.logs.maxSize";
 const DEFAULT_LOG_MAX_SIZE_CONFIG_VALUE: &str = "0M";
 const THREAD_REUSE_CARRYOVER_TOKEN_TARGET_CONFIG_KEY: &str =
     "canon.threadReuse.carryoverTokenTarget";
+const DEFAULT_DIAGNOSTIC_LOG_FILES: [&str; 8] = [
+    "0.jsonl", "1.jsonl", "2.jsonl", "3.jsonl", "4.jsonl", "5.jsonl", "6.jsonl", "7.jsonl",
+];
+const DEFAULT_DIAGNOSTIC_LOG_CONFIG: DiagnosticLogConfig = DiagnosticLogConfig {
+    max_bytes: 0,
+    explicitly_disabled: true,
+    files: &DEFAULT_DIAGNOSTIC_LOG_FILES,
+};
+
+#[derive(Clone, Copy)]
+pub(crate) struct DiagnosticLogConfig {
+    pub(crate) max_bytes: u64,
+    pub(crate) explicitly_disabled: bool,
+    pub(crate) files: &'static [&'static str],
+}
 
 pub(crate) fn diagnostic_log_config(root: &Path) -> DiagnosticLogResult<DiagnosticLogConfig> {
     let (max_bytes, explicitly_disabled) = configured_log_max_size(root)?;

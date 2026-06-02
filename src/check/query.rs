@@ -6,8 +6,7 @@ use crate::check::interrogation_records::{
 use crate::check::interrogation_state::{CheckRuntime, InterrogationRunState};
 use crate::check::model_fallback::run_with_model_fallbacks;
 use crate::check::types::{ObservedAnswerState, ParsedAnswer, QueryResult};
-use crate::evaluator::prompt::evaluator_turn_prompt;
-use crate::evaluator::types::{EvaluatorError, EvaluatorRunner};
+use crate::evaluator::{evaluator_turn_prompt, EvaluatorError, EvaluatorRunner};
 use crate::hash::full_scope;
 use crate::logs::DiagnosticLogWriter;
 use crate::scope::sanitize_scope;

@@ -111,9 +111,25 @@ pub(crate) struct Expectation {
     #[serde(default, skip)]
     pub(crate) agent: AgentConfig,
     #[serde(default)]
-    pub(crate) cooldown: Option<String>,
+    pub(crate) cooldown: Option<CooldownConfig>,
     #[serde(default)]
     pub(crate) thinking: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(untagged)]
+pub(crate) enum CooldownConfig {
+    Compact(String),
+    Mapping(CooldownMappingConfig),
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CooldownMappingConfig {
+    #[serde(default)]
+    pub(crate) pass: Option<String>,
+    #[serde(default)]
+    pub(crate) fail: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -127,7 +143,7 @@ pub(crate) enum RawExpectationItem {
 pub(crate) struct RawExplicitExpectation {
     pub(crate) q: String,
     pub(crate) a: String,
-    pub(crate) cooldown: Option<String>,
+    pub(crate) cooldown: Option<CooldownConfig>,
     pub(crate) settings: RawExpectationSettings,
 }
 
@@ -140,14 +156,14 @@ pub(crate) struct RawGeneratorExpectation {
     pub(crate) question_template: String,
     pub(crate) path: String,
     pub(crate) a: String,
-    pub(crate) cooldown: Option<String>,
+    pub(crate) cooldown: Option<CooldownConfig>,
     pub(crate) settings: RawExpectationSettings,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct RawIncludeExpectation {
     pub(crate) include: String,
-    pub(crate) cooldown: Option<String>,
+    pub(crate) cooldown: Option<CooldownConfig>,
     pub(crate) settings: RawExpectationSettings,
 }
 
@@ -167,7 +183,7 @@ struct RawExpectationFields {
     #[serde(default)]
     include: Option<String>,
     #[serde(default)]
-    cooldown: Option<String>,
+    cooldown: Option<CooldownConfig>,
     #[serde(default)]
     preset: Option<String>,
     #[serde(default)]

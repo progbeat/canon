@@ -1,8 +1,8 @@
-use crate::check::validation::codex_reasoning_effort;
+use crate::check::codex_reasoning_effort;
 use crate::config_types::AgentConfig;
 use crate::fs_util::write_temp_file_then_replace;
 use crate::git::resolve_git_path;
-use crate::logs::config::{thread_reuse_config, ThreadReuseConfig};
+use crate::logs::{thread_reuse_config, ThreadReuseConfig};
 use crate::platform;
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
@@ -114,7 +114,10 @@ pub(crate) fn evaluator_working_tree_permissions(session_root: &Path) -> BTreeMa
 
 pub(crate) fn evaluator_state_dir_permissions(app_server_root: &Path) -> BTreeMap<String, String> {
     let mut permissions = BTreeMap::new();
-    let Ok(state_root) = resolve_git_path(app_server_root, crate::CANON_STATE_DIR_GIT_PATH) else {
+    let Ok(state_root) = resolve_git_path(
+        app_server_root,
+        crate::state_paths::CANON_STATE_DIR_GIT_PATH,
+    ) else {
         return permissions;
     };
     insert_tree_permission(&mut permissions, &state_root, FILESYSTEM_DENY);
@@ -532,7 +535,8 @@ mod tests {
     #[test]
     fn state_dir_permissions_deny_canon_state_tree() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let state_root = resolve_git_path(root, crate::CANON_STATE_DIR_GIT_PATH).unwrap();
+        let state_root =
+            resolve_git_path(root, crate::state_paths::CANON_STATE_DIR_GIT_PATH).unwrap();
         let state_root = state_root.display().to_string();
         let permissions = evaluator_state_dir_permissions(root);
 

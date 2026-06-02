@@ -15,7 +15,7 @@
 
 - q: "Can `canon check` report a change in expectation results when the compared Git trees are the same?"
   a: "no"
-  preset: smart
+  thinking: xhigh
 
 # - q: "Do the dev instructions require knowing any specialized terms whose meaning is not available from the dev instructions themselves?"
 #   a: "no"

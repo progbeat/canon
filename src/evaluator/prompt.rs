@@ -1,4 +1,4 @@
-use crate::check::output::compact_json_string_array;
+use crate::json_util::compact_json_string_array;
 
 const DEVELOPER_INSTRUCTIONS_TEMPLATE: &str =
     include_str!("../../resources/prompts/evaluator_developer_instructions.txt");

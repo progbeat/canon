@@ -1,4 +1,4 @@
-use crate::check::types::ParsedAnswer;
+use crate::check::ParsedAnswer;
 use crate::config_types::AgentConfig;
 use crate::evaluator::response::parse_evaluator_response;
 use crate::scope::effective_ignore_patterns;

@@ -1,6 +1,6 @@
+use super::program::{head_tracked_files, staged_tracked_files, StagedTrackedFile};
+use super::tree_source::TreeSource;
 use crate::config_types::AgentConfig;
-use crate::git::tree_source::TreeSource;
-use crate::git::{head_tracked_files, staged_tracked_files, StagedTrackedFile};
 #[cfg(test)]
 use crate::hash::full_scope;
 use crate::project::command_output_trimmed;

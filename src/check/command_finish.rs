@@ -9,7 +9,7 @@ use crate::gate::{
     gate_cached_result_for_tree, gate_regression_count_with_config, GateCacheResult,
     GateComparisonTree,
 };
-use crate::git::visible_tree_oid::VisibleTreeOidCache;
+use crate::git::VisibleTreeOidCache;
 use crate::history::HistoryCache;
 use std::io::Write;
 use std::path::Path;
@@ -117,11 +117,14 @@ fn staged_passes_failed_at_head_count_with_cache(
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<usize, String> {
     let mut count = 0usize;
-    for expectation in report_passing_expectations(report, agent) {
+    for passing in report_passing_expectations(report, agent) {
+        if staged_visible_tree_matches_head(root, agent, &passing.scope, visible_tree_oid_cache)? {
+            continue;
+        }
         match gate_cached_result_for_tree(
             root,
             agent,
-            &expectation,
+            &passing.expectation,
             GateComparisonTree::Head,
             history_cache,
             visible_tree_oid_cache,
@@ -133,18 +136,40 @@ fn staged_passes_failed_at_head_count_with_cache(
     Ok(count)
 }
 
+struct PassingExpectation {
+    expectation: SelectedExpectation,
+    scope: Vec<String>,
+}
+
+fn staged_visible_tree_matches_head(
+    root: &Path,
+    agent: &AgentConfig,
+    scope: &[String],
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
+) -> Result<bool, String> {
+    let staged = visible_tree_oid_cache.staged_visible_tree_oid(root, agent, scope)?;
+    let head = visible_tree_oid_cache.gate_head_tree_fingerprint(root, agent, scope)?;
+    Ok(head.as_deref() == Some(staged.as_str()))
+}
+
 fn report_passing_expectations(
     report: &CheckRunReport,
     agent: &AgentConfig,
-) -> Vec<SelectedExpectation> {
+) -> Vec<PassingExpectation> {
     let mut expectations = Vec::new();
     for record in report.records.iter().filter(|record| record.passed()) {
         if let Some(expectation) = selected_expectation_from_record(record, agent) {
-            expectations.push(expectation);
+            expectations.push(PassingExpectation {
+                expectation,
+                scope: record.scope.clone(),
+            });
         }
     }
     for cached in report.cached.iter().filter(|cached| cached.record.passed()) {
-        expectations.push(cached.expectation.clone());
+        expectations.push(PassingExpectation {
+            expectation: cached.expectation.clone(),
+            scope: cached.record.scope.clone(),
+        });
     }
     expectations
 }
@@ -250,4 +275,135 @@ fn selected_expectation_from_record(
         cooldown: None,
         thinking: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::check::types::{CheckResult, CheckRunReport, NarrowingStats};
+    use crate::hash::full_scope;
+    use crate::time::format_record_timestamp;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::process;
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn same_visible_tree_pass_is_not_a_head_improvement() {
+        let root = git_project("same-visible-tree-pass-not-improvement");
+        let agent = AgentConfig::default();
+        let scope = full_scope();
+        let report = passing_report_for_staged_scope(&root, &agent, &scope);
+        let mut history_cache = HistoryCache::new();
+        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
+
+        let count = staged_pass_notice_count(
+            &root,
+            &agent,
+            &report,
+            &mut history_cache,
+            &mut visible_tree_oid_cache,
+        )
+        .unwrap();
+
+        assert_eq!(count, 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn changed_visible_tree_pass_with_missing_head_cache_is_an_improvement() {
+        let root = git_project("changed-visible-tree-pass-improvement");
+        fs::write(root.join("README.md"), "changed\n").unwrap();
+        git(&root, &["add", "README.md"]);
+        let agent = AgentConfig::default();
+        let scope = full_scope();
+        let report = passing_report_for_staged_scope(&root, &agent, &scope);
+        let mut history_cache = HistoryCache::new();
+        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
+
+        let count = staged_pass_notice_count(
+            &root,
+            &agent,
+            &report,
+            &mut history_cache,
+            &mut visible_tree_oid_cache,
+        )
+        .unwrap();
+
+        assert_eq!(count, 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn passing_report_for_staged_scope(
+        root: &std::path::Path,
+        agent: &AgentConfig,
+        scope: &[String],
+    ) -> CheckRunReport {
+        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
+        let visible_tree_oid = visible_tree_oid_cache
+            .staged_visible_tree_oid(root, agent, scope)
+            .unwrap();
+        CheckRunReport {
+            records: vec![CheckRecord {
+                timestamp: format_record_timestamp(0),
+                number: 1,
+                result: CheckResult::Pass,
+                prompt: Some("Does it pass?".to_string()),
+                expected: Some("yes".to_string()),
+                observed: "yes".to_string(),
+                error: None,
+                evidence: "test evidence".to_string(),
+                scope: scope.to_vec(),
+                suggested_q_scope: None,
+                visible_tree_oid,
+                id: "11111111111111111111".to_string(),
+                display_id: "1".to_string(),
+                cache_key: None,
+            }],
+            non_selected: Vec::new(),
+            cached: Vec::new(),
+            evaluated: 1,
+            selected: 1,
+            skipped: 0,
+            silent: 0,
+            narrowing: NarrowingStats::default(),
+        }
+    }
+
+    fn git_project(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-tmp")
+            .join(format!("canon-test-{}-{}-{}", name, process::id(), unique));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        git(&root, &["init"]);
+        git(&root, &["config", "core.autocrlf", "false"]);
+        git(&root, &["config", "core.eol", "lf"]);
+        git(&root, &["config", "user.name", "Canon Test"]);
+        git(&root, &["config", "user.email", "canon-test@example.com"]);
+        fs::write(root.join("README.md"), "hello\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "initial"]);
+        root
+    }
+
+    fn git(root: &std::path::Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }

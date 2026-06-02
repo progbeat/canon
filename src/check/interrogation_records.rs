@@ -1,7 +1,6 @@
 use crate::check::interrogation_state::{CheckRuntime, InterrogationRunState};
 use crate::check::types::{InterrogationResult, ParsedAnswer, QueryResult, SelectedExpectation};
-use crate::evaluator::turn::{record_from_response, ParsedTurnResponse};
-use crate::evaluator::types::EvaluatorError;
+use crate::evaluator::{record_from_response, EvaluatorError, ParsedTurnResponse};
 use crate::logs::{DiagnosticLogWriter, DiagnosticRecordEvent};
 use crate::scope::sanitize_scope;
 use serde_json::json;
