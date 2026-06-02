@@ -42,12 +42,15 @@ mod tests {
     }
 
     #[test]
-    fn developer_instructions_define_stale_docs_evidence_threshold() {
+    fn developer_instructions_define_topic_neutral_evidence_threshold() {
         let instructions = developer_instructions(&[".".to_string()]);
 
-        assert!(instructions.contains("stale/misleading docs/comments"));
-        assert!(instructions.contains("no concrete mismatch"));
-        assert!(instructions.contains("do not require exhaustive proof"));
+        assert!(instructions.contains("visible files and question text do not prove"));
+        assert!(instructions.contains("Relevant direct reads/searches"));
+        assert!(
+            instructions.contains("do not require exhaustive proof when direct evidence is enough")
+        );
+        assert!(!instructions.contains("answer `no` to"));
         assert!(instructions.contains("text before or after the JSON is invalid"));
         assert!(instructions.contains("first non-whitespace character must be `{`"));
     }
