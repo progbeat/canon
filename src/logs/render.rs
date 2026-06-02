@@ -51,11 +51,11 @@ fn required_runtime_log_fields(event: &str) -> Option<&'static [&'static str]> {
         "cache.cleanup" => Some(&["removed", "kept"]),
         "cache.hit" => Some(&["id", "result", "scope"]),
         "check.start" => Some(&["selected"]),
-        "expectation.result"
-        | "expectation.review_required"
-        | "interrogation.result"
-        | "interrogation.review_required" => Some(&[
+        "expectation.result" | "interrogation.result" => Some(&[
             "id", "result", "observed", "evidence", "scope", "prompt", "expected",
+        ]),
+        "expectation.review_required" | "interrogation.review_required" => Some(&[
+            "id", "result", "observed", "evidence", "scope", "prompt", "expected", "reason",
         ]),
         "lazy_full_scope_reset" => Some(&["evaluated", "candidates", "reset", "ids"]),
         "lazy_full_scope_reset.error" => Some(&["message"]),
@@ -123,6 +123,9 @@ fn validate_runtime_log_nested_schema(
                     reason: "empty for event schema",
                 });
             }
+            for (index, update) in updates.iter().enumerate() {
+                validate_token_usage_update(index, update)?;
+            }
             true
         }
         None => false,
@@ -140,12 +143,54 @@ fn validate_runtime_log_nested_schema(
             reason: "duplicates raw token usage updates",
         });
     }
-    let Some(token_usage) = runtime_log_field_value(fields, "tokenUsage") else {
-        return Ok(());
-    };
-    let Some(object) = token_usage.as_object() else {
+    if let Some(token_usage) = runtime_log_field_value(fields, "tokenUsage") {
+        validate_token_usage_counts("tokenUsage", token_usage)?;
+    }
+    Ok(())
+}
+
+fn validate_token_usage_update(index: usize, update: &Value) -> DiagnosticLogResult<()> {
+    let prefix = format!("tokenUsageUpdates[{}]", index);
+    let Some(object) = update.as_object() else {
         return Err(DiagnosticLogError::InvalidRuntimeField {
-            key: "tokenUsage".to_string(),
+            key: prefix,
+            reason: "not an object",
+        });
+    };
+    for key in ["sequence", "threadId", "turnId", "tokenUsage"] {
+        if object.get(key).is_some() {
+            continue;
+        }
+        return Err(DiagnosticLogError::InvalidRuntimeField {
+            key: format!("{}.{}", prefix, key),
+            reason: "missing for event schema",
+        });
+    }
+    let token_usage_key = format!("{}.tokenUsage", prefix);
+    let token_usage = object.get("tokenUsage").expect("presence checked above");
+    let Some(token_usage) = token_usage.as_object() else {
+        return Err(DiagnosticLogError::InvalidRuntimeField {
+            key: token_usage_key,
+            reason: "not an object",
+        });
+    };
+    for part in ["last", "total"] {
+        let key = format!("{}.tokenUsage.{}", prefix, part);
+        let Some(value) = token_usage.get(part) else {
+            return Err(DiagnosticLogError::InvalidRuntimeField {
+                key,
+                reason: "missing for event schema",
+            });
+        };
+        validate_token_usage_counts(&key, value)?;
+    }
+    Ok(())
+}
+
+fn validate_token_usage_counts(prefix: &str, value: &Value) -> DiagnosticLogResult<()> {
+    let Some(object) = value.as_object() else {
+        return Err(DiagnosticLogError::InvalidRuntimeField {
+            key: prefix.to_string(),
             reason: "not an object",
         });
     };
@@ -156,12 +201,18 @@ fn validate_runtime_log_nested_schema(
         "outputTokens",
         "reasoningOutputTokens",
     ] {
-        if object.contains_key(key) {
+        let Some(value) = object.get(key) else {
+            return Err(DiagnosticLogError::InvalidRuntimeField {
+                key: format!("{}.{}", prefix, key),
+                reason: "missing for event schema",
+            });
+        };
+        if value.as_u64().is_some() {
             continue;
         }
         return Err(DiagnosticLogError::InvalidRuntimeField {
-            key: format!("tokenUsage.{}", key),
-            reason: "missing for event schema",
+            key: format!("{}.{}", prefix, key),
+            reason: "not an unsigned integer",
         });
     }
     Ok(())
@@ -230,4 +281,83 @@ pub(crate) fn push_json_control_escape(output: &mut String, byte: u8) {
     output.push_str("\\u00");
     output.push(HEX[(code >> 4) & 0x0f] as char);
     output.push(HEX[code & 0x0f] as char);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_runtime_log_event;
+    use serde_json::{json, Value};
+
+    #[test]
+    fn token_usage_updates_expose_raw_count_objects() {
+        let fields = agent_response_fields(vec![json!({
+            "sequence": 1,
+            "threadId": "thread",
+            "turnId": "turn",
+            "tokenUsage": {
+                "last": token_usage(),
+                "total": token_usage(),
+            },
+        })]);
+
+        render_runtime_log_event("info", "agent.response", &fields).unwrap();
+    }
+
+    #[test]
+    fn token_usage_updates_require_reasoning_count() {
+        let mut usage = token_usage();
+        usage
+            .as_object_mut()
+            .unwrap()
+            .remove("reasoningOutputTokens");
+        let fields = agent_response_fields(vec![json!({
+            "sequence": 1,
+            "threadId": "thread",
+            "turnId": "turn",
+            "tokenUsage": {
+                "last": usage,
+                "total": token_usage(),
+            },
+        })]);
+
+        let error = render_runtime_log_event("info", "agent.response", &fields).unwrap_err();
+
+        assert!(error.to_string().contains("reasoningOutputTokens"));
+    }
+
+    #[test]
+    fn review_required_record_events_include_reason() {
+        let fields = vec![
+            ("id", json!("id")),
+            ("result", json!("fail")),
+            ("observed", json!("unparsable")),
+            ("evidence", json!("evidence")),
+            ("scope", json!(["."])),
+            ("prompt", json!("prompt")),
+            ("expected", json!("yes")),
+            ("reason", json!("unparsable")),
+        ];
+
+        render_runtime_log_event("warn", "expectation.review_required", &fields).unwrap();
+    }
+
+    fn agent_response_fields(updates: Vec<Value>) -> Vec<(&'static str, Value)> {
+        vec![
+            ("id", json!("id")),
+            ("attempt", json!(1)),
+            ("reason", json!("initial")),
+            ("response", json!({"sessionId": "thread", "text": "{}"})),
+            ("tokenUsageUpdates", json!(updates)),
+        ]
+    }
+
+    fn token_usage() -> Value {
+        json!({
+            "totalTokens": 10,
+            "inputTokens": 6,
+            "cachedInputTokens": 2,
+            "outputTokens": 4,
+            "reasoningOutputTokens": 1,
+        })
+    }
 }
