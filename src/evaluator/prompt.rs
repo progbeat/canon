@@ -41,5 +41,6 @@ mod tests {
         assert!(instructions.contains("stale/misleading docs/comments"));
         assert!(instructions.contains("no concrete mismatch"));
         assert!(instructions.contains("do not require exhaustive proof"));
+        assert!(instructions.contains("first non-whitespace character must be `{`"));
     }
 }
