@@ -29,3 +29,17 @@ fn render_resource_template(template: &str, replacements: &[(&str, &str)]) -> St
             rendered.replace(placeholder, value)
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::developer_instructions;
+
+    #[test]
+    fn developer_instructions_define_stale_docs_evidence_threshold() {
+        let instructions = developer_instructions(&[".".to_string()]);
+
+        assert!(instructions.contains("stale/misleading docs/comments"));
+        assert!(instructions.contains("no concrete mismatch"));
+        assert!(instructions.contains("do not require exhaustive proof"));
+    }
+}
