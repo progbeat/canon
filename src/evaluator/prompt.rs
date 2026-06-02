@@ -32,7 +32,13 @@ fn render_resource_template(template: &str, replacements: &[(&str, &str)]) -> St
 
 #[cfg(test)]
 mod tests {
-    use super::developer_instructions;
+    use super::{developer_instructions, EVALUATOR_BASE_INSTRUCTIONS};
+
+    #[test]
+    fn base_instructions_prohibit_status_text() {
+        assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("do not announce skills"));
+        assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("only the JSON object"));
+    }
 
     #[test]
     fn developer_instructions_define_stale_docs_evidence_threshold() {

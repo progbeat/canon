@@ -91,4 +91,32 @@ mod tests {
         response.validate_schema().unwrap();
         assert_eq!(response.q_scope_suggestion, vec!["src/main.rs"]);
     }
+
+    #[test]
+    fn evaluator_response_schema_allows_non_crlf_control_chars() {
+        let response = parse_evaluator_response_json(
+            "{\"answer\":\"yes\\t\",\"evidence\":\"`src/main.rs`\",\"qScopeSuggestion\":[\"src/main.rs\\u0008\"]}",
+        )
+        .unwrap();
+
+        response.validate_schema().unwrap();
+    }
+
+    #[test]
+    fn evaluator_response_schema_rejects_crlf_in_single_line_fields() {
+        let answer = parse_evaluator_response_json(
+            "{\"answer\":\"yes\\n\",\"evidence\":\"`src/main.rs`\",\"qScopeSuggestion\":[\"src/main.rs\"]}",
+        )
+        .unwrap();
+        let q_scope = parse_evaluator_response_json(
+            "{\"answer\":\"yes\",\"evidence\":\"`src/main.rs`\",\"qScopeSuggestion\":[\"src\\rmain.rs\"]}",
+        )
+        .unwrap();
+
+        assert!(answer.validate_schema().unwrap_err().contains("answer"));
+        assert!(q_scope
+            .validate_schema()
+            .unwrap_err()
+            .contains("qScopeSuggestion"));
+    }
 }
