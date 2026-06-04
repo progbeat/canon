@@ -39,6 +39,8 @@ pub(crate) use run::{run_check_with_runner_and_caches, CheckRunCaches};
 pub(crate) use selection::{
     expectation_identities, select_expectations_with_identities, ExpectationIdentity,
 };
+#[cfg(test)]
+pub(crate) use types::Cooldown;
 pub(crate) use types::{
     CheckRecord, CheckRecordOutcome, CheckResult, EvaluatorResponseJson, ParsedAnswer,
     SelectedExpectation, ERROR_UNPARSABLE,

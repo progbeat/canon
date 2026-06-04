@@ -2,7 +2,7 @@ use crate::check::types::{CheckRecord, SelectedExpectation};
 use crate::config_types::AgentConfig;
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::history::{
-    cooldown_history_record, newer_cached_history_record, same_tree_history_record_with_cache,
+    cached_history_record, cooldown_history_record, same_tree_history_record_with_cache,
     CachedHistoryRecord, HistoryCache,
 };
 use crate::logs::{DiagnosticLogWriter, DiagnosticRecordEvent};
@@ -53,7 +53,7 @@ pub(crate) fn cached_result_for_expectation(
         None
     };
     Ok(
-        newer_cached_history_record(same_tree, cooldown).map(|hit| match hit {
+        cached_history_record(same_tree, cooldown).map(|hit| match hit {
             CachedHistoryRecord::SameTree(record) => CheckCacheHit {
                 record,
                 kind: CachedResultKind::SameTree,

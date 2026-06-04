@@ -79,11 +79,11 @@ pub(crate) fn cooldown_history_record(
     };
     let record = scan_latest_history_records(root, expectation, history_cache, |mut record| {
         // Cooldown keys off the latest answer history record, unlike same-tree
-        // lookup which searches for the latest visibleTreeOid match. Invalid
-        // scopes are skipped here, while a newer fail, bad timestamp, or
-        // expired result deliberately blocks cooldown reuse of an older result.
+        // lookup which searches for the latest visibleTreeOid match. A newer
+        // invalid scope, fail, bad timestamp, or expired result deliberately
+        // blocks cooldown reuse of an older result.
         let Ok(scope) = sanitize_scope_for_hash(&record.scope) else {
-            return Ok(HistoryRecordScan::Continue);
+            return Ok(HistoryRecordScan::Done(None));
         };
         record.scope = scope;
         let Some(timestamp) = parse_record_timestamp(&record.timestamp) else {
@@ -109,7 +109,7 @@ pub(crate) enum CachedHistoryRecord {
     Cooldown(CheckRecord),
 }
 
-pub(crate) fn newer_cached_history_record(
+pub(crate) fn cached_history_record(
     same_tree: Option<CheckRecord>,
     cooldown: Option<CheckRecord>,
 ) -> Option<CachedHistoryRecord> {
@@ -206,4 +206,135 @@ fn current_result_for_history_record(
     expectation: &SelectedExpectation,
 ) -> CheckResult {
     CheckResult::from_expected_answer(&expectation.a, &record.observed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::check::Cooldown;
+    use crate::time::format_record_timestamp;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::process;
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn cached_history_record_prefers_same_tree_over_newer_cooldown() {
+        let same_tree = record("1970-01-01T00:00:00Z", "same-tree");
+        let cooldown = record("2099-01-01T00:00:00Z", "cooldown");
+
+        let hit = cached_history_record(Some(same_tree), Some(cooldown)).unwrap();
+
+        match hit {
+            CachedHistoryRecord::SameTree(record) => assert_eq!(record.evidence, "same-tree"),
+            CachedHistoryRecord::Cooldown(_) => panic!("cooldown must be only a fallback"),
+        }
+    }
+
+    fn record(timestamp: &str, evidence: &str) -> CheckRecord {
+        CheckRecord {
+            timestamp: timestamp.to_string(),
+            number: 1,
+            result: CheckResult::Pass,
+            prompt: Some("Does it pass?".to_string()),
+            expected: Some("yes".to_string()),
+            observed: "yes".to_string(),
+            error: None,
+            evidence: evidence.to_string(),
+            scope: vec![".".to_string()],
+            suggested_q_scope: None,
+            visible_tree_oid: "tree".to_string(),
+            id: "11111111111111111111".to_string(),
+            display_id: "1".to_string(),
+            cache_key: None,
+        }
+    }
+
+    #[test]
+    fn cooldown_history_record_invalid_latest_scope_blocks_older_reuse() {
+        let root = git_project("cooldown-invalid-latest-scope");
+        let expectation = expectation_with_cooldown();
+        let mut history_cache = HistoryCache::new();
+        let path = history_cache.path(&root, &expectation).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            format!(
+                "{}\n{}\n",
+                history_line(10, r#"["."]"#, "older pass"),
+                history_line(20, r#"[".."]"#, "newer invalid scope")
+            ),
+        )
+        .unwrap();
+
+        let hit = cooldown_history_record(
+            &root,
+            &expectation.agent,
+            &expectation,
+            &mut history_cache,
+            30,
+        )
+        .unwrap();
+
+        assert!(hit.is_none(), "invalid latest q-scope must block cooldown");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn expectation_with_cooldown() -> SelectedExpectation {
+        SelectedExpectation {
+            number: 1,
+            id: "11111111111111111111".to_string(),
+            display_id: "1".to_string(),
+            q: "Does it pass?".to_string(),
+            a: "yes".to_string(),
+            prompt_scope: Vec::new(),
+            agent: AgentConfig {
+                models: Vec::new(),
+                thinking: "medium".to_string(),
+                ignore: Vec::new(),
+                plugins: Vec::new(),
+            },
+            cooldown: Some(Cooldown {
+                pass_seconds: Some(100),
+                fail_seconds: None,
+            }),
+            thinking: None,
+        }
+    }
+
+    fn history_line(timestamp: u64, q_scope: &str, evidence: &str) -> String {
+        format!(
+            r#"{{"timestamp":"{}","observed":"yes","evidence":"{}","qScope":{},"visibleTreeOid":"{}"}}"#,
+            format_record_timestamp(timestamp),
+            evidence,
+            q_scope,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        )
+    }
+
+    fn git_project(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-tmp")
+            .join(format!("canon-test-{}-{}-{}", name, process::id(), unique));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let output = Command::new("git")
+            .arg("init")
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git init failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        root
+    }
 }
