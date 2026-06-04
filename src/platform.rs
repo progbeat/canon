@@ -157,15 +157,6 @@ pub(crate) fn open_file_for_append_without_following_symlink(
     imp::open_file_for_append_without_following_symlink(path).map_err(platform_error)
 }
 
-#[cfg(all(test, unix))]
-pub(crate) fn staged_snapshot_parent_candidates() -> Vec<PathBuf> {
-    let mut parents = memory_backed_staged_snapshot_parent_candidates();
-    for parent in ordinary_staged_snapshot_parent_candidates() {
-        push_unique_path(&mut parents, parent);
-    }
-    parents
-}
-
 pub(crate) fn memory_backed_staged_snapshot_parent_candidates() -> Vec<PathBuf> {
     let mut parents = Vec::new();
     add_common_memory_backed_staged_snapshot_parent_candidates(&mut parents);
@@ -220,18 +211,6 @@ pub(crate) fn git_path_bytes(path: &Path) -> Result<Vec<u8>, String> {
     {
         imp::git_path_bytes(path)
     }
-}
-
-#[cfg(all(test, unix))]
-pub(crate) fn checkout_index_prefix_arg(path: &Path) -> Result<OsString, String> {
-    let mut prefix = git_path_bytes(path)?;
-    let separator = std::path::MAIN_SEPARATOR as u8;
-    if prefix.last() != Some(&separator) {
-        prefix.push(separator);
-    }
-    let mut arg = b"--prefix=".to_vec();
-    arg.extend(prefix);
-    Ok(imp::os_string_from_bytes(arg))
 }
 
 pub(crate) fn os_string_from_bytes(bytes: Vec<u8>) -> Result<OsString, String> {

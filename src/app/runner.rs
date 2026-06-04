@@ -3,8 +3,8 @@ use crate::app::transport::AppServerTurnRequest;
 use crate::check::codex_reasoning_effort;
 use crate::config_types::AgentConfig;
 use crate::evaluator::{
-    evaluator_thread_config_with_no_sandbox, evaluator_turn_input, is_model_technical_failure,
-    render_evaluator_turn_input, EvaluatorError, EvaluatorRunner, EVALUATOR_BASE_INSTRUCTIONS,
+    evaluator_thread_config_with_no_sandbox, is_model_technical_failure, EvaluatorError,
+    EvaluatorRunner, EVALUATOR_BASE_INSTRUCTIONS,
 };
 use crate::token_usage_types::{EvaluatorTurnUsage, TokenUsage};
 use serde::{Deserialize, Serialize};
@@ -186,7 +186,7 @@ impl EvaluatorRunner for AppServerRunner {
             thinking,
             self.session_cwds.get(session_id).map(PathBuf::as_path),
             self.no_sandbox,
-        )?;
+        );
         let response =
             self.send_turn_request("turn/start", AppServerTurnRequest::new(session_id, request))?;
         Ok(response)
@@ -208,15 +208,13 @@ pub(crate) fn turn_start_request(
     thinking: &str,
     cwd: Option<&Path>,
     no_sandbox: bool,
-) -> Result<Value, EvaluatorError> {
-    let input = evaluator_turn_input(prompt)?;
-    let input_text = render_evaluator_turn_input(&input)?;
+) -> Value {
     let mut request = json!({
         "threadId": session_id,
         "input": [
             {
                 "type": "text",
-                "text": input_text
+                "text": prompt
             }
         ]
     });
@@ -231,7 +229,7 @@ pub(crate) fn turn_start_request(
     if let Some(effort) = codex_reasoning_effort(thinking) {
         request["effort"] = Value::String(effort.to_string());
     }
-    Ok(request)
+    request
 }
 
 fn thread_start_sandbox_mode(no_sandbox: bool) -> &'static str {
@@ -295,8 +293,7 @@ mod tests {
             "low",
             Some(Path::new("/tmp/cwd")),
             false,
-        )
-        .expect("turn request");
+        );
 
         assert_eq!(
             request["sandboxPolicy"],
@@ -313,8 +310,7 @@ mod tests {
             "low",
             Some(Path::new("/tmp/cwd")),
             true,
-        )
-        .expect("turn request");
+        );
 
         assert_eq!(
             request["sandboxPolicy"],

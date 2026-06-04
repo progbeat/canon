@@ -47,9 +47,7 @@ mod tests {
 
         assert!(instructions.contains("visible files and question text do not prove"));
         assert!(instructions.contains("Relevant direct reads/searches"));
-        assert!(
-            instructions.contains("do not require exhaustive proof when direct evidence is enough")
-        );
+        assert!(instructions.contains("do not require a literal exhaustive audit"));
         assert!(!instructions.contains("answer `no` to"));
         assert!(instructions.contains("text before or after the JSON is invalid"));
         assert!(instructions.contains("first non-whitespace character must be `{`"));

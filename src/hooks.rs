@@ -689,13 +689,6 @@ pub(crate) fn make_executable(path: &Path) -> Result<(), String> {
     platform::make_hook_executable(path)
 }
 
-#[cfg(test)]
-pub(crate) fn current_git_hooks_path_for_worktree(root: &Path) -> Result<Option<String>, String> {
-    Ok(current_git_hooks_paths_for_worktree(root)?
-        .into_iter()
-        .next())
-}
-
 fn current_git_hooks_paths_for_worktree(root: &Path) -> Result<Vec<String>, String> {
     let output = run_git_config_with_status(
         root,

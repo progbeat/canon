@@ -5,7 +5,7 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::process;
 
-use crate::check::{check_help_command, check_help_requested, run_check_command};
+use crate::check::{check_help_command, run_check_command};
 use crate::gate::run_gate_command;
 use crate::hooks::{run_hook_command, run_init};
 use crate::logs::DiagnosticLogError;
@@ -41,17 +41,77 @@ enum NoteCommand {
 }
 
 impl NoteCommand {
+    fn all() -> &'static [NoteCommand] {
+        &[
+            NoteCommand::Pwd,
+            NoteCommand::Path,
+            NoteCommand::Read,
+            NoteCommand::Write,
+            NoteCommand::Append,
+            NoteCommand::Delete,
+            NoteCommand::Search,
+        ]
+    }
+
     fn parse(value: &str) -> Option<NoteCommand> {
-        match value {
-            "pwd" => Some(NoteCommand::Pwd),
-            "p" | "path" => Some(NoteCommand::Path),
-            "r" | "read" => Some(NoteCommand::Read),
-            "w" | "write" => Some(NoteCommand::Write),
-            "a" | "append" => Some(NoteCommand::Append),
-            "d" | "del" | "delete" | "rm" => Some(NoteCommand::Delete),
-            "rg" | "g" => Some(NoteCommand::Search),
-            _ => None,
+        Self::all()
+            .iter()
+            .copied()
+            .find(|command| command.aliases().contains(&value))
+    }
+
+    fn aliases(self) -> &'static [&'static str] {
+        match self {
+            NoteCommand::Pwd => &["pwd"],
+            NoteCommand::Path => &["p", "path"],
+            NoteCommand::Read => &["r", "read"],
+            NoteCommand::Write => &["w", "write"],
+            NoteCommand::Append => &["a", "append"],
+            NoteCommand::Delete => &["d", "del", "delete", "rm"],
+            NoteCommand::Search => &["rg", "g"],
         }
+    }
+
+    fn help_name(self) -> &'static str {
+        match self {
+            NoteCommand::Pwd => "pwd",
+            NoteCommand::Path => "path",
+            NoteCommand::Read => "read",
+            NoteCommand::Write => "write",
+            NoteCommand::Append => "append",
+            NoteCommand::Delete => "delete",
+            NoteCommand::Search => "rg",
+        }
+    }
+
+    fn help_bin_name(self) -> &'static str {
+        match self {
+            NoteCommand::Pwd => "canon pwd",
+            NoteCommand::Path => "canon path",
+            NoteCommand::Read => "canon read",
+            NoteCommand::Write => "canon write",
+            NoteCommand::Append => "canon append",
+            NoteCommand::Delete => "canon delete",
+            NoteCommand::Search => "canon rg",
+        }
+    }
+
+    fn help_about(self) -> &'static str {
+        match self {
+            NoteCommand::Pwd => "Print the canon project root",
+            NoteCommand::Path => "Print the path for a canon note",
+            NoteCommand::Read => "Read a canon note",
+            NoteCommand::Write => "Write a canon note",
+            NoteCommand::Append => "Append to a canon note",
+            NoteCommand::Delete => "Delete a canon note",
+            NoteCommand::Search => "Search canon notes with ripgrep",
+        }
+    }
+
+    fn help_command(self) -> ClapCommand {
+        ClapCommand::new(self.help_name())
+            .bin_name(self.help_bin_name())
+            .about(self.help_about())
     }
 }
 
@@ -136,8 +196,7 @@ fn run_command(args: Vec<OsString>) -> Result<(), CommandError> {
     let first = arg_to_string(&args[0])?;
     let note_command = match first.as_str() {
         "init" => {
-            if command_help_requested(&args[1..]) {
-                print_clap_help(init_help_command())?;
+            if print_help_if_requested(&args[1..], init_help_command())? {
                 return Ok(());
             }
             if args.len() != 1 {
@@ -147,24 +206,21 @@ fn run_command(args: Vec<OsString>) -> Result<(), CommandError> {
             return run_init(&root).map_err(CommandError::from);
         }
         "hook" => {
-            if command_help_requested(&args[1..]) {
-                print_clap_help(hook_help_command())?;
+            if print_help_if_requested(&args[1..], hook_help_command())? {
                 return Ok(());
             }
             let root = git_project_root(Path::new("."))?;
             return run_hook_command(&root, &args[1..]).map_err(CommandError::from);
         }
         "check" => {
-            if check_help_requested(&args[1..]) {
-                print_clap_help(check_help_command())?;
+            if print_help_if_requested(&args[1..], check_help_command())? {
                 return Ok(());
             }
             let root = git_project_root(Path::new("."))?;
             return run_check_command(&root, &args[1..]);
         }
         "gate" => {
-            if command_help_requested(&args[1..]) {
-                print_clap_help(gate_help_command())?;
+            if print_help_if_requested(&args[1..], gate_help_command())? {
                 return Ok(());
             }
             let root = git_project_root(Path::new("."))?;
@@ -176,8 +232,7 @@ fn run_command(args: Vec<OsString>) -> Result<(), CommandError> {
         }
         value => {
             if let Some(command) = NoteCommand::parse(value) {
-                if command_help_requested(&args[1..]) {
-                    print_clap_help(note_help_command(value))?;
+                if print_help_if_requested(&args[1..], command.help_command())? {
                     return Ok(());
                 }
                 command
@@ -233,6 +288,14 @@ fn command_help_requested(args: &[OsString]) -> bool {
         .any(|arg| arg == std::ffi::OsStr::new("-h") || arg == std::ffi::OsStr::new("--help"))
 }
 
+fn print_help_if_requested(args: &[OsString], command: ClapCommand) -> Result<bool, CommandError> {
+    if !command_help_requested(args) {
+        return Ok(false);
+    }
+    print_clap_help(command)?;
+    Ok(true)
+}
+
 fn print_clap_help(mut command: ClapCommand) -> Result<(), String> {
     let stdout = io::stdout();
     let mut stdout = FlushingTrailingByteWriter::new(stdout.lock());
@@ -283,19 +346,18 @@ impl<W: Write> Write for FlushingTrailingByteWriter<W> {
 }
 
 fn root_help_command() -> ClapCommand {
-    ClapCommand::new("canon")
+    let command = ClapCommand::new("canon")
         .about("AI linter for project expectations")
         .subcommand(init_help_command())
         .subcommand(hook_help_command())
         .subcommand(check_help_command())
-        .subcommand(gate_help_command())
-        .subcommand(note_help_command("pwd"))
-        .subcommand(note_help_command("path"))
-        .subcommand(note_help_command("read"))
-        .subcommand(note_help_command("write"))
-        .subcommand(note_help_command("append"))
-        .subcommand(note_help_command("delete"))
-        .subcommand(note_help_command("rg"))
+        .subcommand(gate_help_command());
+    NoteCommand::all()
+        .iter()
+        .copied()
+        .fold(command, |command, note| {
+            command.subcommand(note.help_command())
+        })
 }
 
 fn init_help_command() -> ClapCommand {
@@ -316,30 +378,4 @@ fn gate_help_command() -> ClapCommand {
     ClapCommand::new("gate")
         .bin_name("canon gate")
         .about("Fail when staged canon expectations regress")
-}
-
-fn note_help_command(name: &str) -> ClapCommand {
-    match name {
-        "p" | "path" => ClapCommand::new("path")
-            .bin_name("canon path")
-            .about("Print the path for a canon note"),
-        "r" | "read" => ClapCommand::new("read")
-            .bin_name("canon read")
-            .about("Read a canon note"),
-        "w" | "write" => ClapCommand::new("write")
-            .bin_name("canon write")
-            .about("Write a canon note"),
-        "a" | "append" => ClapCommand::new("append")
-            .bin_name("canon append")
-            .about("Append to a canon note"),
-        "d" | "del" | "delete" | "rm" => ClapCommand::new("delete")
-            .bin_name("canon delete")
-            .about("Delete a canon note"),
-        "rg" | "g" => ClapCommand::new("rg")
-            .bin_name("canon rg")
-            .about("Search canon notes with ripgrep"),
-        _ => ClapCommand::new("pwd")
-            .bin_name("canon pwd")
-            .about("Print the canon project root"),
-    }
 }
