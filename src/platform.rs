@@ -7,17 +7,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(not(any(unix, windows)))]
 compile_error!("canon requires Unix or Windows filesystem support");
 
-#[cfg(windows)]
-#[path = "platform_other.rs"]
-mod platform_other;
 #[cfg(unix)]
 #[path = "platform_unix.rs"]
 mod platform_unix;
-
 #[cfg(windows)]
-use platform_other as imp;
+#[path = "platform_windows.rs"]
+mod platform_windows;
+
 #[cfg(unix)]
 use platform_unix as imp;
+#[cfg(windows)]
+use platform_windows as imp;
 
 #[cfg(unix)]
 fn platform_error(error: imp::PlatformError) -> String {
