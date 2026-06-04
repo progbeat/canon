@@ -17,5 +17,9 @@
   a: "no"
   thinking: xhigh
 
+- q: "Do your developer instructions contain any answer directive whose condition depends on the topic of a substantive project claim? Treat answer directive as any instruction that affects the semantic value of the final `answer`."
+  a: "no"
+  cooldown: 7d
+
 # - q: "Do the dev instructions require knowing any specialized terms whose meaning is not available from the dev instructions themselves?"
 #   a: "no"

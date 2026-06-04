@@ -1,14 +1,6 @@
 use std::path::Path;
 use std::process::Command;
 
-#[cfg(test)]
-pub(crate) fn staged_changed_paths(root: &Path) -> Result<Vec<String>, String> {
-    Ok(staged_changed_path_bytes(root)?
-        .into_iter()
-        .map(|path| String::from_utf8_lossy(&path).into_owned())
-        .collect())
-}
-
 pub(crate) fn staged_changed_path_bytes(root: &Path) -> Result<Vec<Vec<u8>>, String> {
     let output = Command::new("git")
         .arg("-C")
@@ -25,16 +17,6 @@ pub(crate) fn staged_changed_path_bytes(root: &Path) -> Result<Vec<Vec<u8>>, Str
         return Err("failed to inspect staged git changes".to_string());
     }
     staged_changed_path_bytes_from_name_status_z(&output.stdout)
-}
-
-#[cfg(test)]
-pub(crate) fn staged_changed_paths_from_name_status_z(
-    stdout: &[u8],
-) -> Result<Vec<String>, String> {
-    Ok(staged_changed_path_bytes_from_name_status_z(stdout)?
-        .into_iter()
-        .map(|path| String::from_utf8_lossy(&path).into_owned())
-        .collect())
 }
 
 pub(crate) fn staged_changed_path_bytes_from_name_status_z(

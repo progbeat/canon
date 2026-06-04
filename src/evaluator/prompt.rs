@@ -29,3 +29,28 @@ fn render_resource_template(template: &str, replacements: &[(&str, &str)]) -> St
             rendered.replace(placeholder, value)
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{developer_instructions, EVALUATOR_BASE_INSTRUCTIONS};
+
+    #[test]
+    fn base_instructions_prohibit_status_text() {
+        assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("Do not announce skills"));
+        assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("only the JSON object"));
+        assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("I'll inspect"));
+    }
+
+    #[test]
+    fn developer_instructions_define_topic_neutral_evidence_threshold() {
+        let instructions = developer_instructions(&[".".to_string()]);
+
+        assert!(instructions.contains("visible files and question text do not prove"));
+        assert!(instructions.contains("Relevant direct reads/searches"));
+        assert!(instructions.contains("do not require a literal exhaustive audit"));
+        assert!(!instructions.contains("answer `no` to"));
+        assert!(instructions.contains("text before or after the JSON is invalid"));
+        assert!(instructions.contains("first non-whitespace character must be `{`"));
+        assert!(instructions.contains("leading inspection summaries"));
+    }
+}

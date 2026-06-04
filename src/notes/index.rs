@@ -20,7 +20,7 @@ pub(crate) fn upsert_index(config: &Config, hash: &str, key: &str) -> Result<(),
     append_index_record(&path, Some(hash), key)
 }
 
-pub(crate) fn remove_index(config: &Config, _hash: &str, key: &str) -> Result<(), String> {
+pub(crate) fn remove_index(config: &Config, key: &str) -> Result<(), String> {
     validate_note_key(key)?;
     ensure_dir_without_symlinks(&config.root)?;
     let _lock = lock_index(config)?;
@@ -74,11 +74,6 @@ pub(crate) fn lock_index(config: &Config) -> Result<IndexLock, String> {
         }
         Err(err) => Err(format!("failed to lock {}: {}", path.display(), err)),
     }
-}
-
-#[cfg(test)]
-pub(crate) fn read_index(path: &Path) -> Result<Vec<(String, String)>, String> {
-    read_materialized_index(path)
 }
 
 fn read_materialized_index(path: &Path) -> Result<Vec<(String, String)>, String> {

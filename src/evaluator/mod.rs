@@ -1,16 +1,13 @@
 mod config;
-mod core;
 mod prompt;
 mod response;
 mod response_cache;
-mod scope;
 mod turn;
 mod types;
 
 pub(crate) use config::{
     app_server_args_with_no_sandbox, app_server_model_key, evaluator_thread_config_with_no_sandbox,
 };
-pub(crate) use core::{evaluator_turn_input, render_evaluator_turn_input};
 pub(crate) use prompt::{
     developer_instructions, evaluator_turn_prompt, EVALUATOR_BASE_INSTRUCTIONS,
 };

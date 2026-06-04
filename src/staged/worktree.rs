@@ -29,6 +29,8 @@ struct VisibleTree {
     // The hardlink materialization spec names this `visible_tree.entry_paths`.
     // Each value is the evaluator-visible Git blob entry for that path, carrying
     // the mode and object id needed to extract and materialize the file.
+    // Git trees do not contain standalone empty directories, so these blob
+    // entries induce every directory that the spec's DFS can materialize.
     entry_paths: Vec<StagedTrackedFile>,
 }
 
@@ -201,6 +203,9 @@ impl StagedWorktreeView {
                 err
             ));
         }
+        // This loop is equivalent to the policy's `visible_tree.children` DFS:
+        // Git stores directories only as prefixes of entries, and all such
+        // parent directories are created before their child file is linked.
         for file in files {
             let relative = relative_path_from_git_path(&file.path)?;
             let source = self.lazy_tree_dir.join(&relative);
@@ -302,7 +307,7 @@ fn write_materialized_file(
     blob: &[u8],
 ) -> Result<(), String> {
     let relative = relative_path_from_git_path(&file.path)?;
-    let target = lazy_tree.join(relative);
+    let target = lazy_tree.join(&relative);
     if let Some(parent) = target.parent() {
         platform::create_private_dir_all(parent).map_err(|err| {
             format!(

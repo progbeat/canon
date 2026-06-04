@@ -5,41 +5,6 @@ use crate::git::TreeSource;
 use crate::repo_inspection::RepoInspectionCache;
 use std::path::Path;
 
-#[cfg(test)]
-use crate::check::CHECK_PATH;
-
-#[cfg(test)]
-pub(crate) fn parse_check_config_content(
-    config_path: &Path,
-    content: &str,
-) -> Result<CheckConfig, String> {
-    let raw = parse_raw_check_config(config_path, content)?;
-    let config =
-        expand_raw_check_config(None, config_path, raw, None, CheckConfigSource::Worktree)?;
-    validate_check_config(&config)?;
-    Ok(config)
-}
-
-#[cfg(test)]
-pub(crate) fn parse_check_config_content_with_root(
-    root: &Path,
-    config_path: &Path,
-    content: &str,
-    cache: &mut RepoInspectionCache,
-) -> Result<CheckConfig, String> {
-    parse_check_config_content_with_root_and_source(
-        root,
-        config_path,
-        content,
-        cache,
-        if config_path == Path::new(CHECK_PATH) {
-            CheckConfigSource::Tree(TreeSource::Staged)
-        } else {
-            CheckConfigSource::Worktree
-        },
-    )
-}
-
 pub(crate) fn parse_tree_check_config_content_with_root(
     root: &Path,
     config_path: &Path,

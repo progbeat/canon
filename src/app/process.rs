@@ -100,12 +100,11 @@ impl AppServerRunner {
             agent,
             no_sandbox,
         )?);
-        let codex_home = if load_plugins {
-            None
-        } else {
-            Some(prepare_evaluator_codex_home(root).map_err(EvaluatorError::message)?)
-        };
-        configure_app_server_environment(&mut command, codex_home.as_deref())
+        // Plugin-enabled checked configs still run from Canon's isolated
+        // Codex home; the checked tree must not select user-installed plugins
+        // by making the app server inherit the caller's real home.
+        let codex_home = prepare_evaluator_codex_home(root).map_err(EvaluatorError::message)?;
+        configure_app_server_environment(&mut command, &codex_home)
             .map_err(EvaluatorError::message)?;
         platform::prepare_app_server_command(&mut command);
         let mut child = command
@@ -166,31 +165,17 @@ impl AppServerRunner {
 
 pub(crate) fn configure_app_server_environment(
     command: &mut Command,
-    isolated_codex_home: Option<&Path>,
+    isolated_codex_home: &Path,
 ) -> Result<(), String> {
     let path = env::var_os("PATH");
-    let home = env::var_os("HOME");
-    let source_codex_home = env::var_os("CODEX_HOME");
     let temp_root = evaluator_temp_root()?;
     command.env_clear();
     if let Some(path) = path {
         command.env("PATH", path);
     }
-    match isolated_codex_home {
-        Some(codex_home) => {
-            command.env("CODEX_HOME", codex_home);
-            if let Some(home) = codex_home.parent() {
-                command.env("HOME", home);
-            }
-        }
-        None => {
-            if let Some(codex_home) = source_codex_home {
-                command.env("CODEX_HOME", codex_home);
-            }
-            if let Some(home) = home {
-                command.env("HOME", home);
-            }
-        }
+    command.env("CODEX_HOME", isolated_codex_home);
+    if let Some(home) = isolated_codex_home.parent() {
+        command.env("HOME", home);
     }
     for key in ["TMPDIR", "TEMP", "TMP"] {
         command.env(key, &temp_root);
@@ -343,6 +328,7 @@ fn take_child_pipe<T>(
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use std::ffi::{OsStr, OsString};
     use std::io::Write;
     use std::os::unix::net::UnixStream;
     use std::time::Duration;
@@ -371,5 +357,29 @@ mod tests {
 
         drop(writer);
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn app_server_environment_uses_isolated_codex_home() {
+        let mut command = Command::new("codex");
+        let codex_home = Path::new("/tmp/canon-evaluator-home/.codex");
+
+        configure_app_server_environment(&mut command, codex_home).unwrap();
+
+        assert_eq!(
+            command_env_value(&command, "CODEX_HOME"),
+            Some(codex_home.as_os_str().to_os_string())
+        );
+        assert_eq!(
+            command_env_value(&command, "HOME"),
+            Some(codex_home.parent().unwrap().as_os_str().to_os_string())
+        );
+    }
+
+    fn command_env_value(command: &Command, key: &str) -> Option<OsString> {
+        command
+            .get_envs()
+            .find(|(name, _)| *name == OsStr::new(key))
+            .and_then(|(_, value)| value.map(OsStr::to_os_string))
     }
 }

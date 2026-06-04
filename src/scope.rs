@@ -2,10 +2,11 @@ use crate::config_types::AgentConfig;
 use crate::hash::full_scope;
 use std::path::Path;
 
-// Glossary implementation map: this module owns scope path normalization,
-// Git pathspec matching, and ignore matching. Visible-scope selection lives in
-// `check::interrogation_state`; visible-tree hashing/materialization live in
-// `git::visible_tree_oid` and `staged::worktree`; q-scope
+// Keep this implementation map in sync with `docs/GLOSSARY.md`: this module
+// owns scope path normalization, Git pathspec matching, and ignore matching.
+// Visible-scope selection lives in `check::interrogation_state`; visible-tree
+// hashing/materialization live in `git::visible_tree_oid` and
+// `staged::worktree`; q-scope
 // verification/storage/reuse live in `check::interrogation_policy`,
 // `history::store`, and `history::reuse`; evaluator-thread reuse invariants
 // live in `check::interrogation_state` and `check::interrogation`.

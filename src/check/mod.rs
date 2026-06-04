@@ -27,7 +27,7 @@ mod types;
 mod validation;
 
 pub(crate) use command::run_check_command;
-pub(crate) use command_args::{check_help_command, check_help_requested};
+pub(crate) use command_args::check_help_command;
 pub(crate) use config::parse_tree_check_config_content_with_root;
 #[cfg(test)]
 pub(crate) use generator_paths::expand_generator_paths;
@@ -39,6 +39,8 @@ pub(crate) use run::{run_check_with_runner_and_caches, CheckRunCaches};
 pub(crate) use selection::{
     expectation_identities, select_expectations_with_identities, ExpectationIdentity,
 };
+#[cfg(test)]
+pub(crate) use types::Cooldown;
 pub(crate) use types::{
     CheckRecord, CheckRecordOutcome, CheckResult, EvaluatorResponseJson, ParsedAnswer,
     SelectedExpectation, ERROR_UNPARSABLE,

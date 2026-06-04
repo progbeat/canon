@@ -417,9 +417,9 @@ pub(crate) fn prepare_check_execution(
     options: PrepareCheckExecutionOptions<'_>,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<PreparedCheckExecution, String> {
-    // Prepare a scope materializer outside the real working tree so evaluator
-    // sessions cannot observe unstaged, untracked, or non-visible project
-    // content.
+    // Prepare a materialized staged tree outside the real working tree.
+    // Scope and ignore filtering choose which Git entries are present there;
+    // sandbox mode controls access outside that materialized cwd.
     let staged_view = match StagedWorktreeView::apply_for_tree_source(
         root,
         options.tree_source.clone(),

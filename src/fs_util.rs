@@ -2,11 +2,6 @@ use std::fs;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Component, Path, PathBuf};
 
-#[cfg(test)]
-pub(crate) fn ensure_dir(path: &Path) -> Result<(), String> {
-    fs::create_dir_all(path).map_err(|err| format!("failed to create {}: {}", path.display(), err))
-}
-
 pub(crate) fn ensure_dir_without_symlinks(path: &Path) -> Result<(), String> {
     let mut current = PathBuf::new();
     for component in path.components() {

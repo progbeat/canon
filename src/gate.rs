@@ -2,14 +2,15 @@
 use crate::check::ExpectationIdentity;
 use crate::check::{
     expectation_identities, is_canon_only_staged_change_bytes, is_canon_project_path_bytes,
-    select_expectations_with_identities, staged_changed_path_bytes, CheckRecord,
-    SelectedExpectation, CHECK_PATH,
+    select_expectations_with_identities, staged_changed_path_bytes, SelectedExpectation,
+    CHECK_PATH,
 };
 use crate::cli::CommandError;
 use crate::config_types::{AgentConfig, CheckConfig};
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::history::{
-    cooldown_history_record, latest_history_record_matching_visible_tree_oid, HistoryCache,
+    cached_history_record, cooldown_history_record,
+    latest_history_record_matching_visible_tree_oid, CachedHistoryRecord, HistoryCache,
 };
 use crate::output::write_stderr_line;
 use crate::repo_inspection::RepoInspectionCache;
@@ -283,30 +284,13 @@ fn gate_cache_result_for_tree_at(
         },
     )?;
     let cooldown = cooldown_history_record(root, agent, expectation, history_cache, now)?;
-    let record = newer_gate_record(same_tree, cooldown);
+    let record = cached_history_record(same_tree, cooldown).map(|hit| match hit {
+        CachedHistoryRecord::SameTree(record) | CachedHistoryRecord::Cooldown(record) => record,
+    });
     match record {
         Some(record) if record.passed() => Ok(GateCacheResult::Pass),
         Some(_) => Ok(GateCacheResult::Fail),
         None => Ok(GateCacheResult::Missing),
-    }
-}
-
-fn newer_gate_record(
-    same_tree: Option<CheckRecord>,
-    cooldown: Option<CheckRecord>,
-) -> Option<CheckRecord> {
-    match (same_tree, cooldown) {
-        (Some(same_tree), Some(cooldown)) => {
-            if crate::time::parse_record_timestamp(&cooldown.timestamp).unwrap_or(0)
-                > crate::time::parse_record_timestamp(&same_tree.timestamp).unwrap_or(0)
-            {
-                Some(cooldown)
-            } else {
-                Some(same_tree)
-            }
-        }
-        (Some(record), None) | (None, Some(record)) => Some(record),
-        (None, None) => None,
     }
 }
 

@@ -12,7 +12,9 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommandArgs, String> {
-    let matches = check_command_args_parser()
+    let matches = check_help_command()
+        .no_binary_name(true)
+        .disable_version_flag(true)
         .try_get_matches_from(args)
         .map_err(|err| err.to_string())?;
 
@@ -91,12 +93,6 @@ pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommand
     })
 }
 
-fn check_command_args_parser() -> Command {
-    check_help_command()
-        .no_binary_name(true)
-        .disable_version_flag(true)
-}
-
 pub(crate) fn check_help_command() -> Command {
     let command = Command::new("check")
         .bin_name("canon check")
@@ -139,11 +135,6 @@ pub(crate) fn check_help_command() -> Command {
     add_check_option_args(command).after_help(
             "Examples:\n  canon check\n      Check staged content against all canon expectations.\n\n  canon check a7F K9m\n      Check canon expectations selected by ID prefix.\n\n  canon check --ignore-cache a7F\n      Freshly check one canon expectation.\n\n  canon check --tree HEAD --against-tree HEAD~1 a7F\n      Check one canon expectation on HEAD with comparison against the previous commit.\n\n  canon check -q \"Does the app expose Undo?\"\n      Ask a one-off question.\n\n  canon check -q \"Does the app expose Undo?\" -s src/app.rs\n      Ask a one-off question with a restricted visible scope.",
         )
-}
-
-pub(crate) fn check_help_requested(args: &[OsString]) -> bool {
-    args.iter()
-        .any(|arg| arg == std::ffi::OsStr::new("-h") || arg == std::ffi::OsStr::new("--help"))
 }
 
 fn check_value_arg(name: &'static str) -> Arg {

@@ -84,14 +84,14 @@ pub(crate) fn delete_note(config: &Config, key: &str) -> Result<(), String> {
         let original = note_log::read_note_data(&note, |path| fs::read(path))?;
         fs::remove_file(&note.path)
             .map_err(|err| format!("failed to delete {}: {}", note.path.display(), err))?;
-        if let Err(index_err) = remove_index(config, &note.hash, key) {
+        if let Err(index_err) = remove_index(config, key) {
             return Err(error_with_restore_context(
                 index_err,
                 restore_deleted_note_after_index_failure(&note.path, &original),
             ));
         }
     } else {
-        remove_index(config, &note.hash, key)?;
+        remove_index(config, key)?;
     }
     Ok(())
 }

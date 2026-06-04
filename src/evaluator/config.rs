@@ -39,26 +39,6 @@ const EVALUATOR_DISABLED_FEATURES: &[&str] = &[
     "workspace_dependencies",
 ];
 
-#[cfg(test)]
-pub(crate) fn evaluator_thread_config(
-    agent: &AgentConfig,
-    scope: &[String],
-    model: Option<&str>,
-    thinking: &str,
-    app_server_root: &Path,
-    session_root: &Path,
-) -> Value {
-    evaluator_thread_config_with_no_sandbox(
-        agent,
-        scope,
-        model,
-        thinking,
-        app_server_root,
-        session_root,
-        false,
-    )
-}
-
 pub(crate) fn evaluator_thread_config_with_no_sandbox(
     agent: &AgentConfig,
     _scope: &[String],
@@ -244,15 +224,6 @@ pub(crate) fn enabled_plugins_config(agent: &AgentConfig) -> Value {
         plugins.insert(plugin.clone(), json!({ "enabled": true }));
     }
     Value::Object(plugins)
-}
-
-#[cfg(test)]
-pub(crate) fn app_server_args(
-    root: &Path,
-    load_plugins: bool,
-    agent: &AgentConfig,
-) -> Result<Vec<String>, String> {
-    app_server_args_with_no_sandbox(root, load_plugins, agent, false)
 }
 
 pub(crate) fn app_server_args_with_no_sandbox(

@@ -15,8 +15,9 @@ previous answer still applies to the current staged project state.
 
 ## Cached result
 
-The reusable result for an expectation in the current Git state. It is the newer
-of the expectation's same-tree result and cooldown result, when either exists.
+The reusable result for an expectation in the current Git state. It is the
+expectation's same-tree result when one exists; otherwise it is the
+expectation's cooldown result, when one exists.
 
 ## Canon
 
@@ -37,14 +38,15 @@ The YAML file that defines evaluator settings and expectations. By default,
 
 ## Cooldown
 
-A time window during which a recent passing result can remain valid without
-being re-proven for every small staged change. Cooldown is useful for broad
-review expectations that are expensive to recheck on every commit.
+A time window during which a recent answer-history result can avoid being
+re-proven for every small staged change. Cooldown is useful for broad review
+expectations that are expensive to recheck on every commit.
 
 ## Cooldown result
 
-A passing answer-history record that is still inside the expectation's
-configured cooldown window.
+A pass cached result derived from the latest answer-history record when that
+record's current pass or fail result has a configured cooldown duration and its
+timestamp is still inside that window.
 
 ## Evidence
 

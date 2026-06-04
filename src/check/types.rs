@@ -175,14 +175,18 @@ impl EvaluatorResponseJson {
                 return Err(format!("unsupported evaluator error: {}", error));
             }
         }
-        // `qScopeSuggestion` is a required non-empty array of non-empty
-        // single-line strings at response-parse time. Repository-relative scope
-        // syntax and semantic sufficiency are intentionally later narrowing
-        // policy checks, which accept a claim only after an independent
-        // answer-producing turn.
+        // Interrogation Policy keeps `qScopeSuggestion` schema validation to
+        // required non-empty single-line strings. Repository-relative scope
+        // syntax is not part of response-schema validity; syntax and semantic
+        // sufficiency are later narrowing policy checks, which accept a claim
+        // only after an independent answer-producing turn.
+        // Interrogation Policy's JSON Schema sets `minItems: 1` for
+        // `qScopeSuggestion`, so an empty array is a response-schema error.
         if self.q_scope_suggestion.is_empty() {
             return Err("qScopeSuggestion must contain at least one path".to_string());
         }
+        // Each item follows the schema's `minLength: 1` and
+        // `pattern: "^[^\\r\\n]*$"` constraints.
         for item in &self.q_scope_suggestion {
             if item.is_empty() || contains_schema_single_line_violation(item) {
                 return Err(
@@ -195,9 +199,7 @@ impl EvaluatorResponseJson {
 }
 
 fn contains_schema_single_line_violation(value: &str) -> bool {
-    value
-        .chars()
-        .any(|char| is_line_break_char(char) || char.is_control())
+    value.chars().any(|char| matches!(char, '\r' | '\n'))
 }
 
 fn deserialize_optional_answer<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
