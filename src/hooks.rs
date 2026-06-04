@@ -30,6 +30,8 @@ const UNINSTALL_FALLBACK_PRE_COMMIT_HOOK_MARKER: &str =
     "# canon temporary uninstall fallback; safe to remove on retry\n";
 const PRE_COMMIT_HOOK_MANUAL_ADVICE: &str =
     "Can't safely install pre-commit hook.\n▷ Add `canon gate` manually to the existing hook setup or ask a human to handle it.";
+const GIT_WORKTREE_REQUIRED_FOR_HOOK_INSTALL: &str =
+    "Can't safely install pre-commit hook: canon hook install requires a Git worktree.";
 static UNINSTALL_FALLBACK_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn run_init(root: &Path) -> Result<(), String> {
@@ -205,10 +207,7 @@ fn preflight_git_worktree(preflight: &HookInstallPreflight) -> Result<(), String
     if preflight.is_git_worktree {
         return Ok(());
     }
-    Err(
-        "Can't safely install pre-commit hook: canon hook install requires a Git worktree."
-            .to_string(),
-    )
+    Err(GIT_WORKTREE_REQUIRED_FOR_HOOK_INSTALL.to_string())
 }
 
 fn preflight_default_git_pre_commit_hook(preflight: &HookInstallPreflight) -> Result<(), String> {
@@ -362,59 +361,66 @@ fn clean_up_created_uninstall_fallback_after_error(
 }
 
 fn remove_reusable_pre_commit_hook(path: &Path) -> Result<(), String> {
-    let Some(existing) = read_optional_file(path)? else {
-        return Ok(());
-    };
-    if !pre_commit_hook_is_reusable(&existing) {
-        return Err(format!(
-            "refusing to remove managed pre-commit hook {} because its content changed",
-            path.display()
-        ));
-    }
-    let temp_dir = create_uninstall_fallback_temp_dir(path).map_err(|err| {
-        format!(
-            "failed to prepare managed pre-commit hook {} for removal: {}",
-            path.display(),
-            err
-        )
-    })?;
-    let temp_path = temp_dir.join("pre-commit");
-    match fs::rename(path, &temp_path) {
-        Ok(()) => remove_moved_reusable_pre_commit_hook(path, &temp_path, &temp_dir),
-        Err(err)
-            if matches!(
-                err.kind(),
-                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
-            ) =>
-        {
-            remove_empty_uninstall_fallback_temp_dir(&temp_dir)?;
-            Ok(())
-        }
-        Err(err) => {
-            remove_empty_uninstall_fallback_temp_dir(&temp_dir)?;
-            Err(format!(
-                "failed to move managed pre-commit hook {} aside before removal: {}",
+    let Some(plan) = move_expected_pre_commit_hook_for_removal(
+        path,
+        pre_commit_hook_is_reusable,
+        "managed pre-commit hook",
+        |path, err| {
+            format!(
+                "failed to prepare managed pre-commit hook {} for removal: {}",
                 path.display(),
                 err
-            ))
-        }
-    }
+            )
+        },
+    )?
+    else {
+        return Ok(());
+    };
+    remove_moved_reusable_pre_commit_hook(path, &plan.temp_path, &plan.temp_dir)
 }
 
 pub(crate) fn remove_uninstall_fallback_pre_commit_hook(path: &Path) -> Result<(), String> {
-    let Some(existing) = read_optional_file(path)? else {
+    let Some(plan) = move_expected_pre_commit_hook_for_removal(
+        path,
+        pre_commit_hook_is_uninstall_fallback,
+        "temporary uninstall fallback",
+        |_, err| err,
+    )?
+    else {
         return Ok(());
     };
-    if !pre_commit_hook_is_uninstall_fallback(&existing) {
+    remove_moved_uninstall_fallback_pre_commit_hook(path, &plan.temp_path, &plan.temp_dir)
+}
+
+struct MovedHookRemovalPlan {
+    temp_dir: PathBuf,
+    temp_path: PathBuf,
+}
+
+fn move_expected_pre_commit_hook_for_removal(
+    path: &Path,
+    is_expected_content: fn(&str) -> bool,
+    hook_description: &str,
+    prepare_temp_error: impl FnOnce(&Path, String) -> String,
+) -> Result<Option<MovedHookRemovalPlan>, String> {
+    let Some(existing) = read_optional_file(path)? else {
+        return Ok(None);
+    };
+    if !is_expected_content(&existing) {
         return Err(format!(
-            "refusing to remove temporary uninstall fallback {} because its content changed",
+            "refusing to remove {} {} because its content changed",
+            hook_description,
             path.display()
         ));
     }
-    let temp_dir = create_uninstall_fallback_temp_dir(path)?;
+    let temp_dir =
+        create_uninstall_fallback_temp_dir(path).map_err(|err| prepare_temp_error(path, err))?;
     let temp_path = temp_dir.join("pre-commit");
     match fs::rename(path, &temp_path) {
-        Ok(()) => remove_moved_uninstall_fallback_pre_commit_hook(path, &temp_path, &temp_dir),
+        Ok(()) => Ok(Some(MovedHookRemovalPlan {
+            temp_dir,
+            temp_path,
+        })),
         Err(err)
             if matches!(
                 err.kind(),
@@ -422,12 +428,13 @@ pub(crate) fn remove_uninstall_fallback_pre_commit_hook(path: &Path) -> Result<(
             ) =>
         {
             remove_empty_uninstall_fallback_temp_dir(&temp_dir)?;
-            Ok(())
+            Ok(None)
         }
         Err(err) => {
             remove_empty_uninstall_fallback_temp_dir(&temp_dir)?;
             Err(format!(
-                "failed to move temporary uninstall fallback {} aside before removal: {}",
+                "failed to move {} {} aside before removal: {}",
+                hook_description,
                 path.display(),
                 err
             ))
@@ -472,48 +479,14 @@ pub(crate) fn remove_moved_reusable_pre_commit_hook(
     moved_path: &Path,
     temp_dir: &Path,
 ) -> Result<(), String> {
-    let moved = match read_optional_file(moved_path) {
-        Ok(Some(content)) => content,
-        Ok(None) => {
-            remove_empty_uninstall_fallback_temp_dir(temp_dir)?;
-            return Ok(());
-        }
-        Err(err) => {
-            return Err(format!(
-                "refusing to remove managed pre-commit hook {} after moving it aside: {}; moved hook left at {}",
-                original_path.display(),
-                err,
-                moved_path.display()
-            ));
-        }
-    };
-    if !pre_commit_hook_is_reusable(&moved) {
-        restore_moved_non_fallback_hook(original_path, moved_path, temp_dir)?;
-        return Err(format!(
-            "refusing to remove managed pre-commit hook {} because its content changed",
-            original_path.display()
-        ));
-    }
-    if let Err(err) = fs::remove_file(moved_path) {
-        return match restore_moved_hook_file(original_path, moved_path) {
-            Ok(()) => Err(format!(
-                "failed to remove moved managed pre-commit hook {}: {}; restored managed pre-commit hook to {}, moved hook left at {}",
-                moved_path.display(),
-                err,
-                original_path.display(),
-                moved_path.display()
-            )),
-            Err(restore_err) => Err(format!(
-                "failed to remove moved managed pre-commit hook {}: {}; additionally failed to restore managed pre-commit hook to {}: {}; moved hook left at {}",
-                moved_path.display(),
-                err,
-                original_path.display(),
-                restore_err,
-                moved_path.display()
-            )),
-        };
-    }
-    remove_empty_uninstall_fallback_temp_dir(temp_dir)
+    remove_moved_expected_pre_commit_hook(
+        original_path,
+        moved_path,
+        temp_dir,
+        pre_commit_hook_is_reusable,
+        "managed pre-commit hook",
+        RemoveMovedHookFailure::RestoreOriginal,
+    )
 }
 
 pub(crate) fn remove_moved_uninstall_fallback_pre_commit_hook(
@@ -521,36 +494,123 @@ pub(crate) fn remove_moved_uninstall_fallback_pre_commit_hook(
     moved_path: &Path,
     temp_dir: &Path,
 ) -> Result<(), String> {
+    remove_moved_expected_pre_commit_hook(
+        original_path,
+        moved_path,
+        temp_dir,
+        pre_commit_hook_is_uninstall_fallback,
+        "temporary uninstall fallback",
+        RemoveMovedHookFailure::ReportOnly,
+    )
+}
+
+enum RemoveMovedHookFailure {
+    RestoreOriginal,
+    ReportOnly,
+}
+
+fn remove_moved_expected_pre_commit_hook(
+    original_path: &Path,
+    moved_path: &Path,
+    temp_dir: &Path,
+    is_expected_content: fn(&str) -> bool,
+    hook_description: &str,
+    remove_failure: RemoveMovedHookFailure,
+) -> Result<(), String> {
+    if !read_moved_expected_pre_commit_hook(
+        original_path,
+        moved_path,
+        temp_dir,
+        is_expected_content,
+        hook_description,
+    )? {
+        return Ok(());
+    }
+    if let Err(err) = fs::remove_file(moved_path) {
+        return handle_moved_hook_remove_failure(
+            original_path,
+            moved_path,
+            hook_description,
+            remove_failure,
+            err,
+        );
+    }
+    remove_empty_uninstall_fallback_temp_dir(temp_dir)
+}
+
+fn handle_moved_hook_remove_failure(
+    original_path: &Path,
+    moved_path: &Path,
+    hook_description: &str,
+    remove_failure: RemoveMovedHookFailure,
+    err: io::Error,
+) -> Result<(), String> {
+    match remove_failure {
+        RemoveMovedHookFailure::ReportOnly => Err(format!(
+            "failed to remove moved {} {}: {}",
+            hook_description,
+            moved_path.display(),
+            err
+        )),
+        RemoveMovedHookFailure::RestoreOriginal => match restore_moved_hook_file(
+            original_path,
+            moved_path,
+        ) {
+            Ok(()) => Err(format!(
+                "failed to remove moved {} {}: {}; restored {} to {}, moved hook left at {}",
+                hook_description,
+                moved_path.display(),
+                err,
+                hook_description,
+                original_path.display(),
+                moved_path.display()
+            )),
+            Err(restore_err) => Err(format!(
+                "failed to remove moved {} {}: {}; additionally failed to restore {} to {}: {}; moved hook left at {}",
+                hook_description,
+                moved_path.display(),
+                err,
+                hook_description,
+                original_path.display(),
+                restore_err,
+                moved_path.display()
+            )),
+        },
+    }
+}
+
+fn read_moved_expected_pre_commit_hook(
+    original_path: &Path,
+    moved_path: &Path,
+    temp_dir: &Path,
+    is_expected_content: fn(&str) -> bool,
+    hook_description: &str,
+) -> Result<bool, String> {
     let moved = match read_optional_file(moved_path) {
         Ok(Some(content)) => content,
         Ok(None) => {
             remove_empty_uninstall_fallback_temp_dir(temp_dir)?;
-            return Ok(());
+            return Ok(false);
         }
         Err(err) => {
             return Err(format!(
-                "refusing to remove temporary uninstall fallback {} after moving it aside: {}; moved hook left at {}",
+                "refusing to remove {} {} after moving it aside: {}; moved hook left at {}",
+                hook_description,
                 original_path.display(),
                 err,
                 moved_path.display()
             ));
         }
     };
-    if !pre_commit_hook_is_uninstall_fallback(&moved) {
+    if !is_expected_content(&moved) {
         restore_moved_non_fallback_hook(original_path, moved_path, temp_dir)?;
         return Err(format!(
-            "refusing to remove temporary uninstall fallback {} because its content changed",
+            "refusing to remove {} {} because its content changed",
+            hook_description,
             original_path.display()
         ));
     }
-    fs::remove_file(moved_path).map_err(|err| {
-        format!(
-            "failed to remove moved temporary uninstall fallback {}: {}",
-            moved_path.display(),
-            err
-        )
-    })?;
-    remove_empty_uninstall_fallback_temp_dir(temp_dir)
+    Ok(true)
 }
 
 fn restore_moved_non_fallback_hook(
@@ -669,10 +729,7 @@ pub(crate) fn configure_git_hooks_path(
     preflight: &HookInstallPreflight,
 ) -> Result<(), String> {
     if !preflight.is_git_worktree {
-        return Err(
-            "Can't safely install pre-commit hook: canon hook install requires a Git worktree."
-                .to_string(),
-        );
+        return Err(GIT_WORKTREE_REQUIRED_FOR_HOOK_INSTALL.to_string());
     }
 
     if uses_canon_git_hooks_path(preflight) {
@@ -808,17 +865,22 @@ impl HookInstallPreflight {
 }
 
 fn canon_git_hooks_path(root: &Path, is_git_worktree: bool) -> Result<PathBuf, String> {
-    if is_git_worktree {
-        return resolve_git_path(root, GIT_HOOKS_PATH);
-    }
-    Ok(root.join(".git").join(GIT_HOOKS_PATH))
+    canon_state_git_path(root, is_git_worktree, GIT_HOOKS_PATH)
 }
 
 fn canon_pre_commit_hook_path(root: &Path, is_git_worktree: bool) -> Result<PathBuf, String> {
+    canon_state_git_path(root, is_git_worktree, PRE_COMMIT_HOOK_PATH)
+}
+
+fn canon_state_git_path(
+    root: &Path,
+    is_git_worktree: bool,
+    git_path: &str,
+) -> Result<PathBuf, String> {
     if is_git_worktree {
-        return resolve_git_path(root, PRE_COMMIT_HOOK_PATH);
+        return resolve_git_path(root, git_path);
     }
-    Ok(root.join(".git").join(PRE_COMMIT_HOOK_PATH))
+    Ok(root.join(".git").join(git_path))
 }
 
 fn default_git_pre_commit_hook_path(root: &Path, is_git_worktree: bool) -> Result<PathBuf, String> {
