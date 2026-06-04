@@ -40,78 +40,154 @@ enum NoteCommand {
     Search,
 }
 
+struct NoteCommandSpec {
+    command: NoteCommand,
+    aliases: &'static [&'static str],
+    help_name: &'static str,
+    help_bin_name: &'static str,
+    help_about: &'static str,
+}
+
+const NOTE_COMMAND_SPECS: &[NoteCommandSpec] = &[
+    NoteCommandSpec {
+        command: NoteCommand::Pwd,
+        aliases: &["pwd"],
+        help_name: "pwd",
+        help_bin_name: "canon pwd",
+        help_about: "Print the canon project root",
+    },
+    NoteCommandSpec {
+        command: NoteCommand::Path,
+        aliases: &["p", "path"],
+        help_name: "path",
+        help_bin_name: "canon path",
+        help_about: "Print the path for a canon note",
+    },
+    NoteCommandSpec {
+        command: NoteCommand::Read,
+        aliases: &["r", "read"],
+        help_name: "read",
+        help_bin_name: "canon read",
+        help_about: "Read a canon note",
+    },
+    NoteCommandSpec {
+        command: NoteCommand::Write,
+        aliases: &["w", "write"],
+        help_name: "write",
+        help_bin_name: "canon write",
+        help_about: "Write a canon note",
+    },
+    NoteCommandSpec {
+        command: NoteCommand::Append,
+        aliases: &["a", "append"],
+        help_name: "append",
+        help_bin_name: "canon append",
+        help_about: "Append to a canon note",
+    },
+    NoteCommandSpec {
+        command: NoteCommand::Delete,
+        aliases: &["d", "del", "delete", "rm"],
+        help_name: "delete",
+        help_bin_name: "canon delete",
+        help_about: "Delete a canon note",
+    },
+    NoteCommandSpec {
+        command: NoteCommand::Search,
+        aliases: &["rg", "g"],
+        help_name: "rg",
+        help_bin_name: "canon rg",
+        help_about: "Search canon notes with ripgrep",
+    },
+];
+
 impl NoteCommand {
-    fn all() -> &'static [NoteCommand] {
+    fn parse(value: &str) -> Option<NoteCommand> {
+        NOTE_COMMAND_SPECS
+            .iter()
+            .find(|spec| spec.aliases.contains(&value))
+            .map(|spec| spec.command)
+    }
+
+    fn spec(self) -> &'static NoteCommandSpec {
+        for spec in NOTE_COMMAND_SPECS {
+            if spec.command == self {
+                return spec;
+            }
+        }
+        unreachable!("every NoteCommand must have a spec")
+    }
+}
+
+impl NoteCommandSpec {
+    fn help_command(&self) -> ClapCommand {
+        ClapCommand::new(self.help_name)
+            .bin_name(self.help_bin_name)
+            .about(self.help_about)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BuiltinCommand {
+    Init,
+    Hook,
+    Check,
+    Gate,
+}
+
+impl BuiltinCommand {
+    fn all() -> &'static [BuiltinCommand] {
         &[
-            NoteCommand::Pwd,
-            NoteCommand::Path,
-            NoteCommand::Read,
-            NoteCommand::Write,
-            NoteCommand::Append,
-            NoteCommand::Delete,
-            NoteCommand::Search,
+            BuiltinCommand::Init,
+            BuiltinCommand::Hook,
+            BuiltinCommand::Check,
+            BuiltinCommand::Gate,
         ]
     }
 
-    fn parse(value: &str) -> Option<NoteCommand> {
-        Self::all()
-            .iter()
-            .copied()
-            .find(|command| command.aliases().contains(&value))
-    }
-
-    fn aliases(self) -> &'static [&'static str] {
-        match self {
-            NoteCommand::Pwd => &["pwd"],
-            NoteCommand::Path => &["p", "path"],
-            NoteCommand::Read => &["r", "read"],
-            NoteCommand::Write => &["w", "write"],
-            NoteCommand::Append => &["a", "append"],
-            NoteCommand::Delete => &["d", "del", "delete", "rm"],
-            NoteCommand::Search => &["rg", "g"],
-        }
-    }
-
-    fn help_name(self) -> &'static str {
-        match self {
-            NoteCommand::Pwd => "pwd",
-            NoteCommand::Path => "path",
-            NoteCommand::Read => "read",
-            NoteCommand::Write => "write",
-            NoteCommand::Append => "append",
-            NoteCommand::Delete => "delete",
-            NoteCommand::Search => "rg",
-        }
-    }
-
-    fn help_bin_name(self) -> &'static str {
-        match self {
-            NoteCommand::Pwd => "canon pwd",
-            NoteCommand::Path => "canon path",
-            NoteCommand::Read => "canon read",
-            NoteCommand::Write => "canon write",
-            NoteCommand::Append => "canon append",
-            NoteCommand::Delete => "canon delete",
-            NoteCommand::Search => "canon rg",
-        }
-    }
-
-    fn help_about(self) -> &'static str {
-        match self {
-            NoteCommand::Pwd => "Print the canon project root",
-            NoteCommand::Path => "Print the path for a canon note",
-            NoteCommand::Read => "Read a canon note",
-            NoteCommand::Write => "Write a canon note",
-            NoteCommand::Append => "Append to a canon note",
-            NoteCommand::Delete => "Delete a canon note",
-            NoteCommand::Search => "Search canon notes with ripgrep",
+    fn parse(value: &str) -> Option<BuiltinCommand> {
+        match value {
+            "init" => Some(BuiltinCommand::Init),
+            "hook" => Some(BuiltinCommand::Hook),
+            "check" => Some(BuiltinCommand::Check),
+            "gate" => Some(BuiltinCommand::Gate),
+            _ => None,
         }
     }
 
     fn help_command(self) -> ClapCommand {
-        ClapCommand::new(self.help_name())
-            .bin_name(self.help_bin_name())
-            .about(self.help_about())
+        match self {
+            BuiltinCommand::Init => init_help_command(),
+            BuiltinCommand::Hook => hook_help_command(),
+            BuiltinCommand::Check => check_help_command(),
+            BuiltinCommand::Gate => gate_help_command(),
+        }
+    }
+
+    fn run(self, args: &[OsString]) -> Result<(), CommandError> {
+        if print_help_if_requested(args, self.help_command())? {
+            return Ok(());
+        }
+        match self {
+            BuiltinCommand::Init => {
+                if !args.is_empty() {
+                    return Err(CommandError::InitDoesNotAcceptArguments);
+                }
+                let root = project_root_or_current(Path::new("."))?;
+                run_init(&root).map_err(CommandError::from)
+            }
+            BuiltinCommand::Hook => {
+                let root = git_project_root(Path::new("."))?;
+                run_hook_command(&root, args).map_err(CommandError::from)
+            }
+            BuiltinCommand::Check => {
+                let root = git_project_root(Path::new("."))?;
+                run_check_command(&root, args)
+            }
+            BuiltinCommand::Gate => {
+                let root = git_project_root(Path::new("."))?;
+                run_gate_command(&root, args)
+            }
+        }
     }
 }
 
@@ -194,45 +270,17 @@ fn run_command(args: Vec<OsString>) -> Result<(), CommandError> {
     }
 
     let first = arg_to_string(&args[0])?;
+    if let Some(command) = BuiltinCommand::parse(first.as_str()) {
+        return command.run(&args[1..]);
+    }
     let note_command = match first.as_str() {
-        "init" => {
-            if print_help_if_requested(&args[1..], init_help_command())? {
-                return Ok(());
-            }
-            if args.len() != 1 {
-                return Err(CommandError::InitDoesNotAcceptArguments);
-            }
-            let root = project_root_or_current(Path::new("."))?;
-            return run_init(&root).map_err(CommandError::from);
-        }
-        "hook" => {
-            if print_help_if_requested(&args[1..], hook_help_command())? {
-                return Ok(());
-            }
-            let root = git_project_root(Path::new("."))?;
-            return run_hook_command(&root, &args[1..]).map_err(CommandError::from);
-        }
-        "check" => {
-            if print_help_if_requested(&args[1..], check_help_command())? {
-                return Ok(());
-            }
-            let root = git_project_root(Path::new("."))?;
-            return run_check_command(&root, &args[1..]);
-        }
-        "gate" => {
-            if print_help_if_requested(&args[1..], gate_help_command())? {
-                return Ok(());
-            }
-            let root = git_project_root(Path::new("."))?;
-            return run_gate_command(&root, &args[1..]);
-        }
         "-h" | "--help" | "help" => {
             print_clap_help(root_help_command())?;
             return Ok(());
         }
         value => {
             if let Some(command) = NoteCommand::parse(value) {
-                if print_help_if_requested(&args[1..], command.help_command())? {
+                if print_help_if_requested(&args[1..], command.spec().help_command())? {
                     return Ok(());
                 }
                 command
@@ -307,9 +355,7 @@ fn print_clap_help(mut command: ClapCommand) -> Result<(), String> {
             .write_all(b"\n")
             .map_err(|err| format!("failed to write help newline to stdout: {}", err))?;
     }
-    stdout
-        .flush()
-        .map_err(|err| format!("failed to flush help to stdout: {}", err))
+    Ok(())
 }
 
 struct FlushingTrailingByteWriter<W> {
@@ -348,16 +394,15 @@ impl<W: Write> Write for FlushingTrailingByteWriter<W> {
 fn root_help_command() -> ClapCommand {
     let command = ClapCommand::new("canon")
         .about("AI linter for project expectations")
-        .subcommand(init_help_command())
-        .subcommand(hook_help_command())
-        .subcommand(check_help_command())
-        .subcommand(gate_help_command());
-    NoteCommand::all()
-        .iter()
-        .copied()
-        .fold(command, |command, note| {
-            command.subcommand(note.help_command())
-        })
+        .subcommands(
+            BuiltinCommand::all()
+                .iter()
+                .copied()
+                .map(BuiltinCommand::help_command),
+        );
+    NOTE_COMMAND_SPECS.iter().fold(command, |command, spec| {
+        command.subcommand(spec.help_command())
+    })
 }
 
 fn init_help_command() -> ClapCommand {
