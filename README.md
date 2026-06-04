@@ -13,6 +13,12 @@ Codex working against `canon` until the repository satisfied its own canon.
 
 ## Install
 
+### AGENTS.md
+
+Copy the
+[`Canon` section from this repository's `AGENTS.md`](https://github.com/progbeat/canon/blob/master/AGENTS.md?plain=1#L12-L56)
+into your project's `AGENTS.md`.
+
 ### Docker
 
 Requires Git, Docker, curl, and Codex (Desktop or CLI).
@@ -58,24 +64,25 @@ cargo install --git https://github.com/progbeat/canon
 Use Cargo when developing `canon` or when you intentionally want a host-native
 binary. Prebuilt release binaries are not published yet.
 
-## Codex Skills
+## Agent Skills
 
-To install the Codex skills, ask Codex:
+To install the skills from this repository, ask Codex:
 
 ```text
-Install the Codex skills from `https://github.com/progbeat/canon/tree/master/skills`.
+Install the agent skills from `https://github.com/progbeat/canon/tree/master/skills`.
 ```
-
-Restart Codex after installing the skills.
 
 ## Workflow
 
-1. Ask Codex to implement a feature using `$canon-warden`.
+1. Ask Codex to implement a feature.
 
 2. If something is off, add the unmet expectation to `.canon/check.yml`, then
    ask Codex to fix the project against the updated canon.
 
 3. Iterate.
+
+Canon changes are the human's responsibility. Before committing them, it is
+recommended to use `$canon-guidelines` for review.
 
 ## Commands
 
