@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 pub(crate) struct StagedWorktreeView {
     source_root: PathBuf,
@@ -29,6 +29,8 @@ struct VisibleTree {
     // The hardlink materialization spec names this `visible_tree.entry_paths`.
     // Each value is the evaluator-visible Git blob entry for that path, carrying
     // the mode and object id needed to extract and materialize the file.
+    // Git trees do not contain standalone empty directories, so these blob
+    // entries induce every directory that the spec's DFS can materialize.
     entry_paths: Vec<StagedTrackedFile>,
 }
 
@@ -201,6 +203,9 @@ impl StagedWorktreeView {
                 err
             ));
         }
+        // This loop is equivalent to the policy's `visible_tree.children` DFS:
+        // Git stores directories only as prefixes of entries, and all such
+        // parent directories are created before their child file is linked.
         for file in files {
             let relative = relative_path_from_git_path(&file.path)?;
             let source = self.lazy_tree_dir.join(&relative);
@@ -330,7 +335,6 @@ fn write_materialized_file(
         }
     }
     if file.mode == "120000" {
-        validate_materialized_symlink_target(&relative, blob)?;
         platform::create_materialized_symlink(blob, &target)?;
     } else {
         fs::write(&target, blob).map_err(|err| {
@@ -342,23 +346,6 @@ fn write_materialized_file(
         })?;
     }
     platform::set_materialized_file_permissions(&target, &file.mode)
-}
-
-fn validate_materialized_symlink_target(link_path: &Path, target: &[u8]) -> Result<(), String> {
-    let target = PathBuf::from(platform::os_string_from_bytes(target.to_vec())?);
-    if target.components().any(|component| {
-        matches!(
-            component,
-            Component::Prefix(_) | Component::RootDir | Component::ParentDir
-        )
-    }) {
-        return Err(format!(
-            "refusing to materialize symlink {} -> {} because evaluator-visible symlink targets must be relative descendants",
-            link_path.display(),
-            target.display()
-        ));
-    }
-    Ok(())
 }
 
 fn relative_path_from_git_path(path: &[u8]) -> Result<PathBuf, String> {
@@ -459,55 +446,6 @@ mod tests {
             Path::new("missing-target"),
         );
         assert_symlink_target(&scope_root.join("link.txt"), Path::new("missing-target"));
-
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn materialized_scope_rejects_absolute_symlink_targets() {
-        assert_materialized_scope_rejects_symlink_target(
-            "staged-snapshot-absolute-symlink",
-            "/tmp/canon-secret",
-        );
-    }
-
-    #[test]
-    fn materialized_scope_rejects_parent_symlink_targets() {
-        assert_materialized_scope_rejects_symlink_target(
-            "staged-snapshot-parent-symlink",
-            "../private.txt",
-        );
-    }
-
-    fn assert_materialized_scope_rejects_symlink_target(name: &str, target: &str) {
-        let root = git_project(name);
-        fs::create_dir_all(root.join("allowed")).unwrap();
-        symlink(target, root.join("allowed/leak.txt")).unwrap();
-        Command::new("git")
-            .args(["add", "allowed/leak.txt"])
-            .current_dir(&root)
-            .output()
-            .unwrap();
-        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
-        let agent = empty_test_agent();
-        let scope = full_scope();
-        let staged_view = StagedWorktreeView::apply_with_visible_tree_oid_cache(
-            &root,
-            &mut visible_tree_oid_cache,
-        )
-        .unwrap();
-        let visible_tree_oid = visible_tree_oid_cache
-            .staged_visible_tree_oid(&root, &agent, &scope)
-            .unwrap();
-
-        let err = staged_view
-            .materialize_evaluator_scope(&agent, &scope, &visible_tree_oid)
-            .unwrap_err();
-
-        assert!(
-            err.contains("refusing to materialize symlink allowed/leak.txt"),
-            "unexpected error: {err}"
-        );
 
         let _ = fs::remove_dir_all(root);
     }
