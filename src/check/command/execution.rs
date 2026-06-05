@@ -14,7 +14,9 @@ use crate::check::run::lazy_reset::{
     apply_lazy_full_scope_reset_for_cached,
 };
 use crate::check::run::selection::{expectation_identities, resolve_check_options_with_identities};
-use crate::check::{run_check_with_runner_and_caches, CheckRunCaches, CHECK_PATH};
+use crate::check::{
+    run_check_with_runner_and_caches, CheckRunCaches, CheckRunSideEffects, CHECK_PATH,
+};
 use crate::cli::CommandError;
 use crate::config_types::CheckConfig;
 use crate::git::{TreeSource, VisibleTreeOidCache};
@@ -214,10 +216,12 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         &options,
         &active_reset_ids,
         &mut execution.runner,
-        Some(&mut diagnostic_log),
-        Some(&mut result_output),
-        started,
-        &mut check_caches,
+        CheckRunSideEffects {
+            diagnostic_log: Some(&mut diagnostic_log),
+            result_output: Some(&mut result_output),
+            started,
+            caches: &mut check_caches,
+        },
     );
     let completed = match records_result {
         Ok(report) => CompletedCheckRun {

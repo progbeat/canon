@@ -17,7 +17,7 @@ use crate::check::run::order_state::{
 };
 use crate::check::run::selection::{
     order_expectations_by_latest_non_pass, select_expectations_after_cache, CachedFailureMode,
-    CachedSelectionHit,
+    CachedSelectionContext, CachedSelectionHit,
 };
 #[cfg(test)]
 use crate::config_types::CheckConfig;
@@ -50,6 +50,13 @@ impl CheckRunCaches {
     }
 }
 
+pub(crate) struct CheckRunSideEffects<'out, 'cache, 'log> {
+    pub(crate) diagnostic_log: Option<&'log mut DiagnosticLogWriter>,
+    pub(crate) result_output: Option<&'out mut dyn Write>,
+    pub(crate) started: Instant,
+    pub(crate) caches: &'cache mut CheckRunCaches,
+}
+
 #[cfg(test)]
 pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
     root: &Path,
@@ -68,10 +75,12 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
         options,
         &active_lazy_full_scope_reset_ids,
         runner,
-        diagnostic_log,
-        result_output,
-        Instant::now(),
-        &mut caches,
+        CheckRunSideEffects {
+            diagnostic_log,
+            result_output,
+            started: Instant::now(),
+            caches: &mut caches,
+        },
     )
 }
 
@@ -80,11 +89,14 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     options: &CheckOptions,
     active_lazy_full_scope_reset_ids: &BTreeSet<String>,
     runner: &mut R,
-    mut diagnostic_log: Option<&mut DiagnosticLogWriter>,
-    mut result_output: Option<&mut dyn Write>,
-    started: Instant,
-    caches: &mut CheckRunCaches,
+    side_effects: CheckRunSideEffects<'_, '_, '_>,
 ) -> Result<CheckRunReport, CheckRunError> {
+    let CheckRunSideEffects {
+        mut diagnostic_log,
+        mut result_output,
+        started,
+        caches,
+    } = side_effects;
     let mut records = Vec::new();
     let mut cached = Vec::new();
     let total_expectations = runtime.config.expectations.len();
@@ -125,14 +137,16 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     // different visible trees.
     let mut interrogation_run_state = run_try!(InterrogationRunState::new(runtime.no_sandbox()));
     let selection = run_try!(select_expectations_after_cache(
-        root,
-        runtime.tree_source,
+        CachedSelectionContext {
+            root,
+            source: runtime.tree_source,
+            history_cache: &mut caches.history,
+            visible_tree_oid_cache: &mut caches.visible_tree_oid,
+            active_lazy_full_scope_reset_ids,
+            diagnostic_log: &mut diagnostic_log,
+        },
         options,
-        &mut caches.history,
-        &mut caches.visible_tree_oid,
-        active_lazy_full_scope_reset_ids,
         run_try!(unix_timestamp()),
-        &mut diagnostic_log,
         if options.selectors_provided {
             CachedFailureMode::Continue
         } else {

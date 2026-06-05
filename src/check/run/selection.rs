@@ -194,30 +194,35 @@ pub(crate) enum CachedFailureMode {
     StopDefaultSelection,
 }
 
+pub(crate) struct CachedSelectionContext<'a, 'log> {
+    pub(crate) root: &'a Path,
+    pub(crate) source: &'a TreeSource,
+    pub(crate) history_cache: &'a mut HistoryCache,
+    pub(crate) visible_tree_oid_cache: &'a mut VisibleTreeOidCache,
+    pub(crate) active_lazy_full_scope_reset_ids: &'a BTreeSet<String>,
+    pub(crate) diagnostic_log: &'a mut Option<&'log mut DiagnosticLogWriter>,
+}
+
 pub(crate) fn select_expectations_after_cache(
-    root: &Path,
-    source: &TreeSource,
+    context: CachedSelectionContext<'_, '_>,
     options: &CheckOptions,
-    history_cache: &mut HistoryCache,
-    visible_tree_oid_cache: &mut VisibleTreeOidCache,
-    active_lazy_full_scope_reset_ids: &BTreeSet<String>,
     now: u64,
-    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     cached_failure_mode: CachedFailureMode,
 ) -> Result<CachedSelection, String> {
     let mut selected = Vec::new();
     let mut cached = Vec::new();
     let mut cached_failure_seen = false;
     for expectation in options.selected.clone() {
-        let active_lazy_full_scope_reset =
-            active_lazy_full_scope_reset_ids.contains(&expectation.id);
+        let active_lazy_full_scope_reset = context
+            .active_lazy_full_scope_reset_ids
+            .contains(&expectation.id);
         match cached_result_for_expectation(
-            root,
-            source,
+            context.root,
+            context.source,
             &expectation.agent,
             &expectation,
-            history_cache,
-            visible_tree_oid_cache,
+            &mut *context.history_cache,
+            &mut *context.visible_tree_oid_cache,
             CachedResultLookup {
                 now,
                 include_same_tree: !active_lazy_full_scope_reset,
@@ -226,7 +231,7 @@ pub(crate) fn select_expectations_after_cache(
         )? {
             Some(hit) => {
                 cached_failure_seen |= !hit.record.passed();
-                if let Some(writer) = diagnostic_log.as_deref_mut() {
+                if let Some(writer) = context.diagnostic_log.as_deref_mut() {
                     write_cache_hit(writer, &hit)?;
                 }
                 cached.push(CachedSelectionHit { expectation, hit });
@@ -247,9 +252,9 @@ pub(crate) fn select_expectations_after_cache(
             .map(|(index, hit)| {
                 Ok(OrderedCachedSelectionHit {
                     latest_non_pass: latest_non_pass_timestamp_with_cache(
-                        root,
+                        context.root,
                         &hit.expectation,
-                        history_cache,
+                        &mut *context.history_cache,
                     )?,
                     index,
                     hit,
@@ -604,14 +609,16 @@ mod tests {
         let mut diagnostic_log = None;
 
         let selection = select_expectations_after_cache(
-            &root,
-            &source,
+            CachedSelectionContext {
+                root: &root,
+                source: &source,
+                history_cache: &mut history_cache,
+                visible_tree_oid_cache: &mut visible_tree_oid_cache,
+                active_lazy_full_scope_reset_ids: &BTreeSet::new(),
+                diagnostic_log: &mut diagnostic_log,
+            },
             &options,
-            &mut history_cache,
-            &mut visible_tree_oid_cache,
-            &BTreeSet::new(),
             0,
-            &mut diagnostic_log,
             CachedFailureMode::Continue,
         )
         .unwrap();

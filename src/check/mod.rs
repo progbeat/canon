@@ -22,5 +22,5 @@ pub(crate) use core::{
 };
 pub(crate) use run::{
     expectation_identities, run_check_with_runner_and_caches, select_expectations_with_identities,
-    CheckRunCaches, ExpectationIdentity,
+    CheckRunCaches, CheckRunSideEffects, ExpectationIdentity,
 };

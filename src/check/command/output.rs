@@ -134,7 +134,7 @@ fn result_elapsed_dot_count(elapsed: Duration) -> usize {
     const NANOS_PER_MINUTE: u128 = 60 * 1_000_000_000;
     let elapsed_nanos = elapsed.as_nanos();
     let mut dots = elapsed_nanos / NANOS_PER_MINUTE;
-    if elapsed_nanos % NANOS_PER_MINUTE != 0 {
+    if !elapsed_nanos.is_multiple_of(NANOS_PER_MINUTE) {
         dots += 1;
     }
     usize::try_from(dots.max(1)).unwrap_or(usize::MAX)
