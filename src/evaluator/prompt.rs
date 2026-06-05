@@ -43,6 +43,8 @@ mod tests {
         assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("only the JSON object"));
         assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("request a shell command or tool call"));
         assert!(EVALUATOR_BASE_INSTRUCTIONS.contains(r#"{"tool":...,"parameters":...}"#));
+        assert!(EVALUATOR_BASE_INSTRUCTIONS.contains(r#"{"command":...}"#));
+        assert!(EVALUATOR_BASE_INSTRUCTIONS.contains(r#"error:"insufficient-evidence""#));
         assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("I'll inspect"));
     }
 
@@ -56,6 +58,7 @@ mod tests {
         assert!(!instructions.contains("answer `no` to"));
         assert!(instructions.contains("text before or after the JSON is invalid"));
         assert!(instructions.contains("tool-request JSON"));
+        assert!(instructions.contains("Tool calls are not an output format"));
         assert!(instructions.contains(r#"{"tool":...}"#));
         assert!(instructions.contains(r#"{"command":...}"#));
         assert!(instructions.contains("first non-whitespace character must be `{`"));
