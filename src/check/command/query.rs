@@ -4,10 +4,10 @@ use crate::check::command::reporting::{
 };
 use crate::check::command::{prepare_check_execution, PrepareCheckExecutionOptions};
 use crate::check::core::types::SelectedExpectation;
-use crate::check::interrogation::interrogation_state::{
+use crate::check::interrogation::query::run_query_with_runner;
+use crate::check::interrogation::state::{
     initial_visible_scope_for_expectation, CheckRuntime, InterrogationRunState,
 };
-use crate::check::interrogation::query::run_query_with_runner;
 use crate::check::run::lazy_reset::clear_active_lazy_full_scope_reset_ids;
 use crate::check::run::selection::{selected_expectation_at, ExpectationIdentity};
 use crate::config_types::{CheckConfig, Expectation};

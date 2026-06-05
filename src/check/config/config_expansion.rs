@@ -219,7 +219,7 @@ impl RawExpectationExpansion<'_> {
     ) -> Result<(), String> {
         let item_number = index + 1;
         let files = self.expand_paths(config_path, &item.path, item_number, "path")?;
-        let uses_content = item.question_format.contains("{{content}}");
+        let uses_content = item.generated_question_format.contains("{{content}}");
         for file in files {
             let content = if uses_content {
                 self.read_expanded_file(&file)?
@@ -227,7 +227,7 @@ impl RawExpectationExpansion<'_> {
                 String::new()
             };
             self.expectations.push(Expectation {
-                q: render_generator_expectation_question(&item.question_format, &content),
+                q: render_generator_expectation_question(&item.generated_question_format, &content),
                 a: item.a.clone(),
                 prompt_scope: if uses_content { vec![file] } else { Vec::new() },
                 agent: self.resolve_expectation_agent(&item.settings)?,
@@ -374,13 +374,13 @@ fn inherit_expectation_cooldown(
     }
 }
 
-fn render_generator_expectation_question(question_format: &str, content: &str) -> String {
+fn render_generator_expectation_question(generated_question_format: &str, content: &str) -> String {
     // The expectations spec defines q_template rendering as plain
     // `{{content}}` substitution to produce user-authored expectation
     // questions. This is deliberately separate from Canon-owned evaluator
     // prompt/instruction templates, which are loaded only by
     // `evaluator::prompt` from `resources/prompts/`.
-    question_format.replace("{{content}}", content)
+    generated_question_format.replace("{{content}}", content)
 }
 
 #[cfg(test)]

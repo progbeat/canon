@@ -1,6 +1,6 @@
 use crate::check::core::types::{InterrogationResult, SelectedExpectation};
 use crate::check::interrogation::interrogate_expectation_with_model;
-use crate::check::interrogation::interrogation_state::{CheckRuntime, InterrogationRunState};
+use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::config_types::AgentConfig;
 use crate::evaluator::{is_model_technical_failure, model_label, EvaluatorError, EvaluatorRunner};
 use crate::logs::DiagnosticLogWriter;

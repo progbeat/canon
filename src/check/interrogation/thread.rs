@@ -1,9 +1,9 @@
 use crate::check::core::types::{InterrogationResult, SelectedExpectation};
-use crate::check::interrogation::interrogation_records::finalize_interrogation_response;
-use crate::check::interrogation::interrogation_state::{
+use crate::check::interrogation::model_fallback::write_model_fallback_events;
+use crate::check::interrogation::records::finalize_interrogation_response;
+use crate::check::interrogation::state::{
     evaluator_thread_reuse_key, CheckRuntime, InterrogationRunState,
 };
-use crate::check::interrogation::model_fallback::write_model_fallback_events;
 use crate::config_types::AgentConfig;
 use crate::evaluator::{
     ask_once, developer_instructions, effective_thinking, evaluator_turn_prompt,

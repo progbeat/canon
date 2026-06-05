@@ -29,10 +29,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 // resolution, JSONL parsing, answer-only append, required field-order
 // rendering, and probabilistic compaction. Runtime `CheckRecord` construction
 // computes the actual `visibleTreeOid` before append in
-// `check_interrogation_records::finalize_parsed_answer`, using
-// `VisibleTreeOidCache::staged_visible_tree_oid` for the enforced q-scope; this
-// layer preserves that native Git tree OID instead of deriving a second
-// fingerprint while writing JSONL.
+// `check::interrogation::records`, using `VisibleTreeOidCache` for the enforced
+// q-scope; this layer preserves that native Git tree OID instead of deriving a
+// second fingerprint while writing JSONL.
 
 static HISTORY_COMPACT_CHANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static HISTORY_COMPACT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);

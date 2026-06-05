@@ -3,12 +3,12 @@ use crate::check::core::types::{
     check_run_error, CachedExpectation, CheckOptions, CheckRecord, CheckRunError, CheckRunReport,
     NarrowingStats, SelectedExpectation,
 };
-use crate::check::interrogation::interrogation_policy::{
+use crate::check::interrogation::policy::{
     interrogate_with_full_scope_retry, narrowed_scope_is_accepted,
     q_scope_suggestion_should_get_independent_verification, turn_exceeds_break_after_tokens,
     turn_has_context_compaction, write_scope_narrowing_event, ScopedInterrogation,
 };
-use crate::check::interrogation::interrogation_state::{
+use crate::check::interrogation::state::{
     initial_visible_scope_for_expectation, CheckRuntime, InterrogationRunState,
 };
 use crate::check::run::lazy_reset::clear_active_lazy_full_scope_reset;

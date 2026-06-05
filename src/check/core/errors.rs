@@ -1,7 +1,7 @@
 use crate::check::core::types::{
     CheckRecord, CheckRecordOutcome, CheckResult, SelectedExpectation, ERROR_UNPARSABLE,
 };
-use crate::check::interrogation::interrogation_state::CheckRuntime;
+use crate::check::interrogation::state::CheckRuntime;
 use crate::config_types::AgentConfig;
 use crate::git::VisibleTreeOidCache;
 

@@ -1,10 +1,10 @@
 use crate::check::core::types::{ObservedAnswerState, ParsedAnswer, QueryResult};
-use crate::check::interrogation::interrogation_policy::q_scope_suggestion_should_get_independent_verification;
-use crate::check::interrogation::interrogation_records::{
+use crate::check::interrogation::model_fallback::run_with_model_fallbacks;
+use crate::check::interrogation::policy::q_scope_suggestion_should_get_independent_verification;
+use crate::check::interrogation::records::{
     finalize_query_answer, write_query_result_event, write_query_review_required_event,
 };
-use crate::check::interrogation::interrogation_state::{CheckRuntime, InterrogationRunState};
-use crate::check::interrogation::model_fallback::run_with_model_fallbacks;
+use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::interrogation::{ask_with_reused_thread, ThreadTurnRequest};
 use crate::evaluator::{evaluator_turn_prompt, EvaluatorError, EvaluatorRunner};
 use crate::hash::full_scope;

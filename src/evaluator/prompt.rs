@@ -1,5 +1,8 @@
 use crate::json_util::compact_json_string_array;
 
+// These resource files are the Canon-owned interrogation prompt/instruction
+// templates. User-authored expectation questions are runtime data inserted into
+// the turn prompt template.
 const DEVELOPER_INSTRUCTIONS_TEMPLATE: &str =
     include_str!("../../resources/prompts/evaluator_developer_instructions.txt");
 pub(crate) const EVALUATOR_BASE_INSTRUCTIONS: &str =
@@ -38,6 +41,7 @@ mod tests {
     fn base_instructions_prohibit_status_text() {
         assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("Do not announce skills"));
         assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("only the JSON object"));
+        assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("request a shell command or tool call"));
         assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("I'll inspect"));
     }
 

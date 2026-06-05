@@ -1,14 +1,14 @@
 use crate::app::LazyAppServerRunner;
-use crate::check::command::command_args::parse_check_command_args;
-use crate::check::command::command_finish::{finish_check_report, CheckReportFinishContext};
+use crate::check::command::args::parse_check_command_args;
+use crate::check::command::finish::{finish_check_report, CheckReportFinishContext};
 use crate::check::command::output::{summary_outcome_counts, write_summary_line};
-use crate::check::command::query_command::{run_check_query_command, CheckQueryCommand};
+use crate::check::command::query::{run_check_query_command, CheckQueryCommand};
 use crate::check::command::reporting::{
     collect_check_token_usage, print_token_usage_summary, write_check_finish_event,
 };
 use crate::check::config::validation::check_config_loads_plugins;
 use crate::check::core::types::CheckRunReport;
-use crate::check::interrogation::interrogation_state::CheckRuntime;
+use crate::check::interrogation::state::CheckRuntime;
 use crate::check::run::lazy_reset::{
     activate_scheduled_lazy_full_scope_resets, active_lazy_full_scope_reset_ids,
 };

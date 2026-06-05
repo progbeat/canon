@@ -1,7 +1,7 @@
 use crate::check::core::types::{
     InterrogationResult, ParsedAnswer, QueryResult, SelectedExpectation,
 };
-use crate::check::interrogation::interrogation_state::{CheckRuntime, InterrogationRunState};
+use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::evaluator::{record_from_response, EvaluatorError, ParsedTurnResponse};
 use crate::logs::{DiagnosticLogWriter, DiagnosticRecordEvent};
 use crate::scope::sanitize_scope;

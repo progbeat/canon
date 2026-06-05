@@ -1,11 +1,11 @@
-mod command;
-pub(super) mod command_args;
-pub(super) mod command_finish;
+pub(super) mod args;
+mod execution;
+pub(super) mod finish;
 pub(super) mod output;
 pub(super) mod preflight;
-pub(super) mod query_command;
+pub(super) mod query;
 pub(super) mod reporting;
 
-pub(crate) use command::run_check_command;
-pub(super) use command::{prepare_check_execution, PrepareCheckExecutionOptions};
-pub(crate) use command_args::check_help_command;
+pub(crate) use args::check_help_command;
+pub(crate) use execution::run_check_command;
+pub(super) use execution::{prepare_check_execution, PrepareCheckExecutionOptions};
