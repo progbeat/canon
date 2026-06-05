@@ -196,8 +196,8 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     let mut result_output: &mut dyn Write = &mut stdout;
     // `run_check_with_runner` calls `write_and_flush_result_output` after each
     // selected expectation; that helper renders the public human-readable
-    // check-output record (`P. OK`, `P. FAILED`, or `P. ERROR`) and flushes it
-    // before the next expectation starts.
+    // check-output record (`P. OK`, `P. FAILED`, or `P. ERROR` with elapsed
+    // minute dots) and flushes it before the next expectation starts.
     let runtime = CheckRuntime::materialized(
         root,
         &execution.staged_view,
@@ -216,6 +216,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         &mut execution.runner,
         Some(&mut diagnostic_log),
         Some(&mut result_output),
+        started,
         &mut check_caches,
     );
     let completed = match records_result {

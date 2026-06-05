@@ -34,6 +34,7 @@ use std::collections::BTreeSet;
 use std::io::Write;
 #[cfg(test)]
 use std::path::Path;
+use std::time::Instant;
 
 pub(crate) struct CheckRunCaches {
     pub(crate) history: HistoryCache,
@@ -69,6 +70,7 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
         runner,
         diagnostic_log,
         result_output,
+        Instant::now(),
         &mut caches,
     )
 }
@@ -80,6 +82,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     runner: &mut R,
     mut diagnostic_log: Option<&mut DiagnosticLogWriter>,
     mut result_output: Option<&mut dyn Write>,
+    started: Instant,
     caches: &mut CheckRunCaches,
 ) -> Result<CheckRunReport, CheckRunError> {
     let mut records = Vec::new();
@@ -139,7 +142,11 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     for CachedSelectionHit { expectation, hit } in selection.cached {
         let record = hit.record;
         if !record.passed() {
-            run_try!(write_and_flush_result_output(&mut result_output, &record));
+            run_try!(write_and_flush_result_output(
+                &mut result_output,
+                &record,
+                started.elapsed()
+            ));
             records.push(record.clone());
         }
         cached.push(CachedExpectation {
@@ -260,7 +267,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 initial_record
                     .suggested_q_scope
                     .as_deref()
-                    .expect("suggestion was validated before verification"),
+                    .expect("suggestion passed the file-count verification gate"),
                 &expectation.agent,
             ));
             let mut verification_scope = proposed_scope.clone();
@@ -339,7 +346,8 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         }
         run_expectation_try!(write_and_flush_result_output(
             &mut result_output,
-            &interrogation.record
+            &interrogation.record,
+            started.elapsed()
         ));
         records.push(interrogation.record);
         if active_lazy_full_scope_reset {

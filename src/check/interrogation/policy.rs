@@ -11,7 +11,6 @@ use crate::git::VisibleTreeOidCache;
 use crate::hash::full_scope;
 use crate::history::is_reusable_history_record;
 use crate::logs::DiagnosticLogWriter;
-use crate::scope::sanitize_scope;
 
 pub(crate) struct InterrogationCall<'a> {
     pub(crate) runtime: &'a CheckRuntime<'a>,
@@ -127,24 +126,24 @@ pub(crate) fn q_scope_suggestion_should_get_independent_verification(
 ) -> Result<bool, String> {
     // Glossary-level q-scope suggestions are evaluator-provided claims. This
     // helper implements only the Interrogation Policy gate for whether such a
-    // claim is worth an independent verification turn: valid scope syntax and
-    // at least 25% fewer visible files. The response JSON Schema does not
-    // require repo-relative or semantically sufficient paths; sufficiency is
-    // established only when the independent verification produces an answer.
-    // A false result leaves the evaluator's claim unverified; it does not
-    // redefine what a q-scope suggestion is.
+    // claim is worth an independent verification turn: at least 25% fewer
+    // visible files. The response JSON Schema does not require repo-relative
+    // or semantically sufficient paths; sufficiency is established only when
+    // the independent verification produces an answer. A false result leaves
+    // the evaluator's claim unverified; it does not redefine what a q-scope
+    // suggestion is.
     let Some(suggestion) = suggestion else {
         return Ok(false);
-    };
-    let suggestion = match sanitize_scope(suggestion, agent) {
-        Ok(scope) => scope,
-        Err(_) => return Ok(false),
     };
     let current_count = runtime.visible_file_count(visible_tree_oid_cache, agent, current_scope)?;
     if current_count == 0 {
         return Ok(false);
     }
-    let suggested_count = runtime.visible_file_count(visible_tree_oid_cache, agent, &suggestion)?;
+    let suggested_count =
+        match runtime.visible_file_count(visible_tree_oid_cache, agent, suggestion) {
+            Ok(count) => count,
+            Err(_) => return Ok(false),
+        };
     Ok(suggested_count.saturating_mul(4) <= current_count.saturating_mul(3))
 }
 

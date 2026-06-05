@@ -9,9 +9,10 @@ use std::time::Duration;
 pub(crate) fn write_and_flush_result_output(
     result_output: &mut Option<&mut dyn Write>,
     record: &CheckRecord,
+    elapsed: Duration,
 ) -> Result<(), String> {
     if let Some(writer) = result_output.as_mut() {
-        let line = render_check_output_record(record);
+        let line = render_check_output_record(record, elapsed);
         write_stdout_record(*writer, line.as_bytes(), "check result")?;
     }
     Ok(())
@@ -82,14 +83,15 @@ pub(crate) fn render_query_output(answer: &ParsedAnswer) -> String {
     output
 }
 
-pub(crate) fn render_check_output_record(record: &CheckRecord) -> String {
+pub(crate) fn render_check_output_record(record: &CheckRecord, elapsed: Duration) -> String {
+    let dots = result_elapsed_dots(elapsed);
     if record.passed() {
-        return format!("{}. OK\n", record.display_id);
+        return format!("{}{} OK\n", record.display_id, dots);
     }
     let is_error = record_requires_human_review(record);
     let status = if is_error { "ERROR" } else { "FAILED" };
     let mut output = String::new();
-    output.push_str(&format!("{}. {}\n", record.display_id, status));
+    output.push_str(&format!("{}{} {}\n", record.display_id, dots, status));
     // This is the spec's `<escaped question>` line, not an extra line beyond
     // the six-line failed and five-line error layouts.
     output.push_str(&escape_check_output_text(record.prompt_text()));
@@ -122,6 +124,20 @@ pub(crate) fn render_check_output_record(record: &CheckRecord) -> String {
         }
     }
     output
+}
+
+fn result_elapsed_dots(elapsed: Duration) -> String {
+    ".".repeat(result_elapsed_dot_count(elapsed))
+}
+
+fn result_elapsed_dot_count(elapsed: Duration) -> usize {
+    const NANOS_PER_MINUTE: u128 = 60 * 1_000_000_000;
+    let elapsed_nanos = elapsed.as_nanos();
+    let mut dots = elapsed_nanos / NANOS_PER_MINUTE;
+    if elapsed_nanos % NANOS_PER_MINUTE != 0 {
+        dots += 1;
+    }
+    usize::try_from(dots.max(1)).unwrap_or(usize::MAX)
 }
 
 pub(crate) fn render_token_usage_summary(usage: TokenUsage) -> String {
@@ -250,5 +266,22 @@ fn push_check_output_unicode_escape(output: &mut String, ch: char) {
         push_json_control_escape(output, ch as u8);
     } else {
         output.push_str(&format!("\\u{:04x}", ch as u32));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::result_elapsed_dot_count;
+    use std::time::Duration;
+
+    #[test]
+    fn result_elapsed_dots_round_up_elapsed_minutes() {
+        assert_eq!(result_elapsed_dot_count(Duration::ZERO), 1);
+        assert_eq!(result_elapsed_dot_count(Duration::from_secs(60)), 1);
+        assert_eq!(
+            result_elapsed_dot_count(Duration::from_secs(60) + Duration::from_nanos(1)),
+            2
+        );
+        assert_eq!(result_elapsed_dot_count(Duration::from_secs(120)), 2);
     }
 }

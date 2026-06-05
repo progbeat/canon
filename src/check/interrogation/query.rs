@@ -75,7 +75,7 @@ pub(crate) fn ask_query_with_model<R: EvaluatorRunner>(
                 .answer
                 .q_scope_suggestion
                 .as_deref()
-                .expect("suggestion was validated before verification"),
+                .expect("suggestion passed the file-count verification gate"),
             &runtime.config.agent,
         )?;
         let mut verification_scope = proposed_scope.clone();
