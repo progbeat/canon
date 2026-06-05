@@ -412,7 +412,7 @@ fn default_check_selection(
             &mut caches.visible_tree_oid,
             CachedResultLookup {
                 now,
-                include_same_tree: !options.ignore_cache && !active_lazy_full_scope_reset,
+                include_same_tree: !active_lazy_full_scope_reset,
                 include_cooldown: !options.ignore_cooldown && !active_lazy_full_scope_reset,
             },
         )? {

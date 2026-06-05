@@ -76,7 +76,7 @@ pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommand
     }
     if query.is_some() && !options.is_empty() {
         return Err(
-            "canon check -q cannot be combined with expectation selectors, --keep-going, --all, --ignore-cache, or --ignore-cooldown"
+            "canon check -q cannot be combined with expectation selectors, --keep-going, --all, or --ignore-cooldown"
                 .to_string(),
         );
     }
@@ -133,7 +133,7 @@ pub(crate) fn check_help_command() -> Command {
                 .action(ArgAction::SetTrue),
         );
     add_check_option_args(command).after_help(
-            "Examples:\n  canon check\n      Check staged content against all canon expectations.\n\n  canon check a7F K9m\n      Check canon expectations selected by ID prefix.\n\n  canon check --ignore-cache a7F\n      Freshly check one canon expectation.\n\n  canon check --tree HEAD --against-tree HEAD~1 a7F\n      Check one canon expectation on HEAD with comparison against the previous commit.\n\n  canon check -q \"Does the app expose Undo?\"\n      Ask a one-off question.\n\n  canon check -q \"Does the app expose Undo?\" -s src/app.rs\n      Ask a one-off question with a restricted visible scope.",
+            "Examples:\n  canon check\n      Check staged content against all canon expectations.\n\n  canon check a7F K9m\n      Check canon expectations selected by ID prefix.\n\n  canon check --tree HEAD --against-tree HEAD~1 a7F\n      Check one canon expectation on HEAD with comparison against the previous commit.\n\n  canon check -q \"Does the app expose Undo?\"\n      Ask a one-off question.\n\n  canon check -q \"Does the app expose Undo?\" -s src/app.rs\n      Ask a one-off question with a restricted visible scope.",
         )
 }
 

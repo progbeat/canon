@@ -399,7 +399,6 @@ pub(crate) struct CheckOptions {
     // `--keep-going` continues after non-pass results among selected
     // expectations; it does not bypass default cache-based selection.
     pub(crate) keep_going: bool,
-    pub(crate) ignore_cache: bool,
     pub(crate) ignore_cooldown: bool,
     pub(crate) break_after_tokens: Option<u64>,
 }
@@ -407,7 +406,6 @@ pub(crate) struct CheckOptions {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RawCheckOptions {
     pub(crate) keep_going: bool,
-    pub(crate) ignore_cache: bool,
     pub(crate) ignore_cooldown: bool,
     pub(crate) break_after_tokens: Option<u64>,
     pub(crate) selectors: Vec<OsString>,
@@ -418,7 +416,6 @@ impl RawCheckOptions {
     // when `canon check -q` is active.
     pub(crate) fn is_empty(&self) -> bool {
         !self.keep_going
-            && !self.ignore_cache
             && !self.ignore_cooldown
             && self.break_after_tokens.is_none()
             && self.selectors.is_empty()

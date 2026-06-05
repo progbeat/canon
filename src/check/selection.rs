@@ -29,7 +29,6 @@ pub(crate) fn resolve_check_options_with_identities(
         selectors_provided: !options.selectors.is_empty(),
         skipped,
         keep_going: options.keep_going,
-        ignore_cache: options.ignore_cache,
         ignore_cooldown: options.ignore_cooldown,
         break_after_tokens: options.break_after_tokens,
     })
@@ -42,12 +41,6 @@ pub(crate) fn add_check_option_args(command: Command) -> Command {
                 .long("keep-going")
                 .alias("all")
                 .help("Continue after failures")
-                .action(ArgAction::SetTrue),
-        )
-        .arg(
-            Arg::new("ignore_cache")
-                .long("ignore-cache")
-                .help("Re-evaluate expectations with cached results")
                 .action(ArgAction::SetTrue),
         )
         .arg(
@@ -88,7 +81,6 @@ pub(crate) fn raw_check_options_from_matches(
     };
     Ok(RawCheckOptions {
         keep_going: matches.get_flag("keep_going"),
-        ignore_cache: matches.get_flag("ignore_cache"),
         ignore_cooldown: matches.get_flag("ignore_cooldown"),
         break_after_tokens,
         selectors: matched_os_values(matches, "selectors"),
