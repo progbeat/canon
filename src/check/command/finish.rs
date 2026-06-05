@@ -15,8 +15,9 @@ use std::io::Write;
 use std::path::Path;
 
 // This module is deliberately not the public check-output renderer. The
-// per-expectation stdout records and summary line live in `check_output`, token
-// usage stderr output lives in `check_reporting`, and `check_command`
+// per-expectation stdout records and summary line live in `command::output`,
+// token usage stderr output lives in `command::reporting`, and
+// `command::execution`
 // orchestrates their order before calling `finish_check_report`. This module
 // owns only the post-summary agent message plus cleanup and finish logging.
 const ALL_CHECKS_PASSED_MESSAGE: &str = "✓ All checks passed. Commit is allowed.";

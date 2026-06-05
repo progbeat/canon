@@ -8,7 +8,9 @@ use crate::check::interrogation::query::run_query_with_runner;
 use crate::check::interrogation::state::{
     initial_visible_scope_for_expectation, CheckRuntime, InterrogationRunState,
 };
-use crate::check::run::lazy_reset::clear_active_lazy_full_scope_reset_ids;
+use crate::check::run::lazy_reset::{
+    apply_lazy_full_scope_reset_for_cached, clear_active_lazy_full_scope_reset_ids,
+};
 use crate::check::run::selection::{selected_expectation_at, ExpectationIdentity};
 use crate::config_types::{CheckConfig, Expectation};
 use crate::git::{TreeSource, VisibleTreeOidCache};
@@ -207,6 +209,9 @@ fn write_query_finish(
     if let Err(reset_err) =
         clear_active_lazy_full_scope_reset_ids(root, applied_lazy_full_scope_reset_ids)
     {
+        finish_error.get_or_insert(reset_err);
+    }
+    if let Err(reset_err) = apply_lazy_full_scope_reset_for_cached(root, 0, &[], diagnostic_log) {
         finish_error.get_or_insert(reset_err);
     }
     write_check_finish_event(diagnostic_log, true, finish_error.as_deref())

@@ -11,6 +11,7 @@ use crate::check::core::types::CheckRunReport;
 use crate::check::interrogation::state::CheckRuntime;
 use crate::check::run::lazy_reset::{
     activate_scheduled_lazy_full_scope_resets, active_lazy_full_scope_reset_ids,
+    apply_lazy_full_scope_reset_for_cached,
 };
 use crate::check::run::selection::{expectation_identities, resolve_check_options_with_identities};
 use crate::check::{run_check_with_runner_and_caches, CheckRunCaches, CHECK_PATH};
@@ -61,6 +62,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     // preflight so a broken config cannot indefinitely defer a scheduled reset.
     if let Err(err) = activate_scheduled_lazy_full_scope_resets(root) {
         return fail_check_before_selection(
+            root,
             &mut diagnostic_log,
             query_start_field,
             query_mode,
@@ -72,6 +74,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         Ok(config) => config,
         Err(err) => {
             return fail_check_before_selection(
+                root,
                 &mut diagnostic_log,
                 query_start_field,
                 query_mode,
@@ -84,6 +87,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         Ok(identities) => identities,
         Err(err) => {
             return fail_check_before_selection(
+                root,
                 &mut diagnostic_log,
                 query_start_field,
                 query_mode,
@@ -96,6 +100,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         Ok(ids) => ids,
         Err(err) => {
             return fail_check_before_selection(
+                root,
                 &mut diagnostic_log,
                 query_start_field,
                 query_mode,
@@ -114,6 +119,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
                 }
                 Err(err) => {
                     return fail_check_before_selection(
+                        root,
                         &mut diagnostic_log,
                         query_start_field,
                         query_mode,
@@ -143,7 +149,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         match resolve_check_options_with_identities(&config, &identities, &command.options) {
             Ok(options) => options,
             Err(err) => {
-                return fail_check_before_selection(&mut diagnostic_log, None, false, 0, err)
+                return fail_check_before_selection(root, &mut diagnostic_log, None, false, 0, err)
             }
         };
     write_check_start_event(
@@ -175,7 +181,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     let active_ids = active_expectation_ids_from_identities(&identities);
     let cleanup = match cleanup_stale_cache_dirs(&cache_dir, &active_ids) {
         Ok(cleanup) => cleanup,
-        Err(err) => return fail_check_after_start(&mut diagnostic_log, false, 1, err),
+        Err(err) => return fail_check_after_start(root, &mut diagnostic_log, false, 1, err),
     };
     diagnostic_log.write_event(
         "info",
@@ -348,6 +354,7 @@ fn write_check_start_event(
 }
 
 fn fail_check_before_selection(
+    root: &Path,
     diagnostic_log: &mut DiagnosticLogWriter,
     start_query: Option<bool>,
     finish_query: bool,
@@ -355,10 +362,11 @@ fn fail_check_before_selection(
     err: String,
 ) -> Result<(), CommandError> {
     write_check_start_event(diagnostic_log, start_query, Vec::new())?;
-    fail_check_after_start(diagnostic_log, finish_query, errors, err)
+    fail_check_after_start(root, diagnostic_log, finish_query, errors, err)
 }
 
 fn fail_check_after_start(
+    root: &Path,
     diagnostic_log: &mut DiagnosticLogWriter,
     query: bool,
     errors: usize,
@@ -366,18 +374,27 @@ fn fail_check_after_start(
 ) -> Result<(), CommandError> {
     // Keep the finish-event writer stringly-typed so preflight setup failures
     // can share it without converting their own Result type through CommandError.
-    write_check_error_finish_event(diagnostic_log, query, errors, &err)
+    write_check_error_finish_event(root, diagnostic_log, query, errors, &err)
         .map_err(CommandError::from)?;
     Err(err.into())
 }
 
 fn write_check_error_finish_event(
+    root: &Path,
     diagnostic_log: &mut DiagnosticLogWriter,
     query: bool,
     _errors: usize,
     err: &str,
 ) -> Result<(), String> {
-    write_check_finish_event(diagnostic_log, query, Some(err))
+    let mut finish_error = err.to_string();
+    // No-report failures have no cached expectation set yet. The lazy
+    // full-scope reset policy still runs at invocation end with zero evaluated
+    // expectations and an empty cached set.
+    if let Err(reset_err) = apply_lazy_full_scope_reset_for_cached(root, 0, &[], diagnostic_log) {
+        finish_error.push_str("; lazy full-scope reset failed: ");
+        finish_error.push_str(&reset_err);
+    }
+    write_check_finish_event(diagnostic_log, query, Some(&finish_error))
 }
 
 pub(crate) struct PreparedCheckExecution {
@@ -426,6 +443,7 @@ pub(crate) fn prepare_check_execution(
         Ok(staged_view) => staged_view,
         Err(err) => {
             write_prepare_check_failure(
+                root,
                 diagnostic_log,
                 options.query,
                 options.errors_on_failure,
@@ -436,8 +454,8 @@ pub(crate) fn prepare_check_execution(
     };
     // The app-server starts from the real project root so Canon-owned runtime
     // state and model catalog config stay under that repository's `.git/canon`.
-    // Evaluator sessions get a materialized visible tree as `thread/start.cwd` in
-    // `check_interrogation::start_thread_session`.
+    // Evaluator sessions get a materialized visible tree as `thread/start.cwd`
+    // in `check::interrogation::thread`.
     let runner = LazyAppServerRunner::new(
         root,
         check_config_loads_plugins(config),
@@ -452,12 +470,13 @@ pub(crate) fn prepare_check_execution(
 }
 
 fn write_prepare_check_failure(
+    root: &Path,
     diagnostic_log: &mut DiagnosticLogWriter,
     query: bool,
     errors_on_failure: usize,
     err: &str,
 ) -> Result<(), String> {
-    write_check_error_finish_event(diagnostic_log, query, errors_on_failure, err)
+    write_check_error_finish_event(root, diagnostic_log, query, errors_on_failure, err)
 }
 
 #[cfg(test)]
