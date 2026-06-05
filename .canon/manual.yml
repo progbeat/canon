@@ -7,7 +7,7 @@ presets:
     plugins: []
 
 expectations:
-  - q: "Are there any inconsistencies between `README.md` and the current state of the repository?"
+  - q: "Can you find any inconsistencies between `README.md` and the current state of the repository?"
     a: "no"
 
   # Docker

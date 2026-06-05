@@ -16,7 +16,7 @@ An expectation item may include an optional `cooldown` field:
 
 ```yaml
 expectations:
-  - q: "Are there any serious code quality issues that can be easily fixed?"
+  - q: "Can you find any serious code quality issues that can be easily fixed?"
     a: "no"
     cooldown: 7d
 ```
