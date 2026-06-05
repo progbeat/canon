@@ -3,10 +3,10 @@ mod git;
 
 use self::fs::{
     ensure_project_dir_without_symlinks, make_executable, path_exists_no_follow,
-    read_optional_file, write_new_file,
+    remove_optional_file, replace_file, write_new_file,
 };
 use self::git::{
-    configure_git_hooks_path, git_hooks_path_matches, has_canon_git_hooks_path, set_git_hooks_path,
+    configure_git_hooks_path, git_hooks_path_matches, has_canon_git_hooks_path,
     unset_git_hooks_path, uses_canon_git_hooks_path, HookInstallPreflight,
 };
 use crate::check::CHECK_PATH;
@@ -14,11 +14,7 @@ use crate::fs_util::ensure_dir_without_symlinks;
 use crate::notes::arg_to_string;
 use crate::output::write_stdout_line;
 use std::ffi::OsString;
-use std::fs as std_fs;
-use std::io;
-use std::path::{Path, PathBuf};
-use std::process;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::Path;
 
 // User-facing output names the repository's pre-commit hook role at Git's
 // default hook path. The managed script is stored under Canon's git-path state
@@ -34,9 +30,6 @@ const PRE_COMMIT_HOOK_MANUAL_ADVICE: &str =
     "Can't safely install pre-commit hook.\n▷ Add `canon gate` manually to the existing hook setup or ask a human to handle it.";
 pub(super) const GIT_WORKTREE_REQUIRED_FOR_HOOK_INSTALL: &str =
     "Can't safely install pre-commit hook: canon hook install requires a Git worktree.";
-const UNINSTALL_FALLBACK_PRE_COMMIT_HOOK_MARKER: &str =
-    "# canon temporary uninstall fallback; safe to remove on retry\n";
-static UNINSTALL_FALLBACK_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 // The `canon init` seed is compiled into the binary from a check-config source
 // file, not loaded at runtime as an evaluator interrogation prompt/instruction.
@@ -75,7 +68,6 @@ pub(crate) fn run_hook_install(root: &Path) -> Result<(), String> {
     let preflight = HookInstallPreflight::load(root)?;
     preflight_git_worktree(&preflight)?;
     preflight_default_git_pre_commit_hook(&preflight)?;
-    preflight_pre_commit_hook_content(preflight.pre_commit_hook.as_deref())?;
     preflight_git_hooks_path(&preflight)?;
     install_pre_commit_hook(root, &preflight)
 }
@@ -101,10 +93,6 @@ fn preflight_default_git_pre_commit_hook(preflight: &HookInstallPreflight) -> Re
     Ok(())
 }
 
-fn preflight_pre_commit_hook_content(content: Option<&str>) -> Result<(), String> {
-    preflight_optional_hook_owner(content, pre_commit_hook_is_reusable)
-}
-
 fn preflight_git_hooks_path(preflight: &HookInstallPreflight) -> Result<(), String> {
     // Canon owns the hook directory only when Git has no custom hook manager or
     // already points at Canon's hook directory. Any other `core.hooksPath`
@@ -117,20 +105,6 @@ fn preflight_git_hooks_path(preflight: &HookInstallPreflight) -> Result<(), Stri
     Ok(())
 }
 
-fn preflight_optional_hook_owner(
-    existing: Option<&str>,
-    is_allowed: impl FnOnce(&str) -> bool,
-) -> Result<(), String> {
-    match existing {
-        Some(value) if !is_allowed(value) => Err(pre_commit_hook_manual_advice()),
-        _ => Ok(()),
-    }
-}
-
-fn pre_commit_hook_is_reusable(content: &str) -> bool {
-    content == DEFAULT_PRE_COMMIT_HOOK
-}
-
 fn install_pre_commit_hook(root: &Path, preflight: &HookInstallPreflight) -> Result<(), String> {
     // The hook script is canon-owned persistent state, so it lives under the
     // repository's git-path state area. The local `core.hooksPath` value is Git
@@ -139,10 +113,8 @@ fn install_pre_commit_hook(root: &Path, preflight: &HookInstallPreflight) -> Res
     if let Some(parent) = hook_path.parent() {
         ensure_dir_without_symlinks(parent)?;
     }
-    if preflight.pre_commit_hook.as_deref() != Some(DEFAULT_PRE_COMMIT_HOOK) {
-        write_new_file(hook_path, DEFAULT_PRE_COMMIT_HOOK)?;
-        write_stdout_line(&format!("Installed {}", DEFAULT_GIT_PRE_COMMIT_HOOK_PATH))?;
-    }
+    replace_file(hook_path, DEFAULT_PRE_COMMIT_HOOK)?;
+    write_stdout_line(&format!("Installed {}", DEFAULT_GIT_PRE_COMMIT_HOOK_PATH))?;
     make_executable(hook_path)?;
     configure_git_hooks_path(root, preflight)?;
     Ok(())
@@ -150,460 +122,15 @@ fn install_pre_commit_hook(root: &Path, preflight: &HookInstallPreflight) -> Res
 
 pub(crate) fn run_hook_uninstall(root: &Path) -> Result<(), String> {
     let preflight = HookInstallPreflight::load(root)?;
-    let hook_path = preflight.pre_commit_hook_path.clone();
-    if let Some(existing) = preflight.pre_commit_hook.as_deref() {
-        if !pre_commit_hook_is_reusable(existing) {
-            return Err(pre_commit_hook_manual_advice());
-        }
-    }
     let uses_canon_hooks_path = uses_canon_git_hooks_path(&preflight);
     if !uses_canon_hooks_path && has_canon_git_hooks_path(&preflight) {
         return Err(pre_commit_hook_manual_advice());
     }
-    if !uses_canon_hooks_path && default_hook_is_uninstall_fallback(&preflight) {
-        if preflight.pre_commit_hook.is_some() {
-            remove_reusable_pre_commit_hook(&hook_path)?;
-        }
-        remove_uninstall_fallback_pre_commit_hook(&preflight.default_pre_commit_hook_path)?;
-        return write_stdout_line(&format!("Uninstalled {}", DEFAULT_GIT_PRE_COMMIT_HOOK_PATH));
-    }
-    let fallback_created = if uses_canon_hooks_path {
-        // Uninstall crosses a state where either core.hooksPath or a hook file
-        // must change first. Put an owned fallback at Git's default hook path
-        // before unsetting core.hooksPath so crashes and partial failures keep
-        // `canon gate` active until uninstall either completes or is retried.
-        ensure_uninstall_fallback_pre_commit_hook(&preflight)?
-    } else {
-        false
-    };
     if uses_canon_hooks_path {
-        if let Err(unset_err) = unset_git_hooks_path(root) {
-            return Err(clean_up_created_uninstall_fallback_after_error(
-                &preflight,
-                fallback_created,
-                unset_err,
-            ));
-        }
+        unset_git_hooks_path(root)?;
     }
-    if preflight.pre_commit_hook.is_some() {
-        if let Err(remove_message) = remove_reusable_pre_commit_hook(&hook_path) {
-            if uses_canon_hooks_path {
-                match restore_git_hooks_path_after_uninstall_failure(root, &preflight) {
-                    Ok(()) => {
-                        return Err(clean_up_created_uninstall_fallback_after_error(
-                            &preflight,
-                            fallback_created,
-                            remove_message,
-                        ));
-                    }
-                    Err(restore_err) => {
-                        return Err(uninstall_remove_and_restore_failed_message(
-                            &preflight,
-                            remove_message,
-                            restore_err,
-                        ));
-                    }
-                }
-            }
-            return Err(clean_up_created_uninstall_fallback_after_error(
-                &preflight,
-                fallback_created,
-                remove_message,
-            ));
-        }
-    }
-    if uses_canon_hooks_path {
-        remove_uninstall_fallback_pre_commit_hook(&preflight.default_pre_commit_hook_path)?;
-    }
+    remove_optional_file(&preflight.pre_commit_hook_path)?;
     write_stdout_line(&format!("Uninstalled {}", DEFAULT_GIT_PRE_COMMIT_HOOK_PATH))
-}
-
-fn restore_git_hooks_path_after_uninstall_failure(
-    root: &Path,
-    preflight: &HookInstallPreflight,
-) -> Result<(), String> {
-    set_git_hooks_path(root, preflight)
-}
-
-fn uninstall_remove_and_restore_failed_message(
-    preflight: &HookInstallPreflight,
-    remove_message: String,
-    restore_err: String,
-) -> String {
-    format!(
-        "{}; additionally failed to restore git core.hooksPath: {}; temporary uninstall fallback left installed at {} to keep canon gate active",
-        remove_message,
-        restore_err,
-        preflight.default_pre_commit_hook_path.display()
-    )
-}
-
-fn default_hook_is_uninstall_fallback(preflight: &HookInstallPreflight) -> bool {
-    preflight
-        .default_pre_commit_hook
-        .as_deref()
-        .is_some_and(pre_commit_hook_is_uninstall_fallback)
-}
-
-fn pre_commit_hook_is_uninstall_fallback(content: &str) -> bool {
-    content == uninstall_fallback_pre_commit_hook_content()
-}
-
-fn uninstall_fallback_pre_commit_hook_content() -> String {
-    let mut content = DEFAULT_PRE_COMMIT_HOOK.to_string();
-    if !content.ends_with('\n') {
-        content.push('\n');
-    }
-    content.push_str(UNINSTALL_FALLBACK_PRE_COMMIT_HOOK_MARKER);
-    content
-}
-
-fn ensure_uninstall_fallback_pre_commit_hook(
-    preflight: &HookInstallPreflight,
-) -> Result<bool, String> {
-    match preflight.default_pre_commit_hook.as_deref() {
-        Some(existing) if pre_commit_hook_is_uninstall_fallback(existing) => {
-            make_executable(&preflight.default_pre_commit_hook_path)?;
-            Ok(false)
-        }
-        Some(_) => Err(pre_commit_hook_manual_advice()),
-        None => {
-            write_uninstall_fallback_pre_commit_hook(&preflight.default_pre_commit_hook_path)?;
-            Ok(true)
-        }
-    }
-}
-
-fn write_uninstall_fallback_pre_commit_hook(path: &Path) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        ensure_dir_without_symlinks(parent)?;
-    }
-    let content = uninstall_fallback_pre_commit_hook_content();
-    write_new_file(path, &content)?;
-    if let Err(err) = make_executable(path) {
-        let _ = std_fs::remove_file(path);
-        return Err(err);
-    }
-    Ok(())
-}
-
-fn clean_up_created_uninstall_fallback_after_error(
-    preflight: &HookInstallPreflight,
-    fallback_created: bool,
-    message: String,
-) -> String {
-    if !fallback_created {
-        return message;
-    }
-    match remove_uninstall_fallback_pre_commit_hook(&preflight.default_pre_commit_hook_path) {
-        Ok(()) => message,
-        Err(cleanup_err) => format!("{}; additionally {}", message, cleanup_err),
-    }
-}
-
-fn remove_reusable_pre_commit_hook(path: &Path) -> Result<(), String> {
-    let Some(plan) = move_expected_pre_commit_hook_for_removal(
-        path,
-        pre_commit_hook_is_reusable,
-        "managed pre-commit hook",
-        |path, err| {
-            format!(
-                "failed to prepare managed pre-commit hook {} for removal: {}",
-                path.display(),
-                err
-            )
-        },
-    )?
-    else {
-        return Ok(());
-    };
-    remove_moved_reusable_pre_commit_hook(path, &plan.temp_path, &plan.temp_dir)
-}
-
-fn remove_uninstall_fallback_pre_commit_hook(path: &Path) -> Result<(), String> {
-    let Some(plan) = move_expected_pre_commit_hook_for_removal(
-        path,
-        pre_commit_hook_is_uninstall_fallback,
-        "temporary uninstall fallback",
-        |_, err| err,
-    )?
-    else {
-        return Ok(());
-    };
-    remove_moved_uninstall_fallback_pre_commit_hook(path, &plan.temp_path, &plan.temp_dir)
-}
-
-struct MovedHookRemovalPlan {
-    temp_dir: PathBuf,
-    temp_path: PathBuf,
-}
-
-fn move_expected_pre_commit_hook_for_removal(
-    path: &Path,
-    is_expected_content: fn(&str) -> bool,
-    hook_description: &str,
-    prepare_temp_error: impl FnOnce(&Path, String) -> String,
-) -> Result<Option<MovedHookRemovalPlan>, String> {
-    let Some(existing) = read_optional_file(path)? else {
-        return Ok(None);
-    };
-    if !is_expected_content(&existing) {
-        return Err(format!(
-            "refusing to remove {} {} because its content changed",
-            hook_description,
-            path.display()
-        ));
-    }
-    let temp_dir =
-        create_uninstall_fallback_temp_dir(path).map_err(|err| prepare_temp_error(path, err))?;
-    let temp_path = temp_dir.join("pre-commit");
-    match std_fs::rename(path, &temp_path) {
-        Ok(()) => Ok(Some(MovedHookRemovalPlan {
-            temp_dir,
-            temp_path,
-        })),
-        Err(err)
-            if matches!(
-                err.kind(),
-                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
-            ) =>
-        {
-            remove_empty_uninstall_fallback_temp_dir(&temp_dir)?;
-            Ok(None)
-        }
-        Err(err) => {
-            remove_empty_uninstall_fallback_temp_dir(&temp_dir)?;
-            Err(format!(
-                "failed to move {} {} aside before removal: {}",
-                hook_description,
-                path.display(),
-                err
-            ))
-        }
-    }
-}
-
-fn create_uninstall_fallback_temp_dir(path: &Path) -> Result<PathBuf, String> {
-    let parent = path.parent().ok_or_else(|| {
-        format!(
-            "failed to create temporary uninstall fallback directory for {}: path has no parent",
-            path.display()
-        )
-    })?;
-    for _ in 0..16 {
-        let sequence = UNINSTALL_FALLBACK_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let candidate = parent.join(format!(
-            ".canon-uninstall-fallback.{}.{}",
-            process::id(),
-            sequence
-        ));
-        match std_fs::create_dir(&candidate) {
-            Ok(()) => return Ok(candidate),
-            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(err) => {
-                return Err(format!(
-                    "failed to create temporary uninstall fallback directory {}: {}",
-                    candidate.display(),
-                    err
-                ));
-            }
-        }
-    }
-    Err(format!(
-        "failed to create temporary uninstall fallback directory next to {}: too many collisions",
-        path.display()
-    ))
-}
-
-fn remove_moved_reusable_pre_commit_hook(
-    original_path: &Path,
-    moved_path: &Path,
-    temp_dir: &Path,
-) -> Result<(), String> {
-    remove_moved_expected_pre_commit_hook(
-        original_path,
-        moved_path,
-        temp_dir,
-        pre_commit_hook_is_reusable,
-        "managed pre-commit hook",
-        RemoveMovedHookFailure::RestoreOriginal,
-    )
-}
-
-fn remove_moved_uninstall_fallback_pre_commit_hook(
-    original_path: &Path,
-    moved_path: &Path,
-    temp_dir: &Path,
-) -> Result<(), String> {
-    remove_moved_expected_pre_commit_hook(
-        original_path,
-        moved_path,
-        temp_dir,
-        pre_commit_hook_is_uninstall_fallback,
-        "temporary uninstall fallback",
-        RemoveMovedHookFailure::ReportOnly,
-    )
-}
-
-enum RemoveMovedHookFailure {
-    RestoreOriginal,
-    ReportOnly,
-}
-
-fn remove_moved_expected_pre_commit_hook(
-    original_path: &Path,
-    moved_path: &Path,
-    temp_dir: &Path,
-    is_expected_content: fn(&str) -> bool,
-    hook_description: &str,
-    remove_failure: RemoveMovedHookFailure,
-) -> Result<(), String> {
-    if !read_moved_expected_pre_commit_hook(
-        original_path,
-        moved_path,
-        temp_dir,
-        is_expected_content,
-        hook_description,
-    )? {
-        return Ok(());
-    }
-    if let Err(err) = std_fs::remove_file(moved_path) {
-        return handle_moved_hook_remove_failure(
-            original_path,
-            moved_path,
-            hook_description,
-            remove_failure,
-            err,
-        );
-    }
-    remove_empty_uninstall_fallback_temp_dir(temp_dir)
-}
-
-fn handle_moved_hook_remove_failure(
-    original_path: &Path,
-    moved_path: &Path,
-    hook_description: &str,
-    remove_failure: RemoveMovedHookFailure,
-    err: io::Error,
-) -> Result<(), String> {
-    match remove_failure {
-        RemoveMovedHookFailure::ReportOnly => Err(format!(
-            "failed to remove moved {} {}: {}",
-            hook_description,
-            moved_path.display(),
-            err
-        )),
-        RemoveMovedHookFailure::RestoreOriginal => match restore_moved_hook_file(
-            original_path,
-            moved_path,
-        ) {
-            Ok(()) => Err(format!(
-                "failed to remove moved {} {}: {}; restored {} to {}, moved hook left at {}",
-                hook_description,
-                moved_path.display(),
-                err,
-                hook_description,
-                original_path.display(),
-                moved_path.display()
-            )),
-            Err(restore_err) => Err(format!(
-                "failed to remove moved {} {}: {}; additionally failed to restore {} to {}: {}; moved hook left at {}",
-                hook_description,
-                moved_path.display(),
-                err,
-                hook_description,
-                original_path.display(),
-                restore_err,
-                moved_path.display()
-            )),
-        },
-    }
-}
-
-fn read_moved_expected_pre_commit_hook(
-    original_path: &Path,
-    moved_path: &Path,
-    temp_dir: &Path,
-    is_expected_content: fn(&str) -> bool,
-    hook_description: &str,
-) -> Result<bool, String> {
-    let moved = match read_optional_file(moved_path) {
-        Ok(Some(content)) => content,
-        Ok(None) => {
-            remove_empty_uninstall_fallback_temp_dir(temp_dir)?;
-            return Ok(false);
-        }
-        Err(err) => {
-            return Err(format!(
-                "refusing to remove {} {} after moving it aside: {}; moved hook left at {}",
-                hook_description,
-                original_path.display(),
-                err,
-                moved_path.display()
-            ));
-        }
-    };
-    if !is_expected_content(&moved) {
-        restore_moved_non_fallback_hook(original_path, moved_path, temp_dir)?;
-        return Err(format!(
-            "refusing to remove {} {} because its content changed",
-            hook_description,
-            original_path.display()
-        ));
-    }
-    Ok(true)
-}
-
-fn restore_moved_non_fallback_hook(
-    original_path: &Path,
-    moved_path: &Path,
-    temp_dir: &Path,
-) -> Result<(), String> {
-    match std_fs::hard_link(moved_path, original_path) {
-        Ok(()) => {
-            std_fs::remove_file(moved_path).map_err(|err| {
-                format!(
-                    "restored changed hook to {}, but failed to remove temporary copy {}: {}",
-                    original_path.display(),
-                    moved_path.display(),
-                    err
-                )
-            })?;
-            remove_empty_uninstall_fallback_temp_dir(temp_dir)
-        }
-        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => Err(format!(
-            "changed hook moved aside during fallback cleanup; {} already exists, moved hook left at {}",
-            original_path.display(),
-            moved_path.display()
-        )),
-        Err(err) => Err(format!(
-            "failed to restore changed hook from {} to {}: {}; moved hook left in place",
-            moved_path.display(),
-            original_path.display(),
-            err
-        )),
-    }
-}
-
-fn restore_moved_hook_file(original_path: &Path, moved_path: &Path) -> Result<(), String> {
-    std_fs::hard_link(moved_path, original_path).map_err(|err| {
-        format!(
-            "failed to restore moved hook from {} to {}: {}",
-            moved_path.display(),
-            original_path.display(),
-            err
-        )
-    })
-}
-
-fn remove_empty_uninstall_fallback_temp_dir(temp_dir: &Path) -> Result<(), String> {
-    std_fs::remove_dir(temp_dir).map_err(|err| {
-        format!(
-            "failed to remove temporary uninstall fallback directory {}: {}",
-            temp_dir.display(),
-            err
-        )
-    })
 }
 
 fn pre_commit_hook_manual_advice() -> String {

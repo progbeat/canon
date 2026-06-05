@@ -41,6 +41,26 @@ pub(super) fn write_new_file(path: &Path, content: &str) -> Result<(), String> {
         .map_err(|err| format!("failed to flush {}: {}", path.display(), err))
 }
 
+pub(super) fn replace_file(path: &Path, content: &str) -> Result<(), String> {
+    remove_optional_file(path)?;
+    write_new_file(path, content)
+}
+
+pub(super) fn remove_optional_file(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+            ) =>
+        {
+            Ok(())
+        }
+        Err(err) => Err(format!("failed to remove {}: {}", path.display(), err)),
+    }
+}
+
 pub(super) fn make_executable(path: &Path) -> Result<(), String> {
     platform::make_hook_executable(path)
 }

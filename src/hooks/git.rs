@@ -143,14 +143,12 @@ pub(super) fn is_git_worktree(root: &Path) -> Result<bool, String> {
 }
 
 pub(super) struct HookInstallPreflight {
-    pub(super) pre_commit_hook: Option<String>,
     pub(super) current_git_hooks_paths: Vec<String>,
     pub(super) default_pre_commit_hook: Option<String>,
     pub(super) is_git_worktree: bool,
     pub(super) root: PathBuf,
     pub(super) git_hooks_path: PathBuf,
     pub(super) pre_commit_hook_path: PathBuf,
-    pub(super) default_pre_commit_hook_path: PathBuf,
 }
 
 impl HookInstallPreflight {
@@ -165,14 +163,12 @@ impl HookInstallPreflight {
             Vec::new()
         };
         Ok(HookInstallPreflight {
-            pre_commit_hook: read_optional_file(&pre_commit_hook_path)?,
             current_git_hooks_paths,
             default_pre_commit_hook: read_optional_file(&default_pre_commit_hook_path)?,
             is_git_worktree,
             root: root.to_path_buf(),
             git_hooks_path,
             pre_commit_hook_path,
-            default_pre_commit_hook_path,
         })
     }
 }
