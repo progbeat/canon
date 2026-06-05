@@ -103,7 +103,6 @@ pub(crate) fn run_hook_install(root: &Path) -> Result<(), String> {
     let preflight = HookInstallPreflight::load(root)?;
     preflight_git_worktree(&preflight)?;
     preflight_default_git_pre_commit_hook(&preflight)?;
-    preflight_default_git_hooks_dir(&preflight)?;
     preflight_pre_commit_hook_content(preflight.pre_commit_hook.as_deref())?;
     preflight_git_hooks_path(&preflight)?;
     install_pre_commit_hook(root, &preflight)
@@ -219,49 +218,6 @@ fn preflight_default_git_pre_commit_hook(preflight: &HookInstallPreflight) -> Re
     // is user-owned whenever Git is not already configured for Canon, even if a
     // file there happens to look compatible.
     if preflight.default_pre_commit_hook.is_some() {
-        return Err(pre_commit_hook_manual_advice());
-    }
-    Ok(())
-}
-
-fn preflight_default_git_hooks_dir(preflight: &HookInstallPreflight) -> Result<(), String> {
-    if uses_canon_git_hooks_path(preflight) {
-        return Ok(());
-    }
-    let Some(default_hooks_dir) = preflight.default_pre_commit_hook_path.parent() else {
-        return Ok(());
-    };
-    let entries = match fs::read_dir(default_hooks_dir) {
-        Ok(entries) => entries,
-        Err(err)
-            if matches!(
-                err.kind(),
-                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
-            ) =>
-        {
-            return Ok(());
-        }
-        Err(err) => {
-            return Err(format!(
-                "failed to inspect default git hooks directory {}: {}",
-                default_hooks_dir.display(),
-                err
-            ));
-        }
-    };
-    for entry in entries {
-        let entry = entry.map_err(|err| {
-            format!(
-                "failed to inspect default git hooks directory {}: {}",
-                default_hooks_dir.display(),
-                err
-            )
-        })?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name == "pre-commit" || name.ends_with(".sample") {
-            continue;
-        }
         return Err(pre_commit_hook_manual_advice());
     }
     Ok(())
