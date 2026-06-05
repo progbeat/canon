@@ -46,7 +46,8 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         request.enforced_scope,
         request.model,
         &visible_tree_oid,
-    );
+    )
+    .map_err(EvaluatorError::message)?;
     // The lookup key begins with the evaluator model and visibleTreeOid. A
     // restricted retry or q-scope verification with a different visible tree
     // therefore misses this pool and starts a separate evaluator thread.

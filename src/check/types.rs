@@ -350,7 +350,7 @@ impl CheckRecord {
         Ok(Self::from_expectation(
             format_record_timestamp(unix_timestamp()?),
             expectation,
-            Some(history_cache_key(agent, expectation)),
+            Some(history_cache_key(agent, expectation)?),
             outcome,
         ))
     }

@@ -7,7 +7,7 @@ use std::thread::JoinHandle;
 use serde_json::Value;
 
 use crate::config_types::AgentConfig;
-use crate::evaluator::EvaluatorError;
+use crate::evaluator::{EvaluatorError, ModelCatalogFile};
 use crate::token_usage_types::{
     ContextCompactionEvent, EvaluatorTurnUsage, TokenUsage, TokenUsageUpdate,
 };
@@ -28,6 +28,7 @@ pub(crate) struct AppServerRunner {
     pub(crate) retired_sessions: BTreeSet<String>,
     pub(crate) session_cwds: BTreeMap<String, PathBuf>,
     pub(crate) no_sandbox: bool,
+    pub(crate) startup_model_catalog_file: Option<ModelCatalogFile>,
 }
 
 pub(crate) struct LazyAppServerRunner {

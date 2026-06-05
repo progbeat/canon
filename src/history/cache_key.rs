@@ -3,12 +3,15 @@ use crate::config_types::AgentConfig;
 use crate::hash::hash_120;
 use crate::scope::effective_ignore_patterns;
 
-pub(crate) fn history_cache_key(agent: &AgentConfig, expectation: &SelectedExpectation) -> String {
+pub(crate) fn history_cache_key(
+    agent: &AgentConfig,
+    expectation: &SelectedExpectation,
+) -> Result<String, String> {
     // `cacheKey` is emitted for audit/debugging only; reusable cache selection
     // remains governed by the history record's q-scope and current visibleTreeOid.
     let mut input = Vec::new();
     push_history_cache_key_part(&mut input, "schema", "2");
-    let mut ignore_patterns = effective_ignore_patterns(agent);
+    let mut ignore_patterns = effective_ignore_patterns(agent)?;
     ignore_patterns.sort();
     for pattern in ignore_patterns {
         push_history_cache_key_part(&mut input, "ignore", &pattern);
@@ -28,7 +31,7 @@ pub(crate) fn history_cache_key(agent: &AgentConfig, expectation: &SelectedExpec
         .map(|cooldown| cooldown.cache_key())
         .unwrap_or_else(|| "none".to_string());
     push_history_cache_key_part(&mut input, "cooldown", &cooldown);
-    hash_120(&input)
+    Ok(hash_120(&input))
 }
 
 fn push_history_cache_key_part(input: &mut Vec<u8>, key: &str, value: &str) {

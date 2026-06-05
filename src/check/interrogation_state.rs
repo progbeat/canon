@@ -1,6 +1,8 @@
 use crate::check::types::{CheckRecord, ObservedAnswerState, SelectedExpectation};
 use crate::config_types::{AgentConfig, CheckConfig};
-use crate::evaluator::{app_server_model_key, evaluator_models, EvaluatorResponseParseCache};
+use crate::evaluator::{
+    app_server_model_key, evaluator_models, AppServerModelKey, EvaluatorResponseParseCache,
+};
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::hash::full_scope;
 use crate::history::{latest_stored_q_scope_with_cache, HistoryCache};
@@ -64,14 +66,14 @@ pub(crate) fn evaluator_thread_reuse_key(
     scope: &[String],
     model: Option<&str>,
     visible_tree_oid: &str,
-) -> String {
+) -> Result<String, String> {
     // The glossary's thread invariant is one-way: a reused thread must keep
     // the same evaluator model and visible tree, and different model/tree
     // inputs must not share a thread. Extra key parts below are stricter
     // developer-instruction inputs that prevent unsafe reuse without allowing
     // cross-model or cross-visible-tree reuse.
     let mut key = String::new();
-    key.push_str(model.unwrap_or("<default>"));
+    app_server_model_key(model).push_cache_key_part(&mut key);
     key.push('\0');
     key.push_str(visible_tree_oid);
     key.push('\0');
@@ -82,7 +84,7 @@ pub(crate) fn evaluator_thread_reuse_key(
         key.push('\0');
     }
     key.push('\0');
-    for pattern in effective_ignore_patterns(agent) {
+    for pattern in effective_ignore_patterns(agent)? {
         key.push_str(&pattern.len().to_string());
         key.push('\0');
         key.push_str(&pattern);
@@ -95,7 +97,7 @@ pub(crate) fn evaluator_thread_reuse_key(
         key.push_str(path);
         key.push('\0');
     }
-    key
+    Ok(key)
 }
 
 pub(crate) struct CheckRuntime<'a> {
@@ -191,7 +193,7 @@ pub(crate) struct InterrogationRunState {
     // visible tree cannot look up an existing session from another tree.
     pub(crate) thread_sessions_by_reuse_key: BTreeMap<String, String>,
     pub(crate) session_instructions: BTreeMap<String, String>,
-    pub(crate) unavailable_models: BTreeSet<String>,
+    pub(crate) unavailable_models: BTreeSet<AppServerModelKey>,
     pub(crate) visible_tree_oid_cache: VisibleTreeOidCache,
     pub(crate) parse_cache: EvaluatorResponseParseCache,
     isolation_policy: Option<NaiveIsolationPolicy>,

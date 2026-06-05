@@ -12,5 +12,5 @@ pub(crate) use tree_source::{
 };
 pub(crate) use visible_tree_oid::{
     git_object_oid_has_hex_len, git_object_oid_has_known_shape,
-    repository_native_object_oid_hex_len, VisibleTreeOidCache,
+    repository_native_object_oid_hex_len, visible_tree_oid_from_tracked_files, VisibleTreeOidCache,
 };

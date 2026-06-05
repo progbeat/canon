@@ -40,89 +40,76 @@ enum NoteCommand {
     Search,
 }
 
-struct NoteCommandSpec {
-    command: NoteCommand,
-    aliases: &'static [&'static str],
-    help_name: &'static str,
-    help_bin_name: &'static str,
-    help_about: &'static str,
-}
-
-const NOTE_COMMAND_SPECS: &[NoteCommandSpec] = &[
-    NoteCommandSpec {
-        command: NoteCommand::Pwd,
-        aliases: &["pwd"],
-        help_name: "pwd",
-        help_bin_name: "canon pwd",
-        help_about: "Print the canon project root",
-    },
-    NoteCommandSpec {
-        command: NoteCommand::Path,
-        aliases: &["p", "path"],
-        help_name: "path",
-        help_bin_name: "canon path",
-        help_about: "Print the path for a canon note",
-    },
-    NoteCommandSpec {
-        command: NoteCommand::Read,
-        aliases: &["r", "read"],
-        help_name: "read",
-        help_bin_name: "canon read",
-        help_about: "Read a canon note",
-    },
-    NoteCommandSpec {
-        command: NoteCommand::Write,
-        aliases: &["w", "write"],
-        help_name: "write",
-        help_bin_name: "canon write",
-        help_about: "Write a canon note",
-    },
-    NoteCommandSpec {
-        command: NoteCommand::Append,
-        aliases: &["a", "append"],
-        help_name: "append",
-        help_bin_name: "canon append",
-        help_about: "Append to a canon note",
-    },
-    NoteCommandSpec {
-        command: NoteCommand::Delete,
-        aliases: &["d", "del", "delete", "rm"],
-        help_name: "delete",
-        help_bin_name: "canon delete",
-        help_about: "Delete a canon note",
-    },
-    NoteCommandSpec {
-        command: NoteCommand::Search,
-        aliases: &["rg", "g"],
-        help_name: "rg",
-        help_bin_name: "canon rg",
-        help_about: "Search canon notes with ripgrep",
-    },
-];
-
 impl NoteCommand {
+    const ALL: [NoteCommand; 7] = [
+        NoteCommand::Pwd,
+        NoteCommand::Path,
+        NoteCommand::Read,
+        NoteCommand::Write,
+        NoteCommand::Append,
+        NoteCommand::Delete,
+        NoteCommand::Search,
+    ];
+
     fn parse(value: &str) -> Option<NoteCommand> {
-        NOTE_COMMAND_SPECS
+        Self::ALL
             .iter()
-            .find(|spec| spec.aliases.contains(&value))
-            .map(|spec| spec.command)
+            .copied()
+            .find(|command| command.aliases().contains(&value))
     }
 
-    fn spec(self) -> &'static NoteCommandSpec {
-        for spec in NOTE_COMMAND_SPECS {
-            if spec.command == self {
-                return spec;
-            }
+    fn aliases(self) -> &'static [&'static str] {
+        match self {
+            NoteCommand::Pwd => &["pwd"],
+            NoteCommand::Path => &["p", "path"],
+            NoteCommand::Read => &["r", "read"],
+            NoteCommand::Write => &["w", "write"],
+            NoteCommand::Append => &["a", "append"],
+            NoteCommand::Delete => &["d", "del", "delete", "rm"],
+            NoteCommand::Search => &["rg", "g"],
         }
-        unreachable!("every NoteCommand must have a spec")
     }
-}
 
-impl NoteCommandSpec {
-    fn help_command(&self) -> ClapCommand {
-        ClapCommand::new(self.help_name)
-            .bin_name(self.help_bin_name)
-            .about(self.help_about)
+    fn help_name(self) -> &'static str {
+        match self {
+            NoteCommand::Pwd => "pwd",
+            NoteCommand::Path => "path",
+            NoteCommand::Read => "read",
+            NoteCommand::Write => "write",
+            NoteCommand::Append => "append",
+            NoteCommand::Delete => "delete",
+            NoteCommand::Search => "rg",
+        }
+    }
+
+    fn help_bin_name(self) -> &'static str {
+        match self {
+            NoteCommand::Pwd => "canon pwd",
+            NoteCommand::Path => "canon path",
+            NoteCommand::Read => "canon read",
+            NoteCommand::Write => "canon write",
+            NoteCommand::Append => "canon append",
+            NoteCommand::Delete => "canon delete",
+            NoteCommand::Search => "canon rg",
+        }
+    }
+
+    fn help_about(self) -> &'static str {
+        match self {
+            NoteCommand::Pwd => "Print the canon project root",
+            NoteCommand::Path => "Print the path for a canon note",
+            NoteCommand::Read => "Read a canon note",
+            NoteCommand::Write => "Write a canon note",
+            NoteCommand::Append => "Append to a canon note",
+            NoteCommand::Delete => "Delete a canon note",
+            NoteCommand::Search => "Search canon notes with ripgrep",
+        }
+    }
+
+    fn help_command(self) -> ClapCommand {
+        ClapCommand::new(self.help_name())
+            .bin_name(self.help_bin_name())
+            .about(self.help_about())
     }
 }
 
@@ -280,7 +267,7 @@ fn run_command(args: Vec<OsString>) -> Result<(), CommandError> {
         }
         value => {
             if let Some(command) = NoteCommand::parse(value) {
-                if print_help_if_requested(&args[1..], command.spec().help_command())? {
+                if print_help_if_requested(&args[1..], command.help_command())? {
                     return Ok(());
                 }
                 command
@@ -400,9 +387,11 @@ fn root_help_command() -> ClapCommand {
                 .copied()
                 .map(BuiltinCommand::help_command),
         );
-    NOTE_COMMAND_SPECS.iter().fold(command, |command, spec| {
-        command.subcommand(spec.help_command())
-    })
+    NoteCommand::ALL
+        .into_iter()
+        .fold(command, |command, note_command| {
+            command.subcommand(note_command.help_command())
+        })
 }
 
 fn init_help_command() -> ClapCommand {

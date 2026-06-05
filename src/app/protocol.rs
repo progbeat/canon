@@ -133,8 +133,7 @@ pub(crate) fn context_compaction_event(message: &Value) -> Option<ContextCompact
         .and_then(|item| item.get("type"))
         .and_then(Value::as_str)
         .is_some_and(is_compaction_item_type);
-    let method_mentions_compaction = method.to_ascii_lowercase().contains("compact");
-    if !is_compaction_item && !method_mentions_compaction {
+    if !is_compaction_item && !is_context_compaction_method(method) {
         return None;
     }
     let thread_id = string_at_path(params, &["threadId"])
@@ -154,6 +153,19 @@ pub(crate) fn context_compaction_event(message: &Value) -> Option<ContextCompact
 
 fn is_compaction_item_type(kind: &str) -> bool {
     matches!(kind, "contextCompaction" | "compacted")
+}
+
+fn is_context_compaction_method(method: &str) -> bool {
+    matches!(
+        method,
+        "thread/contextCompaction/created"
+            | "thread/contextCompaction/updated"
+            | "thread/contextCompaction/completed"
+            | "turn/contextCompaction/created"
+            | "turn/contextCompaction/completed"
+            | "contextCompaction/created"
+            | "contextCompaction/completed"
+    )
 }
 
 pub(crate) fn turn_started_id(message: &Value) -> Option<String> {
@@ -271,8 +283,14 @@ pub(crate) fn is_assistant_message_item(item: &Value) -> bool {
         || item
             .get("type")
             .and_then(Value::as_str)
-            .map(|kind| kind.contains("agent") && kind.contains("message"))
-            .unwrap_or(false)
+            .is_some_and(is_assistant_message_type)
+}
+
+fn is_assistant_message_type(kind: &str) -> bool {
+    matches!(
+        kind,
+        "agentMessage" | "agent_message" | "assistantMessage" | "assistant_message"
+    )
 }
 
 pub(crate) fn append_message_payload_text(payload: &Value, output: &mut String) {
@@ -294,5 +312,50 @@ pub(crate) fn append_content_text_parts(parts: &[Value], output: &mut String) {
                 output.push_str(text);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_compaction_event_requires_exact_method_or_item_type() {
+        let unrelated = json!({
+            "method": "thread/compactDisc/updated",
+            "params": {
+                "threadId": "thread",
+                "turnId": "turn"
+            }
+        });
+        assert!(context_compaction_event(&unrelated).is_none());
+
+        let method_event = json!({
+            "method": "thread/contextCompaction/updated",
+            "params": {
+                "threadId": "thread",
+                "turnId": "turn"
+            }
+        });
+        assert!(context_compaction_event(&method_event).is_some());
+
+        let item_event = json!({
+            "method": "item/completed",
+            "params": {
+                "threadId": "thread",
+                "turnId": "turn",
+                "item": { "type": "contextCompaction" }
+            }
+        });
+        assert!(context_compaction_event(&item_event).is_some());
+    }
+
+    #[test]
+    fn assistant_message_item_type_uses_exact_names() {
+        assert!(is_assistant_message_item(&json!({"type": "agentMessage"})));
+        assert!(is_assistant_message_item(&json!({"role": "assistant"})));
+        assert!(!is_assistant_message_item(
+            &json!({"type": "agent_status_message"})
+        ));
     }
 }

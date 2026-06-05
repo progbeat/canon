@@ -94,12 +94,11 @@ impl AppServerRunner {
         no_sandbox: bool,
     ) -> Result<AppServerRunner, EvaluatorError> {
         let mut command = Command::new("codex");
-        command.args(app_server_args_with_no_sandbox(
-            root,
-            load_plugins,
-            agent,
-            no_sandbox,
-        )?);
+        let app_server_args =
+            app_server_args_with_no_sandbox(root, load_plugins, agent, no_sandbox)
+                .map_err(|err| EvaluatorError::message(err.to_string()))?;
+        command.args(&app_server_args.args);
+        let mut model_catalog_file = app_server_args.model_catalog_file;
         // Plugin-enabled checked configs still run from Canon's isolated
         // Codex home; the checked tree must not select user-installed plugins
         // by making the app server inherit the caller's real home.
@@ -146,6 +145,7 @@ impl AppServerRunner {
             retired_sessions: Default::default(),
             session_cwds: BTreeMap::new(),
             no_sandbox,
+            startup_model_catalog_file: model_catalog_file.take(),
         };
         runner.send_request(
             "initialize",
@@ -307,6 +307,7 @@ impl Drop for AppServerRunner {
         if let Some(reader) = self.stderr_reader.take() {
             let _ = reader.join();
         }
+        self.startup_model_catalog_file.take();
     }
 }
 

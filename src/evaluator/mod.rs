@@ -7,6 +7,7 @@ mod types;
 
 pub(crate) use config::{
     app_server_args_with_no_sandbox, app_server_model_key, evaluator_thread_config_with_no_sandbox,
+    AppServerModelKey, ModelCatalogFile,
 };
 pub(crate) use prompt::{
     developer_instructions, evaluator_turn_prompt, EVALUATOR_BASE_INSTRUCTIONS,
