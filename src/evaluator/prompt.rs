@@ -51,6 +51,7 @@ mod tests {
         assert!(!instructions.contains("answer `no` to"));
         assert!(instructions.contains("text before or after the JSON is invalid"));
         assert!(instructions.contains("tool-call objects"));
+        assert!(instructions.contains("command JSON"));
         assert!(instructions.contains("first non-whitespace character must be `{`"));
         assert!(instructions.contains("leading inspection summaries"));
     }
