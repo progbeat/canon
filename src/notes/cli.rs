@@ -7,8 +7,6 @@ use std::io::{BufRead, BufReader, Read};
 use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
 use std::thread;
 
-pub(crate) const LOCK_STALE_AFTER_SECS: u64 = 600;
-
 pub(crate) fn require_key(args: &[OsString], index: usize) -> Result<&str, String> {
     let key = args
         .get(index)

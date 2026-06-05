@@ -11,9 +11,6 @@ use std::slice;
 
 #[cfg(windows)]
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
-use std::os::windows::fs::OpenOptionsExt;
-
-const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 
 pub(crate) fn install_check_signal_handlers() -> Result<(), String> {
     Ok(())
@@ -169,45 +166,20 @@ pub(crate) fn create_private_dir_all(path: &Path) -> std::io::Result<()> {
     fs::create_dir_all(path)
 }
 
-pub(crate) fn open_file_for_append_without_following_symlink(
-    path: &Path,
-) -> Result<fs::File, String> {
-    reject_append_symlink(path)?;
-    let file = fs::OpenOptions::new()
-        .append(true)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(path)
-        .map_err(|err| format!("failed to open {}: {}", path.display(), err))?;
-    let metadata = file
-        .metadata()
-        .map_err(|err| format!("failed to inspect opened {}: {}", path.display(), err))?;
-    if metadata.file_type().is_symlink() {
-        return Err(format!("refusing to open symlink {}", path.display()));
-    }
-    if !metadata.file_type().is_file() {
-        return Err(format!("refusing to open non-file {}", path.display()));
-    }
-    Ok(file)
-}
-
-fn reject_append_symlink(path: &Path) -> Result<(), String> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
-    if metadata.file_type().is_symlink() {
-        return Err(format!("refusing to open symlink {}", path.display()));
-    }
-    Ok(())
-}
-
-pub(crate) fn add_memory_backed_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
+pub(crate) fn memory_backed_staged_snapshot_parent_candidates() -> Vec<PathBuf> {
+    let mut parents = Vec::new();
     add_env_staged_snapshot_parent_candidates(
-        parents,
+        &mut parents,
         &["CANON_MEMORY_BACKED_TMPDIR", "RAMDISK", "RAMDISK_TMPDIR"],
     );
+    parents
 }
 
-pub(crate) fn add_ordinary_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
-    add_env_staged_snapshot_parent_candidates(parents, &["TMPDIR", "TEMP", "TMP"]);
+pub(crate) fn ordinary_staged_snapshot_parent_candidates() -> Vec<PathBuf> {
+    let mut parents = Vec::new();
+    add_env_staged_snapshot_parent_candidates(&mut parents, &["TMPDIR", "TEMP", "TMP"]);
+    push_unique_path(&mut parents, std::env::temp_dir());
+    parents
 }
 
 fn add_env_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>, names: &[&str]) {

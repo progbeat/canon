@@ -588,18 +588,22 @@ fn private_dir_builder(recursive: bool) -> fs::DirBuilder {
     builder
 }
 
-pub(crate) fn open_file_for_append_without_following_symlink(
-    path: &Path,
-) -> PlatformResult<fs::File> {
-    fs::OpenOptions::new()
-        .append(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
-        .map_err(|err| PlatformError::io(format!("failed to open {}", path.display()), err))
+pub(crate) fn memory_backed_staged_snapshot_parent_candidates() -> Vec<PathBuf> {
+    let mut parents = Vec::new();
+    add_common_memory_backed_staged_snapshot_parent_candidates(&mut parents);
+    add_discovered_memory_backed_staged_snapshot_parent_candidates(&mut parents);
+    parents
 }
 
-pub(crate) fn add_memory_backed_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
-    add_discovered_memory_backed_staged_snapshot_parent_candidates(parents);
+pub(crate) fn ordinary_staged_snapshot_parent_candidates() -> Vec<PathBuf> {
+    vec![std::env::temp_dir()]
+}
+
+fn add_common_memory_backed_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
+    // Prefer common RAM-backed locations before ordinary temp directories.
+    // Missing paths are skipped later by snapshot creation.
+    push_unique_path(parents, PathBuf::from("/dev/shm"));
+    push_unique_path(parents, PathBuf::from("/run/shm"));
 }
 
 fn add_discovered_memory_backed_staged_snapshot_parent_candidates(parents: &mut Vec<PathBuf>) {
@@ -693,9 +697,4 @@ pub(crate) fn git_path_bytes(path: &Path) -> Vec<u8> {
 
 pub(crate) fn os_string_from_bytes(bytes: Vec<u8>) -> OsString {
     OsString::from_vec(bytes)
-}
-
-#[cfg(test)]
-pub(crate) fn git_path_from_raw_bytes(path: &[u8]) -> OsString {
-    std::ffi::OsStr::from_bytes(path).to_os_string()
 }

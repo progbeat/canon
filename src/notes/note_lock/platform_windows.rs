@@ -1,47 +1,18 @@
-#[cfg(not(unix))]
-use self::lock::remove_stale_lock_for_retry;
-use crate::project_types::Note;
 use std::fs;
-use std::io;
-#[cfg(not(unix))]
-use std::io::{Seek, SeekFrom, Write};
-use std::path::Path;
-#[cfg(not(unix))]
-use std::path::PathBuf;
-#[cfg(not(unix))]
+use std::io::{self, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 use std::process;
-#[cfg(not(unix))]
 use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(not(unix))]
 use std::sync::Arc;
-#[cfg(not(unix))]
 use std::thread::{self, JoinHandle};
-#[cfg(not(unix))]
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-#[path = "lock.rs"]
-mod lock;
-
-pub(super) use self::lock::{create_lock_file, remove_stale_lock, stale_lock_age};
-
-#[cfg(not(unix))]
 const NOTE_LOCK_HEARTBEAT_SECS: u64 = 60;
-#[cfg(not(unix))]
 const NOTE_LOCK_HEARTBEAT_POLL: Duration = Duration::from_millis(25);
-#[cfg(not(unix))]
 const NOTE_LOCK_RETRY_COUNT: usize = 1000;
-#[cfg(not(unix))]
 const NOTE_LOCK_RETRY_SLEEP: Duration = Duration::from_millis(10);
 
-// Note compaction replaces the note file, so same-note mutations use a sidecar
-// lock that stays stable across append-log writes, compaction, and delete.
-#[cfg(unix)]
-pub(crate) struct NoteLock {
-    _file: fs::File,
-}
-
-#[cfg(not(unix))]
-pub(crate) struct NoteLock {
+pub(super) struct NoteLock {
     file: Option<fs::File>,
     path: PathBuf,
     token: String,
@@ -49,7 +20,6 @@ pub(crate) struct NoteLock {
     heartbeat: Option<JoinHandle<()>>,
 }
 
-#[cfg(not(unix))]
 impl Drop for NoteLock {
     fn drop(&mut self) {
         self.stop_heartbeat.store(true, Ordering::Release);
@@ -61,38 +31,18 @@ impl Drop for NoteLock {
     }
 }
 
-#[cfg(not(unix))]
 enum NoteLockState {
     Missing,
     Held,
     Stale,
 }
 
-pub(crate) fn lock_note(note: &Note) -> Result<NoteLock, String> {
-    let path = note.path.with_extension("md.lock");
-    lock_note_at_path(&path)
-}
-
-#[cfg(unix)]
-fn lock_note_at_path(path: &Path) -> Result<NoteLock, String> {
-    let mut options = fs::OpenOptions::new();
-    options.read(true).write(true).create(true);
-    use std::os::unix::fs::OpenOptionsExt;
-    options.custom_flags(libc::O_NOFOLLOW);
-    let file = options
-        .open(path)
-        .map_err(|err| format!("failed to open lock {}: {}", path.display(), err))?;
-    lock_note_file(&file, path)?;
-    Ok(NoteLock { _file: file })
-}
-
-#[cfg(not(unix))]
-fn lock_note_at_path(path: &Path) -> Result<NoteLock, String> {
+pub(super) fn lock_note_sidecar(path: &Path, stale_after: Duration) -> Result<NoteLock, String> {
     for _ in 0..NOTE_LOCK_RETRY_COUNT {
         match create_note_lock(path) {
             Ok(file) => return new_note_lock(path, file),
             Err(err) if note_lock_create_error_is_retryable(&err) => {
-                if matches!(note_lock_state(path)?, NoteLockState::Stale)
+                if matches!(note_lock_state(path, stale_after)?, NoteLockState::Stale)
                     && remove_stale_lock_for_retry(path)?
                 {
                     continue;
@@ -108,12 +58,13 @@ fn lock_note_at_path(path: &Path) -> Result<NoteLock, String> {
     ))
 }
 
-#[cfg(not(unix))]
 fn create_note_lock(path: &Path) -> Result<fs::File, io::Error> {
-    create_lock_file(path)
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
 }
 
-#[cfg(not(unix))]
 fn note_lock_create_error_is_retryable(err: &io::Error) -> bool {
     matches!(
         err.kind(),
@@ -121,7 +72,6 @@ fn note_lock_create_error_is_retryable(err: &io::Error) -> bool {
     )
 }
 
-#[cfg(not(unix))]
 fn new_note_lock(path: &Path, mut file: fs::File) -> Result<NoteLock, String> {
     let token = note_lock_token();
     write_note_lock_owner(&mut file, path, &token)?;
@@ -144,7 +94,6 @@ fn new_note_lock(path: &Path, mut file: fs::File) -> Result<NoteLock, String> {
     })
 }
 
-#[cfg(not(unix))]
 fn note_lock_token() -> String {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -153,7 +102,6 @@ fn note_lock_token() -> String {
     format!("pid={} token={}", process::id(), timestamp)
 }
 
-#[cfg(not(unix))]
 fn start_note_lock_heartbeat(
     path: PathBuf,
     token: String,
@@ -179,7 +127,6 @@ fn start_note_lock_heartbeat(
     })
 }
 
-#[cfg(not(unix))]
 fn write_note_lock_owner(file: &mut fs::File, path: &Path, token: &str) -> Result<(), String> {
     file.set_len(0)
         .and_then(|()| file.seek(SeekFrom::Start(0)).map(|_| ()))
@@ -189,8 +136,7 @@ fn write_note_lock_owner(file: &mut fs::File, path: &Path, token: &str) -> Resul
         .map_err(|err| format!("failed to refresh lock {}: {}", path.display(), err))
 }
 
-#[cfg(not(unix))]
-fn note_lock_state(path: &Path) -> Result<NoteLockState, String> {
+fn note_lock_state(path: &Path, stale_after: Duration) -> Result<NoteLockState, String> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err(format!("refusing to use symlink {}", path.display()));
@@ -225,17 +171,29 @@ fn note_lock_state(path: &Path) -> Result<NoteLockState, String> {
             ));
         }
     };
-    Ok(if stale_lock_age(age) {
+    Ok(if age >= stale_after {
         NoteLockState::Stale
     } else {
         NoteLockState::Held
     })
 }
 
-#[cfg(not(unix))]
+fn remove_stale_lock_for_retry(path: &Path) -> Result<bool, String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(true),
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => Ok(false),
+        Err(err) => Err(format!(
+            "failed to remove stale lock {}: {}",
+            path.display(),
+            err
+        )),
+    }
+}
+
 fn remove_note_lock_if_owned(path: &Path, token: &str) -> Result<(), String> {
     match fs::read_to_string(path) {
-        Ok(content) if content.lines().next() == Some(token) => remove_stale_lock(path),
+        Ok(content) if content.lines().next() == Some(token) => remove_note_lock_file(path),
         Ok(_) => Ok(()),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(err) => Err(format!(
@@ -246,18 +204,14 @@ fn remove_note_lock_if_owned(path: &Path, token: &str) -> Result<(), String> {
     }
 }
 
-#[cfg(unix)]
-fn lock_note_file(file: &fs::File, path: &Path) -> Result<(), String> {
-    use std::os::fd::AsRawFd;
-    loop {
-        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
-        if result == 0 {
-            return Ok(());
-        }
-        let err = io::Error::last_os_error();
-        if err.kind() == io::ErrorKind::Interrupted {
-            continue;
-        }
-        return Err(format!("failed to lock {}: {}", path.display(), err));
+fn remove_note_lock_file(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(format!(
+            "failed to remove stale lock {}: {}",
+            path.display(),
+            err
+        )),
     }
 }
