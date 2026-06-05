@@ -36,7 +36,7 @@ Canon intent comes from the human; these guidelines only describe what makes can
 
 - For canon review requests, review the canon text yourself and draft findings.
 - Do not treat underspecification or canon silence as a finding; report only written text that creates a concrete maintainability issue under these guidelines.
-- After drafting findings, spawn a subagent to independently re-check the findings against these guidelines.
+- After drafting findings, spawn a subagent to re-check the findings against these guidelines with a prompt that starts with `$canon-guidelines`.
 
 ## Review Questions
 
