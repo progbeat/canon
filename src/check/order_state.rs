@@ -15,7 +15,7 @@ pub(crate) fn latest_recorded_non_pass_timestamp(
     root: &Path,
     expectation: &SelectedExpectation,
 ) -> Result<Option<u64>, String> {
-    let mut history_cache = HistoryCache::new();
+    let mut history_cache = HistoryCache::default();
     latest_recorded_non_pass_timestamp_with_cache(root, expectation, &mut history_cache)
 }
 
@@ -53,7 +53,7 @@ pub(crate) fn write_latest_non_pass_record(
     expectation: &SelectedExpectation,
     record: &CheckRecord,
 ) -> Result<(), String> {
-    let mut history_cache = HistoryCache::new();
+    let mut history_cache = HistoryCache::default();
     write_latest_non_pass_record_with_cache(root, expectation, record, &mut history_cache)
 }
 

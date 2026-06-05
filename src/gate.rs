@@ -60,7 +60,7 @@ fn gate_regression_count(root: &Path) -> Result<usize, String> {
     let mut repo_cache = RepoInspectionCache::new();
     let config = repo_cache.load_check_config(root, Path::new(CHECK_PATH), &TreeSource::Staged)?;
     let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
-    let mut history_cache = HistoryCache::new();
+    let mut history_cache = HistoryCache::default();
     gate_regression_count_with_config(
         root,
         &config,

@@ -52,7 +52,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     let mut repo_cache = RepoInspectionCache::new();
     // Runtime logs are canon-owned state under `${CANON_STATE_DIR}/logs`, not
     // project working-tree content. They are created before snapshot evaluation
-    // and are denied to evaluator sessions by the mandatory ignore policy.
+    // and denied to evaluator sessions by filesystem permissions.
     let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
     let query_mode = command.query.is_some();
     let query_start_field = if query_mode { Some(true) } else { None };
@@ -177,16 +177,14 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         Ok(cleanup) => cleanup,
         Err(err) => return fail_check_after_start(&mut diagnostic_log, false, 1, err),
     };
-    if cleanup.sampled {
-        diagnostic_log.write_event(
-            "info",
-            "cache.cleanup",
-            &[
-                ("removed", json!(cleanup.removed)),
-                ("kept", json!(cleanup.kept)),
-            ],
-        )?;
-    }
+    diagnostic_log.write_event(
+        "info",
+        "cache.cleanup",
+        &[
+            ("removed", json!(cleanup.removed)),
+            ("kept", json!(cleanup.kept)),
+        ],
+    )?;
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
     let mut result_output: &mut dyn Write = &mut stdout;

@@ -29,8 +29,6 @@ mod validation;
 pub(crate) use command::run_check_command;
 pub(crate) use command_args::check_help_command;
 pub(crate) use config::parse_tree_check_config_content_with_root;
-#[cfg(test)]
-pub(crate) use generator_paths::expand_generator_paths;
 pub(crate) use generator_paths::expand_staged_generator_paths_from_listing;
 pub(crate) use preflight::{
     is_canon_only_staged_change_bytes, is_canon_project_path_bytes, staged_changed_path_bytes,

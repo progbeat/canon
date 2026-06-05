@@ -14,16 +14,6 @@ use std::path::Path;
 
 const UNIX_EPOCH_TIMESTAMP: u64 = 0;
 
-#[cfg(test)]
-pub(crate) fn parse_check_options(
-    config: &CheckConfig,
-    args: &[OsString],
-) -> Result<CheckOptions, String> {
-    let identities = expectation_identities(config)?;
-    let options = parse_raw_check_options(args)?;
-    resolve_check_options_with_identities(config, &identities, &options)
-}
-
 pub(crate) fn resolve_check_options_with_identities(
     config: &CheckConfig,
     identities: &[ExpectationIdentity],
@@ -43,21 +33,6 @@ pub(crate) fn resolve_check_options_with_identities(
         ignore_cooldown: options.ignore_cooldown,
         break_after_tokens: options.break_after_tokens,
     })
-}
-
-#[cfg(test)]
-fn parse_raw_check_options(args: &[OsString]) -> Result<RawCheckOptions, String> {
-    let matches = add_check_option_args(check_options_parser())
-        .try_get_matches_from(args)
-        .map_err(|err| err.to_string())?;
-    raw_check_options_from_matches(&matches)
-}
-
-#[cfg(test)]
-fn check_options_parser() -> Command {
-    Command::new("check-options")
-        .no_binary_name(true)
-        .disable_version_flag(true)
 }
 
 pub(crate) fn add_check_option_args(command: Command) -> Command {
@@ -140,15 +115,6 @@ fn parse_break_after_tokens(value: &str) -> Result<u64, String> {
     Ok(parsed)
 }
 
-#[cfg(test)]
-pub(crate) fn select_expectations(
-    config: &CheckConfig,
-    args: &[OsString],
-) -> Result<Vec<SelectedExpectation>, String> {
-    let identities = expectation_identities(config)?;
-    select_expectations_with_identities(config, &identities, args)
-}
-
 pub(crate) fn select_expectations_with_identities(
     config: &CheckConfig,
     identities: &[ExpectationIdentity],
@@ -191,15 +157,6 @@ pub(crate) fn select_expectations_with_identities(
         .into_iter()
         .map(|index| selected_expectation_at(config, identities, index, true))
         .collect::<Result<Vec<_>, _>>()
-}
-
-#[cfg(test)]
-pub(crate) fn initial_non_selected_expectations(
-    config: &CheckConfig,
-    selected: &[SelectedExpectation],
-) -> Result<Vec<SelectedExpectation>, String> {
-    let identities = expectation_identities(config)?;
-    initial_non_selected_expectations_with_identities(config, &identities, selected)
 }
 
 pub(crate) fn initial_non_selected_expectations_with_identities(
@@ -257,10 +214,8 @@ pub(crate) fn selected_expectation_at(
         display_id: identity.display_id.clone(),
         q: expectation.q.clone(),
         a: expectation.a.clone(),
-        prompt_scope: expectation.prompt_scope.clone(),
         agent: expectation.agent.clone(),
         cooldown,
-        thinking: expectation.thinking.clone(),
     })
 }
 

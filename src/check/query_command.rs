@@ -243,7 +243,7 @@ fn query_enforced_scope(
     let Some(expectation) = matching_expectation else {
         return Ok(full_scope());
     };
-    let mut history_cache = HistoryCache::new();
+    let mut history_cache = HistoryCache::default();
     initial_visible_scope_for_expectation(
         root,
         expectation,

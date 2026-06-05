@@ -42,27 +42,8 @@ const HISTORY_LOCK_RETRY_COUNT: usize = 100;
 const HISTORY_LOCK_RETRY_SLEEP: Duration = Duration::from_millis(10);
 const HISTORY_LOCK_STALE_AFTER: Duration = Duration::from_secs(60);
 
-#[cfg(test)]
-pub(crate) fn history_path(
-    root: &Path,
-    expectation: &SelectedExpectation,
-) -> Result<PathBuf, String> {
-    Ok(resolve_git_path(root, CANON_CACHE_DIR_GIT_PATH)?
-        .join(&expectation.id)
-        .join(history_file_name()))
-}
-
 pub(crate) fn history_file_name() -> &'static str {
     "history.jsonl"
-}
-
-#[cfg(test)]
-pub(crate) fn read_history_records(
-    root: &Path,
-    expectation: &SelectedExpectation,
-) -> Result<Vec<CheckRecord>, String> {
-    let path = history_path(root, expectation)?;
-    read_repository_history_records_from_path(root, &path, &expectation.a)
 }
 
 pub(crate) fn read_repository_history_records_from_path(
@@ -236,16 +217,14 @@ pub(crate) struct HistoryCache {
     pub(crate) cache_dirs: BTreeMap<PathBuf, PathBuf>,
     pub(crate) paths: BTreeMap<(PathBuf, String), PathBuf>,
     pub(crate) records: BTreeMap<HistoryRecordsKey, Vec<CheckRecord>>,
+    // `check::order_state` owns the latest-non-pass marker policy; the cache
+    // lives here with the other history path/read caches for one run.
     pub(crate) latest_non_pass: BTreeMap<PathBuf, Option<u64>>,
 }
 
 type HistoryRecordsKey = (PathBuf, String);
 
 impl HistoryCache {
-    pub(crate) fn new() -> HistoryCache {
-        HistoryCache::default()
-    }
-
     pub(crate) fn read_records(
         &mut self,
         root: &Path,

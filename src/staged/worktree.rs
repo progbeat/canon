@@ -1,11 +1,10 @@
 use crate::config_types::AgentConfig;
+use crate::git::git_object_oid_has_known_shape;
 use crate::git::{GitBlobReader, StagedTrackedFile};
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::platform;
-use crate::scope::{is_denied_path_bytes, path_bytes_in_scope, sanitize_scope};
+use crate::scope::{path_bytes_in_scope, visible_scope};
 use crate::staged::paths::create_snapshot_root;
-#[cfg(test)]
-pub(crate) use crate::staged::paths::snapshot_parent_outside_worktree;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::fs;
@@ -26,11 +25,10 @@ pub(crate) struct StagedWorktreeView {
 
 struct VisibleTree {
     oid: String,
-    // The hardlink materialization spec names this `visible_tree.entry_paths`.
-    // Each value is the evaluator-visible Git blob entry for that path, carrying
-    // the mode and object id needed to extract and materialize the file.
-    // Git trees do not contain standalone empty directories, so these blob
-    // entries induce every directory that the spec's DFS can materialize.
+    // The hardlink materialization spec names this `visible_tree.entry_paths`:
+    // Git entries selected by applying the visible scope pathspec to the
+    // checked tree. Blob-backed entries can be extracted into the lazy tree;
+    // gitlinks are represented as empty directories in the materialized view.
     entry_paths: Vec<StagedTrackedFile>,
 }
 
@@ -94,8 +92,8 @@ impl StagedWorktreeView {
         scope: &[String],
         visible_tree_oid: &str,
     ) -> Result<PathBuf, String> {
-        let scope = sanitize_scope(scope, agent)?;
-        let visible_tree = self.visible_tree(agent, &scope, visible_tree_oid)?;
+        let scope = visible_scope(agent, scope)?;
+        let visible_tree = self.visible_tree(&scope, visible_tree_oid)?;
         self.materialize_visible_tree(&visible_tree)
     }
 
@@ -119,20 +117,20 @@ impl StagedWorktreeView {
 
     fn visible_tree(
         &self,
-        agent: &AgentConfig,
         scope: &[String],
         visible_tree_oid: &str,
     ) -> Result<VisibleTree, String> {
+        if !git_object_oid_has_known_shape(visible_tree_oid) {
+            return Err("visibleTreeOid must be a Git object ID hex string".to_string());
+        }
         // Build the `visible_tree.entry_paths` set used by the hardlink
         // materialization policy. `TreeSource` supplies the checked Git tree
-        // (staged index or explicit `--tree` revision); scope and ignore
-        // filters define the evaluator-visible tree over its blob entries.
+        // (staged index or explicit `--tree` revision); the visible scope
+        // pathspec defines the evaluator-visible tree.
         let entry_paths = self
             .source_files()?
             .into_iter()
-            .filter(|file| file.is_blob_file_entry())
             .filter(|file| path_bytes_in_scope(&file.path, scope))
-            .filter(|file| !is_denied_path_bytes(agent, &file.path))
             .collect();
         Ok(VisibleTree {
             oid: visible_tree_oid.to_string(),
@@ -154,6 +152,7 @@ impl StagedWorktreeView {
             let unpacked = self.unpacked_paths.borrow();
             files
                 .iter()
+                .filter(|file| file.is_blob_file_entry())
                 .filter(|file| !unpacked.contains(&file.path))
                 .cloned()
                 .collect::<Vec<_>>()
@@ -167,12 +166,9 @@ impl StagedWorktreeView {
             .map(|file| file.object_id.clone())
             .collect::<Vec<_>>();
         let blobs = self.read_missing_blobs(&object_ids)?;
-        for (file, blob) in missing.iter().zip(blobs) {
-            write_materialized_file(&self.lazy_tree_dir, file, &blob)?;
-        }
-        let mut unpacked = self.unpacked_paths.borrow_mut();
-        for file in missing {
-            unpacked.insert(file.path);
+        for (file, blob) in missing.into_iter().zip(blobs) {
+            write_materialized_file(&self.lazy_tree_dir, &file, &blob)?;
+            self.unpacked_paths.borrow_mut().insert(file.path);
         }
         Ok(())
     }
@@ -208,7 +204,6 @@ impl StagedWorktreeView {
         // parent directories are created before their child file is linked.
         for file in files {
             let relative = relative_path_from_git_path(&file.path)?;
-            let source = self.lazy_tree_dir.join(&relative);
             let target = visible_tree_root.join(&relative);
             if let Some(parent) = target.parent() {
                 platform::create_private_dir_all(parent).map_err(|err| {
@@ -219,6 +214,17 @@ impl StagedWorktreeView {
                     )
                 })?;
             }
+            if !file.is_blob_file_entry() {
+                platform::create_private_dir_all(&target).map_err(|err| {
+                    format!(
+                        "failed to create evaluator visible tree directory {}: {}",
+                        target.display(),
+                        err
+                    )
+                })?;
+                continue;
+            }
+            let source = self.lazy_tree_dir.join(&relative);
             platform::hardlink_file_or_copy_symlink(&source, &target)?;
         }
         // Equivalent to the policy's post-order dfs chmod: each directory is
@@ -447,6 +453,27 @@ mod tests {
         );
         assert_symlink_target(&scope_root.join("link.txt"), Path::new("missing-target"));
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn materialization_rejects_non_oid_tree_root_name() {
+        let root = git_project("staged-snapshot-reject-tree-root-escape");
+        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
+        let agent = empty_test_agent();
+        let scope = full_scope();
+        let staged_view = StagedWorktreeView::apply_with_visible_tree_oid_cache(
+            &root,
+            &mut visible_tree_oid_cache,
+        )
+        .unwrap();
+        let escape = root.join("escape-root");
+        let err = staged_view
+            .materialize_evaluator_scope(&agent, &scope, &escape.to_string_lossy())
+            .unwrap_err();
+
+        assert!(err.contains("visibleTreeOid"));
+        assert!(!escape.exists());
         let _ = fs::remove_dir_all(root);
     }
 

@@ -1,5 +1,3 @@
-#[cfg(test)]
-use crate::check::expand_generator_paths;
 use crate::check::{
     expand_staged_generator_paths_from_listing, parse_tree_check_config_content_with_root,
     CHECK_PATH,
@@ -11,9 +9,6 @@ use crate::git::{
 use crate::platform::git_path_bytes;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-
-#[cfg(test)]
-use std::fs;
 
 type GitPathCacheKey = (PathBuf, String);
 type GeneratorPathsCacheKey = (PathBuf, PathBuf, String, String);
@@ -35,8 +30,6 @@ pub(crate) struct RepoInspectionCache {
     tree_files: BTreeMap<(PathBuf, String), Result<Vec<StagedTrackedFile>, String>>,
     staged_blob_contents: BTreeMap<PathBuf, Result<StagedBlobContents, String>>,
     tree_blob_contents: BTreeMap<(PathBuf, String), Result<StagedBlobContents, String>>,
-    #[cfg(test)]
-    filesystem_text: BTreeMap<PathBuf, Result<String, String>>,
     check_configs: BTreeMap<CheckConfigCacheKey, Result<CheckConfig, String>>,
     included_expectations:
         BTreeMap<IncludedExpectationsCacheKey, Result<Vec<RawExpectationItem>, String>>,
@@ -80,27 +73,6 @@ impl RepoInspectionCache {
                 self.expand_tree_generator_paths(root, config_path, path, source)
             }
         };
-        self.generator_paths.insert(key, expanded.clone());
-        expanded
-    }
-
-    #[cfg(test)]
-    pub(crate) fn filesystem_generator_paths(
-        &mut self,
-        root: &Path,
-        config_path: &Path,
-        path: &str,
-    ) -> Result<Vec<String>, String> {
-        let key = (
-            root.to_path_buf(),
-            config_path.to_path_buf(),
-            path.to_string(),
-            "worktree".to_string(),
-        );
-        if let Some(cached) = self.generator_paths.get(&key) {
-            return cached.clone();
-        }
-        let expanded = expand_generator_paths(root, config_path, path, false);
         self.generator_paths.insert(key, expanded.clone());
         expanded
     }
@@ -286,18 +258,6 @@ impl RepoInspectionCache {
                 result
             }
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn read_to_string(&mut self, path: &Path) -> Result<String, String> {
-        let key = path.to_path_buf();
-        if let Some(cached) = self.filesystem_text.get(&key) {
-            return cached.clone();
-        }
-        let content = fs::read_to_string(path)
-            .map_err(|err| format!("failed to read {}: {}", path.display(), err));
-        self.filesystem_text.insert(key, content.clone());
-        content
     }
 
     pub(crate) fn load_check_config(

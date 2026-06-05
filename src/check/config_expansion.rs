@@ -1,4 +1,3 @@
-use crate::check::generator_paths::expand_generator_paths;
 use crate::check::validation::normalize_agent_ignore_pattern_for_config;
 use crate::config_types::{
     AgentConfig, CheckConfig, CooldownConfig, Expectation, RawCheckConfig, RawExpectationItem,
@@ -8,9 +7,6 @@ use crate::git::TreeSource;
 use crate::repo_inspection::RepoInspectionCache;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-
-#[cfg(test)]
-use std::fs;
 
 pub(crate) fn expand_raw_check_config(
     root: Option<&Path>,
@@ -52,6 +48,8 @@ fn raw_presets_from_config(
     match (presets, legacy_agent) {
         (Some(presets), None) => Ok(presets),
         (None, Some(agent)) => {
+            // Backward compatibility for check.yml files written before
+            // named presets: top-level `agent` still maps to `presets.default`.
             let mut presets = BTreeMap::new();
             presets.insert("default".to_string(), raw_preset_from_legacy_agent(agent));
             Ok(presets)
@@ -164,16 +162,12 @@ fn apply_expectation_settings(
 #[derive(Clone)]
 pub(crate) enum CheckConfigSource {
     Tree(TreeSource),
-    #[cfg(test)]
-    Worktree,
 }
 
 impl CheckConfigSource {
-    fn tree_source(&self) -> Option<&TreeSource> {
+    fn tree_source(&self) -> &TreeSource {
         match self {
-            CheckConfigSource::Tree(source) => Some(source),
-            #[cfg(test)]
-            CheckConfigSource::Worktree => None,
+            CheckConfigSource::Tree(source) => source,
         }
     }
 }
@@ -225,7 +219,7 @@ impl RawExpectationExpansion<'_> {
     ) -> Result<(), String> {
         let item_number = index + 1;
         let files = self.expand_paths(config_path, &item.path, item_number, "path")?;
-        let uses_content = item.question_template.contains("{{content}}");
+        let uses_content = item.question_format.contains("{{content}}");
         for file in files {
             let content = if uses_content {
                 self.read_expanded_file(&file)?
@@ -233,7 +227,7 @@ impl RawExpectationExpansion<'_> {
                 String::new()
             };
             self.expectations.push(Expectation {
-                q: render_generator_question(&item.question_template, &content),
+                q: render_generator_expectation_question(&item.question_format, &content),
                 a: item.a.clone(),
                 prompt_scope: if uses_content { vec![file] } else { Vec::new() },
                 agent: self.resolve_expectation_agent(&item.settings)?,
@@ -282,15 +276,10 @@ impl RawExpectationExpansion<'_> {
                 item_number, label
             )
         })?;
-        let files = if let Some(source) = self.source.tree_source().cloned() {
-            match self.cache.as_deref_mut() {
-                Some(cache) => cache.generator_paths(root, config_path, path, &source)?,
-                None => {
-                    return Err("tree config expansion requires RepoInspectionCache".to_string())
-                }
-            }
-        } else {
-            expand_generator_paths(root, config_path, path, false)?
+        let source = self.source.tree_source().clone();
+        let files = match self.cache.as_deref_mut() {
+            Some(cache) => cache.generator_paths(root, config_path, path, &source)?,
+            None => return Err("tree config expansion requires RepoInspectionCache".to_string()),
         };
         Ok(files)
     }
@@ -299,20 +288,9 @@ impl RawExpectationExpansion<'_> {
         let root = self
             .root
             .ok_or_else(|| "config expansion has no project root".to_string())?;
-        match self.source {
-            CheckConfigSource::Tree(ref source) => match self.cache.as_deref_mut() {
-                Some(cache) => cache.tree_file_content(root, source, file),
-                None => Err("staged config expansion requires RepoInspectionCache".to_string()),
-            },
-            #[cfg(test)]
-            CheckConfigSource::Worktree => {
-                let absolute = root.join(file);
-                match self.cache.as_deref_mut() {
-                    Some(cache) => cache.read_to_string(&absolute),
-                    None => fs::read_to_string(&absolute)
-                        .map_err(|err| format!("failed to read {}: {}", file, err)),
-                }
-            }
+        match self.cache.as_deref_mut() {
+            Some(cache) => cache.tree_file_content(root, self.source.tree_source(), file),
+            None => Err("staged config expansion requires RepoInspectionCache".to_string()),
         }
     }
 
@@ -396,25 +374,28 @@ fn inherit_expectation_cooldown(
     }
 }
 
-fn render_generator_question(template: &str, content: &str) -> String {
+fn render_generator_expectation_question(question_format: &str, content: &str) -> String {
     // The expectations spec defines q_template rendering as plain
     // `{{content}}` substitution to produce user-authored expectation
     // questions. This is deliberately separate from Canon-owned evaluator
     // prompt/instruction templates, which are loaded only by
     // `evaluator::prompt` from `resources/prompts/`.
-    template.replace("{{content}}", content)
+    question_format.replace("{{content}}", content)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::path::PathBuf;
     use std::process;
+    use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn include_cooldown_is_inherited_without_overriding_child_cooldown() {
         let root = test_root("include-cooldown-inheritance");
+        git(&root, &["init"]);
         fs::create_dir_all(root.join("expects")).unwrap();
         fs::write(
             root.join("expects/included.yml"),
@@ -427,6 +408,7 @@ mod tests {
 "#,
         )
         .unwrap();
+        git(&root, &["add", "expects/included.yml"]);
         let raw: RawCheckConfig = serde_saphyr::from_str(
             r#"
 version: 1
@@ -438,13 +420,14 @@ expectations:
 "#,
         )
         .expect("parse raw check config");
+        let mut cache = RepoInspectionCache::new();
 
         let config = expand_raw_check_config(
             Some(&root),
             Path::new("check.yml"),
             raw,
-            None,
-            CheckConfigSource::Worktree,
+            Some(&mut cache),
+            CheckConfigSource::Tree(TreeSource::Staged),
         )
         .expect("expand config");
 
@@ -460,6 +443,42 @@ expectations:
         let _ = fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn legacy_agent_config_still_expands_to_default_preset() {
+        let raw: RawCheckConfig = serde_saphyr::from_str(
+            r#"
+version: 1
+agent:
+  model:
+    primary: "legacy-primary"
+    fallbacks: ["legacy-fallback"]
+  thinking: high
+  ignore: ["tmp/**"]
+expectations:
+  - q: "Does the legacy agent expand?"
+    a: "yes"
+"#,
+        )
+        .expect("parse legacy raw check config");
+
+        let config = expand_raw_check_config(
+            None,
+            Path::new("check.yml"),
+            raw,
+            None,
+            CheckConfigSource::Tree(TreeSource::Staged),
+        )
+        .expect("expand legacy config");
+
+        assert_eq!(
+            config.agent.models,
+            vec!["legacy-primary".to_string(), "legacy-fallback".to_string()]
+        );
+        assert_eq!(config.agent.thinking, "high");
+        assert_eq!(config.agent.ignore, vec!["tmp/**".to_string()]);
+        assert_eq!(config.presets.get("default"), Some(&config.agent));
+    }
+
     fn test_root(name: &str) -> PathBuf {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -472,5 +491,19 @@ expectations:
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    fn git(root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

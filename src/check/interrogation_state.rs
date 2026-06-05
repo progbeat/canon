@@ -36,9 +36,9 @@ pub(crate) fn initial_visible_scope_for_expectation(
 ) -> Result<Vec<String>, String> {
     // Glossary visible-scope selection starts from the latest verified q-scope
     // stored in answer history. If no q-scope is stored, fresh interrogation
-    // starts from full project scope. This vector is the inclusion side of the
-    // visible scope; `session_root_for_scope` and visibleTreeOid hashing apply
-    // the expectation agent's normalized ignore patterns as exclusions last.
+    // starts from full project scope. The actual visible scope is formed later
+    // by appending the expectation agent's configured ignore patterns as
+    // excluding pathspec items.
     //
     // Stored scopes are trusted because they are written only after independent
     // q-scope verification. Even if a stored q-scope's paths are absent in the

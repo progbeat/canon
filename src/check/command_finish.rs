@@ -92,23 +92,6 @@ pub(crate) fn pass_improvement_notice(count: usize) -> Option<String> {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn staged_passes_failed_at_head_count(
-    root: &Path,
-    agent: &AgentConfig,
-    report: &CheckRunReport,
-) -> Result<usize, String> {
-    let mut history_cache = HistoryCache::new();
-    let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
-    staged_passes_failed_at_head_count_with_cache(
-        root,
-        agent,
-        report,
-        &mut history_cache,
-        &mut visible_tree_oid_cache,
-    )
-}
-
 fn staged_passes_failed_at_head_count_with_cache(
     root: &Path,
     agent: &AgentConfig,
@@ -194,20 +177,6 @@ fn write_check_agent_message(
     Ok(())
 }
 
-#[cfg(test)]
-pub(crate) fn check_agent_message(
-    root: &Path,
-    config: &CheckConfig,
-    report: &CheckRunReport,
-    history_cache: &mut HistoryCache,
-    visible_tree_oid_cache: &mut VisibleTreeOidCache,
-) -> Result<String, String> {
-    Ok(
-        check_agent_messages(root, config, report, history_cache, visible_tree_oid_cache)?
-            .join("\n"),
-    )
-}
-
 pub(crate) fn check_agent_messages(
     root: &Path,
     config: &CheckConfig,
@@ -270,10 +239,8 @@ fn selected_expectation_from_record(
         display_id: record.display_id.clone(),
         q: record.prompt.clone()?,
         a: record.expected.clone()?,
-        prompt_scope: Vec::new(),
         agent: agent.clone(),
         cooldown: None,
-        thinking: None,
     })
 }
 
@@ -295,7 +262,7 @@ mod tests {
         let agent = AgentConfig::default();
         let scope = full_scope();
         let report = passing_report_for_staged_scope(&root, &agent, &scope);
-        let mut history_cache = HistoryCache::new();
+        let mut history_cache = HistoryCache::default();
         let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
 
         let count = staged_pass_notice_count(
@@ -319,7 +286,7 @@ mod tests {
         let agent = AgentConfig::default();
         let scope = full_scope();
         let report = passing_report_for_staged_scope(&root, &agent, &scope);
-        let mut history_cache = HistoryCache::new();
+        let mut history_cache = HistoryCache::default();
         let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
 
         let count = staged_pass_notice_count(

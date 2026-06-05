@@ -149,11 +149,11 @@ pub(crate) struct RawExplicitExpectation {
 
 #[derive(Debug, Clone)]
 pub(crate) struct RawGeneratorExpectation {
-    // User-authored generator text that renders an expectation question from a
-    // matched file. It is canon data, not a Canon-owned interrogation prompt
-    // template; runtime evaluator prompt/instruction templates live under
+    // User-authored `q_template` text that renders an expectation question
+    // from a matched file. It is canon data, not a Canon-owned evaluator
+    // prompt/instruction template; runtime interrogation templates live under
     // `resources/prompts/`.
-    pub(crate) question_template: String,
+    pub(crate) question_format: String,
     pub(crate) path: String,
     pub(crate) a: String,
     pub(crate) cooldown: Option<CooldownConfig>,
@@ -238,7 +238,7 @@ impl RawExpectationItem {
         match (q, q_template, path, a) {
             (_, Some(q_template), Some(path), Some(a)) => {
                 Ok(RawExpectationItem::Generator(RawGeneratorExpectation {
-                    question_template: q_template,
+                    question_format: q_template,
                     path,
                     a,
                     cooldown,
@@ -283,7 +283,7 @@ a: "yes"
         match item {
             RawExpectationItem::Generator(item) => {
                 assert_eq!(item.path, "specs/*.md");
-                assert_eq!(item.question_template, "{{content}}");
+                assert_eq!(item.question_format, "{{content}}");
                 assert_eq!(item.a, "yes");
             }
             RawExpectationItem::Explicit(_) => panic!("generator item parsed as explicit"),

@@ -8,24 +8,6 @@ use crate::scope::sanitize_scope_for_hash;
 use crate::time::parse_record_timestamp;
 use std::path::Path;
 
-#[cfg(test)]
-pub(crate) fn same_tree_history_record(
-    root: &Path,
-    agent: &AgentConfig,
-    expectation: &SelectedExpectation,
-) -> Result<Option<CheckRecord>, String> {
-    let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
-    let mut history_cache = HistoryCache::new();
-    same_tree_history_record_with_cache(
-        root,
-        &TreeSource::Staged,
-        agent,
-        expectation,
-        &mut history_cache,
-        &mut visible_tree_oid_cache,
-    )
-}
-
 pub(crate) fn same_tree_history_record_with_cache(
     root: &Path,
     source: &TreeSource,
@@ -255,7 +237,7 @@ mod tests {
     fn cooldown_history_record_invalid_latest_scope_blocks_older_reuse() {
         let root = git_project("cooldown-invalid-latest-scope");
         let expectation = expectation_with_cooldown();
-        let mut history_cache = HistoryCache::new();
+        let mut history_cache = HistoryCache::default();
         let path = history_cache.path(&root, &expectation).unwrap();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(
@@ -289,7 +271,6 @@ mod tests {
             display_id: "1".to_string(),
             q: "Does it pass?".to_string(),
             a: "yes".to_string(),
-            prompt_scope: Vec::new(),
             agent: AgentConfig {
                 models: Vec::new(),
                 thinking: "medium".to_string(),
@@ -300,7 +281,6 @@ mod tests {
                 pass_seconds: Some(100),
                 fail_seconds: None,
             }),
-            thinking: None,
         }
     }
 

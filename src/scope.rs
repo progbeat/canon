@@ -22,6 +22,17 @@ pub(crate) fn sanitize_scope_for_hash(scope: &[String]) -> Result<Vec<String>, S
     sanitize_scope_paths(scope)
 }
 
+pub(crate) fn visible_scope(
+    agent: &AgentConfig,
+    q_scope: &[String],
+) -> Result<Vec<String>, String> {
+    let mut scope = sanitize_scope_paths(q_scope)?;
+    for pattern in effective_ignore_patterns(agent) {
+        scope.push(excluding_pathspec(&pattern));
+    }
+    Ok(scope)
+}
+
 fn sanitize_scope_paths(scope: &[String]) -> Result<Vec<String>, String> {
     if scope.is_empty() {
         return Err("scope must not be empty".to_string());
@@ -30,9 +41,8 @@ fn sanitize_scope_paths(scope: &[String]) -> Result<Vec<String>, String> {
     let mut has_full_scope = false;
     for path in scope {
         let path = normalize_repo_path(path)?;
-        // Scope normalization keeps the q-scope as a Git pathspec list.
-        // Mandatory and agent ignore patterns are applied later as visible
-        // scope exclusions, so ignored paths remain valid scope entries.
+        // Scope normalization keeps the q-scope as a Git pathspec list. The
+        // visible scope is formed later by appending configured exclusions.
         if path == "." {
             has_full_scope = true;
             continue;
@@ -104,26 +114,27 @@ pub(crate) fn normalize_repo_path(value: &str) -> Result<String, String> {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn is_denied_path(agent: &AgentConfig, path: &str) -> bool {
-    effective_ignore_patterns(agent)
-        .iter()
-        .any(|pattern| path_matches_pattern(path, pattern))
-}
-
-pub(crate) fn is_denied_path_bytes(agent: &AgentConfig, path: &[u8]) -> bool {
-    effective_ignore_patterns(agent)
-        .iter()
-        .any(|pattern| path_matches_pattern_bytes(path, pattern.as_bytes()))
-}
-
 pub(crate) fn path_bytes_in_scope(path: &[u8], scope: &[String]) -> bool {
-    if scope == full_scope() {
-        return true;
+    let mut has_include = false;
+    let mut included = false;
+    for pathspec in scope {
+        if pathspec_is_exclude(pathspec) {
+            continue;
+        }
+        has_include = true;
+        if path_bytes_match_scope_base(path, pathspec) {
+            included = true;
+        }
     }
-    scope
-        .iter()
-        .any(|base| path_bytes_match_scope_base(path, base))
+    if !has_include {
+        included = true;
+    }
+    for pathspec in scope {
+        if pathspec_is_exclude(pathspec) && path_bytes_match_scope_base(path, pathspec) {
+            included = false;
+        }
+    }
+    included
 }
 
 #[cfg(test)]
@@ -179,6 +190,7 @@ fn path_bytes_match_scope_base(path: &[u8], base: &str) -> bool {
 
 struct PathspecPattern<'a> {
     magic: PathspecMagic,
+    exclude: bool,
     path: &'a str,
 }
 
@@ -188,23 +200,48 @@ enum PathspecMagic {
 }
 
 fn pathspec_magic_pattern(pathspec: &str) -> Option<PathspecPattern<'_>> {
+    if let Some(path) = pathspec.strip_prefix(":!") {
+        return Some(PathspecPattern {
+            magic: PathspecMagic::Glob,
+            exclude: true,
+            path,
+        });
+    }
+    if let Some(path) = pathspec.strip_prefix(":^") {
+        return Some(PathspecPattern {
+            magic: PathspecMagic::Glob,
+            exclude: true,
+            path,
+        });
+    }
     let rest = pathspec.strip_prefix(":(")?;
     let end = rest.find(')')?;
     let magic = &rest[..end];
     let path = &rest[end + 1..];
+    let exclude = magic.split(',').any(|item| item == "exclude");
     if magic.split(',').any(|item| item == "glob") {
         return Some(PathspecPattern {
             magic: PathspecMagic::Glob,
+            exclude,
             path,
         });
     }
     if magic.split(',').any(|item| item == "literal") {
         return Some(PathspecPattern {
             magic: PathspecMagic::Literal,
+            exclude,
             path,
         });
     }
-    None
+    Some(PathspecPattern {
+        magic: PathspecMagic::Glob,
+        exclude,
+        path,
+    })
+}
+
+fn pathspec_is_exclude(pathspec: &str) -> bool {
+    pathspec_magic_pattern(pathspec).is_some_and(|pattern| pattern.exclude)
 }
 
 fn pathspec_has_wildcard_bytes(pathspec: &[u8]) -> bool {
@@ -406,21 +443,17 @@ fn normalize_scope_for_comparison(scope: &[String]) -> Option<Vec<String>> {
 }
 
 pub(crate) fn effective_ignore_patterns(agent: &AgentConfig) -> Vec<String> {
-    let mut patterns = MANDATORY_EVALUATOR_DENY_PATTERNS
-        .iter()
-        .map(|pattern| (*pattern).to_string())
-        .collect::<Vec<_>>();
+    let mut patterns = Vec::new();
     for pattern in &agent.ignore {
-        match normalized_ignore_pattern(pattern) {
-            Ok(pattern) => push_unique_pattern(&mut patterns, pattern),
-            Err(_) => {
-                for fallback in INVALID_IGNORE_PATTERN_FAIL_CLOSED_PATTERNS {
-                    push_unique_pattern(&mut patterns, (*fallback).to_string());
-                }
-            }
+        if let Ok(pattern) = normalized_ignore_pattern(pattern) {
+            push_unique_pattern(&mut patterns, pattern);
         }
     }
     patterns
+}
+
+fn excluding_pathspec(pattern: &str) -> String {
+    format!(":(exclude,glob){}", pattern)
 }
 
 fn push_unique_pattern(patterns: &mut Vec<String>, pattern: String) {
@@ -433,13 +466,25 @@ pub(crate) fn normalized_ignore_pattern(pattern: &str) -> Result<String, String>
     normalize_repo_path(pattern)
 }
 
-pub(crate) const MANDATORY_EVALUATOR_DENY_PATTERNS: &[&str] = &[
-    ".canon",
-    ".canon/**",
-    ".git/canon",
-    ".git/canon/**",
-    ".git/canon/logs",
-    ".git/canon/logs/**",
-];
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-const INVALID_IGNORE_PATTERN_FAIL_CLOSED_PATTERNS: &[&str] = &["*", "*/**"];
+    #[test]
+    fn visible_scope_applies_configured_ignores_as_pathspec_exclusions() {
+        let agent = AgentConfig {
+            models: Vec::new(),
+            thinking: "medium".to_string(),
+            ignore: vec![".canon/**".to_string()],
+            plugins: Vec::new(),
+        };
+        let scope = visible_scope(&agent, &full_scope()).unwrap();
+
+        assert_eq!(
+            scope,
+            vec![".".to_string(), ":(exclude,glob).canon/**".to_string()]
+        );
+        assert!(!path_bytes_in_scope(b".canon/TODOs.md", &scope));
+        assert!(path_bytes_in_scope(b"src/main.rs", &scope));
+    }
+}

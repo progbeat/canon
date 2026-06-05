@@ -523,6 +523,8 @@ fn find_note_log(note: &Note, content: &str) -> Result<Option<(usize, Vec<NoteRe
                 return Ok(Some((line_start.saturating_sub(1), records)));
             }
         } else if trimmed == LEGACY_NOTE_LOG_MARKER {
+            // Backward compatibility for note files written before log markers
+            // included the note hash and byte offset.
             let log_start = line_start + line.len();
             if let Some(records) = parse_legacy_note_log_records(&content[log_start..]) {
                 return Ok(Some((line_start.saturating_sub(1), records)));
@@ -668,6 +670,29 @@ pub(crate) fn read_note_data<T>(
 ) -> Result<T, String> {
     reject_symlink(&note.path)?;
     read(&note.path).map_err(|err| note_read_error(note, err))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_note_log_records_are_still_readable() {
+        let records = parse_legacy_note_log_records(concat!(
+            r#"{"op":"append","timestamp":42,"text":"legacy body"}"#,
+            "\n"
+        ))
+        .expect("parse legacy note log");
+
+        assert_eq!(records.len(), 1);
+        match &records[0] {
+            NoteRecord::Append { timestamp, text } => {
+                assert_eq!(*timestamp, 42);
+                assert_eq!(text, "legacy body");
+            }
+            NoteRecord::Write { .. } => panic!("expected append record"),
+        }
+    }
 }
 
 fn note_read_error(note: &Note, err: io::Error) -> String {

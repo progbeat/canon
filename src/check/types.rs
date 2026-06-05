@@ -15,15 +15,17 @@ pub(crate) const ERROR_INSUFFICIENT_EVIDENCE: &str = "insufficient-evidence";
 pub(crate) const ERROR_INVALID_QUESTION: &str = "invalid-question";
 pub(crate) const ERROR_UNPARSABLE: &str = "unparsable";
 
-pub(crate) fn contains_line_break(value: &str) -> bool {
-    value.chars().any(is_line_break_char)
-}
-
+// Shared by config validation and check-output escaping so every public
+// single-line field uses one line-break definition.
 pub(crate) fn is_line_break_char(char: char) -> bool {
     matches!(
         char,
         '\n' | '\r' | '\u{000b}' | '\u{000c}' | '\u{0085}' | '\u{2028}' | '\u{2029}'
     )
+}
+
+pub(crate) fn contains_line_break(value: &str) -> bool {
+    value.chars().any(is_line_break_char)
 }
 
 #[derive(Debug, Clone)]
@@ -33,12 +35,8 @@ pub(crate) struct SelectedExpectation {
     pub(crate) display_id: String,
     pub(crate) q: String,
     pub(crate) a: String,
-    #[allow(dead_code)]
-    pub(crate) prompt_scope: Vec<String>,
     pub(crate) agent: AgentConfig,
     pub(crate) cooldown: Option<Cooldown>,
-    #[allow(dead_code)]
-    pub(crate) thinking: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -261,6 +259,8 @@ impl CheckResult {
         }
     }
 
+    // Used by evaluator turns, history loading, and selection filters whenever
+    // an observed answer must be classified against the current expectation.
     pub(crate) fn from_expected_answer(expected: &str, observed: &str) -> CheckResult {
         if observed == expected {
             CheckResult::Pass
@@ -331,17 +331,15 @@ pub(crate) struct CheckRecordOutcome {
 }
 
 impl CheckRecord {
+    // Output, logs, gate, lazy reset, and run control all use these accessors
+    // instead of duplicating optional-history-record semantics at each call
+    // site.
     pub(crate) fn passed(&self) -> bool {
         self.result == CheckResult::Pass
     }
 
     pub(crate) fn review_error_text(&self) -> Option<&str> {
-        let error = self.error.as_deref()?;
-        if ObservedAnswerState::from_error(Some(error)).requires_human_review() {
-            Some(error)
-        } else {
-            None
-        }
+        self.error.as_deref()
     }
 
     pub(crate) fn current_from_expectation(
@@ -416,6 +414,8 @@ pub(crate) struct RawCheckOptions {
 }
 
 impl RawCheckOptions {
+    // Query argument validation uses this to reject expectation-mode options
+    // when `canon check -q` is active.
     pub(crate) fn is_empty(&self) -> bool {
         !self.keep_going
             && !self.ignore_cache
@@ -492,6 +492,8 @@ pub(crate) struct CheckRunError {
     pub(crate) report: Box<CheckRunReport>,
 }
 
+// `check::run` uses this constructor to attach the partial report to every
+// early-returning runtime error.
 pub(crate) fn check_run_error(error: String, report: CheckRunReport) -> CheckRunError {
     CheckRunError {
         error,

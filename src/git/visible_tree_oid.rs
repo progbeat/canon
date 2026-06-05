@@ -4,9 +4,9 @@ use crate::config_types::AgentConfig;
 #[cfg(test)]
 use crate::hash::full_scope;
 use crate::project::command_output_trimmed;
-use crate::scope::{
-    effective_ignore_patterns, is_denied_path_bytes, path_bytes_in_scope, sanitize_scope_for_hash,
-};
+#[cfg(all(test, unix))]
+use crate::scope::sanitize_scope_for_hash;
+use crate::scope::{effective_ignore_patterns, path_bytes_in_scope, visible_scope};
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
 use std::collections::BTreeMap;
@@ -71,7 +71,7 @@ impl VisibleTreeOidCache {
         agent: &AgentConfig,
         scope: &[String],
     ) -> Result<usize, String> {
-        let scope = sanitize_scope_for_hash(scope)?;
+        let scope = visible_scope(agent, scope)?;
         let entries = self.staged_visible_scope_entries(root, agent, &scope)?;
         Ok(entries
             .iter()
@@ -89,7 +89,7 @@ impl VisibleTreeOidCache {
         match source {
             TreeSource::Staged => self.staged_visible_file_count(root, agent, scope),
             TreeSource::Git { .. } => {
-                let scope = sanitize_scope_for_hash(scope)?;
+                let scope = visible_scope(agent, scope)?;
                 let entries = self.git_tree_visible_scope_entries(root, source, agent, &scope)?;
                 Ok(entries
                     .iter()
@@ -112,7 +112,7 @@ impl VisibleTreeOidCache {
         agent: &AgentConfig,
         scope: &[String],
     ) -> Result<Option<String>, String> {
-        let scope = sanitize_scope_for_hash(scope)?;
+        let scope = visible_scope(agent, scope)?;
         let key = scope_cache_key(root, agent, &scope);
         if let Some(hash) = self.staged_tree_oids.get(&key) {
             return Ok(hash.clone());
@@ -133,7 +133,7 @@ impl VisibleTreeOidCache {
         agent: &AgentConfig,
         scope: &[String],
     ) -> Result<String, String> {
-        let scope = sanitize_scope_for_hash(scope)?;
+        let scope = visible_scope(agent, scope)?;
         let key = source_scope_cache_key(root, source, agent, &scope);
         if let Some(hash) = self.tree_source_oids.get(&key) {
             return Ok(hash.clone());
@@ -159,7 +159,7 @@ impl VisibleTreeOidCache {
         // Keep direct git subprocesses independent of the number of scopes or
         // history records: list each tree source once, then filter scopes here.
         let files = self.tree_source_files(root, source)?;
-        let entries = visible_scope_entries_from_files(&files, agent, scope);
+        let entries = visible_scope_entries_from_files(&files, scope);
         self.tree_source_entries.insert(key, entries.clone());
         Ok(entries)
     }
@@ -177,7 +177,7 @@ impl VisibleTreeOidCache {
         // Same bound for the staged index: one `git ls-files` result is cached
         // for the run, and every scope is derived in memory.
         let files = self.staged_files(root)?;
-        let entries = visible_scope_entries_from_files(&files, agent, scope);
+        let entries = visible_scope_entries_from_files(&files, scope);
         self.staged_entries.insert(key, entries.clone());
         Ok(entries)
     }
@@ -227,14 +227,14 @@ impl VisibleTreeOidCache {
         agent: &AgentConfig,
         scope: &[String],
     ) -> Result<Option<String>, String> {
-        let scope = sanitize_scope_for_hash(scope)?;
+        let scope = visible_scope(agent, scope)?;
         let key = scope_cache_key(root, agent, &scope);
         if let Some(hash) = self.gate_head_values.get(&key) {
             return Ok(hash.clone());
         }
         let object_hash_algorithm = self.object_hash_algorithm(root)?;
         let hash = self
-            .head_visible_scope_entries(root, agent, &scope)?
+            .head_visible_scope_entries(root, &scope)?
             .map(|entries| visible_tree_oid_from_entries(&entries, object_hash_algorithm))
             .transpose()?;
         self.gate_head_values.insert(key, hash.clone());
@@ -244,12 +244,11 @@ impl VisibleTreeOidCache {
     fn head_visible_scope_entries(
         &mut self,
         root: &Path,
-        agent: &AgentConfig,
         scope: &[String],
     ) -> Result<Option<Vec<String>>, String> {
         Ok(self
             .head_files(root)?
-            .map(|files| visible_scope_entries_from_files(&files, agent, scope)))
+            .map(|files| visible_scope_entries_from_files(&files, scope)))
     }
 
     fn head_files(&mut self, root: &Path) -> Result<Option<Vec<StagedTrackedFile>>, String> {
@@ -273,10 +272,10 @@ impl VisibleTreeOidCache {
 }
 
 fn scope_cache_key(root: &Path, agent: &AgentConfig, scope: &[String]) -> ScopeCacheKey {
-    let mut deny_patterns = effective_ignore_patterns(agent);
-    deny_patterns.sort();
-    deny_patterns.dedup();
-    (root.to_path_buf(), scope.to_vec(), deny_patterns)
+    let mut ignore_patterns = effective_ignore_patterns(agent);
+    ignore_patterns.sort();
+    ignore_patterns.dedup();
+    (root.to_path_buf(), scope.to_vec(), ignore_patterns)
 }
 
 fn source_scope_cache_key(
@@ -285,14 +284,14 @@ fn source_scope_cache_key(
     agent: &AgentConfig,
     scope: &[String],
 ) -> SourceScopeCacheKey {
-    let mut deny_patterns = effective_ignore_patterns(agent);
-    deny_patterns.sort();
-    deny_patterns.dedup();
+    let mut ignore_patterns = effective_ignore_patterns(agent);
+    ignore_patterns.sort();
+    ignore_patterns.dedup();
     (
         root.to_path_buf(),
         source.cache_key(),
         scope.to_vec(),
-        deny_patterns,
+        ignore_patterns,
     )
 }
 
@@ -615,16 +614,10 @@ pub(crate) fn staged_scope_entries(root: &Path, scope: &[String]) -> Result<Vec<
     VisibleTreeOidCache::new().staged_scope_entries(root, scope)
 }
 
-fn visible_scope_entries_from_files(
-    files: &[StagedTrackedFile],
-    agent: &AgentConfig,
-    scope: &[String],
-) -> Vec<String> {
+fn visible_scope_entries_from_files(files: &[StagedTrackedFile], scope: &[String]) -> Vec<String> {
     let visible_files = files
         .iter()
-        .filter(|file| file.is_blob_file_entry())
         .filter(|file| path_bytes_in_scope(&file.path, scope))
-        .filter(|file| !is_denied_path_bytes(agent, &file.path))
         .collect::<Vec<_>>();
     tracked_files_scope_entries(&visible_files)
 }
@@ -808,5 +801,22 @@ mod tests {
             filter_scope_entries(std::slice::from_ref(&entry), &["dir".to_string()]),
             vec![entry]
         );
+    }
+
+    #[test]
+    fn visible_scope_entries_are_selected_by_pathspec_without_blob_filtering() {
+        let files = vec![StagedTrackedFile {
+            path: b"deps/example".to_vec(),
+            mode: "160000".to_string(),
+            object_id: "0123456789012345678901234567890123456789".to_string(),
+        }];
+
+        let entries = visible_scope_entries_from_files(&files, &["deps".to_string()]);
+
+        assert_eq!(
+            entries,
+            vec!["160000 0123456789012345678901234567890123456789\tdeps/example"]
+        );
+        sha1_visible_tree_oid_from_entries(&entries).unwrap();
     }
 }

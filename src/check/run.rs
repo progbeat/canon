@@ -44,7 +44,7 @@ pub(crate) struct CheckRunCaches {
 impl CheckRunCaches {
     pub(crate) fn new() -> CheckRunCaches {
         CheckRunCaches {
-            history: HistoryCache::new(),
+            history: HistoryCache::default(),
             visible_tree_oid: VisibleTreeOidCache::new(),
         }
     }
