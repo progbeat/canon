@@ -2,6 +2,10 @@
 
 **expectation** is the basic unit of the canon: a formalized human expectation expressed as a question and expected-answer pair.
 
+**ID** is a 20-character base62 hash derived from the rendered expectation question.
+
+**short ID** is the shortest prefix of an expectation's **ID** that uniquely identifies that expectation among the collected expectations.
+
 **scope** is a Git pathspec list that defines a file subset within a Git-tracked tree.
 
 **scoped tree** is the logical Git tree induced by applying a scope to a Git-tracked tree. It does not have to exist as a Git tree object.

@@ -50,13 +50,13 @@ is emitted by the run.
 For each passing evaluated expectation, stdout contains exactly one line:
 
 ```
-<P><DOTS> OK
+<short ID><DOTS> OK
 ```
 
 For each failed expectation, evaluated or cached, stdout contains exactly one block. The block has these required lines:
 
 ```
-<P><DOTS> FAILED
+<short ID><DOTS> FAILED
 <escaped question>
 Expected: <escaped expected>
 Observed: <escaped observed>
@@ -74,13 +74,11 @@ The line is omitted when no q-scope suggestion is available.
 For each errored expectation, stdout contains exactly one block of lines:
 
 ```
-<P><DOTS> ERROR
+<short ID><DOTS> ERROR
 <escaped question>
 Error: <escaped error>
 Evidence: <escaped evidence>
 ```
-
-**P** is the shortest prefix of the expectation's `ID` that uniquely identifies that expectation among the collected expectations.
 
 **DOTS** is `max(1, ceil(num_elapsed_minutes))` period characters, where
 `num_elapsed_minutes` is the elapsed wall-clock minutes from the start of the
