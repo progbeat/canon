@@ -5,6 +5,8 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeSet;
 
+// This module renders one runtime log event and validates event-local schemas.
+// JSONL append/flush/rotation are owned by `logs::writer` and `logs::rotation`.
 pub(crate) fn render_runtime_log_event(
     level: &str,
     event: &str,
@@ -131,12 +133,6 @@ fn validate_runtime_log_nested_schema(
         None => false,
     };
     let has_token_usage = runtime_log_field_value(fields, "tokenUsage").is_some();
-    if !has_token_usage && !has_token_usage_updates {
-        return Err(DiagnosticLogError::InvalidRuntimeField {
-            key: "tokenUsage".to_string(),
-            reason: "missing usage source for event schema",
-        });
-    }
     if has_token_usage && has_token_usage_updates {
         return Err(DiagnosticLogError::InvalidRuntimeField {
             key: "tokenUsage".to_string(),
@@ -323,6 +319,20 @@ mod tests {
         let error = render_runtime_log_event("info", "agent.response", &fields).unwrap_err();
 
         assert!(error.to_string().contains("reasoningOutputTokens"));
+    }
+
+    #[test]
+    fn agent_response_allows_missing_usage_when_unavailable() {
+        let fields = vec![
+            ("id", json!("id")),
+            ("attempt", json!(1)),
+            ("reason", json!("initial")),
+            ("error", json!("missing evaluator turn usage")),
+            ("response", json!({"sessionId": "thread", "text": "{}"})),
+            ("tokenUsageUnavailable", json!(true)),
+        ];
+
+        render_runtime_log_event("error", "agent.turn_error", &fields).unwrap();
     }
 
     #[test]
