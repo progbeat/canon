@@ -17,9 +17,7 @@ pub(crate) fn same_tree_history_record_with_cache(
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<Option<CheckRecord>, String> {
     latest_history_record_matching_visible_tree_oid(root, expectation, history_cache, |scope| {
-        visible_tree_oid_cache
-            .visible_tree_oid(root, source, agent, scope)
-            .map(Some)
+        visible_tree_oid_cache.visible_tree_oid_for_reuse(root, source, agent, scope)
     })
 }
 
@@ -260,6 +258,43 @@ mod tests {
         .unwrap();
 
         assert!(hit.is_none(), "invalid latest q-scope must block cooldown");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn same_tree_history_record_skips_absent_scope() {
+        let root = git_project("same-tree-absent-scope");
+        let expectation = expectation_with_cooldown();
+        let mut history_cache = HistoryCache::default();
+        let path = history_cache.path(&root, &expectation).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            format!(
+                "{}\n{}\n",
+                history_line(10, r#"["."]"#, "older pass"),
+                history_line(20, r#"["missing.rs"]"#, "newer absent scope")
+            ),
+        )
+        .unwrap();
+
+        let hit = latest_history_record_matching_visible_tree_oid(
+            &root,
+            &expectation,
+            &mut history_cache,
+            |scope| {
+                if scope == ["missing.rs"] {
+                    Ok(None)
+                } else {
+                    Ok(Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()))
+                }
+            },
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(hit.evidence, "older pass");
 
         let _ = fs::remove_dir_all(root);
     }

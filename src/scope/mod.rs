@@ -209,7 +209,7 @@ fn pathspec_magic_pattern(pathspec: &str) -> Result<Option<PathspecPattern<'_>>,
     }))
 }
 
-fn pathspec_is_exclude(pathspec: &str) -> Result<bool, String> {
+pub(crate) fn pathspec_is_exclude(pathspec: &str) -> Result<bool, String> {
     Ok(pathspec_magic_pattern(pathspec)?.is_some_and(|pattern| pattern.exclude))
 }
 

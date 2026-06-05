@@ -6,7 +6,9 @@ use crate::hash::full_scope;
 use crate::project::command_output_trimmed;
 #[cfg(all(test, unix))]
 use crate::scope::sanitize_scope_for_hash;
-use crate::scope::{effective_ignore_patterns, path_bytes_in_scope, visible_scope};
+use crate::scope::{
+    effective_ignore_patterns, path_bytes_in_scope, pathspec_is_exclude, visible_scope,
+};
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
 use std::collections::BTreeMap;
@@ -27,7 +29,7 @@ type SourceFilesCacheKey = (PathBuf, String);
 #[derive(Default)]
 pub(crate) struct VisibleTreeOidCache {
     staged_tree_oids: BTreeMap<ScopeCacheKey, Option<String>>,
-    tree_source_oids: BTreeMap<SourceScopeCacheKey, String>,
+    tree_source_oids: BTreeMap<SourceScopeCacheKey, Option<String>>,
     tree_source_entries: BTreeMap<SourceScopeCacheKey, Vec<String>>,
     tree_source_files: BTreeMap<SourceFilesCacheKey, Result<Vec<StagedTrackedFile>, String>>,
     staged_entries: BTreeMap<ScopeCacheKey, Vec<String>>,
@@ -62,6 +64,22 @@ impl VisibleTreeOidCache {
         match source {
             TreeSource::Staged => self.staged_visible_tree_oid(root, agent, scope),
             TreeSource::Git { .. } => self.git_tree_visible_tree_oid(root, source, agent, scope),
+        }
+    }
+
+    pub(crate) fn visible_tree_oid_for_reuse(
+        &mut self,
+        root: &Path,
+        source: &TreeSource,
+        agent: &AgentConfig,
+        scope: &[String],
+    ) -> Result<Option<String>, String> {
+        match source {
+            TreeSource::Staged => self.staged_visible_tree_oid_option(root, agent, scope),
+            TreeSource::Git { .. } => {
+                let scope = visible_scope(agent, scope)?;
+                self.git_tree_visible_tree_oid_option(root, source, agent, scope)
+            }
         }
     }
 
@@ -117,11 +135,12 @@ impl VisibleTreeOidCache {
         if let Some(hash) = self.staged_tree_oids.get(&key) {
             return Ok(hash.clone());
         }
-        let visible_entries = self.staged_visible_scope_entries(root, agent, &scope)?;
-        let hash = Some(visible_tree_oid_from_entries(
-            &visible_entries,
+        let files = self.staged_files(root)?;
+        let hash = visible_tree_oid_from_files_if_scope_present(
+            &files,
+            &scope,
             self.object_hash_algorithm(root)?,
-        )?);
+        )?;
         self.staged_tree_oids.insert(key, hash.clone());
         Ok(hash)
     }
@@ -134,13 +153,27 @@ impl VisibleTreeOidCache {
         scope: &[String],
     ) -> Result<String, String> {
         let scope = visible_scope(agent, scope)?;
+        self.git_tree_visible_tree_oid_option(root, source, agent, scope)?
+            .ok_or("failed to hash tree scope".to_string())
+    }
+
+    fn git_tree_visible_tree_oid_option(
+        &mut self,
+        root: &Path,
+        source: &TreeSource,
+        agent: &AgentConfig,
+        scope: Vec<String>,
+    ) -> Result<Option<String>, String> {
         let key = source_scope_cache_key(root, source, agent, &scope)?;
         if let Some(hash) = self.tree_source_oids.get(&key) {
             return Ok(hash.clone());
         }
-        let visible_entries = self.git_tree_visible_scope_entries(root, source, agent, &scope)?;
-        let hash =
-            visible_tree_oid_from_entries(&visible_entries, self.object_hash_algorithm(root)?)?;
+        let files = self.tree_source_files(root, source)?;
+        let hash = visible_tree_oid_from_files_if_scope_present(
+            &files,
+            &scope,
+            self.object_hash_algorithm(root)?,
+        )?;
         self.tree_source_oids.insert(key, hash.clone());
         Ok(hash)
     }
@@ -246,9 +279,13 @@ impl VisibleTreeOidCache {
         root: &Path,
         scope: &[String],
     ) -> Result<Option<Vec<String>>, String> {
-        self.head_files(root)?
-            .map(|files| visible_scope_entries_from_files(&files, scope))
-            .transpose()
+        let Some(files) = self.head_files(root)? else {
+            return Ok(None);
+        };
+        if !scope_includes_match_tracked_files(&files, scope)? {
+            return Ok(None);
+        }
+        visible_scope_entries_from_files(&files, scope).map(Some)
     }
 
     fn head_files(&mut self, root: &Path) -> Result<Option<Vec<StagedTrackedFile>>, String> {
@@ -640,6 +677,49 @@ fn visible_scope_entries_from_files(
     Ok(tracked_files_scope_entries(&visible_files))
 }
 
+fn visible_tree_oid_from_files_if_scope_present(
+    files: &[StagedTrackedFile],
+    scope: &[String],
+    object_hash_algorithm: GitObjectHashAlgorithm,
+) -> Result<Option<String>, String> {
+    if !scope_includes_match_tracked_files(files, scope)? {
+        return Ok(None);
+    }
+    let entries = visible_scope_entries_from_files(files, scope)?;
+    visible_tree_oid_from_entries(&entries, object_hash_algorithm).map(Some)
+}
+
+fn scope_includes_match_tracked_files(
+    files: &[StagedTrackedFile],
+    scope: &[String],
+) -> Result<bool, String> {
+    let include_pathspecs = scope
+        .iter()
+        .filter_map(|pathspec| match pathspec_is_exclude(pathspec) {
+            Ok(true) => None,
+            Ok(false) => Some(Ok(pathspec)),
+            Err(err) => Some(Err(err)),
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    if include_pathspecs.iter().any(|pathspec| pathspec == &".") {
+        return Ok(true);
+    }
+    for pathspec in include_pathspecs {
+        let pathspec_scope = [pathspec.clone()];
+        let mut matched = false;
+        for file in files {
+            if path_bytes_in_scope(&file.path, &pathspec_scope)? {
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 #[cfg(all(test, unix))]
 fn scope_entries_from_files(
     files: &[StagedTrackedFile],
@@ -835,5 +915,22 @@ mod tests {
             vec!["160000 0123456789012345678901234567890123456789\tdeps/example"]
         );
         sha1_visible_tree_oid_from_entries(&entries).unwrap();
+    }
+
+    #[test]
+    fn explicit_absent_scope_does_not_match_empty_tree() {
+        let files = vec![StagedTrackedFile {
+            path: b"src/check/run/run.rs".to_vec(),
+            mode: "100644".to_string(),
+            object_id: "0123456789012345678901234567890123456789".to_string(),
+        }];
+
+        assert!(
+            scope_includes_match_tracked_files(&files, &["src/check/run".to_string()]).unwrap()
+        );
+        assert!(
+            !scope_includes_match_tracked_files(&files, &["src/check/run.rs".to_string()]).unwrap()
+        );
+        assert!(scope_includes_match_tracked_files(&[], &[".".to_string()]).unwrap());
     }
 }

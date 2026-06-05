@@ -32,8 +32,10 @@ pub(crate) fn should_retry_full_scope_after_restricted_response(
 
 pub(crate) fn initial_visible_scope_for_expectation(
     root: &Path,
+    tree_source: &TreeSource,
     expectation: &SelectedExpectation,
     history_cache: &mut HistoryCache,
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
     active_lazy_full_scope_reset_ids: &BTreeSet<String>,
 ) -> Result<Vec<String>, String> {
     // Glossary visible-scope selection starts from the latest verified q-scope
@@ -43,9 +45,9 @@ pub(crate) fn initial_visible_scope_for_expectation(
     // excluding pathspec items.
     //
     // Stored scopes are trusted because they are written only after independent
-    // q-scope verification. Even if a stored q-scope's paths are absent in the
-    // current tree, the first interrogation still uses that q-scope; restricted
-    // insufficient-evidence is the only policy that widens it to full scope.
+    // q-scope verification, but source files can move later. If the stored
+    // q-scope no longer maps to the current visible tree, fresh interrogation
+    // starts from full project scope instead of reusing an empty tree.
     //
     // An active lazy full-scope reset is the reset policy's invocation-start
     // state transition: it makes the effective stored q-scope full project
@@ -55,10 +57,19 @@ pub(crate) fn initial_visible_scope_for_expectation(
     if active_lazy_full_scope_reset_ids.contains(&expectation.id) {
         return Ok(full_scope());
     }
-    Ok(
+    let Some(scope) =
         latest_stored_q_scope_with_cache(root, &expectation.agent, expectation, history_cache)?
-            .unwrap_or_else(full_scope),
-    )
+    else {
+        return Ok(full_scope());
+    };
+    if visible_tree_oid_cache
+        .visible_tree_oid_for_reuse(root, tree_source, &expectation.agent, &scope)?
+        .is_some()
+    {
+        Ok(scope)
+    } else {
+        Ok(full_scope())
+    }
 }
 
 pub(crate) fn evaluator_thread_reuse_key(

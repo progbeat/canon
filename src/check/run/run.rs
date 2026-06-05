@@ -122,56 +122,53 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     // verifications start different app-server sessions when they see
     // different visible trees.
     let mut interrogation_run_state = run_try!(InterrogationRunState::new(runtime.no_sandbox()));
-    let check_work_queue = if !options.selectors_provided {
-        let selection = run_try!(default_check_selection(
-            root,
-            runtime.tree_source,
-            options,
-            caches,
-            active_lazy_full_scope_reset_ids,
-            run_try!(unix_timestamp()),
-            &mut diagnostic_log,
+    let selection = run_try!(check_selection_after_cache(
+        root,
+        runtime.tree_source,
+        options,
+        caches,
+        active_lazy_full_scope_reset_ids,
+        run_try!(unix_timestamp()),
+        &mut diagnostic_log,
+        if options.selectors_provided {
+            CachedFailureMode::Continue
+        } else {
+            CachedFailureMode::StopDefaultSelection
+        },
+    ));
+    for CachedSelectionHit { expectation, hit } in selection.cached {
+        let record = hit.record;
+        if !record.passed() {
+            run_try!(write_and_flush_result_output(&mut result_output, &record));
+            records.push(record.clone());
+        }
+        cached.push(CachedExpectation {
+            expectation,
+            record,
+        });
+    }
+    if selection.cached_failure_seen && selection.selected.is_empty() && !options.selectors_provided
+    {
+        let skipped = skipped_count(total_expectations, &records, &cached);
+        return Ok(check_run_report(
+            records,
+            non_selected,
+            cached,
+            CheckRunReportCounts {
+                evaluated,
+                selected,
+                skipped,
+                silent,
+            },
+            narrowing,
         ));
-        for CachedSelectionHit { expectation, hit } in selection.cached {
-            let record = hit.record;
-            if !record.passed() {
-                run_try!(write_and_flush_result_output(&mut result_output, &record));
-                records.push(record.clone());
-            }
-            cached.push(CachedExpectation {
-                expectation,
-                record,
-            });
-        }
-        if selection.cached_failure_seen && selection.selected.is_empty() {
-            let skipped = skipped_count(total_expectations, &records, &cached);
-            return Ok(check_run_report(
-                records,
-                non_selected,
-                cached,
-                CheckRunReportCounts {
-                    evaluated,
-                    selected,
-                    skipped,
-                    silent,
-                },
-                narrowing,
-            ));
-        }
-        selected = selection.selected.len();
-        run_try!(order_expectations_by_latest_non_pass(
-            root,
-            selection.selected,
-            &mut caches.history
-        ))
-    } else {
-        selected = options.selected.len();
-        run_try!(order_expectations_by_latest_non_pass(
-            root,
-            options.selected.clone(),
-            &mut caches.history
-        ))
-    };
+    }
+    selected = selection.selected.len();
+    let check_work_queue = run_try!(order_expectations_by_latest_non_pass(
+        root,
+        selection.selected,
+        &mut caches.history
+    ));
     for expectation in &check_work_queue {
         macro_rules! return_expectation_error {
             ($error:expr) => {{
@@ -205,8 +202,10 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             active_lazy_full_scope_reset_ids.contains(&expectation.id);
         let mut verified_q_scope = run_expectation_try!(initial_visible_scope_for_expectation(
             root,
+            runtime.tree_source,
             expectation,
             &mut caches.history,
+            &mut caches.visible_tree_oid,
             active_lazy_full_scope_reset_ids,
         ));
         // Response-format problems and evaluator runner/model failures are
@@ -388,7 +387,13 @@ struct CachedSelectionHit {
     hit: CheckCacheHit,
 }
 
-fn default_check_selection(
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CachedFailureMode {
+    Continue,
+    StopDefaultSelection,
+}
+
+fn check_selection_after_cache(
     root: &Path,
     source: &TreeSource,
     options: &CheckOptions,
@@ -396,6 +401,7 @@ fn default_check_selection(
     active_lazy_full_scope_reset_ids: &BTreeSet<String>,
     now: u64,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    cached_failure_mode: CachedFailureMode,
 ) -> Result<CachedSelection, String> {
     let mut selected = Vec::new();
     let mut cached = Vec::new();
@@ -426,7 +432,7 @@ fn default_check_selection(
             None => selected.push(expectation),
         }
     }
-    if cached_failure_seen {
+    if cached_failure_seen && cached_failure_mode == CachedFailureMode::StopDefaultSelection {
         // Default selection stops at cached failures. Active lazy full-scope
         // reset markers have already taken effect by disabling cache reuse
         // above; if cached failures block fresh evaluation, those markers stay
@@ -525,4 +531,126 @@ fn summary_result_count(records: &[CheckRecord], cached: &[CachedExpectation]) -
         }
     }
     count
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::check::core::types::{CheckRecordOutcome, CheckResult};
+    use crate::check::run::selection::{expectation_identities, selected_expectation_at};
+    use crate::config_types::{AgentConfig, CheckConfig, Expectation};
+    use crate::history::append_current_history_record_with_cache;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_repo(prefix: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-tmp")
+            .join(format!("{prefix}-{}-{unique}", std::process::id()))
+    }
+
+    fn init_git_repo(root: &Path) {
+        fs::create_dir_all(root).unwrap();
+        let output = Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn one_expectation_config() -> CheckConfig {
+        CheckConfig {
+            version: 1,
+            presets: Default::default(),
+            agent: AgentConfig::implementation_default(),
+            expectations: vec![Expectation {
+                q: "Does selector cache reuse avoid unnecessary evaluator work?".to_string(),
+                a: "yes".to_string(),
+                prompt_scope: Vec::new(),
+                agent: AgentConfig::implementation_default(),
+                cooldown: None,
+                thinking: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn selector_candidates_with_cached_pass_are_not_evaluated() {
+        let root = temp_repo("canon-selector-cache");
+        init_git_repo(&root);
+        let config = one_expectation_config();
+        let identities = expectation_identities(&config).unwrap();
+        let expectation = selected_expectation_at(&config, &identities, 0, true).unwrap();
+        let options = CheckOptions {
+            selected: vec![expectation.clone()],
+            non_selected: Vec::new(),
+            selectors_provided: true,
+            skipped: 0,
+            keep_going: false,
+            ignore_cooldown: false,
+            break_after_tokens: None,
+        };
+        let mut caches = CheckRunCaches::new();
+        let source = TreeSource::Staged;
+        let scope = vec![".".to_string()];
+        let visible_tree_oid = caches
+            .visible_tree_oid
+            .visible_tree_oid(&root, &source, &expectation.agent, &scope)
+            .unwrap();
+        let record = CheckRecord::current_from_expectation(
+            &expectation.agent,
+            &expectation,
+            CheckRecordOutcome {
+                result: CheckResult::Pass,
+                observed: "yes".to_string(),
+                error: None,
+                evidence: "cached pass".to_string(),
+                scope,
+                suggested_q_scope: None,
+                visible_tree_oid,
+            },
+        )
+        .unwrap();
+        append_current_history_record_with_cache(
+            &root,
+            &source,
+            &expectation,
+            &record,
+            &mut caches.history,
+            &mut caches.visible_tree_oid,
+        )
+        .unwrap();
+        let mut diagnostic_log = None;
+
+        let selection = check_selection_after_cache(
+            &root,
+            &source,
+            &options,
+            &mut caches,
+            &BTreeSet::new(),
+            0,
+            &mut diagnostic_log,
+            CachedFailureMode::Continue,
+        )
+        .unwrap();
+
+        let _ = fs::remove_dir_all(&root);
+
+        assert!(selection.selected.is_empty());
+        assert_eq!(selection.cached.len(), 1);
+        assert_eq!(selection.cached[0].expectation.id, expectation.id);
+        assert!(!selection.cached_failure_seen);
+    }
 }

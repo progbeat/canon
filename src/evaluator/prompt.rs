@@ -54,5 +54,6 @@ mod tests {
         assert!(instructions.contains("command JSON"));
         assert!(instructions.contains("first non-whitespace character must be `{`"));
         assert!(instructions.contains("leading inspection summaries"));
+        assert!(instructions.contains("backslash immediately before a backtick"));
     }
 }

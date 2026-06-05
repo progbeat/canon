@@ -112,10 +112,10 @@ pub(crate) fn select_expectations_with_identities(
     identities: &[ExpectationIdentity],
     args: &[OsString],
 ) -> Result<Vec<SelectedExpectation>, String> {
-    // This expands command-line expectation selectors into the pre-cache
-    // candidate set. With no selectors, every collected expectation is a
-    // candidate; `check::run` applies cached-result rules before evaluation
-    // starts to form the final selected expectations.
+    // This resolves command-line expectation selectors into the candidate set.
+    // `check::run` always removes reusable cached results before evaluation
+    // starts, so the final selected set contains only expectations that still
+    // require evaluator work.
     let mut selected_indexes = Vec::new();
     if args.is_empty() {
         selected_indexes.extend(0..config.expectations.len());

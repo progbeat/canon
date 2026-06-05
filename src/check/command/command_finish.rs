@@ -9,7 +9,7 @@ use crate::gate::{
     gate_cached_result_for_tree, gate_regression_count_with_config, GateCacheResult,
     GateComparisonTree,
 };
-use crate::git::VisibleTreeOidCache;
+use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::history::HistoryCache;
 use std::io::Write;
 use std::path::Path;
@@ -101,8 +101,10 @@ fn staged_passes_failed_at_head_count_with_cache(
 ) -> Result<usize, String> {
     let mut count = 0usize;
     for passing in report_passing_expectations(report, agent) {
-        if staged_visible_tree_matches_head(root, agent, &passing.scope, visible_tree_oid_cache)? {
-            continue;
+        match staged_visible_tree_matches_head(root, agent, &passing.scope, visible_tree_oid_cache)?
+        {
+            Some(true) | None => continue,
+            Some(false) => {}
         }
         match gate_cached_result_for_tree(
             root,
@@ -129,10 +131,18 @@ fn staged_visible_tree_matches_head(
     agent: &AgentConfig,
     scope: &[String],
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
-) -> Result<bool, String> {
-    let staged = visible_tree_oid_cache.staged_visible_tree_oid(root, agent, scope)?;
+) -> Result<Option<bool>, String> {
+    let Some(staged) = visible_tree_oid_cache.visible_tree_oid_for_reuse(
+        root,
+        &TreeSource::Staged,
+        agent,
+        scope,
+    )?
+    else {
+        return Ok(None);
+    };
     let head = visible_tree_oid_cache.gate_head_tree_fingerprint(root, agent, scope)?;
-    Ok(head.as_deref() == Some(staged.as_str()))
+    Ok(Some(head.as_deref() == Some(staged.as_str())))
 }
 
 fn report_passing_expectations(

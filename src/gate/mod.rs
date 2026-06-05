@@ -270,19 +270,19 @@ fn gate_cache_result_for_tree_at(
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
     now: u64,
 ) -> Result<GateCacheResult, String> {
-    let same_tree = latest_history_record_matching_visible_tree_oid(
-        root,
-        expectation,
-        history_cache,
-        |scope| match tree {
-            GateComparisonTree::StagedIndex => visible_tree_oid_cache
-                .staged_visible_tree_oid(root, agent, scope)
-                .map(Some),
-            GateComparisonTree::Head => {
-                visible_tree_oid_cache.gate_head_tree_fingerprint(root, agent, scope)
-            }
-        },
-    )?;
+    let same_tree =
+        latest_history_record_matching_visible_tree_oid(
+            root,
+            expectation,
+            history_cache,
+            |scope| match tree {
+                GateComparisonTree::StagedIndex => visible_tree_oid_cache
+                    .visible_tree_oid_for_reuse(root, &TreeSource::Staged, agent, scope),
+                GateComparisonTree::Head => {
+                    visible_tree_oid_cache.gate_head_tree_fingerprint(root, agent, scope)
+                }
+            },
+        )?;
     let cooldown = cooldown_history_record(root, agent, expectation, history_cache, now)?;
     let record = cached_history_record(same_tree, cooldown).map(|hit| match hit {
         CachedHistoryRecord::SameTree(record) | CachedHistoryRecord::Cooldown(record) => record,

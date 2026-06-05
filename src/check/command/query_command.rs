@@ -65,6 +65,7 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
         root,
         config,
         query_scope,
+        tree_source,
         matching_expectation.as_ref(),
         active_lazy_full_scope_reset_ids,
     ) {
@@ -233,6 +234,7 @@ fn query_enforced_scope(
     root: &Path,
     config: &CheckConfig,
     query_scope: &[String],
+    tree_source: &TreeSource,
     matching_expectation: Option<&SelectedExpectation>,
     active_lazy_full_scope_reset_ids: &BTreeSet<String>,
 ) -> Result<Vec<String>, String> {
@@ -244,10 +246,13 @@ fn query_enforced_scope(
         return Ok(full_scope());
     };
     let mut history_cache = HistoryCache::default();
+    let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
     initial_visible_scope_for_expectation(
         root,
+        tree_source,
         expectation,
         &mut history_cache,
+        &mut visible_tree_oid_cache,
         active_lazy_full_scope_reset_ids,
     )
 }
