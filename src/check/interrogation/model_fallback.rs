@@ -101,7 +101,7 @@ pub(crate) fn write_model_fallback_events(
             "model.failure",
             &[
                 ("id", json!(expectation_id)),
-                ("model", json!(model_label(model))),
+                ("model", json!(model)),
                 ("error", json!(error)),
             ],
         )
@@ -113,8 +113,8 @@ pub(crate) fn write_model_fallback_events(
                 "model.fallback",
                 &[
                     ("id", json!(expectation_id)),
-                    ("from", json!(model_label(model))),
-                    ("to", json!(model_label(Some(next_model)))),
+                    ("from", json!(model)),
+                    ("to", json!(next_model)),
                     ("reason", json!(error)),
                 ],
             )

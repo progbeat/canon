@@ -96,7 +96,7 @@ fn required_runtime_log_fields(event: &str) -> Option<&'static [&'static str]> {
             "baseInstructions",
             "developerInstructions",
         ]),
-        "check.finish" => Some(&["query", "status"]),
+        "check.finish" => Some(&["query"]),
         _ => None,
     }
 }
@@ -339,6 +339,27 @@ mod tests {
         ];
 
         render_runtime_log_event("warn", "expectation.review_required", &fields).unwrap();
+    }
+
+    #[test]
+    fn check_finish_does_not_require_derived_status() {
+        let fields = vec![("query", json!(false))];
+
+        render_runtime_log_event("info", "check.finish", &fields).unwrap();
+    }
+
+    #[test]
+    fn thread_events_accept_raw_default_model_as_null() {
+        let fields = vec![
+            ("threadId", json!("thread")),
+            ("scope", json!(["."])),
+            ("model", Value::Null),
+            ("thinking", json!("medium")),
+            ("baseInstructions", json!("base")),
+            ("developerInstructions", json!("developer")),
+        ];
+
+        render_runtime_log_event("info", "thread.start", &fields).unwrap();
     }
 
     fn agent_response_fields(updates: Vec<Value>) -> Vec<(&'static str, Value)> {

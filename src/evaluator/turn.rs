@@ -278,7 +278,7 @@ pub(crate) fn write_thread_lifecycle_event(
         &[
             ("threadId", json!(&lifecycle_log.session_id)),
             ("scope", json!(enforced_scope)),
-            ("model", json!(model_label(model))),
+            ("model", json!(model)),
             ("thinking", json!(thinking)),
             ("baseInstructions", json!(EVALUATOR_BASE_INSTRUCTIONS)),
             (
@@ -306,7 +306,7 @@ pub(crate) fn write_thread_restart_event(
             ("threadId", json!(session_id)),
             ("id", json!(expectation_id)),
             ("scope", json!(enforced_scope)),
-            ("model", json!(model_label(model))),
+            ("model", json!(model)),
             ("baseInstructions", json!(EVALUATOR_BASE_INSTRUCTIONS)),
             ("developerInstructions", json!(developer_instructions)),
             ("reason", json!(reason)),
