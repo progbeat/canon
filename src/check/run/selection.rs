@@ -1,10 +1,15 @@
 use crate::check::core::types::{
     CheckOptions, CheckResult, Cooldown, ObservedAnswerState, RawCheckOptions, SelectedExpectation,
 };
+use crate::check::run::cache::{
+    cached_result_for_expectation, write_cache_hit, CachedResultLookup, CheckCacheHit,
+};
 use crate::check::run::order_state::latest_recorded_non_pass_timestamp_with_cache;
 use crate::config_types::{CheckConfig, CooldownConfig};
+use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::hash::expectation_id;
 use crate::history::HistoryCache;
+use crate::logs::DiagnosticLogWriter;
 use crate::time::parse_record_timestamp;
 use clap::builder::OsStringValueParser;
 use clap::{Arg, ArgAction, ArgMatches, Command};
@@ -113,9 +118,9 @@ pub(crate) fn select_expectations_with_identities(
     args: &[OsString],
 ) -> Result<Vec<SelectedExpectation>, String> {
     // This resolves command-line expectation selectors into the candidate set.
-    // `check::run` always removes reusable cached results before evaluation
-    // starts, so the final selected set contains only expectations that still
-    // require evaluator work.
+    // Cached results are applied by `select_expectations_after_cache` before
+    // evaluation starts, so the final selected set contains only expectations
+    // that still require evaluator work.
     let mut selected_indexes = Vec::new();
     if args.is_empty() {
         selected_indexes.extend(0..config.expectations.len());
@@ -170,6 +175,109 @@ pub(crate) fn initial_non_selected_expectations_with_identities(
         }
     }
     Ok(non_selected)
+}
+
+pub(crate) struct CachedSelection {
+    pub(crate) selected: Vec<SelectedExpectation>,
+    pub(crate) cached: Vec<CachedSelectionHit>,
+    pub(crate) cached_failure_seen: bool,
+}
+
+pub(crate) struct CachedSelectionHit {
+    pub(crate) expectation: SelectedExpectation,
+    pub(crate) hit: CheckCacheHit,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CachedFailureMode {
+    Continue,
+    StopDefaultSelection,
+}
+
+pub(crate) fn select_expectations_after_cache(
+    root: &Path,
+    source: &TreeSource,
+    options: &CheckOptions,
+    history_cache: &mut HistoryCache,
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
+    active_lazy_full_scope_reset_ids: &BTreeSet<String>,
+    now: u64,
+    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    cached_failure_mode: CachedFailureMode,
+) -> Result<CachedSelection, String> {
+    let mut selected = Vec::new();
+    let mut cached = Vec::new();
+    let mut cached_failure_seen = false;
+    for expectation in options.selected.clone() {
+        let active_lazy_full_scope_reset =
+            active_lazy_full_scope_reset_ids.contains(&expectation.id);
+        match cached_result_for_expectation(
+            root,
+            source,
+            &expectation.agent,
+            &expectation,
+            history_cache,
+            visible_tree_oid_cache,
+            CachedResultLookup {
+                now,
+                include_same_tree: !active_lazy_full_scope_reset,
+                include_cooldown: !options.ignore_cooldown && !active_lazy_full_scope_reset,
+            },
+        )? {
+            Some(hit) => {
+                cached_failure_seen |= !hit.record.passed();
+                if let Some(writer) = diagnostic_log.as_deref_mut() {
+                    write_cache_hit(writer, &hit)?;
+                }
+                cached.push(CachedSelectionHit { expectation, hit });
+            }
+            None => selected.push(expectation),
+        }
+    }
+    if cached_failure_seen && cached_failure_mode == CachedFailureMode::StopDefaultSelection {
+        // Default selection stops at cached failures. Active lazy full-scope
+        // reset markers have already taken effect by disabling cache reuse
+        // above; if cached failures block fresh evaluation, those markers stay
+        // active until a later invocation can write the replacement full-scope
+        // record.
+        selected.clear();
+        let mut ordered_cached = cached
+            .into_iter()
+            .enumerate()
+            .map(|(index, hit)| {
+                Ok(OrderedCachedSelectionHit {
+                    latest_non_pass: latest_non_pass_timestamp_with_cache(
+                        root,
+                        &hit.expectation,
+                        history_cache,
+                    )?,
+                    index,
+                    hit,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        ordered_cached.sort_by(|left, right| {
+            right
+                .latest_non_pass
+                .cmp(&left.latest_non_pass)
+                .then_with(|| left.index.cmp(&right.index))
+        });
+        cached = ordered_cached
+            .into_iter()
+            .map(|ordered| ordered.hit)
+            .collect();
+    }
+    Ok(CachedSelection {
+        selected,
+        cached,
+        cached_failure_seen,
+    })
+}
+
+struct OrderedCachedSelectionHit {
+    hit: CachedSelectionHit,
+    latest_non_pass: u64,
+    index: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -393,4 +501,126 @@ fn parse_cooldown_duration(value: &str) -> Result<u64, String> {
         .checked_mul(multiplier)
         .ok_or_else(|| "duration is too large".to_string())?;
     Ok(seconds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::check::core::types::{CheckRecord, CheckRecordOutcome};
+    use crate::config_types::{AgentConfig, Expectation};
+    use crate::history::append_current_history_record_with_cache;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_repo(prefix: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-tmp")
+            .join(format!("{prefix}-{}-{unique}", std::process::id()))
+    }
+
+    fn init_git_repo(root: &Path) {
+        fs::create_dir_all(root).unwrap();
+        let output = Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn one_expectation_config() -> CheckConfig {
+        CheckConfig {
+            version: 1,
+            presets: Default::default(),
+            agent: AgentConfig::implementation_default(),
+            expectations: vec![Expectation {
+                q: "Does selector cache reuse avoid unnecessary evaluator work?".to_string(),
+                a: "yes".to_string(),
+                prompt_scope: Vec::new(),
+                agent: AgentConfig::implementation_default(),
+                cooldown: None,
+                thinking: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn selector_candidates_with_cached_pass_are_not_evaluated() {
+        let root = temp_repo("canon-selector-cache");
+        init_git_repo(&root);
+        let config = one_expectation_config();
+        let identities = expectation_identities(&config).unwrap();
+        let expectation = selected_expectation_at(&config, &identities, 0, true).unwrap();
+        let options = CheckOptions {
+            selected: vec![expectation.clone()],
+            non_selected: Vec::new(),
+            selectors_provided: true,
+            skipped: 0,
+            keep_going: false,
+            ignore_cooldown: false,
+            break_after_tokens: None,
+        };
+        let mut history_cache = HistoryCache::default();
+        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
+        let source = TreeSource::Staged;
+        let scope = vec![".".to_string()];
+        let visible_tree_oid = visible_tree_oid_cache
+            .visible_tree_oid(&root, &source, &expectation.agent, &scope)
+            .unwrap();
+        let record = CheckRecord::current_from_expectation(
+            &expectation.agent,
+            &expectation,
+            CheckRecordOutcome {
+                result: CheckResult::Pass,
+                observed: "yes".to_string(),
+                error: None,
+                evidence: "cached pass".to_string(),
+                scope,
+                suggested_q_scope: None,
+                visible_tree_oid,
+            },
+        )
+        .unwrap();
+        append_current_history_record_with_cache(
+            &root,
+            &source,
+            &expectation,
+            &record,
+            &mut history_cache,
+            &mut visible_tree_oid_cache,
+        )
+        .unwrap();
+        let mut diagnostic_log = None;
+
+        let selection = select_expectations_after_cache(
+            &root,
+            &source,
+            &options,
+            &mut history_cache,
+            &mut visible_tree_oid_cache,
+            &BTreeSet::new(),
+            0,
+            &mut diagnostic_log,
+            CachedFailureMode::Continue,
+        )
+        .unwrap();
+
+        let _ = fs::remove_dir_all(&root);
+
+        assert!(selection.selected.is_empty());
+        assert_eq!(selection.cached.len(), 1);
+        assert_eq!(selection.cached[0].expectation.id, expectation.id);
+        assert!(!selection.cached_failure_seen);
+    }
 }
