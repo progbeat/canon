@@ -202,9 +202,7 @@ mod tests {
     fn base_instructions_prohibit_status_text() {
         assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("Do not announce skills"));
         assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("only the JSON object"));
-        assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("request a shell command or tool call"));
-        assert!(EVALUATOR_BASE_INSTRUCTIONS.contains(r#"{"tool":...,"parameters":...}"#));
-        assert!(EVALUATOR_BASE_INSTRUCTIONS.contains(r#"{"command":...}"#));
+        assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("simulate a shell command or tool call"));
         assert!(EVALUATOR_BASE_INSTRUCTIONS.contains(r#"error:"insufficient-evidence""#));
         assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("I'll inspect"));
     }
@@ -234,9 +232,11 @@ mod tests {
         assert!(instructions.contains("text before or after the JSON is invalid"));
         assert!(instructions.contains("tool-request JSON"));
         assert!(instructions.contains("Tool calls are not an output format"));
-        assert!(instructions.contains("Never print or simulate a tool call"));
-        assert!(instructions.contains(r#"{"tool":...}"#));
-        assert!(instructions.contains(r#"{"command":...}"#));
+        assert!(instructions.contains("Never print or simulate a tool call or shell command"));
+        assert!(instructions.contains("Valid top-level keys are only"));
+        assert!(
+            instructions.contains("never output `command`, `tool`, `arguments`, or `parameters`")
+        );
         assert!(instructions.contains("first non-whitespace character must be `{`"));
         assert!(instructions.contains("leading inspection summaries"));
         assert!(instructions.contains("backslash immediately before a backtick"));
