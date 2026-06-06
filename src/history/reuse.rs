@@ -343,6 +343,42 @@ mod tests {
     }
 
     #[test]
+    fn same_tree_history_record_skips_out_of_scope_evidence() {
+        let root = git_project("same-tree-out-of-scope-evidence");
+        let expectation = expectation_with_cooldown();
+        let mut history_cache = HistoryCache::default();
+        let path = history_cache.path(&root, &expectation).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            format!(
+                "{}\n{}\n",
+                history_line(10, r#"["."]"#, "older pass"),
+                history_line(
+                    20,
+                    r#"["src/evaluator/config.rs"]"#,
+                    "`src/platform/platform_unix.rs:126-700` is outside scope"
+                )
+            ),
+        )
+        .unwrap();
+
+        let hit = latest_history_record_matching_visible_tree_oid(
+            &root,
+            &expectation.agent,
+            &expectation,
+            &mut history_cache,
+            |_| Ok(Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string())),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(hit.evidence, "older pass");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn same_tree_history_record_derives_q_scope_from_stored_visible_scope() {
         let root = git_project("same-tree-visible-scope");
         let mut expectation = expectation_with_cooldown();

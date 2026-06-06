@@ -7,9 +7,10 @@ use crate::check::interrogation::records::{
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::interrogation::{ask_with_reused_thread, ThreadTurnRequest};
 use crate::evaluator::{evaluator_turn_prompt, EvaluatorError, EvaluatorRunner};
+use crate::evidence::evidence_file_refs_are_visible;
 use crate::hash::full_scope;
 use crate::logs::DiagnosticLogWriter;
-use crate::scope::sanitize_scope;
+use crate::scope::{sanitize_scope, visible_scope};
 
 #[derive(Clone, Copy)]
 pub(crate) struct QueryRequest<'a> {
@@ -88,7 +89,7 @@ pub(crate) fn ask_query_with_model<R: EvaluatorRunner>(
             model,
         );
         if let Ok(narrowed) = narrowed {
-            if query_narrowed_answer_is_accepted(&narrowed.answer, &proposed_scope) {
+            if query_narrowed_answer_is_accepted(runtime, &narrowed.answer, &proposed_scope) {
                 result = narrowed;
             } else {
                 result.answer.q_scope_suggestion = None;
@@ -201,11 +202,18 @@ fn query_should_verify_narrowing(
     .map_err(EvaluatorError::from)
 }
 
-fn query_narrowed_answer_is_accepted(narrowed: &ParsedAnswer, proposed_scope: &[String]) -> bool {
+fn query_narrowed_answer_is_accepted(
+    runtime: &CheckRuntime<'_>,
+    narrowed: &ParsedAnswer,
+    proposed_scope: &[String],
+) -> bool {
     matches!(
         ObservedAnswerState::from_error(narrowed.error.as_deref()),
         ObservedAnswerState::Answer
     ) && narrowed.scope == proposed_scope
+        && visible_scope(&runtime.config.agent, &narrowed.scope)
+            .map(|scope| evidence_file_refs_are_visible(&narrowed.evidence, &scope))
+            .unwrap_or(false)
 }
 
 fn query_human_review_reason(result: &QueryResult) -> Option<&'static str> {

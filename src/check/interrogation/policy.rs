@@ -7,10 +7,12 @@ use crate::check::interrogation::state::{
 };
 use crate::config_types::AgentConfig;
 use crate::evaluator::EvaluatorRunner;
+use crate::evidence::evidence_file_refs_are_visible;
 use crate::git::VisibleTreeOidCache;
 use crate::hash::full_scope;
 use crate::history::{is_reusable_history_record, HistoryCache};
 use crate::logs::DiagnosticLogWriter;
+use crate::scope::visible_scope;
 
 pub(crate) struct InterrogationCall<'a> {
     pub(crate) runtime: &'a CheckRuntime<'a>,
@@ -153,6 +155,7 @@ pub(crate) fn q_scope_suggestion_should_get_independent_verification(
 }
 
 pub(crate) fn narrowed_scope_is_accepted(
+    agent: &AgentConfig,
     narrowed: &CheckRecord,
     proposed_scope: &[String],
 ) -> bool {
@@ -162,7 +165,11 @@ pub(crate) fn narrowed_scope_is_accepted(
     // that proposed scope. If verification needed full-scope retry, the
     // restricted insufficient-evidence is not final, but the proposed scope is
     // not verified.
-    is_reusable_history_record(narrowed) && narrowed.scope == proposed_scope
+    is_reusable_history_record(narrowed)
+        && narrowed.scope == proposed_scope
+        && visible_scope(agent, &narrowed.scope)
+            .map(|scope| evidence_file_refs_are_visible(&narrowed.evidence, &scope))
+            .unwrap_or(false)
 }
 
 pub(crate) fn write_scope_narrowing_event(
