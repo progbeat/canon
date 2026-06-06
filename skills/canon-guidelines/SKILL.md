@@ -34,7 +34,7 @@ Canon intent comes from the human; these guidelines only describe what makes can
 
 ## Review Process
 
-- For canon review requests, review the canon text yourself and draft findings.
+- For canon review requests, review only the canon text yourself. Do not review any other project files.
 - Do not treat underspecification or canon silence as a finding; report only written text that creates a concrete maintainability issue under these guidelines.
 - After drafting findings, spawn a subagent to re-check the findings against these guidelines with a prompt that starts with `$canon-guidelines`.
 
