@@ -2,9 +2,7 @@
 
 `CACHE_DIR` is `${CANON_STATE_DIR}/cache`.
 
-Each expectation has a ID. The ID is a 20-character base62 hash derived from the rendered expectation question.
-
-`canon check` stores per-expectation data (e.g. answer history) under `$CACHE_DIR/$ID`.
+`canon check` stores per-expectation data (e.g. answer history) under `$CACHE_DIR/$ID`, where `ID` is the expectation's ID.
 
 ## Answer History
 

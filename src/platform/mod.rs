@@ -1,0 +1,209 @@
+use std::ffi::OsString;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(not(any(unix, windows)))]
+compile_error!("canon requires Unix or Windows filesystem support");
+
+#[cfg(unix)]
+#[path = "platform_unix.rs"]
+mod platform_unix;
+#[cfg(windows)]
+#[path = "platform_windows.rs"]
+mod platform_windows;
+
+#[cfg(unix)]
+use platform_unix as imp;
+#[cfg(windows)]
+use platform_windows as imp;
+
+#[cfg(unix)]
+fn platform_error(error: imp::PlatformError) -> String {
+    error.to_string()
+}
+
+#[cfg(windows)]
+fn platform_error(error: String) -> String {
+    error
+}
+
+static CHECK_INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn install_check_signal_handlers() -> Result<(), String> {
+    imp::install_check_signal_handlers().map_err(platform_error)
+}
+
+pub(crate) fn reset_check_interrupted() {
+    CHECK_INTERRUPTED.store(false, Ordering::SeqCst);
+}
+
+pub(crate) fn check_interrupted() -> bool {
+    CHECK_INTERRUPTED.load(Ordering::SeqCst)
+}
+
+pub(crate) fn prepare_app_server_command(command: &mut Command) {
+    imp::prepare_app_server_command(command);
+}
+
+pub(crate) fn terminate_app_server_child(child: &mut Child) -> Result<(), String> {
+    imp::terminate_app_server_child(child).map_err(platform_error)
+}
+
+pub(crate) fn mirror_evaluator_codex_home_file(source: &Path, target: &Path) -> Result<(), String> {
+    imp::mirror_evaluator_codex_home_file(source, target).map_err(platform_error)
+}
+
+pub(crate) fn move_path(source: &Path, target: &Path) -> Result<(), String> {
+    imp::move_path(source, target).map_err(platform_error)
+}
+
+pub(crate) fn make_hook_executable(path: &Path) -> Result<(), String> {
+    imp::make_hook_executable(path).map_err(platform_error)
+}
+
+pub(crate) fn set_materialized_file_permissions(path: &Path, mode: &str) -> Result<(), String> {
+    set_materialized_permissions(path, Some(mode))
+}
+
+pub(crate) fn set_materialized_dir_permissions(path: &Path) -> Result<(), String> {
+    set_materialized_permissions(path, None)
+}
+
+fn set_materialized_permissions(path: &Path, file_mode: Option<&str>) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        match file_mode {
+            Some(mode) => imp::set_materialized_file_permissions(path, mode),
+            None => imp::set_materialized_dir_permissions(path),
+        }
+        .map_err(platform_error)
+    }
+    #[cfg(windows)]
+    {
+        let _ = file_mode;
+        imp::set_materialized_permissions(path)
+    }
+}
+
+pub(crate) fn set_private_dir_permissions(path: &Path) -> Result<(), String> {
+    set_private_permissions(path, PrivatePathKind::Directory)
+}
+
+pub(crate) fn set_private_file_permissions(path: &Path) -> Result<(), String> {
+    set_private_permissions(path, PrivatePathKind::File)
+}
+
+enum PrivatePathKind {
+    Directory,
+    File,
+}
+
+fn set_private_permissions(path: &Path, kind: PrivatePathKind) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        match kind {
+            PrivatePathKind::Directory => imp::set_private_dir_permissions(path),
+            PrivatePathKind::File => imp::set_private_file_permissions(path),
+        }
+        .map_err(platform_error)
+    }
+    #[cfg(windows)]
+    {
+        let _ = kind;
+        imp::set_private_permissions(path)
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct SecretDirMode {
+    inner: imp::SecretDirMode,
+}
+
+pub(crate) fn secret_dir_mode(path: &Path) -> Result<SecretDirMode, String> {
+    imp::secret_dir_mode(path)
+        .map(|inner| SecretDirMode { inner })
+        .map_err(platform_error)
+}
+
+pub(crate) fn chmod_secret_dir_no_access(path: &Path) -> Result<(), String> {
+    imp::chmod_secret_dir_no_access(path).map_err(platform_error)
+}
+
+pub(crate) fn restore_secret_dir_mode(path: &Path, mode: &SecretDirMode) -> Result<(), String> {
+    imp::restore_secret_dir_mode(path, &mode.inner).map_err(platform_error)
+}
+
+pub(crate) fn create_materialized_symlink(target: &[u8], link: &Path) -> Result<(), String> {
+    imp::create_materialized_symlink(target, link).map_err(platform_error)
+}
+
+pub(crate) fn hardlink_file_or_copy_symlink(source: &Path, target: &Path) -> Result<(), String> {
+    imp::hardlink_file_or_copy_symlink(source, target).map_err(platform_error)
+}
+
+pub(crate) fn create_private_dir(path: &Path) -> io::Result<()> {
+    imp::create_private_dir(path)
+}
+
+pub(crate) fn create_private_dir_all(path: &Path) -> io::Result<()> {
+    imp::create_private_dir_all(path)
+}
+
+pub(crate) fn memory_backed_staged_snapshot_parent_candidates() -> Vec<PathBuf> {
+    imp::memory_backed_staged_snapshot_parent_candidates()
+}
+
+pub(crate) fn ordinary_staged_snapshot_parent_candidates() -> Vec<PathBuf> {
+    imp::ordinary_staged_snapshot_parent_candidates()
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    if !paths.iter().any(|existing| existing == &path) {
+        paths.push(path);
+    }
+}
+
+pub(crate) fn path_from_git_stdout(mut bytes: Vec<u8>) -> Result<PathBuf, String> {
+    while matches!(bytes.last(), Some(b'\n' | b'\r')) {
+        bytes.pop();
+    }
+    #[cfg(unix)]
+    {
+        Ok(imp::path_from_git_bytes(bytes))
+    }
+    #[cfg(windows)]
+    {
+        imp::path_from_git_bytes(bytes)
+    }
+}
+
+pub(crate) fn git_path_bytes(path: &Path) -> Result<Vec<u8>, String> {
+    #[cfg(unix)]
+    {
+        Ok(imp::git_path_bytes(path))
+    }
+    #[cfg(windows)]
+    {
+        imp::git_path_bytes(path)
+    }
+}
+
+pub(crate) fn os_string_from_bytes(bytes: Vec<u8>) -> Result<OsString, String> {
+    #[cfg(unix)]
+    {
+        Ok(imp::os_string_from_bytes(bytes))
+    }
+    #[cfg(windows)]
+    {
+        imp::os_string_from_bytes(bytes)
+    }
+}
+
+fn wait_for_app_server_child(child: &mut Child) -> Result<(), String> {
+    child
+        .wait()
+        .map(|_| ())
+        .map_err(|err| format!("failed to wait for app-server child: {}", err))
+}

@@ -19,7 +19,7 @@ impl EvaluatorResponseParseCache {
         text: &str,
         agent: &AgentConfig,
     ) -> Result<ParsedAnswer, String> {
-        let key = (text.to_string(), effective_ignore_patterns(agent));
+        let key = (text.to_string(), effective_ignore_patterns(agent)?);
         if let Some(parsed) = self.values.get(&key) {
             return parsed.clone();
         }

@@ -1,4 +1,3 @@
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -20,14 +19,7 @@ impl SnapshotRoot {
     }
 }
 
-pub(crate) fn create_snapshot_root(root: &Path) -> Result<SnapshotRoot, String> {
-    let root = root.canonicalize().map_err(|err| {
-        format!(
-            "failed to canonicalize project root {}: {}",
-            root.display(),
-            err
-        )
-    })?;
+pub(crate) fn create_snapshot_root(_root: &Path) -> Result<SnapshotRoot, String> {
     if let Some(path) = configured_tree_cache_dir() {
         return create_snapshot_root_from_configured_cache_dir(&path);
     }
@@ -37,14 +29,12 @@ pub(crate) fn create_snapshot_root(root: &Path) -> Result<SnapshotRoot, String> 
     // canon-owned temporary storage to prefer memory-backed parents when the
     // host provides one; ordinary temp storage remains the fallback.
     if let Some(path) = create_snapshot_root_from_candidates(
-        &root,
         crate::platform::memory_backed_staged_snapshot_parent_candidates(),
         &mut errors,
     ) {
         return Ok(temporary_snapshot_root(path));
     }
     if let Some(path) = create_snapshot_root_from_candidates(
-        &root,
         crate::platform::ordinary_staged_snapshot_parent_candidates(),
         &mut errors,
     ) {
@@ -95,15 +85,10 @@ fn temporary_snapshot_root(path: PathBuf) -> SnapshotRoot {
 }
 
 fn create_snapshot_root_from_candidates(
-    root: &Path,
     parents: Vec<PathBuf>,
     errors: &mut Vec<String>,
 ) -> Option<PathBuf> {
     for parent in parents {
-        if let Err(err) = snapshot_parent_outside_worktree(root, &parent) {
-            errors.push(err);
-            continue;
-        }
         let path = match create_snapshot_root_in(&parent) {
             Ok(path) => path,
             Err(err) => {
@@ -111,55 +96,9 @@ fn create_snapshot_root_from_candidates(
                 continue;
             }
         };
-        match verify_snapshot_root_outside_worktree(root, path) {
-            Ok(path) => return Some(path),
-            Err(err) => errors.push(err),
-        }
+        return Some(path);
     }
     None
-}
-
-pub(crate) fn snapshot_parent_outside_worktree(root: &Path, parent: &Path) -> Result<(), String> {
-    canonical_snapshot_path_outside_worktree(root, parent, "staged snapshot parent", None)
-        .map(|_| ())
-}
-
-fn verify_snapshot_root_outside_worktree(root: &Path, path: PathBuf) -> Result<PathBuf, String> {
-    canonical_snapshot_path_outside_worktree(
-        root,
-        &path,
-        "staged snapshot root",
-        Some(path.as_path()),
-    )?;
-    Ok(path)
-}
-
-fn canonical_snapshot_path_outside_worktree(
-    root: &Path,
-    path: &Path,
-    description: &str,
-    cleanup_on_inside: Option<&Path>,
-) -> Result<PathBuf, String> {
-    let canonical = path.canonicalize().map_err(|err| {
-        format!(
-            "failed to canonicalize {} {}: {}",
-            description,
-            path.display(),
-            err
-        )
-    })?;
-    if canonical == root || canonical.starts_with(root) {
-        if let Some(cleanup) = cleanup_on_inside {
-            let _ = fs::remove_dir_all(cleanup);
-        }
-        return Err(format!(
-            "{} {} is inside project root {}",
-            description,
-            canonical.display(),
-            root.display()
-        ));
-    }
-    Ok(canonical)
 }
 
 fn create_snapshot_root_in(parent: &Path) -> Result<PathBuf, String> {

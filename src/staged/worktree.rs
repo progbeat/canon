@@ -1,13 +1,13 @@
 use crate::config_types::AgentConfig;
+use crate::git::git_object_oid_has_known_shape;
+use crate::git::visible_tree_oid_from_tracked_files;
 use crate::git::{GitBlobReader, StagedTrackedFile};
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::platform;
-use crate::scope::{is_denied_path_bytes, path_bytes_in_scope, sanitize_scope};
+use crate::scope::{path_bytes_in_scope, visible_scope};
 use crate::staged::paths::create_snapshot_root;
-#[cfg(test)]
-pub(crate) use crate::staged::paths::snapshot_parent_outside_worktree;
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -26,12 +26,17 @@ pub(crate) struct StagedWorktreeView {
 
 struct VisibleTree {
     oid: String,
-    // The hardlink materialization spec names this `visible_tree.entry_paths`.
-    // Each value is the evaluator-visible Git blob entry for that path, carrying
-    // the mode and object id needed to extract and materialize the file.
-    // Git trees do not contain standalone empty directories, so these blob
-    // entries induce every directory that the spec's DFS can materialize.
+    // The hardlink materialization spec names this `visible_tree.entry_paths`:
+    // Git entries selected by applying the visible scope pathspec to the
+    // checked tree. Blob-backed entries can be extracted into the lazy tree;
+    // gitlinks are represented as empty directories in the materialized view.
     entry_paths: Vec<StagedTrackedFile>,
+}
+
+struct VisibleTreeChild {
+    name: Vec<u8>,
+    path: Vec<u8>,
+    is_dir: bool,
 }
 
 impl StagedWorktreeView {
@@ -94,15 +99,17 @@ impl StagedWorktreeView {
         scope: &[String],
         visible_tree_oid: &str,
     ) -> Result<PathBuf, String> {
-        let scope = sanitize_scope(scope, agent)?;
-        let visible_tree = self.visible_tree(agent, &scope, visible_tree_oid)?;
+        let scope = visible_scope(agent, scope)?;
+        let visible_tree = self.visible_tree(&scope, visible_tree_oid)?;
         self.materialize_visible_tree(&visible_tree)
     }
 
     fn materialize_visible_tree(&self, visible_tree: &VisibleTree) -> Result<PathBuf, String> {
         // Lazy hardlink policy mapping:
-        // - `unpack_missing_files` performs `git_tree.extract` once per
-        //   not-yet-unpacked blob into `lazy_tree_dir`.
+        // - `unpack_missing_visible_entries` walks every not-yet-unpacked
+        //   visible entry. Blob-backed entries are extracted into
+        //   `lazy_tree_dir`; gitlinks are marked handled here and created as
+        //   directories by `hardlink_visible_tree_root`.
         // - `hardlink_visible_tree_root` builds the tree under
         //   `trees_dir/<visibleTreeOid>` and then chmods every directory
         //   read-only after its children are linked.
@@ -113,27 +120,35 @@ impl StagedWorktreeView {
         if visible_tree_root.exists() {
             return Ok(visible_tree_root);
         }
-        self.unpack_missing_files(&visible_tree.entry_paths)?;
-        self.hardlink_visible_tree_root(&visible_tree.entry_paths, visible_tree_root)
+        self.unpack_missing_visible_entries(visible_tree)?;
+        self.hardlink_visible_tree_root(visible_tree, visible_tree_root)
     }
 
     fn visible_tree(
         &self,
-        agent: &AgentConfig,
         scope: &[String],
         visible_tree_oid: &str,
     ) -> Result<VisibleTree, String> {
+        if !git_object_oid_has_known_shape(visible_tree_oid) {
+            return Err("visibleTreeOid must be a Git object ID hex string".to_string());
+        }
         // Build the `visible_tree.entry_paths` set used by the hardlink
         // materialization policy. `TreeSource` supplies the checked Git tree
-        // (staged index or explicit `--tree` revision); scope and ignore
-        // filters define the evaluator-visible tree over its blob entries.
-        let entry_paths = self
-            .source_files()?
-            .into_iter()
-            .filter(|file| file.is_blob_file_entry())
-            .filter(|file| path_bytes_in_scope(&file.path, scope))
-            .filter(|file| !is_denied_path_bytes(agent, &file.path))
-            .collect();
+        // (staged index or explicit `--tree` revision); the visible scope
+        // pathspec defines the evaluator-visible tree.
+        let mut entry_paths = Vec::new();
+        for file in self.source_files()? {
+            if path_bytes_in_scope(&file.path, scope)? {
+                entry_paths.push(file);
+            }
+        }
+        let actual_oid = visible_tree_oid_from_tracked_files(&self.source_root, &entry_paths)?;
+        if actual_oid != visible_tree_oid {
+            return Err(format!(
+                "visibleTreeOid {} does not match materialized visible tree {}",
+                visible_tree_oid, actual_oid
+            ));
+        }
         Ok(VisibleTree {
             oid: visible_tree_oid.to_string(),
             entry_paths,
@@ -149,30 +164,42 @@ impl StagedWorktreeView {
         Ok(files)
     }
 
-    fn unpack_missing_files(&self, files: &[StagedTrackedFile]) -> Result<(), String> {
-        let missing = {
+    fn unpack_missing_visible_entries(&self, visible_tree: &VisibleTree) -> Result<(), String> {
+        let (missing_blobs, missing_non_blobs) = {
             let unpacked = self.unpacked_paths.borrow();
-            files
+            let missing = visible_tree
+                .entry_paths
                 .iter()
                 .filter(|file| !unpacked.contains(&file.path))
                 .cloned()
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+            let missing_blobs = missing
+                .iter()
+                .filter(|file| file.is_blob_file_entry())
+                .cloned()
+                .collect::<Vec<_>>();
+            let missing_non_blobs = missing
+                .into_iter()
+                .filter(|file| !file.is_blob_file_entry())
+                .collect::<Vec<_>>();
+            (missing_blobs, missing_non_blobs)
         };
-        if missing.is_empty() {
+        for file in missing_non_blobs {
+            extract_non_blob_visible_entry(&self.lazy_tree_dir, &file)?;
+            self.unpacked_paths.borrow_mut().insert(file.path);
+        }
+        if missing_blobs.is_empty() {
             return Ok(());
         }
 
-        let object_ids = missing
+        let object_ids = missing_blobs
             .iter()
             .map(|file| file.object_id.clone())
             .collect::<Vec<_>>();
         let blobs = self.read_missing_blobs(&object_ids)?;
-        for (file, blob) in missing.iter().zip(blobs) {
-            write_materialized_file(&self.lazy_tree_dir, file, &blob)?;
-        }
-        let mut unpacked = self.unpacked_paths.borrow_mut();
-        for file in missing {
-            unpacked.insert(file.path);
+        for (file, blob) in missing_blobs.into_iter().zip(blobs) {
+            write_materialized_file(&self.lazy_tree_dir, &file, &blob)?;
+            self.unpacked_paths.borrow_mut().insert(file.path);
         }
         Ok(())
     }
@@ -190,7 +217,7 @@ impl StagedWorktreeView {
 
     fn hardlink_visible_tree_root(
         &self,
-        files: &[StagedTrackedFile],
+        visible_tree: &VisibleTree,
         visible_tree_root: PathBuf,
     ) -> Result<PathBuf, String> {
         if let Err(err) = platform::create_private_dir(&visible_tree_root) {
@@ -203,28 +230,68 @@ impl StagedWorktreeView {
                 err
             ));
         }
-        // This loop is equivalent to the policy's `visible_tree.children` DFS:
-        // Git stores directories only as prefixes of entries, and all such
-        // parent directories are created before their child file is linked.
-        for file in files {
-            let relative = relative_path_from_git_path(&file.path)?;
-            let source = self.lazy_tree_dir.join(&relative);
-            let target = visible_tree_root.join(&relative);
-            if let Some(parent) = target.parent() {
-                platform::create_private_dir_all(parent).map_err(|err| {
+        self.hardlink_visible_tree_children(visible_tree, b"", &visible_tree_root)?;
+        remove_write_permissions_from_materialized_dir(&visible_tree_root)?;
+        Ok(visible_tree_root)
+    }
+
+    fn hardlink_visible_tree_children(
+        &self,
+        visible_tree: &VisibleTree,
+        prefix: &[u8],
+        target_dir: &Path,
+    ) -> Result<(), String> {
+        for child in visible_tree.children(prefix) {
+            let target = target_dir.join(platform::os_string_from_bytes(child.name)?);
+            if child.is_dir {
+                platform::create_private_dir(&target).map_err(|err| {
                     format!(
                         "failed to create evaluator visible tree directory {}: {}",
-                        parent.display(),
+                        target.display(),
                         err
                     )
                 })?;
+                self.hardlink_visible_tree_children(visible_tree, &child.path, &target)?;
+                remove_write_permissions_from_materialized_dir(&target)?;
+            } else {
+                let source = self
+                    .lazy_tree_dir
+                    .join(relative_path_from_git_path(&child.path)?);
+                platform::hardlink_file_or_copy_symlink(&source, &target)?;
             }
-            platform::hardlink_file_or_copy_symlink(&source, &target)?;
         }
-        // Equivalent to the policy's post-order dfs chmod: each directory is
-        // made read-only only after every descendant has been created.
-        make_visible_tree_directories_read_only(&visible_tree_root)?;
-        Ok(visible_tree_root)
+        Ok(())
+    }
+}
+
+impl VisibleTree {
+    fn children(&self, prefix: &[u8]) -> Vec<VisibleTreeChild> {
+        let prefix_components = path_components(prefix);
+        let mut children = BTreeMap::new();
+        for file in &self.entry_paths {
+            let components = path_components(&file.path);
+            if !components.starts_with(&prefix_components)
+                || components.len() == prefix_components.len()
+            {
+                continue;
+            }
+            let child_components = &components[..prefix_components.len() + 1];
+            let child_path = join_path_components(child_components);
+            let is_leaf = child_components.len() == components.len();
+            let is_dir = !is_leaf || !file.is_blob_file_entry();
+            children
+                .entry(child_path.clone())
+                .or_insert_with(|| VisibleTreeChild {
+                    name: child_components
+                        .last()
+                        .copied()
+                        .unwrap_or_default()
+                        .to_vec(),
+                    path: child_path,
+                    is_dir,
+                });
+        }
+        children.into_values().collect()
     }
 }
 
@@ -237,32 +304,40 @@ impl Drop for StagedWorktreeView {
     }
 }
 
-fn make_visible_tree_directories_read_only(path: &Path) -> Result<(), String> {
-    for entry in fs::read_dir(path).map_err(|err| {
+fn path_components(path: &[u8]) -> Vec<&[u8]> {
+    path.split(|byte| *byte == b'/')
+        .filter(|component| !component.is_empty())
+        .collect()
+}
+
+fn join_path_components(components: &[&[u8]]) -> Vec<u8> {
+    let mut path = Vec::new();
+    for component in components {
+        if !path.is_empty() {
+            path.push(b'/');
+        }
+        path.extend_from_slice(component);
+    }
+    path
+}
+
+fn extract_non_blob_visible_entry(
+    lazy_tree: &Path,
+    file: &StagedTrackedFile,
+) -> Result<(), String> {
+    let relative = relative_path_from_git_path(&file.path)?;
+    let target = lazy_tree.join(&relative);
+    platform::create_private_dir_all(&target).map_err(|err| {
         format!(
-            "failed to read evaluator visible tree directory {}: {}",
-            path.display(),
+            "failed to create evaluator lazy directory {}: {}",
+            target.display(),
             err
         )
-    })? {
-        let entry = entry.map_err(|err| {
-            format!(
-                "failed to read evaluator visible tree directory entry in {}: {}",
-                path.display(),
-                err
-            )
-        })?;
-        let file_type = entry.file_type().map_err(|err| {
-            format!(
-                "failed to inspect evaluator scope path {}: {}",
-                entry.path().display(),
-                err
-            )
-        })?;
-        if file_type.is_dir() {
-            make_visible_tree_directories_read_only(&entry.path())?;
-        }
-    }
+    })?;
+    remove_write_permissions_from_materialized_dir(&target)
+}
+
+fn remove_write_permissions_from_materialized_dir(path: &Path) -> Result<(), String> {
     platform::set_materialized_dir_permissions(path)
 }
 
@@ -345,7 +420,13 @@ fn write_materialized_file(
             )
         })?;
     }
-    platform::set_materialized_file_permissions(&target, &file.mode)
+    remove_write_permissions_from_extracted_file(&target, &file.mode)
+}
+
+fn remove_write_permissions_from_extracted_file(path: &Path, mode: &str) -> Result<(), String> {
+    // The platform helper opens symlinks with `ChmodSymlink::Ignore`, matching
+    // the policy's `follow_symlinks=False` requirement.
+    platform::set_materialized_file_permissions(path, mode)
 }
 
 fn relative_path_from_git_path(path: &[u8]) -> Result<PathBuf, String> {
@@ -447,6 +528,58 @@ mod tests {
         );
         assert_symlink_target(&scope_root.join("link.txt"), Path::new("missing-target"));
 
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn materialization_rejects_non_oid_tree_root_name() {
+        let root = git_project("staged-snapshot-reject-tree-root-escape");
+        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
+        let agent = empty_test_agent();
+        let scope = full_scope();
+        let staged_view = StagedWorktreeView::apply_with_visible_tree_oid_cache(
+            &root,
+            &mut visible_tree_oid_cache,
+        )
+        .unwrap();
+        let escape = root.join("escape-root");
+        let err = staged_view
+            .materialize_evaluator_scope(&agent, &scope, &escape.to_string_lossy())
+            .unwrap_err();
+
+        assert!(err.contains("visibleTreeOid"));
+        assert!(!escape.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn materialization_rejects_oid_that_does_not_match_visible_tree() {
+        let root = git_project("staged-snapshot-reject-mismatched-oid");
+        fs::write(root.join("file.txt"), "contents").unwrap();
+        Command::new("git")
+            .args(["add", "file.txt"])
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
+        let agent = empty_test_agent();
+        let scope = full_scope();
+        let staged_view = StagedWorktreeView::apply_with_visible_tree_oid_cache(
+            &root,
+            &mut visible_tree_oid_cache,
+        )
+        .unwrap();
+        let wrong_oid = "0000000000000000000000000000000000000000";
+        let err = staged_view
+            .materialize_evaluator_scope(&agent, &scope, wrong_oid)
+            .unwrap_err();
+
+        assert!(err.contains("does not match materialized visible tree"));
+        assert!(!staged_view
+            .materialization_root()
+            .join("trees")
+            .join(wrong_oid)
+            .exists());
         let _ = fs::remove_dir_all(root);
     }
 

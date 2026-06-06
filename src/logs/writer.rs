@@ -48,7 +48,7 @@ impl DiagnosticRecordEvent {
 }
 
 impl DiagnosticLogWriter {
-    // This module owns JSONL storage and rotation. `logging_render` validates
+    // This module owns JSONL storage and rotation. `logs::render` validates
     // the required fields for known runtime-log event schemas.
     #[cfg(test)]
     pub(crate) fn create(root: &Path) -> DiagnosticLogResult<DiagnosticLogWriter> {

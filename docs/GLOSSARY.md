@@ -142,13 +142,15 @@ the snapshot.
 ## `visibleTreeOid`
 
 The Git-compatible object ID of the tracked tree entries visible to the
-evaluator after enforced scope and ignore rules are applied.
+evaluator after the visible scope is applied.
 
 ## Visible scope
 
 The scope applied to a staged tracked tree for an evaluator interrogation. It is
 the latest stored q-scope for the expectation, or full project scope when no
-q-scope is stored, with configured ignore patterns applied last.
+q-scope is stored. Configured ignore patterns are normalized as
+project-relative pathspec items, converted to excluding pathspec items, and
+applied last.
 
 ## Visible tree
 
@@ -160,8 +162,8 @@ The scoped tree induced by a visible scope.
 expectation questions and expected answers from config loading into check runs.
 
 `scope.rs` keeps scopes as Git pathspec lists: it normalizes repository paths,
-matches tracked paths against scope entries, and applies configured ignore
-patterns as exclusions through `effective_ignore_patterns`.
+forms visible scopes by appending configured ignore patterns as excluding
+pathspec items, and matches tracked paths against those pathspec lists.
 
 `git::visible_tree_oid` implements scoped tree and visible tree identity. It
 collects the tracked entries induced by a scope, then computes the
@@ -172,9 +174,9 @@ repository's object hash algorithm. `staged::worktree` uses that same OID when
 materializing evaluator-visible trees.
 
 `check::interrogation_state::initial_visible_scope_for_expectation` forms the
-visible scope from the latest stored q-scope, or full project scope when none is
-available. `staged::worktree::materialize_evaluator_scope` then applies that
-scope and the agent ignore rules before creating the evaluator working tree.
+base q-scope from the latest stored q-scope, or full project scope when none is
+available. `staged::worktree::materialize_evaluator_scope` then applies the
+visible scope before creating the evaluator working tree.
 
 `check::types::EvaluatorResponseJson` parses evaluator evidence and optional
 `qScopeSuggestion` values. `check::interrogation_policy` treats suggestions as

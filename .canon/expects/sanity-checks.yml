@@ -19,3 +19,7 @@
 
 - q: "2+2=?"
   a: "4"
+
+- q: "Count files under `.canon`."
+  a: "0"
+  cooldown: 7d

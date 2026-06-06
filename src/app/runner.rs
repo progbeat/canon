@@ -151,7 +151,8 @@ impl EvaluatorRunner for AppServerRunner {
                 &self.app_server_root,
                 session_cwd,
                 self.no_sandbox,
-            ),
+            )
+            .map_err(|err| EvaluatorError::message(err.to_string()))?,
             // Evaluator threads are invocation-local and ephemeral. Canon still
             // reuses live thread IDs by scope within this `canon check`, but
             // oversized carryover is handled by retiring the local session ID

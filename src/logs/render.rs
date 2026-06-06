@@ -5,6 +5,8 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeSet;
 
+// This module renders one runtime log event and validates event-local schemas.
+// JSONL append/flush/rotation are owned by `logs::writer` and `logs::rotation`.
 pub(crate) fn render_runtime_log_event(
     level: &str,
     event: &str,
@@ -96,7 +98,7 @@ fn required_runtime_log_fields(event: &str) -> Option<&'static [&'static str]> {
             "baseInstructions",
             "developerInstructions",
         ]),
-        "check.finish" => Some(&["query", "status"]),
+        "check.finish" => Some(&["query"]),
         _ => None,
     }
 }
@@ -131,12 +133,6 @@ fn validate_runtime_log_nested_schema(
         None => false,
     };
     let has_token_usage = runtime_log_field_value(fields, "tokenUsage").is_some();
-    if !has_token_usage && !has_token_usage_updates {
-        return Err(DiagnosticLogError::InvalidRuntimeField {
-            key: "tokenUsage".to_string(),
-            reason: "missing usage source for event schema",
-        });
-    }
     if has_token_usage && has_token_usage_updates {
         return Err(DiagnosticLogError::InvalidRuntimeField {
             key: "tokenUsage".to_string(),
@@ -326,6 +322,20 @@ mod tests {
     }
 
     #[test]
+    fn agent_response_allows_missing_usage_when_unavailable() {
+        let fields = vec![
+            ("id", json!("id")),
+            ("attempt", json!(1)),
+            ("reason", json!("initial")),
+            ("error", json!("missing evaluator turn usage")),
+            ("response", json!({"sessionId": "thread", "text": "{}"})),
+            ("tokenUsageUnavailable", json!(true)),
+        ];
+
+        render_runtime_log_event("error", "agent.turn_error", &fields).unwrap();
+    }
+
+    #[test]
     fn review_required_record_events_include_reason() {
         let fields = vec![
             ("id", json!("id")),
@@ -339,6 +349,27 @@ mod tests {
         ];
 
         render_runtime_log_event("warn", "expectation.review_required", &fields).unwrap();
+    }
+
+    #[test]
+    fn check_finish_does_not_require_derived_status() {
+        let fields = vec![("query", json!(false))];
+
+        render_runtime_log_event("info", "check.finish", &fields).unwrap();
+    }
+
+    #[test]
+    fn thread_events_accept_raw_default_model_as_null() {
+        let fields = vec![
+            ("threadId", json!("thread")),
+            ("scope", json!(["."])),
+            ("model", Value::Null),
+            ("thinking", json!("medium")),
+            ("baseInstructions", json!("base")),
+            ("developerInstructions", json!("developer")),
+        ];
+
+        render_runtime_log_event("info", "thread.start", &fields).unwrap();
     }
 
     fn agent_response_fields(updates: Vec<Value>) -> Vec<(&'static str, Value)> {

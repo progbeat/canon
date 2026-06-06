@@ -1,20 +1,7 @@
 use crate::check::ExpectationIdentity;
-#[cfg(test)]
-use crate::config_types::CheckConfig;
-#[cfg(test)]
-use crate::hash::expectation_id;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
-
-#[cfg(test)]
-pub(crate) fn active_expectation_ids(config: &CheckConfig) -> BTreeSet<String> {
-    config
-        .expectations
-        .iter()
-        .map(|expectation| expectation_id(&expectation.q))
-        .collect()
-}
 
 pub(crate) fn active_expectation_ids_from_identities(
     identities: &[ExpectationIdentity],
@@ -27,7 +14,6 @@ pub(crate) fn active_expectation_ids_from_identities(
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct CacheCleanupStats {
-    pub(crate) sampled: bool,
     pub(crate) removed: usize,
     pub(crate) kept: usize,
 }
@@ -38,13 +24,11 @@ pub(crate) fn cleanup_stale_cache_dirs(
 ) -> Result<CacheCleanupStats, String> {
     if !cache_dir.exists() {
         return Ok(CacheCleanupStats {
-            sampled: true,
             removed: 0,
             kept: 0,
         });
     }
     let mut stats = CacheCleanupStats {
-        sampled: true,
         removed: 0,
         kept: 0,
     };

@@ -53,7 +53,7 @@ expectations:
     preset: docker
 
   # Documentation
-  - q: "Are there any inconsistencies between `docs/GLOSSARY.md` and the codebase?"
+  - q: "Can you find any inconsistencies between `docs/GLOSSARY.md` and the codebase?"
     a: "no"
     cooldown: 1d
 
