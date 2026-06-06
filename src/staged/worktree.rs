@@ -1,9 +1,10 @@
+#[cfg(test)]
 use crate::config_types::AgentConfig;
 use crate::git::git_object_oid_has_known_shape;
 use crate::git::{GitBlobReader, StagedTrackedFile};
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::platform;
-use crate::scope::{path_bytes_in_scope, visible_scope};
+use crate::scope::path_bytes_in_scope;
 use crate::staged::paths::create_snapshot_root;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -87,14 +88,12 @@ impl StagedWorktreeView {
         })
     }
 
-    pub(crate) fn materialize_evaluator_scope(
+    pub(crate) fn materialize_visible_scope(
         &self,
-        agent: &AgentConfig,
-        scope: &[String],
+        visible_scope: &[String],
         visible_tree_oid: &str,
     ) -> Result<PathBuf, String> {
-        let scope = visible_scope(agent, scope)?;
-        let visible_tree = self.visible_tree(&scope, visible_tree_oid)?;
+        let visible_tree = self.visible_tree(visible_scope, visible_tree_oid)?;
         self.materialize_visible_tree(&visible_tree)
     }
 
@@ -459,6 +458,7 @@ mod tests {
         let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
         let agent = empty_test_agent();
         let scope = full_scope();
+        let visible_scope = full_scope();
         let staged_view = StagedWorktreeView::apply_with_visible_tree_oid_cache(
             &root,
             &mut visible_tree_oid_cache,
@@ -468,7 +468,7 @@ mod tests {
             .staged_visible_tree_oid(&root, &agent, &scope)
             .unwrap();
         let scope_root = staged_view
-            .materialize_evaluator_scope(&agent, &scope, &visible_tree_oid)
+            .materialize_visible_scope(&visible_scope, &visible_tree_oid)
             .unwrap();
 
         assert_dir_read_only(&scope_root);
@@ -490,6 +490,7 @@ mod tests {
         let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
         let agent = empty_test_agent();
         let scope = full_scope();
+        let visible_scope = full_scope();
         let staged_view = StagedWorktreeView::apply_with_visible_tree_oid_cache(
             &root,
             &mut visible_tree_oid_cache,
@@ -499,7 +500,7 @@ mod tests {
             .staged_visible_tree_oid(&root, &agent, &scope)
             .unwrap();
         let scope_root = staged_view
-            .materialize_evaluator_scope(&agent, &scope, &visible_tree_oid)
+            .materialize_visible_scope(&visible_scope, &visible_tree_oid)
             .unwrap();
 
         assert_symlink_target(&scope_root.join("link.txt"), Path::new("missing-target"));
@@ -511,8 +512,7 @@ mod tests {
     fn materialization_rejects_non_oid_tree_root_name() {
         let root = git_project("staged-snapshot-reject-tree-root-escape");
         let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
-        let agent = empty_test_agent();
-        let scope = full_scope();
+        let visible_scope = full_scope();
         let staged_view = StagedWorktreeView::apply_with_visible_tree_oid_cache(
             &root,
             &mut visible_tree_oid_cache,
@@ -520,7 +520,7 @@ mod tests {
         .unwrap();
         let escape = root.join("escape-root");
         let err = staged_view
-            .materialize_evaluator_scope(&agent, &scope, &escape.to_string_lossy())
+            .materialize_visible_scope(&visible_scope, &escape.to_string_lossy())
             .unwrap_err();
 
         assert!(err.contains("visibleTreeOid"));

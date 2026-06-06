@@ -9,7 +9,7 @@ use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::hash::full_scope;
 use crate::history::{latest_stored_q_scope_with_cache, HistoryCache};
 use crate::isolation::{NaiveIsolationGuard, NaiveIsolationPolicy};
-use crate::scope::effective_ignore_patterns;
+use crate::scope::{effective_ignore_patterns, visible_scope};
 use crate::staged::StagedWorktreeView;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -210,8 +210,11 @@ impl<'a> CheckRuntime<'a> {
             CheckSessionRoots::Fixed(path) => Ok(path.to_path_buf()),
             CheckSessionRoots::Materialized(staged_view) => {
                 // Configured ignore patterns shape the evaluator-visible Git
-                // tree before the lazy hardlink materialization step.
-                staged_view.materialize_evaluator_scope(agent, scope, visible_tree_oid)
+                // tree before the lazy hardlink materialization step. From
+                // here down, materialization applies only this visible scope
+                // pathspec to checked Git entries.
+                let visible_scope = visible_scope(agent, scope)?;
+                staged_view.materialize_visible_scope(&visible_scope, visible_tree_oid)
             }
         }
     }
