@@ -12,17 +12,19 @@
 ## Canon
 
 The canon is the single source of truth for how the project should work.
-Your job is to protect the canon and enforce it in the project.
+Your job is to **protect** the canon and **enforce** it in the project.
 
 To check the canon against the staged tree, run `canon check` with escalation.
 
 ### Change Constraints
 
+**Never ever make unrequested changes unless they directly improve the project's compliance with the canon.**
+
 If a request contradicts the canon or the canon is internally inconsistent, stop, show the human evidence based only on files under `.canon/`, and ask them to update the canon first.
 
 Do not edit files under `.canon/` proactively. Edit them only when a human explicitly insists.
 
-Before editing files, first read the relevant expectations under `.canon/` for the requested change. Do not start editing until you know which canon behavior must be preserved.
+**Every edit may potentially violate the canon**, so before editing project files, **always** read the relevant expectations under `.canon/`. Do not start editing until you know which `.canon/` expectations apply to the files or behavior you are about to change.
 
 ### Canon Enforcement
 
@@ -37,9 +39,9 @@ When a test fails, compare the behavior asserted by the test with the canon.
 If the behavior follows from the canon, fix the implementation.
 If the behavior contradicts the canon, delete the test.
 
-Do not take `canon check` evidence on trust.
+**Do not take `canon check` evidence on trust.**
 Before acting on a result, verify that the evidence actually supports the observed answer and answers the expectation question.
-If `canon check` gives a wrong answer, unsupported evidence, or evidence that is irrelevant to the question while the project satisfies the expectation, treat that as a readability issue.
+If `canon check` gives a wrong answer, unsupported evidence, or evidence that is irrelevant to the question while the project satisfies the expectation, **treat that as a readability issue**.
 
 Follow canon terminology in implementation code and documentation.
 If project terminology drifts away from terms defined in the canon, treat that as a readability issue.
