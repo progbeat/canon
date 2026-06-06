@@ -9,7 +9,7 @@ use crate::config_types::AgentConfig;
 use crate::evaluator::EvaluatorRunner;
 use crate::git::VisibleTreeOidCache;
 use crate::hash::full_scope;
-use crate::history::is_reusable_history_record;
+use crate::history::{is_reusable_history_record, HistoryCache};
 use crate::logs::DiagnosticLogWriter;
 
 pub(crate) struct InterrogationCall<'a> {
@@ -39,6 +39,7 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     interrogation_run_state: &mut InterrogationRunState,
+    history_cache: &mut HistoryCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
     break_after_tokens: Option<u64>,
 ) -> Result<InterrogationResult, String> {
@@ -47,6 +48,7 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
         runner,
         diagnostic_log,
         interrogation_run_state,
+        history_cache,
         visible_tree_oid_cache,
     )?;
     let should_stop_after_current_expectation =
@@ -62,6 +64,7 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
             runner,
             diagnostic_log,
             interrogation_run_state,
+            history_cache,
             visible_tree_oid_cache,
         )?;
         interrogation.stop_after_current_expectation |= should_stop_after_current_expectation;
@@ -76,6 +79,7 @@ pub(crate) fn interrogate_or_error_record<R: EvaluatorRunner>(
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     interrogation_run_state: &mut InterrogationRunState,
+    history_cache: &mut HistoryCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<InterrogationResult, String> {
     match interrogate_expectation_with_model_fallbacks(
@@ -84,6 +88,7 @@ pub(crate) fn interrogate_or_error_record<R: EvaluatorRunner>(
         runner,
         diagnostic_log,
         interrogation_run_state,
+        history_cache,
         call.scope,
     ) {
         Ok(interrogation) => Ok(interrogation),

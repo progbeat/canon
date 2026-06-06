@@ -83,6 +83,36 @@ impl VisibleTreeOidCache {
         }
     }
 
+    pub(crate) fn visible_tree_oid_for_visible_scope(
+        &mut self,
+        root: &Path,
+        source: &TreeSource,
+        visible_scope: &[String],
+    ) -> Result<Option<String>, String> {
+        let files = match source {
+            TreeSource::Staged => self.staged_files(root)?,
+            TreeSource::Git { .. } => self.tree_source_files(root, source)?,
+        };
+        visible_tree_oid_from_files_if_scope_present(
+            &files,
+            visible_scope,
+            self.object_hash_algorithm(root)?,
+        )
+    }
+
+    pub(crate) fn checked_file_count(
+        &mut self,
+        root: &Path,
+        source: &TreeSource,
+    ) -> Result<usize, String> {
+        match source {
+            TreeSource::Staged => self.staged_files(root).map(|files| files.len()),
+            TreeSource::Git { .. } => self
+                .tree_source_files(root, source)
+                .map(|files| files.len()),
+        }
+    }
+
     pub(crate) fn staged_visible_file_count(
         &mut self,
         root: &Path,
@@ -395,15 +425,6 @@ pub(crate) fn git_object_oid_has_known_shape(object_id: &str) -> bool {
 
 pub(crate) fn repository_native_object_oid_hex_len(root: &Path) -> Result<usize, String> {
     Ok(git_object_oid_hex_len(git_object_hash_algorithm(root)?))
-}
-
-pub(crate) fn visible_tree_oid_from_tracked_files(
-    root: &Path,
-    files: &[StagedTrackedFile],
-) -> Result<String, String> {
-    let files = files.iter().collect::<Vec<_>>();
-    let entries = tracked_files_scope_entries(&files);
-    visible_tree_oid_from_entries(&entries, git_object_hash_algorithm(root)?)
 }
 
 pub(crate) fn git_object_oid_has_hex_len(object_id: &str, hex_len: usize) -> bool {

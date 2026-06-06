@@ -51,6 +51,44 @@ pub(crate) fn git_head_tree_exists(root: &Path) -> Result<bool, String> {
     Ok(output.status.success())
 }
 
+pub(crate) fn staged_tree_oid(root: &Path) -> Result<String, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("write-tree")
+        .output()
+        .map_err(|err| format!("failed to run git write-tree: {}", err))?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed to resolve staged tree: {}",
+            command_output_trimmed(&output.stderr, "git write-tree stderr")?
+        ));
+    }
+    command_output_trimmed(&output.stdout, "git write-tree stdout").map(str::to_string)
+}
+
+pub(crate) fn empty_tree_oid(root: &Path) -> Result<String, String> {
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["hash-object", "-t", "tree", "--stdin"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|err| format!("failed to run git hash-object: {}", err))?;
+    drop(child.stdin.take());
+    let output = child
+        .wait_with_output()
+        .map_err(|err| format!("failed to read git hash-object output: {}", err))?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed to resolve empty tree: {}",
+            command_output_trimmed(&output.stderr, "git hash-object stderr")?
+        ));
+    }
+    command_output_trimmed(&output.stdout, "git hash-object stdout").map(str::to_string)
+}
+
 pub(crate) fn staged_tracked_files(root: &Path) -> Result<Vec<StagedTrackedFile>, String> {
     tracked_files_for_pathspecs(root, None, &[])
 }

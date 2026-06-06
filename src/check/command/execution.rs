@@ -11,6 +11,7 @@ use crate::check::command::reporting::{
 use crate::check::config::validation::check_config_loads_plugins;
 use crate::check::core::types::CheckRunReport;
 use crate::check::interrogation::state::CheckRuntime;
+use crate::check::interrogation::state::CheckTreeContext;
 use crate::check::run::lazy_reset::{
     activate_scheduled_lazy_full_scope_resets, active_lazy_full_scope_reset_ids,
     apply_lazy_full_scope_reset_for_cached,
@@ -40,14 +41,11 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     reset_check_interrupted();
     let command = parse_check_command_args(args)?;
     let checked_tree = TreeSource::resolve(root, &command.tree, "--tree")?;
-    let against_tree = if command.against_tree_explicit {
-        TreeSource::resolve(root, &command.against_tree, "--against-tree")?
-    } else {
-        TreeSource::Git {
-            treeish: command.against_tree.clone(),
-            tree_oid: String::new(),
-        }
-    };
+    let against_tree = TreeSource::resolve_default_against_tree(
+        root,
+        &command.against_tree,
+        command.against_tree_explicit,
+    )?;
     let write_agent_message = check_command_writes_agent_message(
         &command.config_path,
         &checked_tree,
@@ -142,6 +140,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             question,
             query_scope: &command.query_scope,
             tree_source: &checked_tree,
+            against_tree: &against_tree,
             no_sandbox: command.no_sandbox,
             diagnostic_log,
         })
@@ -172,6 +171,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         &mut diagnostic_log,
         PrepareCheckExecutionOptions {
             tree_source: &checked_tree,
+            against_tree: &against_tree,
             no_sandbox: command.no_sandbox,
             query: false,
             errors_on_failure: 0,
@@ -204,6 +204,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         root,
         &execution.staged_view,
         &execution.tree_source,
+        execution.tree_context.clone(),
         &config,
         command.no_sandbox,
     );
@@ -409,11 +410,13 @@ fn write_check_error_finish_event(
 pub(crate) struct PreparedCheckExecution {
     pub(crate) staged_view: StagedWorktreeView,
     pub(crate) tree_source: TreeSource,
+    pub(crate) tree_context: CheckTreeContext,
     pub(crate) runner: LazyAppServerRunner,
 }
 
 pub(crate) struct PrepareCheckExecutionOptions<'a> {
     pub(crate) tree_source: &'a TreeSource,
+    pub(crate) against_tree: &'a TreeSource,
     pub(crate) no_sandbox: bool,
     pub(crate) query: bool,
     pub(crate) errors_on_failure: usize,
@@ -461,6 +464,12 @@ pub(crate) fn prepare_check_execution(
             return Err(err);
         }
     };
+    let tree_context = CheckTreeContext {
+        checked_tree_oid: options.tree_source.tree_oid_for_prompt_diff(root)?,
+        against_tree_oid: options.against_tree.tree_oid_for_prompt_diff(root)?,
+        against_tree: options.against_tree.clone(),
+        checked_file_count: visible_tree_oid_cache.checked_file_count(root, options.tree_source)?,
+    };
     // The app-server starts from the real project root so Canon-owned runtime
     // state and model catalog config stay under that repository's `.git/canon`.
     // Evaluator sessions get a materialized visible tree as `thread/start.cwd`
@@ -474,6 +483,7 @@ pub(crate) fn prepare_check_execution(
     Ok(PreparedCheckExecution {
         staged_view,
         tree_source: options.tree_source.clone(),
+        tree_context,
         runner,
     })
 }

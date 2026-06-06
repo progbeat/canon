@@ -2,9 +2,10 @@
 // plus current visibleTreeOid matching.
 use crate::check::{CheckRecord, CheckResult, SelectedExpectation};
 use crate::config_types::AgentConfig;
+use crate::evaluator::AgainstTreeAnswer;
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::history::HistoryCache;
-use crate::scope::sanitize_scope_for_hash;
+use crate::scope::{sanitize_scope_for_hash, visible_scope};
 use crate::time::parse_record_timestamp;
 use std::path::Path;
 
@@ -84,6 +85,36 @@ pub(crate) fn cooldown_history_record(
     Ok(record.map(|record| cooldown_record_with_current_expectation(record, expectation)))
 }
 
+pub(crate) fn against_tree_answer_with_cache(
+    root: &Path,
+    source: &TreeSource,
+    agent: &AgentConfig,
+    expectation: &SelectedExpectation,
+    current_scope: &[String],
+    history_cache: &mut HistoryCache,
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
+) -> Result<Option<AgainstTreeAnswer>, String> {
+    let current_visible_scope = visible_scope(agent, current_scope)?;
+    let Some(against_tree_oid) = visible_tree_oid_cache.visible_tree_oid_for_visible_scope(
+        root,
+        source,
+        &current_visible_scope,
+    )?
+    else {
+        return Ok(None);
+    };
+    let records = history_cache.read_records(root, expectation)?;
+    for record in records.into_iter().rev() {
+        if record.scope == current_visible_scope && record.visible_tree_oid == against_tree_oid {
+            return Ok(Some(AgainstTreeAnswer {
+                answer: record.observed,
+                evidence: record.evidence,
+            }));
+        }
+    }
+    Ok(None)
+}
+
 pub(crate) enum CachedHistoryRecord {
     SameTree(CheckRecord),
     Cooldown(CheckRecord),
@@ -109,11 +140,11 @@ pub(crate) fn latest_stored_q_scope_with_cache(
     history_cache: &mut HistoryCache,
 ) -> Result<Option<Vec<String>>, String> {
     // Expectation-mode `canon check` calls this before each fresh interrogation.
-    // It returns only the latest stored q-scope from answer history; it is not a
+    // It returns only the latest stored scope from answer history; it is not a
     // cached check result and does not let callers skip evaluator work. Cache
     // specifies that answer-history records contain schema-valid `answer`
-    // responses only, and each record's `qScope` is the q-scope used to form
-    // that record's visible tree.
+    // responses only, and each record's `visibleScope` is the scope used to
+    // form that record's visible tree.
     scan_latest_history_records(root, expectation, history_cache, |record| {
         let Some(scope) = sanitized_answer_history_q_scope(&record) else {
             return Ok(HistoryRecordScan::Continue);
@@ -257,7 +288,10 @@ mod tests {
         )
         .unwrap();
 
-        assert!(hit.is_none(), "invalid latest q-scope must block cooldown");
+        assert!(
+            hit.is_none(),
+            "invalid latest visible scope must block cooldown"
+        );
 
         let _ = fs::remove_dir_all(root);
     }
@@ -319,12 +353,12 @@ mod tests {
         }
     }
 
-    fn history_line(timestamp: u64, q_scope: &str, evidence: &str) -> String {
+    fn history_line(timestamp: u64, visible_scope: &str, evidence: &str) -> String {
         format!(
-            r#"{{"timestamp":"{}","observed":"yes","evidence":"{}","qScope":{},"visibleTreeOid":"{}"}}"#,
+            r#"{{"timestamp":"{}","observed":"yes","evidence":"{}","visibleScope":{},"visibleTreeOid":"{}"}}"#,
             format_record_timestamp(timestamp),
             evidence,
-            q_scope,
+            visible_scope,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         )
     }

@@ -1,5 +1,6 @@
 use super::program::{
-    resolve_tree_oid, staged_tracked_files, tree_tracked_files, StagedTrackedFile,
+    empty_tree_oid, git_head_tree_exists, resolve_tree_oid, staged_tracked_files, staged_tree_oid,
+    tree_tracked_files, StagedTrackedFile,
 };
 use std::path::Path;
 
@@ -26,6 +27,21 @@ impl TreeSource {
         })
     }
 
+    pub(crate) fn resolve_default_against_tree(
+        root: &Path,
+        value: &str,
+        explicit: bool,
+    ) -> Result<TreeSource, String> {
+        validate_tree_arg(value, "--against-tree")?;
+        if explicit || value != DEFAULT_AGAINST_TREE_ARG || git_head_tree_exists(root)? {
+            return TreeSource::resolve(root, value, "--against-tree");
+        }
+        Ok(TreeSource::Git {
+            treeish: value.to_string(),
+            tree_oid: empty_tree_oid(root)?,
+        })
+    }
+
     pub(crate) fn cache_key(&self) -> String {
         match self {
             TreeSource::Staged => STAGED_TREE_ARG.to_string(),
@@ -37,6 +53,13 @@ impl TreeSource {
         match self {
             TreeSource::Staged => staged_tracked_files(root),
             TreeSource::Git { tree_oid, .. } => tree_tracked_files(root, tree_oid),
+        }
+    }
+
+    pub(crate) fn tree_oid_for_prompt_diff(&self, root: &Path) -> Result<String, String> {
+        match self {
+            TreeSource::Staged => staged_tree_oid(root),
+            TreeSource::Git { tree_oid, .. } => Ok(tree_oid.clone()),
         }
     }
 

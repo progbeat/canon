@@ -8,11 +8,13 @@ use crate::config_types::AgentConfig;
 use crate::evaluator::{
     ask_once, developer_instructions, effective_thinking, evaluator_turn_prompt,
     is_context_window_failure, session_failure_invalidates_thread, write_thread_lifecycle_event,
-    write_thread_restart_event, EvaluatorError, EvaluatorResponseParseCache, EvaluatorRunner,
-    EvaluatorTurnContext, ParsedTurnResponse, ThreadLifecycleLog,
+    write_thread_restart_event, DeveloperInstructionsContext, EvaluatorError,
+    EvaluatorResponseParseCache, EvaluatorRunner, EvaluatorTurnContext, ParsedTurnResponse,
+    ThreadLifecycleLog,
 };
+use crate::history::{against_tree_answer_with_cache, HistoryCache};
 use crate::logs::DiagnosticLogWriter;
-use crate::scope::sanitize_scope;
+use crate::scope::{sanitize_scope, visible_scope};
 use std::collections::BTreeSet;
 
 #[derive(Clone, Copy)]
@@ -175,7 +177,22 @@ fn start_thread_session<R: EvaluatorRunner>(
     visible_tree_oid: &str,
     request: ThreadTurnRequest<'_>,
 ) -> Result<ThreadLifecycleLog, EvaluatorError> {
-    let developer_instructions = developer_instructions(request.enforced_scope);
+    let visible_scope =
+        visible_scope(request.agent, request.enforced_scope).map_err(EvaluatorError::message)?;
+    let visible_file_count = runtime.visible_file_count(
+        &mut state.visible_tree_oid_cache,
+        request.agent,
+        request.enforced_scope,
+    )?;
+    let developer_instructions = developer_instructions(DeveloperInstructionsContext {
+        root: runtime.root,
+        against_tree_oid: &runtime.tree_context.against_tree_oid,
+        checked_tree_oid: &runtime.tree_context.checked_tree_oid,
+        visible_scope: &visible_scope,
+        checked_file_count: runtime.tree_context.checked_file_count,
+        visible_file_count,
+    })
+    .map_err(EvaluatorError::message)?;
     let session_root = runtime
         .session_root_for_scope(request.agent, request.enforced_scope, visible_tree_oid)
         .map_err(EvaluatorError::message)?;
@@ -216,13 +233,13 @@ fn start_thread_session<R: EvaluatorRunner>(
 fn thread_reuse_log(
     state: &InterrogationRunState,
     session_id: String,
-    request: ThreadTurnRequest<'_>,
+    _request: ThreadTurnRequest<'_>,
 ) -> ThreadLifecycleLog {
     let developer_instructions = state
         .session_instructions
         .get(&session_id)
         .cloned()
-        .unwrap_or_else(|| developer_instructions(request.enforced_scope));
+        .unwrap_or_default();
     ThreadLifecycleLog {
         event: "thread.reuse",
         session_id,
@@ -275,6 +292,7 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     state: &mut InterrogationRunState,
+    history_cache: &mut HistoryCache,
     enforced_scope: &[String],
     model: Option<&str>,
 ) -> Result<InterrogationResult, EvaluatorError> {
@@ -283,7 +301,18 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
     // developer instructions and the turn prompt are rendered from
     // `resources/prompts/` plus runtime data.
     let enforced_scope = sanitize_scope(enforced_scope, &expectation.agent)?;
-    let prompt = evaluator_turn_prompt(&expectation.q);
+    let against_tree_answer = against_tree_answer_with_cache(
+        runtime.root,
+        &runtime.tree_context.against_tree,
+        &expectation.agent,
+        expectation,
+        &enforced_scope,
+        history_cache,
+        &mut state.visible_tree_oid_cache,
+    )
+    .map_err(EvaluatorError::message)?;
+    let prompt = evaluator_turn_prompt(&expectation.q, against_tree_answer.as_ref())
+        .map_err(EvaluatorError::message)?;
     let thinking = effective_thinking(&expectation.agent, expectation);
     let response = ask_with_reused_thread(
         runtime,

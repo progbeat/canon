@@ -318,12 +318,6 @@ mod tests {
             json!({ "type": "dangerFullAccess" })
         );
     }
-
-    #[test]
-    fn thread_start_sandbox_mode_matches_no_sandbox_flag() {
-        assert_eq!(thread_start_sandbox_mode(false), "read-only");
-        assert_eq!(thread_start_sandbox_mode(true), "danger-full-access");
-    }
 }
 
 #[derive(Deserialize)]

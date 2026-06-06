@@ -181,7 +181,7 @@ visible scope before creating the evaluator working tree.
 `check::types::EvaluatorResponseJson` parses evaluator evidence and optional
 `qScopeSuggestion` values. `check::interrogation_policy` treats suggestions as
 unverified claims until an independent verification turn accepts them.
-`history::store` persists accepted answer records with `qScope` and
+`history::store` persists accepted answer records with `visibleScope` and
 `visibleTreeOid`; `history::reuse` reads only reusable answer history when
 seeding future q-scopes or same-tree cached results.
 

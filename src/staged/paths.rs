@@ -4,6 +4,9 @@ use std::process;
 
 const CANON_TREE_CACHE_DIR: &str = "CANON_TREE_CACHE_DIR";
 
+// Hardlink materialization cannot be evaluated from this file alone:
+// paths.rs owns tmp_dir selection, and worktree.rs owns lazy_tree_dir,
+// trees_dir, unpacked_paths, visible_tree.entry_paths, and materialize().
 pub(crate) struct SnapshotRoot {
     path: PathBuf,
     remove_on_drop: bool,
@@ -23,22 +26,24 @@ pub(crate) fn create_snapshot_root(_root: &Path) -> Result<SnapshotRoot, String>
     if let Some(path) = configured_tree_cache_dir() {
         return create_snapshot_root_from_configured_cache_dir(&path);
     }
+    make_temp_dir().map(temporary_snapshot_root)
+}
+
+fn make_temp_dir() -> Result<PathBuf, String> {
     let mut errors = Vec::new();
-    // This is Canon's `make_temp_dir()` for hardlink materialization when
-    // CANON_TREE_CACHE_DIR is unset. A separate canon expectation constrains
-    // canon-owned temporary storage to prefer memory-backed parents when the
-    // host provides one; ordinary temp storage remains the fallback.
+    // This is the hardlink materialization policy's `make_temp_dir()`.
+    // Canon's temporary-storage expectation defines the parent preference.
     if let Some(path) = create_snapshot_root_from_candidates(
         crate::platform::memory_backed_staged_snapshot_parent_candidates(),
         &mut errors,
     ) {
-        return Ok(temporary_snapshot_root(path));
+        return Ok(path);
     }
     if let Some(path) = create_snapshot_root_from_candidates(
         crate::platform::ordinary_staged_snapshot_parent_candidates(),
         &mut errors,
     ) {
-        return Ok(temporary_snapshot_root(path));
+        return Ok(path);
     }
     Err(format!(
         "failed to create staged snapshot directory: {}",
@@ -55,6 +60,8 @@ fn configured_tree_cache_dir() -> Option<PathBuf> {
 }
 
 fn create_snapshot_root_from_configured_cache_dir(path: &Path) -> Result<SnapshotRoot, String> {
+    // This file only owns the hardlink policy's tmp_dir selection. The
+    // remaining fields and materialize() flow live in src/staged/worktree.rs.
     crate::platform::create_private_dir_all(path).map_err(|err| {
         format!(
             "failed to create {} {}: {}",
@@ -63,16 +70,8 @@ fn create_snapshot_root_from_configured_cache_dir(path: &Path) -> Result<Snapsho
             err
         )
     })?;
-    let path = path.canonicalize().map_err(|err| {
-        format!(
-            "failed to canonicalize {} {}: {}",
-            CANON_TREE_CACHE_DIR,
-            path.display(),
-            err
-        )
-    })?;
     Ok(SnapshotRoot {
-        path,
+        path: path.to_path_buf(),
         remove_on_drop: false,
     })
 }

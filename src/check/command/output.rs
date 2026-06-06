@@ -416,7 +416,7 @@ fn push_check_output_unicode_escape(output: &mut String, ch: char) {
 #[cfg(test)]
 mod tests {
     use super::{
-        render_check_agent_messages, result_elapsed_dot_count, start_check_progress_output,
+        render_check_agent_messages, start_check_progress_output, write_and_flush_result_output,
         SharedCheckOutput,
     };
     use crate::check::core::types::{CheckRecord, CheckResult};
@@ -441,14 +441,18 @@ mod tests {
     }
 
     #[test]
-    fn result_elapsed_dots_round_up_elapsed_minutes() {
-        assert_eq!(result_elapsed_dot_count(Duration::ZERO), 1);
-        assert_eq!(result_elapsed_dot_count(Duration::from_secs(60)), 1);
-        assert_eq!(
-            result_elapsed_dot_count(Duration::from_secs(60) + Duration::from_nanos(1)),
-            2
-        );
-        assert_eq!(result_elapsed_dot_count(Duration::from_secs(120)), 2);
+    fn check_result_output_rounds_progress_dots_to_elapsed_minutes() {
+        let mut bytes = Vec::new();
+        let mut result_output = Some(&mut bytes as &mut dyn Write);
+
+        write_and_flush_result_output(
+            &mut result_output,
+            &passing_record(),
+            Duration::from_secs(60) + Duration::from_nanos(1),
+        )
+        .unwrap();
+
+        assert_eq!(String::from_utf8(bytes).unwrap(), "j.. OK\n");
     }
 
     #[test]

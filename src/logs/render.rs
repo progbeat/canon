@@ -46,6 +46,15 @@ fn validate_runtime_log_event_schema(
 }
 
 fn required_runtime_log_fields(event: &str) -> Option<&'static [&'static str]> {
+    // Runtime-log emission is intentionally owned by workflow modules while
+    // this renderer owns event-local schemas:
+    // - check lifecycle: `check::command::{execution,query,reporting}`
+    // - expectation and interrogation outcomes/review: `logs::writer`
+    // - evaluator requests, responses, thread lifecycle, and token usage:
+    //   `evaluator::turn`
+    // - model fallback: `check::interrogation::model_fallback`
+    // - query result/review: `check::interrogation::records`
+    // - cache hits, narrowing, lazy reset, and cleanup: `check::run::*`
     match event {
         "agent.request" => Some(&["id", "attempt", "reason", "request"]),
         "agent.response" => Some(&["id", "attempt", "reason", "response"]),

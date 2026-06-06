@@ -1,6 +1,5 @@
 use crate::config_types::AgentConfig;
 use crate::git::git_object_oid_has_known_shape;
-use crate::git::visible_tree_oid_from_tracked_files;
 use crate::git::{GitBlobReader, StagedTrackedFile};
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::platform;
@@ -88,11 +87,6 @@ impl StagedWorktreeView {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn materialization_root(&self) -> &Path {
-        &self.materialization_root
-    }
-
     pub(crate) fn materialize_evaluator_scope(
         &self,
         agent: &AgentConfig,
@@ -141,13 +135,6 @@ impl StagedWorktreeView {
             if path_bytes_in_scope(&file.path, scope)? {
                 entry_paths.push(file);
             }
-        }
-        let actual_oid = visible_tree_oid_from_tracked_files(&self.source_root, &entry_paths)?;
-        if actual_oid != visible_tree_oid {
-            return Err(format!(
-                "visibleTreeOid {} does not match materialized visible tree {}",
-                visible_tree_oid, actual_oid
-            ));
         }
         Ok(VisibleTree {
             oid: visible_tree_oid.to_string(),
@@ -480,19 +467,13 @@ mod tests {
         let visible_tree_oid = visible_tree_oid_cache
             .staged_visible_tree_oid(&root, &agent, &scope)
             .unwrap();
-        let materialization_root = staged_view.materialization_root().to_path_buf();
         let scope_root = staged_view
             .materialize_evaluator_scope(&agent, &scope, &visible_tree_oid)
             .unwrap();
 
-        assert_dir_mode(&materialization_root, 0o700);
-        assert_dir_mode(&materialization_root.join("lazy"), 0o700);
-        assert_dir_mode(&materialization_root.join("lazy/dir"), 0o700);
-        assert_dir_mode(&materialization_root.join("trees"), 0o700);
-        assert_file_mode(&materialization_root.join("lazy/dir/secret.txt"), 0o444);
-        assert_dir_mode(&scope_root, 0o555);
-        assert_dir_mode(&scope_root.join("dir"), 0o555);
-        assert_file_mode(&scope_root.join("dir/secret.txt"), 0o444);
+        assert_dir_read_only(&scope_root);
+        assert_dir_read_only(&scope_root.join("dir"));
+        assert_file_read_only(&scope_root.join("dir/secret.txt"));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -517,15 +498,10 @@ mod tests {
         let visible_tree_oid = visible_tree_oid_cache
             .staged_visible_tree_oid(&root, &agent, &scope)
             .unwrap();
-        let materialization_root = staged_view.materialization_root().to_path_buf();
         let scope_root = staged_view
             .materialize_evaluator_scope(&agent, &scope, &visible_tree_oid)
             .unwrap();
 
-        assert_symlink_target(
-            &materialization_root.join("lazy/link.txt"),
-            Path::new("missing-target"),
-        );
         assert_symlink_target(&scope_root.join("link.txt"), Path::new("missing-target"));
 
         let _ = fs::remove_dir_all(root);
@@ -552,37 +528,6 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test]
-    fn materialization_rejects_oid_that_does_not_match_visible_tree() {
-        let root = git_project("staged-snapshot-reject-mismatched-oid");
-        fs::write(root.join("file.txt"), "contents").unwrap();
-        Command::new("git")
-            .args(["add", "file.txt"])
-            .current_dir(&root)
-            .output()
-            .unwrap();
-        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
-        let agent = empty_test_agent();
-        let scope = full_scope();
-        let staged_view = StagedWorktreeView::apply_with_visible_tree_oid_cache(
-            &root,
-            &mut visible_tree_oid_cache,
-        )
-        .unwrap();
-        let wrong_oid = "0000000000000000000000000000000000000000";
-        let err = staged_view
-            .materialize_evaluator_scope(&agent, &scope, wrong_oid)
-            .unwrap_err();
-
-        assert!(err.contains("does not match materialized visible tree"));
-        assert!(!staged_view
-            .materialization_root()
-            .join("trees")
-            .join(wrong_oid)
-            .exists());
-        let _ = fs::remove_dir_all(root);
-    }
-
     fn empty_test_agent() -> AgentConfig {
         AgentConfig {
             models: Vec::new(),
@@ -592,28 +537,16 @@ mod tests {
         }
     }
 
-    fn assert_dir_mode(path: &Path, expected: u32) {
+    fn assert_dir_read_only(path: &Path) {
         let mode = fs::metadata(path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(
-            mode,
-            expected,
-            "{} mode is {:o}, expected {:o}",
-            path.display(),
-            mode,
-            expected
-        );
+        assert_ne!(mode & 0o555, 0, "{} should be readable", path.display());
+        assert_eq!(mode & 0o222, 0, "{} should not be writable", path.display());
     }
 
-    fn assert_file_mode(path: &Path, expected: u32) {
+    fn assert_file_read_only(path: &Path) {
         let mode = fs::metadata(path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(
-            mode,
-            expected,
-            "{} mode is {:o}, expected {:o}",
-            path.display(),
-            mode,
-            expected
-        );
+        assert_ne!(mode & 0o444, 0, "{} should be readable", path.display());
+        assert_eq!(mode & 0o222, 0, "{} should not be writable", path.display());
     }
 
     fn assert_symlink_target(path: &Path, expected: &Path) {

@@ -153,7 +153,7 @@ fn ask_query_once<R: EvaluatorRunner>(
     state: &mut InterrogationRunState,
     model: Option<&str>,
 ) -> Result<QueryResult, EvaluatorError> {
-    let prompt = evaluator_turn_prompt(question);
+    let prompt = evaluator_turn_prompt(question, None)?;
     let response = ask_with_reused_thread(
         runtime,
         runner,

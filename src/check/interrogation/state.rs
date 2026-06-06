@@ -3,6 +3,8 @@ use crate::config_types::{AgentConfig, CheckConfig};
 use crate::evaluator::{
     app_server_model_key, evaluator_models, AppServerModelKey, EvaluatorResponseParseCache,
 };
+#[cfg(test)]
+use crate::git::staged_tree_oid;
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::hash::full_scope;
 use crate::history::{latest_stored_q_scope_with_cache, HistoryCache};
@@ -115,8 +117,17 @@ pub(crate) struct CheckRuntime<'a> {
     pub(crate) root: &'a Path,
     pub(crate) config: &'a CheckConfig,
     pub(crate) tree_source: &'a TreeSource,
+    pub(crate) tree_context: CheckTreeContext,
     no_sandbox: bool,
     session_roots: CheckSessionRoots<'a>,
+}
+
+#[derive(Clone)]
+pub(crate) struct CheckTreeContext {
+    pub(crate) checked_tree_oid: String,
+    pub(crate) against_tree_oid: String,
+    pub(crate) against_tree: TreeSource,
+    pub(crate) checked_file_count: usize,
 }
 
 enum CheckSessionRoots<'a> {
@@ -132,10 +143,17 @@ impl<'a> CheckRuntime<'a> {
         snapshot_root: &'a Path,
         config: &'a CheckConfig,
     ) -> CheckRuntime<'a> {
+        let checked_tree_oid = staged_tree_oid(root).unwrap_or_else(|_| String::new());
         CheckRuntime {
             root,
             config,
             tree_source: &STAGED_RUNTIME_TREE_SOURCE,
+            tree_context: CheckTreeContext {
+                checked_tree_oid: checked_tree_oid.clone(),
+                against_tree_oid: checked_tree_oid,
+                against_tree: STAGED_RUNTIME_TREE_SOURCE.clone(),
+                checked_file_count: 0,
+            },
             no_sandbox: true,
             session_roots: CheckSessionRoots::Fixed(snapshot_root),
         }
@@ -145,6 +163,7 @@ impl<'a> CheckRuntime<'a> {
         root: &'a Path,
         staged_view: &'a StagedWorktreeView,
         tree_source: &'a TreeSource,
+        tree_context: CheckTreeContext,
         config: &'a CheckConfig,
         no_sandbox: bool,
     ) -> CheckRuntime<'a> {
@@ -152,6 +171,7 @@ impl<'a> CheckRuntime<'a> {
             root,
             config,
             tree_source,
+            tree_context,
             no_sandbox,
             session_roots: CheckSessionRoots::Materialized(staged_view),
         }

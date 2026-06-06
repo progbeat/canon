@@ -31,6 +31,7 @@ pub(crate) struct CheckQueryCommand<'a> {
     pub(crate) question: &'a str,
     pub(crate) query_scope: &'a [String],
     pub(crate) tree_source: &'a TreeSource,
+    pub(crate) against_tree: &'a TreeSource,
     pub(crate) no_sandbox: bool,
     pub(crate) diagnostic_log: DiagnosticLogWriter,
 }
@@ -44,6 +45,7 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
         question,
         query_scope,
         tree_source,
+        against_tree,
         no_sandbox,
         mut diagnostic_log,
     } = command;
@@ -94,6 +96,7 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
         &mut diagnostic_log,
         PrepareCheckExecutionOptions {
             tree_source,
+            against_tree,
             no_sandbox,
             query: true,
             errors_on_failure: 1,
@@ -104,6 +107,7 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
         root,
         &execution.staged_view,
         &execution.tree_source,
+        execution.tree_context.clone(),
         config,
         no_sandbox,
     );

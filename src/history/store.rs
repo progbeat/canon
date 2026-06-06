@@ -10,6 +10,7 @@ use crate::git::{
 };
 use crate::logs::{external_log_error, DiagnosticLogError, DiagnosticLogResult};
 use crate::path_io_error::PathIoError;
+use crate::scope::visible_scope;
 use crate::state_paths::CANON_CACHE_DIR_GIT_PATH;
 use crate::time::parse_record_timestamp;
 use serde::{Deserialize, Serialize};
@@ -30,7 +31,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 // rendering, and probabilistic compaction. Runtime `CheckRecord` construction
 // computes the actual `visibleTreeOid` before append in
 // `check::interrogation::records`, using `VisibleTreeOidCache` for the enforced
-// q-scope; this layer preserves that native Git tree OID instead of deriving a
+// scope; this layer preserves that native Git tree OID instead of deriving a
 // second fingerprint while writing JSONL.
 
 static HISTORY_COMPACT_CHANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -124,8 +125,8 @@ struct HistoryReadRecord {
     timestamp: String,
     observed: String,
     evidence: String,
-    #[serde(rename = "qScope")]
-    q_scope: Vec<String>,
+    #[serde(rename = "visibleScope", alias = "qScope", alias = "scope")]
+    visible_scope: Vec<String>,
     #[serde(rename = "visibleTreeOid")]
     visible_tree_oid: String,
     #[serde(default)]
@@ -148,7 +149,7 @@ impl HistoryReadRecord {
             observed: self.observed,
             error: has_error_field.then(|| "error".to_string()),
             evidence: self.evidence,
-            scope: self.q_scope,
+            scope: self.visible_scope,
             suggested_q_scope: None,
             visible_tree_oid: self.visible_tree_oid,
             id: String::new(),
@@ -198,10 +199,11 @@ fn validate_appendable_answer_history_record(
 ) -> Result<(), String> {
     // Append-time validation checks that a runtime-produced record is a valid
     // answer-history row and that its `visibleTreeOid` uses the repository's
-    // native object format. It intentionally does not recompute the q-scope's
-    // current visible tree here: history rows are later read when their stored
-    // qScope may describe an older Git state, and cache reuse is the layer that
-    // compares stored OIDs with freshly computed current OIDs.
+    // native object format. It intentionally does not recompute the stored
+    // visible scope's current visible tree here: history rows are later read
+    // when their stored visibleScope may describe an older Git state, and cache
+    // reuse is the layer that compares stored OIDs with freshly computed
+    // current OIDs.
     validate_schema_valid_answer_history_record(record)?;
     if !git_object_oid_has_hex_len(&record.visible_tree_oid, native_oid_hex_len) {
         return Err(
@@ -279,7 +281,10 @@ impl HistoryCache {
     }
 }
 
-pub(crate) fn render_answer_history_record(record: &CheckRecord) -> DiagnosticLogResult<String> {
+pub(crate) fn render_answer_history_record(
+    agent: &crate::config_types::AgentConfig,
+    record: &CheckRecord,
+) -> DiagnosticLogResult<String> {
     validate_schema_valid_answer_history_record(record)
         .map_err(|message| external_log_error("render answer history record", message))?;
     // Keep answer-history rows to the Cache spec fields. Current result is
@@ -288,7 +293,8 @@ pub(crate) fn render_answer_history_record(record: &CheckRecord) -> DiagnosticLo
         timestamp: &record.timestamp,
         observed: &record.observed,
         evidence: &record.evidence,
-        q_scope: &record.scope,
+        visible_scope: &visible_scope(agent, &record.scope)
+            .map_err(|message| external_log_error("render answer history record", message))?,
         visible_tree_oid: &record.visible_tree_oid,
     };
     answer_history_json_line(&history)
@@ -306,12 +312,12 @@ fn answer_history_json_line(value: &impl Serialize) -> DiagnosticLogResult<Strin
 #[derive(Serialize)]
 struct HistoryLogRecord<'a> {
     // Required Cache spec prefix. Keep these fields first and in this order:
-    // timestamp, observed, evidence, qScope, visibleTreeOid.
+    // timestamp, observed, evidence, visibleScope, visibleTreeOid.
     timestamp: &'a str,
     observed: &'a str,
     evidence: &'a str,
-    #[serde(rename = "qScope")]
-    q_scope: &'a [String],
+    #[serde(rename = "visibleScope")]
+    visible_scope: &'a [String],
     #[serde(rename = "visibleTreeOid")]
     visible_tree_oid: &'a str,
 }
@@ -347,7 +353,8 @@ fn validate_current_visible_tree_oid(
         visible_tree_oid_cache.visible_tree_oid(root, source, &expectation.agent, &record.scope)?;
     if record.visible_tree_oid != current_visible_tree_oid {
         return Err(
-            "visibleTreeOid must match the current repository visible tree for qScope".to_string(),
+            "visibleTreeOid must match the current repository visible tree for visibleScope"
+                .to_string(),
         );
     }
     Ok(())
@@ -363,7 +370,7 @@ fn append_history_record_with_cache_inner(
     // Cache spec answer history is JSON Lines containing only schema-valid
     // evaluator responses with `answer`. `render_answer_history_record` writes
     // the required field prefix in order: timestamp, observed, evidence,
-    // qScope, visibleTreeOid. `should_compact_history` implements the
+    // visibleScope, visibleTreeOid. `should_compact_history` implements the
     // approximate 1-in-16 trigger, and `compact_history` retains the latest 8
     // valid JSON object records.
     validate_appendable_answer_history_record(record, native_oid_hex_len).map_err(|message| {
@@ -377,7 +384,7 @@ fn append_history_record_with_cache_inner(
     }
     let _lock = lock_history_file(&path)?;
     let mut file = open_history_append_file(&path)?;
-    let line = render_answer_history_record(record)?;
+    let line = render_answer_history_record(&expectation.agent, record)?;
     write_history_line(&mut file, &path, &line)?;
     flush_history_file(&mut file, &path)?;
     drop(file);
@@ -631,4 +638,47 @@ pub(crate) fn compact_history_temp_path(path: &Path) -> Result<PathBuf, String> 
     let sequence = HISTORY_COMPACT_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     temp_name.push(format!(".tmp.{}.{}", process::id(), sequence));
     Ok(path.with_file_name(temp_name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_answer_history_record;
+    use crate::check::{CheckRecord, CheckResult};
+    use crate::config_types::AgentConfig;
+    use serde_json::Value;
+
+    #[test]
+    fn answer_history_record_writes_visible_scope_field() {
+        let agent = AgentConfig {
+            models: Vec::new(),
+            thinking: "medium".to_string(),
+            ignore: vec!["target/**".to_string()],
+            plugins: Vec::new(),
+        };
+        let record = CheckRecord {
+            timestamp: "1970-01-01T00:00:00Z".to_string(),
+            number: 1,
+            result: CheckResult::Pass,
+            prompt: Some("Does it pass?".to_string()),
+            expected: Some("yes".to_string()),
+            observed: "yes".to_string(),
+            error: None,
+            evidence: "`src/main.rs`".to_string(),
+            scope: vec![".".to_string()],
+            suggested_q_scope: None,
+            visible_tree_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            id: "11111111111111111111".to_string(),
+            display_id: "1".to_string(),
+            cache_key: None,
+        };
+
+        let line = render_answer_history_record(&agent, &record).unwrap();
+        let json: Value = serde_json::from_str(&line).unwrap();
+
+        assert!(json.get("qScope").is_none());
+        assert_eq!(
+            json.get("visibleScope"),
+            Some(&serde_json::json!([".", ":(exclude,glob)target/**"]))
+        );
+    }
 }

@@ -305,7 +305,7 @@ pub(crate) struct CheckRecord {
     #[serde(default)]
     pub(crate) error: Option<String>,
     pub(crate) evidence: String,
-    #[serde(rename = "qScope", alias = "scope")]
+    #[serde(rename = "visibleScope", alias = "qScope", alias = "scope")]
     pub(crate) scope: Vec<String>,
     #[serde(default, rename = "suggestedQScope")]
     pub(crate) suggested_q_scope: Option<Vec<String>>,

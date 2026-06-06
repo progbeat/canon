@@ -7,8 +7,8 @@ use std::path::Path;
 // owns scope path normalization, Git pathspec matching, and ignore matching.
 // Visible-scope selection lives in `check::interrogation::state`;
 // visible-tree hashing/materialization live in `git::visible_tree_oid` and
-// `staged::worktree`; q-scope verification/storage/reuse live in
-// `check::interrogation::policy`, `history::store`, and `history::reuse`;
+// `staged::worktree`; q-scope verification and visible-scope storage/reuse live
+// in `check::interrogation::policy`, `history::store`, and `history::reuse`;
 // evaluator-thread reuse invariants live in `check::interrogation::state` and
 // `check::interrogation::thread`.
 
