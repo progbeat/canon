@@ -5,8 +5,7 @@ use crate::fs_util::{
 };
 use crate::git::resolve_git_path;
 use crate::git::{
-    git_object_oid_has_hex_len, git_object_oid_has_known_shape,
-    repository_native_object_oid_hex_len, TreeSource, VisibleTreeOidCache,
+    git_object_oid_has_hex_len, git_object_oid_has_known_shape, TreeSource, VisibleTreeOidCache,
 };
 use crate::logs::{external_log_error, DiagnosticLogError, DiagnosticLogResult};
 use crate::path_io_error::PathIoError;
@@ -51,7 +50,8 @@ pub(crate) fn read_repository_history_records_from_path(
     path: &Path,
     expected_answer: &str,
 ) -> Result<Vec<CheckRecord>, String> {
-    let native_oid_hex_len = repository_native_object_oid_hex_len(root)?;
+    let native_oid_hex_len =
+        VisibleTreeOidCache::new().repository_native_object_oid_hex_len(root)?;
     let mut records = Vec::new();
     for_each_nonempty_line(path, |line_number, line| {
         match parse_history_record_line_for_expected(
@@ -172,10 +172,24 @@ fn validate_schema_valid_answer_history_record(record: &CheckRecord) -> Result<(
     if parse_record_timestamp(&record.timestamp).is_none() {
         return Err("timestamp must be UTC in YYYY-MM-DDTHH:MM:SSZ form".to_string());
     }
+    if has_duplicate_scope_entries(&record.scope) {
+        return Err("visibleScope must not contain duplicate entries".to_string());
+    }
     if !git_object_oid_has_known_shape(&record.visible_tree_oid) {
         return Err("visibleTreeOid must be a Git object ID hex string".to_string());
     }
     Ok(())
+}
+
+fn has_duplicate_scope_entries(scope: &[String]) -> bool {
+    let mut seen = Vec::new();
+    for entry in scope {
+        if seen.iter().any(|existing| *existing == entry) {
+            return true;
+        }
+        seen.push(entry);
+    }
+    false
 }
 
 fn validate_history_answer_response_schema(record: &CheckRecord) -> Result<(), String> {
@@ -508,7 +522,8 @@ fn compaction_chance_seed() -> u64 {
 }
 
 fn compact_repository_history_locked(root: &Path, path: &Path) -> Result<(), String> {
-    let native_oid_hex_len = repository_native_object_oid_hex_len(root)?;
+    let native_oid_hex_len =
+        VisibleTreeOidCache::new().repository_native_object_oid_hex_len(root)?;
     compact_history_locked_with_native_oid_len(path, Some(native_oid_hex_len))
 }
 
@@ -642,10 +657,11 @@ pub(crate) fn compact_history_temp_path(path: &Path) -> Result<PathBuf, String> 
 
 #[cfg(test)]
 mod tests {
-    use super::render_answer_history_record;
+    use super::{parse_history_record_line, render_answer_history_record};
     use crate::check::{CheckRecord, CheckResult};
     use crate::config_types::AgentConfig;
     use serde_json::Value;
+    use std::path::Path;
 
     #[test]
     fn answer_history_record_writes_visible_scope_field() {
@@ -680,5 +696,14 @@ mod tests {
             json.get("visibleScope"),
             Some(&serde_json::json!([".", ":(exclude,glob)target/**"]))
         );
+    }
+
+    #[test]
+    fn answer_history_rejects_duplicate_visible_scope_entries() {
+        let line = r#"{"timestamp":"1970-01-01T00:00:00Z","observed":"yes","evidence":"ok","visibleScope":["src","src"],"visibleTreeOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#;
+
+        let err = parse_history_record_line(Path::new("history.jsonl"), 1, line).unwrap_err();
+
+        assert!(err.contains("visibleScope must not contain duplicate entries"));
     }
 }

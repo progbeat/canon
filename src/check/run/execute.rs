@@ -311,7 +311,6 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                         .suggested_q_scope
                         .as_deref()
                         .expect("suggestion passed the file-count verification gate"),
-                    &expectation.agent,
                 ),
                 &mut progress,
             ));

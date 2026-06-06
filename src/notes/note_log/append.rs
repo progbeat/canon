@@ -123,12 +123,3 @@ fn rollback_note_log_append_error(path: &Path, previous_size: u64, err: io::Erro
         err
     )
 }
-
-#[cfg(test)]
-pub(crate) fn rollback_note_log_append_for_test(
-    path: &Path,
-    previous_size: u64,
-) -> Result<(), String> {
-    let file = platform::open_append_target(path)?;
-    rollback_note_log_append(path, file, previous_size)
-}

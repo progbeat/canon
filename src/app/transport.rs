@@ -49,7 +49,9 @@ impl AppServerRunner {
             };
             last_activity = Instant::now();
             self.record_app_server_events(&message);
-            let envelope = app_server_message(&message).map_err(app_server_protocol_error)?;
+            let envelope = app_server_message(&message).map_err(|error| {
+                EvaluatorError::failure(EvaluatorFailureKind::UnknownAppServer, error)
+            })?;
             if envelope.id == Some(id) {
                 if let Some(error) = envelope.error.as_ref() {
                     return Err(app_server_failure_from_value(method, error));
@@ -103,7 +105,9 @@ impl AppServerRunner {
             };
             last_activity = Instant::now();
             self.record_app_server_events(&message);
-            let envelope = app_server_message(&message).map_err(app_server_protocol_error)?;
+            let envelope = app_server_message(&message).map_err(|error| {
+                EvaluatorError::failure(EvaluatorFailureKind::UnknownAppServer, error)
+            })?;
             if let Some(started_turn_id) = turn_started_id(&message) {
                 turn_id = Some(started_turn_id);
                 self.maybe_interrupt_turn(
@@ -212,8 +216,4 @@ impl AppServerRunner {
         self.last_turn_usage = turn_id.map(|turn_id| self.turn_usage_for_turn(thread_id, turn_id));
         app_server_failure_from_value(method, error)
     }
-}
-
-fn app_server_protocol_error(error: String) -> EvaluatorError {
-    EvaluatorError::failure(EvaluatorFailureKind::UnknownAppServer, error)
 }

@@ -67,7 +67,6 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
     let matching_expectation = matching_q_a_only_expectation(config, identities, question)?;
     let enforced_scope = match query_enforced_scope(
         root,
-        config,
         query_scope,
         tree_source,
         matching_expectation.as_ref(),
@@ -241,15 +240,13 @@ fn query_applied_lazy_full_scope_reset_ids(
 
 fn query_enforced_scope(
     root: &Path,
-    config: &CheckConfig,
     query_scope: &[String],
     tree_source: &TreeSource,
     matching_expectation: Option<&SelectedExpectation>,
     active_lazy_full_scope_reset_ids: &BTreeSet<String>,
 ) -> Result<Vec<String>, String> {
     if !query_scope.is_empty() {
-        return sanitize_scope(query_scope, &config.agent)
-            .map_err(|err| format!("--scope: {}", err));
+        return sanitize_scope(query_scope).map_err(|err| format!("--scope: {}", err));
     }
     let Some(expectation) = matching_expectation else {
         return Ok(full_scope());

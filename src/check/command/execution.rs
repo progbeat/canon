@@ -447,23 +447,20 @@ pub(crate) fn prepare_check_execution(
     // Prepare a materialized staged tree outside the real working tree.
     // Scope and ignore filtering choose which Git entries are present there;
     // sandbox mode controls access outside that materialized cwd.
-    let staged_view = match StagedWorktreeView::apply_for_tree_source(
-        root,
-        options.tree_source.clone(),
-        visible_tree_oid_cache,
-    ) {
-        Ok(staged_view) => staged_view,
-        Err(err) => {
-            write_prepare_check_failure(
-                root,
-                diagnostic_log,
-                options.query,
-                options.errors_on_failure,
-                &err,
-            )?;
-            return Err(err);
-        }
-    };
+    let staged_view =
+        match StagedWorktreeView::apply_for_tree_source(root, options.tree_source.clone()) {
+            Ok(staged_view) => staged_view,
+            Err(err) => {
+                write_prepare_check_failure(
+                    root,
+                    diagnostic_log,
+                    options.query,
+                    options.errors_on_failure,
+                    &err,
+                )?;
+                return Err(err);
+            }
+        };
     let tree_context = CheckTreeContext {
         checked_tree_oid: options.tree_source.tree_oid_for_prompt_diff(root)?,
         against_tree_oid: options.against_tree.tree_oid_for_prompt_diff(root)?,

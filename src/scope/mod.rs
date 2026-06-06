@@ -12,14 +12,7 @@ use std::path::Path;
 // evaluator-thread reuse invariants live in `check::interrogation::state` and
 // `check::interrogation::thread`.
 
-pub(crate) fn sanitize_scope(
-    scope: &[String],
-    _agent: &AgentConfig,
-) -> Result<Vec<String>, String> {
-    sanitize_scope_paths(scope)
-}
-
-pub(crate) fn sanitize_scope_for_hash(scope: &[String]) -> Result<Vec<String>, String> {
+pub(crate) fn sanitize_scope(scope: &[String]) -> Result<Vec<String>, String> {
     sanitize_scope_paths(scope)
 }
 
@@ -27,11 +20,37 @@ pub(crate) fn visible_scope(
     agent: &AgentConfig,
     q_scope: &[String],
 ) -> Result<Vec<String>, String> {
-    let mut scope = sanitize_scope_paths(q_scope)?;
-    for pattern in effective_ignore_patterns(agent)? {
-        scope.push(excluding_pathspec(&pattern));
+    let ignore_exclusions = effective_ignore_exclusion_pathspecs(agent)?;
+    let base_scope = q_scope_without_configured_ignore_exclusions(q_scope, &ignore_exclusions);
+    let mut scope = sanitize_scope_paths(&base_scope)?;
+    for exclusion in ignore_exclusions {
+        push_unique_pattern(&mut scope, exclusion);
     }
     Ok(scope)
+}
+
+pub(crate) fn q_scope_from_visible_scope(
+    agent: &AgentConfig,
+    visible_scope: &[String],
+) -> Result<Vec<String>, String> {
+    let ignore_exclusions = effective_ignore_exclusion_pathspecs(agent)?;
+    let q_scope = q_scope_without_configured_ignore_exclusions(visible_scope, &ignore_exclusions);
+    sanitize_scope_paths(&q_scope)
+}
+
+fn q_scope_without_configured_ignore_exclusions(
+    scope: &[String],
+    ignore_exclusions: &[String],
+) -> Vec<String> {
+    scope
+        .iter()
+        .filter(|pathspec| {
+            !ignore_exclusions
+                .iter()
+                .any(|ignore| ignore == pathspec.as_str())
+        })
+        .cloned()
+        .collect()
 }
 
 fn sanitize_scope_paths(scope: &[String]) -> Result<Vec<String>, String> {
@@ -384,6 +403,13 @@ fn excluding_pathspec(pattern: &str) -> String {
     format!(":(exclude,glob){}", pattern)
 }
 
+fn effective_ignore_exclusion_pathspecs(agent: &AgentConfig) -> Result<Vec<String>, String> {
+    Ok(effective_ignore_patterns(agent)?
+        .into_iter()
+        .map(|pattern| excluding_pathspec(&pattern))
+        .collect())
+}
+
 fn push_unique_pattern(patterns: &mut Vec<String>, pattern: String) {
     if !patterns.iter().any(|existing| existing == &pattern) {
         patterns.push(pattern);
@@ -414,6 +440,27 @@ mod tests {
         );
         assert!(!path_bytes_in_scope(b".canon/TODOs.md", &scope).unwrap());
         assert!(path_bytes_in_scope(b"src/main.rs", &scope).unwrap());
+    }
+
+    #[test]
+    fn visible_scope_does_not_duplicate_existing_configured_exclusions() {
+        let agent = AgentConfig {
+            models: Vec::new(),
+            thinking: "medium".to_string(),
+            ignore: vec![".canon/**".to_string()],
+            plugins: Vec::new(),
+        };
+
+        let scope = visible_scope(
+            &agent,
+            &["src".to_string(), ":(exclude,glob).canon/**".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(
+            scope,
+            vec!["src".to_string(), ":(exclude,glob).canon/**".to_string()]
+        );
     }
 
     #[test]

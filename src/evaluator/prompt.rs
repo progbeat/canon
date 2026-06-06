@@ -234,6 +234,7 @@ mod tests {
         assert!(instructions.contains("text before or after the JSON is invalid"));
         assert!(instructions.contains("tool-request JSON"));
         assert!(instructions.contains("Tool calls are not an output format"));
+        assert!(instructions.contains("Never print or simulate a tool call"));
         assert!(instructions.contains(r#"{"tool":...}"#));
         assert!(instructions.contains(r#"{"command":...}"#));
         assert!(instructions.contains("first non-whitespace character must be `{`"));

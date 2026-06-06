@@ -1,8 +1,10 @@
 #[cfg(test)]
 use crate::config_types::AgentConfig;
 use crate::git::git_object_oid_has_known_shape;
+use crate::git::TreeSource;
+#[cfg(test)]
+use crate::git::VisibleTreeOidCache;
 use crate::git::{GitBlobReader, StagedTrackedFile};
-use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::platform;
 use crate::scope::path_bytes_in_scope;
 use crate::staged::paths::create_snapshot_root;
@@ -40,24 +42,9 @@ struct VisibleTreeChild {
 }
 
 impl StagedWorktreeView {
-    #[cfg(test)]
-    pub(crate) fn apply(root: &Path) -> Result<StagedWorktreeView, String> {
-        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
-        StagedWorktreeView::apply_with_visible_tree_oid_cache(root, &mut visible_tree_oid_cache)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn apply_with_visible_tree_oid_cache(
-        root: &Path,
-        visible_tree_oid_cache: &mut VisibleTreeOidCache,
-    ) -> Result<StagedWorktreeView, String> {
-        StagedWorktreeView::apply_for_tree_source(root, TreeSource::Staged, visible_tree_oid_cache)
-    }
-
     pub(crate) fn apply_for_tree_source(
         root: &Path,
         source: TreeSource,
-        _visible_tree_oid_cache: &mut VisibleTreeOidCache,
     ) -> Result<StagedWorktreeView, String> {
         let files = source.tracked_files(root)?;
         let snapshot_root = create_snapshot_root(root)?;
@@ -459,13 +446,10 @@ mod tests {
         let agent = empty_test_agent();
         let scope = full_scope();
         let visible_scope = full_scope();
-        let staged_view = StagedWorktreeView::apply_with_visible_tree_oid_cache(
-            &root,
-            &mut visible_tree_oid_cache,
-        )
-        .unwrap();
+        let staged_view =
+            StagedWorktreeView::apply_for_tree_source(&root, TreeSource::Staged).unwrap();
         let visible_tree_oid = visible_tree_oid_cache
-            .staged_visible_tree_oid(&root, &agent, &scope)
+            .visible_tree_oid(&root, &TreeSource::Staged, &agent, &scope)
             .unwrap();
         let scope_root = staged_view
             .materialize_visible_scope(&visible_scope, &visible_tree_oid)
@@ -491,13 +475,10 @@ mod tests {
         let agent = empty_test_agent();
         let scope = full_scope();
         let visible_scope = full_scope();
-        let staged_view = StagedWorktreeView::apply_with_visible_tree_oid_cache(
-            &root,
-            &mut visible_tree_oid_cache,
-        )
-        .unwrap();
+        let staged_view =
+            StagedWorktreeView::apply_for_tree_source(&root, TreeSource::Staged).unwrap();
         let visible_tree_oid = visible_tree_oid_cache
-            .staged_visible_tree_oid(&root, &agent, &scope)
+            .visible_tree_oid(&root, &TreeSource::Staged, &agent, &scope)
             .unwrap();
         let scope_root = staged_view
             .materialize_visible_scope(&visible_scope, &visible_tree_oid)
@@ -511,13 +492,9 @@ mod tests {
     #[test]
     fn materialization_rejects_non_oid_tree_root_name() {
         let root = git_project("staged-snapshot-reject-tree-root-escape");
-        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
         let visible_scope = full_scope();
-        let staged_view = StagedWorktreeView::apply_with_visible_tree_oid_cache(
-            &root,
-            &mut visible_tree_oid_cache,
-        )
-        .unwrap();
+        let staged_view =
+            StagedWorktreeView::apply_for_tree_source(&root, TreeSource::Staged).unwrap();
         let escape = root.join("escape-root");
         let err = staged_view
             .materialize_visible_scope(&visible_scope, &escape.to_string_lossy())

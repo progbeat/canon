@@ -1,5 +1,3 @@
-#[cfg(test)]
-use crate::check::ExpectationIdentity;
 use crate::check::{
     expectation_identities, is_canon_only_staged_change_bytes, is_canon_project_path_bytes,
     select_expectations_with_identities, staged_changed_path_bytes, SelectedExpectation,
@@ -30,9 +28,22 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
     // same HEAD-vs-staged regression count is zero. In that same-tree commit
     // case, remaining expectation failures are not gate failures; only a
     // staged regression from HEAD pass to staged fail blocks the hook.
-    let num_regressions = gate_result_or_failure(gate_regression_count(root))?;
+    let mut repo_cache = RepoInspectionCache::new();
+    let config = gate_result_or_failure(repo_cache.load_check_config(
+        root,
+        Path::new(CHECK_PATH),
+        &TreeSource::Staged,
+    ))?;
+    let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
+    let mut history_cache = HistoryCache::default();
+    let num_regressions = gate_result_or_failure(gate_regression_count_with_config(
+        root,
+        &config,
+        &mut history_cache,
+        &mut visible_tree_oid_cache,
+    ))?;
     if num_regressions > 0 {
-        write_gate_failure_event(GateFailureEvent::Regressed)?;
+        write_gate_regression_failure()?;
         return Err(CommandError::GateFailed);
     }
     if gate_result_or_failure(has_mixed_canon_and_non_canon_changes(root))? {
@@ -56,23 +67,6 @@ fn gate_result_or_failure<T>(result: Result<T, String>) -> Result<T, CommandErro
     }
 }
 
-fn gate_regression_count(root: &Path) -> Result<usize, String> {
-    let mut repo_cache = RepoInspectionCache::new();
-    let config = repo_cache.load_check_config(root, Path::new(CHECK_PATH), &TreeSource::Staged)?;
-    let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
-    let mut history_cache = HistoryCache::default();
-    gate_regression_count_with_config(
-        root,
-        &config,
-        &mut history_cache,
-        &mut visible_tree_oid_cache,
-    )
-}
-
-pub(crate) enum GateFailureEvent {
-    Regressed,
-}
-
 fn has_mixed_canon_and_non_canon_changes(root: &Path) -> Result<bool, String> {
     let changed_paths = staged_changed_path_bytes(root)?;
     let has_canon_change = changed_paths
@@ -81,46 +75,42 @@ fn has_mixed_canon_and_non_canon_changes(root: &Path) -> Result<bool, String> {
     Ok(has_canon_change && !is_canon_only_staged_change_bytes(&changed_paths))
 }
 
-#[cfg(test)]
-pub(crate) fn gate_pass_with_config(
-    root: &Path,
-    config: &CheckConfig,
-    identities: &[ExpectationIdentity],
-    mut caches: GateCaches<'_>,
-    now: u64,
-    emit_failure: impl FnMut(GateFailureEvent) -> Result<(), String>,
-) -> Result<bool, String> {
-    let selected_expectations = select_expectations_with_identities(config, identities, &[])?;
-    // The gate pseudocode fails only on staged regressions. Missing staged
-    // cached results are non-blocking; `canon check` is still responsible for
-    // producing fresh history when the human wants full confirmation.
-    gate_selected_expectations(
-        root,
-        &config.agent,
-        &selected_expectations,
-        &mut caches,
-        now,
-        emit_failure,
-    )
-}
-
 pub(crate) fn gate_regression_count_with_config(
     root: &Path,
     config: &CheckConfig,
     history_cache: &mut HistoryCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<usize, String> {
-    // This is the gate spec's expectation comparison as a count: HEAD pass
-    // followed by staged fail.
     let identities = expectation_identities(config)?;
     let selected_expectations = select_expectations_with_identities(config, &identities, &[])?;
     let now = unix_timestamp()?;
+    gate_selected_regression_count(
+        root,
+        &config.agent,
+        &selected_expectations,
+        history_cache,
+        visible_tree_oid_cache,
+        now,
+    )
+}
+
+fn gate_selected_regression_count(
+    root: &Path,
+    agent: &AgentConfig,
+    selected_expectations: &[SelectedExpectation],
+    history_cache: &mut HistoryCache,
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
+    now: u64,
+) -> Result<usize, String> {
+    // This is the gate spec's only expectation-related failure: HEAD pass
+    // followed by staged fail. Non-OK check results remain non-blocking when
+    // they did not regress from a HEAD pass.
     selected_expectations
         .iter()
         .map(|expectation| {
             Ok(gate_expectation_status(
                 root,
-                &config.agent,
+                agent,
                 expectation,
                 history_cache,
                 visible_tree_oid_cache,
@@ -129,40 +119,6 @@ pub(crate) fn gate_regression_count_with_config(
             .is_blocking() as usize)
         })
         .sum()
-}
-
-#[cfg(test)]
-fn gate_selected_expectations(
-    root: &Path,
-    agent: &AgentConfig,
-    selected_expectations: &[SelectedExpectation],
-    caches: &mut GateCaches<'_>,
-    now: u64,
-    mut emit_failure: impl FnMut(GateFailureEvent) -> Result<(), String>,
-) -> Result<bool, String> {
-    // These statuses are the only expectation-related way `canon gate` can
-    // fail. Non-OK check results can remain non-blocking here when they did not
-    // regress from a HEAD pass.
-    // `gate_regression_count_with_config` counts these same statuses for
-    // `canon check`'s `num_regressions`; if that count is zero, this loop has
-    // no expectation-related failure branch to take.
-    for expectation in selected_expectations {
-        match gate_expectation_status(
-            root,
-            agent,
-            expectation,
-            caches.history,
-            caches.visible_tree_oid,
-            now,
-        )? {
-            GateExpectationStatus::PassedOrNonBlocking => {}
-            GateExpectationStatus::Regressed => {
-                emit_failure(GateFailureEvent::Regressed)?;
-                return Ok(false);
-            }
-        }
-    }
-    Ok(true)
 }
 
 fn gate_expectation_status(
@@ -208,23 +164,12 @@ impl GateExpectationStatus {
     }
 }
 
-#[cfg(test)]
-pub(crate) struct GateCaches<'a> {
-    pub(crate) history: &'a mut HistoryCache,
-    pub(crate) visible_tree_oid: &'a mut VisibleTreeOidCache,
-}
-
-fn write_gate_failure_event(event: GateFailureEvent) -> Result<(), String> {
-    match event {
-        GateFailureEvent::Regressed => {
-            // Gate output stays generic by canon: even expectation-related
-            // failures are reported without expectation IDs or per-expectation
-            // lines. `canon check` is the command that prints individual
-            // expectation records.
-            write_stderr_line("canon gate: staged changes regress cached canon results")?;
-            write_stderr_line(gate_regression_advice())
-        }
-    }
+fn write_gate_regression_failure() -> Result<(), String> {
+    // Gate output stays generic by canon: even expectation-related failures
+    // are reported without expectation IDs or per-expectation lines. `canon
+    // check` is the command that prints individual expectation records.
+    write_stderr_line("canon gate: staged changes regress cached canon results")?;
+    write_stderr_line(gate_regression_advice())
 }
 
 pub(crate) fn gate_regression_advice() -> &'static str {
@@ -273,6 +218,7 @@ fn gate_cache_result_for_tree_at(
     let same_tree =
         latest_history_record_matching_visible_tree_oid(
             root,
+            agent,
             expectation,
             history_cache,
             |scope| match tree {

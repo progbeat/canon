@@ -292,7 +292,7 @@ mod tests {
     ) -> CheckRunReport {
         let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
         let visible_tree_oid = visible_tree_oid_cache
-            .staged_visible_tree_oid(root, agent, scope)
+            .visible_tree_oid(root, &TreeSource::Staged, agent, scope)
             .unwrap();
         CheckRunReport {
             records: vec![CheckRecord {

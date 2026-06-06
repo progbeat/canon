@@ -114,7 +114,7 @@ fn finalize_parsed_answer(
     enforced_scope: &[String],
     response: ParsedAnswer,
 ) -> Result<FinalizedParsedAnswer, EvaluatorError> {
-    let scope = sanitize_scope(enforced_scope, agent)?;
+    let scope = sanitize_scope(enforced_scope)?;
     let visible_tree_oid =
         runtime.visible_tree_oid(&mut state.visible_tree_oid_cache, agent, &scope)?;
     let mut response = response;

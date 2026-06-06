@@ -300,7 +300,7 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
     // after sanitization this path shares query mode's first-turn construction:
     // developer instructions and the turn prompt are rendered from
     // `resources/prompts/` plus runtime data.
-    let enforced_scope = sanitize_scope(enforced_scope, &expectation.agent)?;
+    let enforced_scope = sanitize_scope(enforced_scope)?;
     let against_tree_answer = against_tree_answer_with_cache(
         runtime.root,
         &runtime.tree_context.against_tree,

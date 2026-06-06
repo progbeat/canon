@@ -5,7 +5,7 @@ use crate::config_types::AgentConfig;
 use crate::evaluator::AgainstTreeAnswer;
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::history::HistoryCache;
-use crate::scope::{sanitize_scope_for_hash, visible_scope};
+use crate::scope::{q_scope_from_visible_scope, visible_scope};
 use crate::time::parse_record_timestamp;
 use std::path::Path;
 
@@ -17,13 +17,18 @@ pub(crate) fn same_tree_history_record_with_cache(
     history_cache: &mut HistoryCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<Option<CheckRecord>, String> {
-    latest_history_record_matching_visible_tree_oid(root, expectation, history_cache, |scope| {
-        visible_tree_oid_cache.visible_tree_oid_for_reuse(root, source, agent, scope)
-    })
+    latest_history_record_matching_visible_tree_oid(
+        root,
+        agent,
+        expectation,
+        history_cache,
+        |scope| visible_tree_oid_cache.visible_tree_oid_for_reuse(root, source, agent, scope),
+    )
 }
 
 pub(crate) fn latest_history_record_matching_visible_tree_oid(
     root: &Path,
+    agent: &AgentConfig,
     expectation: &SelectedExpectation,
     history_cache: &mut HistoryCache,
     mut current_visible_tree_oid_for_scope: impl FnMut(&[String]) -> Result<Option<String>, String>,
@@ -33,7 +38,7 @@ pub(crate) fn latest_history_record_matching_visible_tree_oid(
     // newest-to-oldest visibleTreeOid match.
     let matched_record =
         scan_latest_history_records(root, expectation, history_cache, |mut record| {
-            let Ok(scope) = sanitize_scope_for_hash(&record.scope) else {
+            let Ok(scope) = q_scope_from_visible_scope(agent, &record.scope) else {
                 return Ok(HistoryRecordScan::Continue);
             };
             let Some(current_visible_tree_oid) = current_visible_tree_oid_for_scope(&scope)? else {
@@ -50,7 +55,7 @@ pub(crate) fn latest_history_record_matching_visible_tree_oid(
 
 pub(crate) fn cooldown_history_record(
     root: &Path,
-    _agent: &AgentConfig,
+    agent: &AgentConfig,
     expectation: &SelectedExpectation,
     history_cache: &mut HistoryCache,
     now: u64,
@@ -63,7 +68,7 @@ pub(crate) fn cooldown_history_record(
         // lookup which searches for the latest visibleTreeOid match. A newer
         // invalid scope, fail, bad timestamp, or expired result deliberately
         // blocks cooldown reuse of an older result.
-        let Ok(scope) = sanitize_scope_for_hash(&record.scope) else {
+        let Ok(scope) = q_scope_from_visible_scope(agent, &record.scope) else {
             return Ok(HistoryRecordScan::Done(None));
         };
         record.scope = scope;
@@ -135,7 +140,7 @@ pub(crate) fn cached_history_record(
 
 pub(crate) fn latest_stored_q_scope_with_cache(
     root: &Path,
-    _agent: &AgentConfig,
+    agent: &AgentConfig,
     expectation: &SelectedExpectation,
     history_cache: &mut HistoryCache,
 ) -> Result<Option<Vec<String>>, String> {
@@ -146,7 +151,7 @@ pub(crate) fn latest_stored_q_scope_with_cache(
     // responses only, and each record's `visibleScope` is the scope used to
     // form that record's visible tree.
     scan_latest_history_records(root, expectation, history_cache, |record| {
-        let Some(scope) = sanitized_answer_history_q_scope(&record) else {
+        let Some(scope) = sanitized_answer_history_q_scope(agent, &record) else {
             return Ok(HistoryRecordScan::Continue);
         };
         Ok(HistoryRecordScan::Done(Some(scope)))
@@ -174,8 +179,11 @@ fn scan_latest_history_records<T>(
     Ok(None)
 }
 
-fn sanitized_answer_history_q_scope(record: &CheckRecord) -> Option<Vec<String>> {
-    sanitize_scope_for_hash(&record.scope).ok()
+fn sanitized_answer_history_q_scope(
+    agent: &AgentConfig,
+    record: &CheckRecord,
+) -> Option<Vec<String>> {
+    q_scope_from_visible_scope(agent, &record.scope).ok()
 }
 
 fn record_with_current_expectation(
@@ -315,6 +323,7 @@ mod tests {
 
         let hit = latest_history_record_matching_visible_tree_oid(
             &root,
+            &expectation.agent,
             &expectation,
             &mut history_cache,
             |scope| {
@@ -329,6 +338,42 @@ mod tests {
         .unwrap();
 
         assert_eq!(hit.evidence, "older pass");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn same_tree_history_record_derives_q_scope_from_stored_visible_scope() {
+        let root = git_project("same-tree-visible-scope");
+        let mut expectation = expectation_with_cooldown();
+        expectation.agent.ignore = vec![".canon/**".to_string()];
+        let mut history_cache = HistoryCache::default();
+        let path = history_cache.path(&root, &expectation).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            history_line(
+                10,
+                r#"["src",":(exclude,glob).canon/**"]"#,
+                "stored visible scope",
+            ),
+        )
+        .unwrap();
+
+        let hit = latest_history_record_matching_visible_tree_oid(
+            &root,
+            &expectation.agent,
+            &expectation,
+            &mut history_cache,
+            |scope| {
+                assert_eq!(scope, ["src".to_string()]);
+                Ok(Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()))
+            },
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(hit.evidence, "stored visible scope");
 
         let _ = fs::remove_dir_all(root);
     }

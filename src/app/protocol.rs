@@ -5,6 +5,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 
+// This module owns app-server protocol parsing. Transport and usage handling
+// call these helpers from src/app/transport.rs and src/app/usage.rs.
 pub(crate) fn turn_idle_timed_out(last_activity: Instant, now: Instant) -> bool {
     now.duration_since(last_activity) >= Duration::from_secs(APP_SERVER_TURN_TIMEOUT_SECS)
 }
@@ -59,12 +61,6 @@ pub(crate) fn app_server_failure_kind(error: &Value) -> EvaluatorFailureKind {
 pub(crate) fn app_server_failure_from_value(method: &str, error: &Value) -> EvaluatorError {
     let failure = format!("app-server {} failed: {}", method, error);
     EvaluatorError::failure(app_server_failure_kind(error), failure)
-}
-
-#[cfg(test)]
-pub(crate) fn app_server_failure_from_message(method: &str, message: &str) -> EvaluatorError {
-    let failure = format!("app-server {} failed: {}", method, message);
-    EvaluatorError::message(failure)
 }
 
 pub(crate) fn app_server_failure_kind_from_code(code: &str) -> EvaluatorFailureKind {
@@ -203,11 +199,6 @@ pub(crate) fn parse_token_usage(value: &Value) -> Option<TokenUsage> {
     })
 }
 
-#[cfg(test)]
-pub(crate) fn app_server_error_message(message: &Value) -> Option<String> {
-    app_server_error_value(message).map(|error| app_server_error_display(&error))
-}
-
 pub(crate) fn app_server_error_value(message: &Value) -> Option<Value> {
     let method = message.get("method").and_then(Value::as_str)?;
     if method != "error" && method != "turn/failed" && method != "turn/error" {
@@ -229,16 +220,6 @@ pub(crate) fn app_server_error_value(message: &Value) -> Option<Value> {
         .or_else(|| string_at_path(message, &["params", "message"]).map(message_error_value))
         .or_else(|| string_at_path(message, &["message"]).map(message_error_value))
         .or_else(|| Some(message_error_value(method)))
-}
-
-#[cfg(test)]
-pub(crate) fn app_server_error_display(error: &Value) -> String {
-    error
-        .get("message")
-        .and_then(Value::as_str)
-        .or_else(|| error.as_str())
-        .map(str::to_string)
-        .unwrap_or_else(|| error.to_string())
 }
 
 pub(crate) fn message_error_value(message: &str) -> Value {
