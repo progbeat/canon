@@ -97,3 +97,11 @@
   a: "no"
   preset: smart
   cooldown: {"pass": 7d, "fail": 1d}
+
+- q: "Can you find code structure that is overly flat?"
+  a: "no"
+  cooldown: {"pass": 7d, "fail": 1d}
+
+- q: 'Can you find tests that assert incidental implementation details instead of stable observable behavior through a public or component interface?'
+  a: "no"
+  cooldown: {"pass": 7d, "fail": 1d}
