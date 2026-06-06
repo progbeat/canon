@@ -1,4 +1,7 @@
-use crate::check::command::output::{record_requires_human_review, write_and_flush_result_output};
+use crate::check::command::output::{
+    record_requires_human_review, start_check_progress_output, write_and_flush_result_output,
+    CheckProgressOutput, SharedCheckOutput,
+};
 use crate::check::core::types::{
     check_run_error, CachedExpectation, CheckOptions, CheckRecord, CheckRunError, CheckRunReport,
     NarrowingStats, SelectedExpectation,
@@ -36,6 +39,12 @@ use std::io::Write;
 use std::path::Path;
 use std::time::Instant;
 
+// This module owns selected-expectation evaluation and per-expectation stdout
+// records. The top-level `canon check` command output continues in
+// `check::command::execution::run_check_command`, which drains token usage,
+// writes the summary line, and emits post-summary agent instructions after it
+// receives the `CheckRunReport` returned here.
+
 pub(crate) struct CheckRunCaches {
     pub(crate) history: HistoryCache,
     pub(crate) visible_tree_oid: VisibleTreeOidCache,
@@ -52,7 +61,10 @@ impl CheckRunCaches {
 
 pub(crate) struct CheckRunSideEffects<'out, 'cache, 'log> {
     pub(crate) diagnostic_log: Option<&'log mut DiagnosticLogWriter>,
+    // Per-expectation output only; command-level trailer output is written by
+    // `check::command::execution` after this run returns a report.
     pub(crate) result_output: Option<&'out mut dyn Write>,
+    pub(crate) progress_output: Option<SharedCheckOutput>,
     pub(crate) started: Instant,
     pub(crate) caches: &'cache mut CheckRunCaches,
 }
@@ -78,6 +90,7 @@ pub(crate) fn run_check_with_runner<R: EvaluatorRunner>(
         CheckRunSideEffects {
             diagnostic_log,
             result_output,
+            progress_output: None,
             started: Instant::now(),
             caches: &mut caches,
         },
@@ -94,6 +107,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     let CheckRunSideEffects {
         mut diagnostic_log,
         mut result_output,
+        progress_output,
         started,
         caches,
     } = side_effects;
@@ -229,22 +243,32 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             &mut caches.visible_tree_oid,
             active_lazy_full_scope_reset_ids,
         ));
+        let mut progress = match progress_output.as_ref() {
+            Some(output) => Some(run_expectation_try!(start_check_progress_output(
+                output.clone(),
+                &expectation.display_id,
+            ))),
+            None => None,
+        };
         // Response-format problems and evaluator runner/model failures are
         // handled inside this call: they become non-pass review records that
         // are written through `write_latest_non_pass_record_with_cache` below.
         // Err here means infrastructure failed before such a record could be
         // produced.
-        let mut interrogation = run_expectation_try!(interrogate_with_full_scope_retry(
-            ScopedInterrogation {
-                runtime: &runtime,
-                expectation,
-                enforced_scope: &mut verified_q_scope,
-            },
-            runner,
-            &mut diagnostic_log,
-            &mut interrogation_run_state,
-            &mut caches.visible_tree_oid,
-            options.break_after_tokens,
+        let mut interrogation = run_expectation_try!(cancel_progress_on_error(
+            interrogate_with_full_scope_retry(
+                ScopedInterrogation {
+                    runtime: &runtime,
+                    expectation,
+                    enforced_scope: &mut verified_q_scope,
+                },
+                runner,
+                &mut diagnostic_log,
+                &mut interrogation_run_state,
+                &mut caches.visible_tree_oid,
+                options.break_after_tokens,
+            ),
+            &mut progress,
         ));
         evaluated += 1;
         let mut break_after_tokens_hit =
@@ -265,37 +289,46 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         // verification needed to trust a strictly narrower cache scope for
         // this expectation's final record.
         if !record_requires_human_review(&interrogation.record)
-            && run_expectation_try!(q_scope_suggestion_should_get_independent_verification(
-                &runtime,
-                &expectation.agent,
-                interrogation.record.suggested_q_scope.as_deref(),
-                &verified_q_scope,
-                &mut caches.visible_tree_oid,
+            && run_expectation_try!(cancel_progress_on_error(
+                q_scope_suggestion_should_get_independent_verification(
+                    &runtime,
+                    &expectation.agent,
+                    interrogation.record.suggested_q_scope.as_deref(),
+                    &verified_q_scope,
+                    &mut caches.visible_tree_oid,
+                ),
+                &mut progress,
             ))
         {
             narrowing.attempted += 1;
             // A q-scope suggestion becomes reusable only when an independent
             // interrogation under that suggested scope returns a valid answer.
             let initial_record = interrogation.record.clone();
-            let proposed_scope = run_expectation_try!(sanitize_scope(
-                initial_record
-                    .suggested_q_scope
-                    .as_deref()
-                    .expect("suggestion passed the file-count verification gate"),
-                &expectation.agent,
+            let proposed_scope = run_expectation_try!(cancel_progress_on_error(
+                sanitize_scope(
+                    initial_record
+                        .suggested_q_scope
+                        .as_deref()
+                        .expect("suggestion passed the file-count verification gate"),
+                    &expectation.agent,
+                ),
+                &mut progress,
             ));
             let mut verification_scope = proposed_scope.clone();
-            let narrowed = run_expectation_try!(interrogate_with_full_scope_retry(
-                ScopedInterrogation {
-                    runtime: &runtime,
-                    expectation,
-                    enforced_scope: &mut verification_scope,
-                },
-                runner,
-                &mut diagnostic_log,
-                &mut interrogation_run_state,
-                &mut caches.visible_tree_oid,
-                options.break_after_tokens,
+            let narrowed = run_expectation_try!(cancel_progress_on_error(
+                interrogate_with_full_scope_retry(
+                    ScopedInterrogation {
+                        runtime: &runtime,
+                        expectation,
+                        enforced_scope: &mut verification_scope,
+                    },
+                    runner,
+                    &mut diagnostic_log,
+                    &mut interrogation_run_state,
+                    &mut caches.visible_tree_oid,
+                    options.break_after_tokens,
+                ),
+                &mut progress,
             ));
             break_after_tokens_hit |=
                 turn_exceeds_break_after_tokens(&narrowed, options.break_after_tokens);
@@ -307,14 +340,17 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             } else {
                 narrowing.rejected += 1;
             }
-            run_expectation_try!(write_scope_narrowing_event(
-                &mut diagnostic_log,
-                &expectation.id,
-                &verified_q_scope,
-                &proposed_scope,
-                accepted,
-                &initial_record,
-                &narrowed.record,
+            run_expectation_try!(cancel_progress_on_error(
+                write_scope_narrowing_event(
+                    &mut diagnostic_log,
+                    &expectation.id,
+                    &verified_q_scope,
+                    &proposed_scope,
+                    accepted,
+                    &initial_record,
+                    &narrowed.record,
+                ),
+                &mut progress,
             ));
             if accepted {
                 interrogation = narrowed;
@@ -327,6 +363,15 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 interrogation.record.suggested_q_scope = None;
                 debug_assert_eq!(interrogation.record.scope, verified_q_scope);
             }
+        }
+        if let Some(progress) = progress.take() {
+            run_expectation_try!(progress.finish_with_record(&interrogation.record));
+        } else {
+            run_expectation_try!(write_and_flush_result_output(
+                &mut result_output,
+                &interrogation.record,
+                started.elapsed()
+            ));
         }
         // Correct and incorrect parsed answers are reusable for every
         // expectation shape, including free-form exact strings. Error and
@@ -358,11 +403,6 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         if run_stop_signal_hit {
             interrogation_run_state.clear_thread_sessions();
         }
-        run_expectation_try!(write_and_flush_result_output(
-            &mut result_output,
-            &interrogation.record,
-            started.elapsed()
-        ));
         records.push(interrogation.record);
         if active_lazy_full_scope_reset {
             run_expectation_try!(clear_active_lazy_full_scope_reset(root, expectation));
@@ -396,6 +436,23 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         },
         narrowing,
     ))
+}
+
+fn cancel_progress_on_error<T>(
+    result: Result<T, String>,
+    progress: &mut Option<CheckProgressOutput>,
+) -> Result<T, String> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(err) => {
+            if let Some(progress) = progress.take() {
+                progress
+                    .cancel()
+                    .map_err(|progress_err| format!("{}; {}", err, progress_err))?;
+            }
+            Err(err)
+        }
+    }
 }
 
 fn check_run_report(

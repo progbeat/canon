@@ -1,7 +1,9 @@
 use crate::app::LazyAppServerRunner;
 use crate::check::command::args::parse_check_command_args;
 use crate::check::command::finish::{finish_check_report, CheckReportFinishContext};
-use crate::check::command::output::{summary_outcome_counts, write_summary_line};
+use crate::check::command::output::{
+    summary_outcome_counts, write_summary_line, SharedCheckOutput,
+};
 use crate::check::command::query::{run_check_query_command, CheckQueryCommand};
 use crate::check::command::reporting::{
     collect_check_token_usage, print_token_usage_summary, write_check_finish_event,
@@ -28,7 +30,7 @@ use crate::staged::StagedWorktreeView;
 use crate::state_paths::CANON_CACHE_DIR_GIT_PATH;
 use serde_json::json;
 use std::ffi::OsString;
-use std::io::{self, Write};
+use std::io::Write;
 use std::path::Path;
 use std::time::Instant;
 
@@ -193,13 +195,11 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             ("kept", json!(cleanup.kept)),
         ],
     )?;
-    let stdout = io::stdout();
-    let mut stdout = stdout.lock();
-    let mut result_output: &mut dyn Write = &mut stdout;
-    // `run_check_with_runner` calls `write_and_flush_result_output` after each
-    // selected expectation; that helper renders the public human-readable
-    // check-output record (`P. OK`, `P. FAILED`, or `P. ERROR` with elapsed
-    // minute dots) and flushes it before the next expectation starts.
+    let shared_output = SharedCheckOutput::stdout();
+    let mut result_output = shared_output.clone();
+    // Selected expectation output starts with `<short ID>.` before evaluator
+    // interrogation, appends one flushed progress dot per minute while the
+    // record is pending, then writes the final status and record body.
     let runtime = CheckRuntime::materialized(
         root,
         &execution.staged_view,
@@ -219,6 +219,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         CheckRunSideEffects {
             diagnostic_log: Some(&mut diagnostic_log),
             result_output: Some(&mut result_output),
+            progress_output: Some(shared_output.clone()),
             started,
             caches: &mut check_caches,
         },
@@ -233,13 +234,16 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             error: Some(err.error),
         },
     };
+    // The canon-check command trailer is deliberately after expectation
+    // evaluation: drain and print token usage, write the summary line, then
+    // let `finish_check_report` emit any post-summary agent instructions.
     if let Err(err) = result_output.flush() {
         let err = format!("failed to flush check result to stdout: {}", err);
         return finish_check_error_report(CheckErrorReportFinish {
             root,
             config: &config,
             diagnostic_log: &mut diagnostic_log,
-            result_output: &mut *result_output,
+            result_output: &mut result_output,
             check_caches: &mut check_caches,
             report: &completed.report,
             error: err,
@@ -247,7 +251,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     }
     if let Err(err) = write_check_trailer(
         &mut execution.runner,
-        &mut *result_output,
+        &mut result_output,
         &completed.report,
         started,
     ) {
@@ -255,7 +259,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             root,
             config: &config,
             diagnostic_log: &mut diagnostic_log,
-            result_output: &mut *result_output,
+            result_output: &mut result_output,
             check_caches: &mut check_caches,
             report: &completed.report,
             error: err,
@@ -266,7 +270,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             root,
             config: &config,
             diagnostic_log: &mut diagnostic_log,
-            result_output: &mut *result_output,
+            result_output: &mut result_output,
             check_caches: &mut check_caches,
             write_agent_message,
         },

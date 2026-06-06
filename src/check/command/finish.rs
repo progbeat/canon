@@ -1,4 +1,6 @@
-use crate::check::command::output::{summary_outcome_counts, write_stdout_line_record};
+use crate::check::command::output::{
+    render_check_agent_messages, summary_outcome_counts, write_stdout_line_record,
+};
 use crate::check::command::reporting::write_check_finish_event;
 use crate::check::core::types::{CheckRecord, CheckRunReport, SelectedExpectation};
 use crate::check::run::lazy_reset::apply_lazy_full_scope_reset;
@@ -20,12 +22,6 @@ use std::path::Path;
 // `command::execution`
 // orchestrates their order before calling `finish_check_report`. This module
 // owns only the post-summary agent message plus cleanup and finish logging.
-const ALL_CHECKS_PASSED_MESSAGE: &str = "✓ All checks passed. Commit is allowed.";
-const FIX_ISSUES_MESSAGE: &str = "▷ Fix the issues and run `canon check` again!";
-const THEN_FIX_REMAINING_MESSAGE: &str =
-    "▷ Then fix the remaining issues and run `canon check` again!";
-const PASS_IMPROVEMENT_COMMIT_SUFFIX: &str = "Commit the staged changes NOW!";
-
 // Success and error reports share cleanup, finish logging, and the post-summary
 // message to the agent when allowed by the command form. The optional error
 // only changes the finish log payload and final command result.
@@ -77,20 +73,6 @@ pub(crate) fn finish_check_report(
         return Err(err);
     }
     Ok(())
-}
-
-pub(crate) fn pass_improvement_notice(count: usize) -> Option<String> {
-    match count {
-        0 => None,
-        1 => Some(format!(
-            "▷ +1 pass compared to HEAD. {}",
-            PASS_IMPROVEMENT_COMMIT_SUFFIX
-        )),
-        count => Some(format!(
-            "▷ +{} passes compared to HEAD. {}",
-            count, PASS_IMPROVEMENT_COMMIT_SUFFIX
-        )),
-    }
 }
 
 fn staged_passes_failed_at_head_count_with_cache(
@@ -206,22 +188,12 @@ pub(crate) fn check_agent_messages(
     let outcome_counts = summary_outcome_counts(report);
     let num_failed = outcome_counts.failed;
     let num_errors = outcome_counts.errors;
-    let num_non_ok = num_failed + num_errors;
-    if num_regressions > 0 || (num_non_ok > 0 && num_fixes == 0) {
-        return Ok(vec![FIX_ISSUES_MESSAGE.to_string()]);
-    }
-    if num_non_ok == 0 && num_fixes == 0 {
-        return Ok(vec![ALL_CHECKS_PASSED_MESSAGE.to_string()]);
-    }
-    // The commit notice is reachable only after `num_regressions == 0`.
-    // `num_regressions` is computed by `gate_regression_count_with_config`, so
-    // `canon gate` has no expectation-related failure branch left for this
-    // staged tree even if non-regressing non-OK records remain.
-    let mut messages = vec![pass_improvement_notice(num_fixes).expect("positive fix count")];
-    if num_non_ok > 0 {
-        messages.push(THEN_FIX_REMAINING_MESSAGE.to_string());
-    }
-    Ok(messages)
+    Ok(render_check_agent_messages(
+        num_failed,
+        num_errors,
+        num_fixes,
+        num_regressions,
+    ))
 }
 
 pub(crate) fn staged_pass_notice_count(

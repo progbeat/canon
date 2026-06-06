@@ -3,8 +3,111 @@ use crate::json_util::compact_json_string_array;
 use crate::logs::push_json_control_escape;
 use crate::token_usage_types::TokenUsage;
 use std::collections::BTreeSet;
-use std::io::Write;
+use std::io::{self, Write};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
+
+const ALL_CHECKS_PASSED_MESSAGE: &str = "✓ All checks passed. Commit is allowed.";
+const FIX_ISSUES_MESSAGE: &str = "▷ Fix the issues and run `canon check` again!";
+const THEN_FIX_REMAINING_MESSAGE: &str =
+    "▷ Then fix the remaining issues and run `canon check` again!";
+const PASS_IMPROVEMENT_COMMIT_SUFFIX: &str = "Commit the staged changes NOW!";
+const PROGRESS_DOT_INTERVAL: Duration = Duration::from_secs(60);
+
+#[derive(Clone)]
+pub(crate) struct SharedCheckOutput {
+    inner: Arc<Mutex<Box<dyn Write + Send>>>,
+}
+
+impl SharedCheckOutput {
+    pub(crate) fn stdout() -> SharedCheckOutput {
+        SharedCheckOutput::new(Box::new(io::stdout()))
+    }
+
+    pub(crate) fn new(writer: Box<dyn Write + Send>) -> SharedCheckOutput {
+        SharedCheckOutput {
+            inner: Arc::new(Mutex::new(writer)),
+        }
+    }
+}
+
+impl Write for SharedCheckOutput {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let mut writer = self
+            .inner
+            .lock()
+            .map_err(|_| io::Error::other("check output lock poisoned"))?;
+        writer.write(bytes)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        let mut writer = self
+            .inner
+            .lock()
+            .map_err(|_| io::Error::other("check output lock poisoned"))?;
+        writer.flush()
+    }
+}
+
+pub(crate) struct CheckProgressOutput {
+    output: SharedCheckOutput,
+    stop: Sender<()>,
+    worker: Option<JoinHandle<Result<(), String>>>,
+}
+
+pub(crate) fn start_check_progress_output(
+    output: SharedCheckOutput,
+    display_id: &str,
+) -> Result<CheckProgressOutput, String> {
+    let mut immediate_output = output.clone();
+    write_stdout_record(
+        &mut immediate_output,
+        format!("{}.", display_id).as_bytes(),
+        "check progress prefix",
+    )?;
+
+    let (stop, stop_requested) = mpsc::channel();
+    let mut progress_output = output.clone();
+    let worker = thread::spawn(move || loop {
+        match stop_requested.recv_timeout(PROGRESS_DOT_INTERVAL) {
+            Ok(()) | Err(RecvTimeoutError::Disconnected) => return Ok(()),
+            Err(RecvTimeoutError::Timeout) => {
+                write_stdout_record(&mut progress_output, b".", "check progress dot")?;
+            }
+        }
+    });
+
+    Ok(CheckProgressOutput {
+        output,
+        stop,
+        worker: Some(worker),
+    })
+}
+
+impl CheckProgressOutput {
+    pub(crate) fn finish_with_record(mut self, record: &CheckRecord) -> Result<(), String> {
+        self.stop_progress_worker()?;
+        let completion = render_check_output_record_completion(record);
+        let mut output = self.output.clone();
+        write_stdout_record(&mut output, completion.as_bytes(), "check result")
+    }
+
+    pub(crate) fn cancel(mut self) -> Result<(), String> {
+        self.stop_progress_worker()
+    }
+
+    fn stop_progress_worker(&mut self) -> Result<(), String> {
+        let _ = self.stop.send(());
+        let Some(worker) = self.worker.take() else {
+            return Ok(());
+        };
+        worker
+            .join()
+            .map_err(|_| "check progress thread panicked".to_string())?
+    }
+}
 
 pub(crate) fn write_and_flush_result_output(
     result_output: &mut Option<&mut dyn Write>,
@@ -85,13 +188,19 @@ pub(crate) fn render_query_output(answer: &ParsedAnswer) -> String {
 
 pub(crate) fn render_check_output_record(record: &CheckRecord, elapsed: Duration) -> String {
     let dots = result_elapsed_dots(elapsed);
+    let mut output = format!("{}{}", record.display_id, dots);
+    output.push_str(&render_check_output_record_completion(record));
+    output
+}
+
+fn render_check_output_record_completion(record: &CheckRecord) -> String {
     if record.passed() {
-        return format!("{}{} OK\n", record.display_id, dots);
+        return " OK\n".to_string();
     }
     let is_error = record_requires_human_review(record);
     let status = if is_error { "ERROR" } else { "FAILED" };
     let mut output = String::new();
-    output.push_str(&format!("{}{} {}\n", record.display_id, dots, status));
+    output.push_str(&format!(" {}\n", status));
     // This is the spec's `<escaped question>` line, not an extra line beyond
     // the six-line failed and five-line error layouts.
     output.push_str(&escape_check_output_text(record.prompt_text()));
@@ -189,6 +298,41 @@ pub(crate) fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -
     format!("{}\n", pad_summary_line(&inner))
 }
 
+pub(crate) fn render_check_agent_messages(
+    num_failed: usize,
+    num_errors: usize,
+    num_fixes: usize,
+    num_regressions: usize,
+) -> Vec<String> {
+    let num_issues = num_failed + num_errors;
+    if num_regressions > 0 || (num_issues > 0 && num_fixes == 0) {
+        return vec![FIX_ISSUES_MESSAGE.to_string()];
+    }
+    if num_issues == 0 && num_fixes == 0 {
+        return vec![ALL_CHECKS_PASSED_MESSAGE.to_string()];
+    }
+
+    let mut messages = vec![pass_improvement_notice(num_fixes).expect("positive fix count")];
+    if num_issues > 0 {
+        messages.push(THEN_FIX_REMAINING_MESSAGE.to_string());
+    }
+    messages
+}
+
+fn pass_improvement_notice(count: usize) -> Option<String> {
+    match count {
+        0 => None,
+        1 => Some(format!(
+            "▷ +1 pass compared to HEAD. {}",
+            PASS_IMPROVEMENT_COMMIT_SUFFIX
+        )),
+        count => Some(format!(
+            "▷ +{} passes compared to HEAD. {}",
+            count, PASS_IMPROVEMENT_COMMIT_SUFFIX
+        )),
+    }
+}
+
 pub(crate) struct SummaryOutcomeCounts {
     pub(crate) passed: usize,
     pub(crate) failed: usize,
@@ -271,8 +415,30 @@ fn push_check_output_unicode_escape(output: &mut String, ch: char) {
 
 #[cfg(test)]
 mod tests {
-    use super::result_elapsed_dot_count;
+    use super::{
+        render_check_agent_messages, result_elapsed_dot_count, start_check_progress_output,
+        SharedCheckOutput,
+    };
+    use crate::check::core::types::{CheckRecord, CheckResult};
+    use std::io::{self, Write};
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
+
+    #[derive(Clone)]
+    struct CapturedOutput {
+        bytes: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Write for CapturedOutput {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.bytes.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn result_elapsed_dots_round_up_elapsed_minutes() {
@@ -283,5 +449,69 @@ mod tests {
             2
         );
         assert_eq!(result_elapsed_dot_count(Duration::from_secs(120)), 2);
+    }
+
+    #[test]
+    fn progress_output_writes_prefix_before_completion() {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let output = SharedCheckOutput::new(Box::new(CapturedOutput {
+            bytes: bytes.clone(),
+        }));
+
+        let progress = start_check_progress_output(output, "j").unwrap();
+        assert_eq!(captured_string(&bytes), "j.");
+
+        progress.finish_with_record(&passing_record()).unwrap();
+        assert_eq!(captured_string(&bytes), "j. OK\n");
+    }
+
+    #[test]
+    fn check_agent_messages_follow_spec_branch_order() {
+        assert_eq!(
+            render_check_agent_messages(1, 0, 0, 0),
+            vec!["▷ Fix the issues and run `canon check` again!"]
+        );
+        assert_eq!(
+            render_check_agent_messages(0, 0, 0, 0),
+            vec!["✓ All checks passed. Commit is allowed."]
+        );
+        assert_eq!(
+            render_check_agent_messages(0, 0, 1, 0),
+            vec!["▷ +1 pass compared to HEAD. Commit the staged changes NOW!"]
+        );
+        assert_eq!(
+            render_check_agent_messages(1, 0, 2, 0),
+            vec![
+                "▷ +2 passes compared to HEAD. Commit the staged changes NOW!",
+                "▷ Then fix the remaining issues and run `canon check` again!"
+            ]
+        );
+        assert_eq!(
+            render_check_agent_messages(0, 0, 1, 1),
+            vec!["▷ Fix the issues and run `canon check` again!"]
+        );
+    }
+
+    fn captured_string(bytes: &Arc<Mutex<Vec<u8>>>) -> String {
+        String::from_utf8(bytes.lock().unwrap().clone()).unwrap()
+    }
+
+    fn passing_record() -> CheckRecord {
+        CheckRecord {
+            timestamp: "1970-01-01T00:00:00Z".to_string(),
+            number: 1,
+            result: CheckResult::Pass,
+            prompt: Some("Does it pass?".to_string()),
+            expected: Some("yes".to_string()),
+            observed: "yes".to_string(),
+            error: None,
+            evidence: "test evidence".to_string(),
+            scope: vec![".".to_string()],
+            suggested_q_scope: None,
+            visible_tree_oid: "visible".to_string(),
+            id: "11111111111111111111".to_string(),
+            display_id: "j".to_string(),
+            cache_key: None,
+        }
     }
 }
