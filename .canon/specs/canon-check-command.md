@@ -80,7 +80,7 @@ Error: <escaped error>
 Evidence: <escaped evidence>
 ```
 
-**progress dots** are `.` characters printed and flushed while an expectation is being evaluated: the first dot is emitted when evaluation starts, and each additional dot is emitted at the start of the next elapsed minute for that expectation.
+**progress dots** are `.` characters printed and flushed while an expectation is being evaluated: print one dot immediately, then one more dot every minute until the result is ready.
 
 Embedded control characters in the question, expected answer, observed answer,
 error, and evidence are escaped before writing to stdout. Escaping prevents
