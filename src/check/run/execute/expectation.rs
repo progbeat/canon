@@ -7,7 +7,7 @@ use crate::check::command::output::{
 use crate::check::core::{CheckOptions, CheckRecord, SelectedExpectation};
 use crate::check::interrogation::policy::{
     interrogate_with_full_scope_retry, narrowed_scope_is_accepted,
-    question_scope_suggestion_should_get_independent_verification, turn_exceeds_break_after_tokens,
+    question_scope_suggestion_scope_for_independent_verification, turn_exceeds_break_after_tokens,
     turn_has_context_compaction, write_scope_narrowing_event, ScopedInterrogation,
 };
 use crate::check::interrogation::state::{
@@ -20,7 +20,7 @@ use crate::evaluator::EvaluatorRunner;
 use crate::history::{append_current_history_record_with_cache, is_reusable_history_record};
 use crate::logs::{DiagnosticLogWriter, DiagnosticRecordEvent};
 use crate::platform::check_interrupted;
-use crate::scope::{sanitize_scope, scope_is_within};
+use crate::scope::scope_is_within;
 use std::collections::BTreeSet;
 use std::io::Write;
 
@@ -112,9 +112,11 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
 
     let record_scope = interrogation.record.scope.clone();
     debug_assert!(scope_is_within(&record_scope, &verified_q_scope));
-    if !record_requires_human_review(&interrogation.record)
-        && run_expectation_try!(cancel_progress_on_error(
-            question_scope_suggestion_should_get_independent_verification(
+    let proposed_q_scope = if record_requires_human_review(&interrogation.record) {
+        None
+    } else {
+        run_expectation_try!(cancel_progress_on_error(
+            question_scope_suggestion_scope_for_independent_verification(
                 context.runtime,
                 &expectation.agent,
                 interrogation.record.question_scope_suggestion.as_deref(),
@@ -123,17 +125,9 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
             ),
             &mut progress,
         ))
-    {
+    };
+    if let Some(proposed_scope) = proposed_q_scope {
         let initial_record = interrogation.record.clone();
-        let proposed_scope = run_expectation_try!(cancel_progress_on_error(
-            sanitize_scope(
-                initial_record
-                    .question_scope_suggestion
-                    .as_deref()
-                    .expect("suggestion passed the file-count verification gate"),
-            ),
-            &mut progress,
-        ));
         let mut verification_scope = proposed_scope.clone();
         let narrowed = run_expectation_try!(cancel_progress_on_error(
             interrogate_with_full_scope_retry(

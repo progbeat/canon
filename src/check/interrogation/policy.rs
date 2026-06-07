@@ -12,6 +12,7 @@ use crate::git::VisibleTreeOidCache;
 use crate::hash::full_scope;
 use crate::history::HistoryCache;
 use crate::logs::DiagnosticLogWriter;
+use crate::scope::sanitize_scope;
 
 pub(crate) struct InterrogationCall<'a> {
     pub(crate) runtime: &'a CheckRuntime<'a>,
@@ -125,34 +126,41 @@ pub(crate) fn turn_has_context_compaction(interrogation: &InterrogationResult) -
     interrogation.context_compacted
 }
 
-pub(crate) fn question_scope_suggestion_should_get_independent_verification(
+pub(crate) fn question_scope_suggestion_scope_for_independent_verification(
     runtime: &CheckRuntime<'_>,
     agent: &AgentConfig,
     suggestion: Option<&[String]>,
     current_scope: &[String],
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
-) -> Result<bool, String> {
+) -> Result<Option<Vec<String>>, String> {
     // Glossary-level q-scope suggestions are evaluator-provided claims. This
     // helper implements only the Interrogation Policy gate for whether such a
     // claim is worth an independent verification turn: at least 25% fewer
     // visible files. The response JSON Schema does not require repo-relative
     // or semantically sufficient paths; sufficiency is established only when
-    // the independent verification produces an answer. A false result leaves
+    // the independent verification produces an answer. Returning `None` leaves
     // the evaluator's claim unverified; it does not redefine what a q-scope
     // suggestion is.
     let Some(suggestion) = suggestion else {
-        return Ok(false);
+        return Ok(None);
+    };
+    let Ok(proposed_scope) = sanitize_scope(suggestion) else {
+        return Ok(None);
     };
     let current_count = runtime.visible_file_count(visible_tree_oid_cache, agent, current_scope)?;
     if current_count == 0 {
-        return Ok(false);
+        return Ok(None);
     }
     let suggested_count =
-        match runtime.visible_file_count(visible_tree_oid_cache, agent, suggestion) {
+        match runtime.visible_file_count(visible_tree_oid_cache, agent, &proposed_scope) {
             Ok(count) => count,
-            Err(_) => return Ok(false),
+            Err(_) => return Ok(None),
         };
-    Ok(suggested_count.saturating_mul(4) <= current_count.saturating_mul(3))
+    if suggested_count.saturating_mul(4) <= current_count.saturating_mul(3) {
+        Ok(Some(proposed_scope))
+    } else {
+        Ok(None)
+    }
 }
 
 pub(crate) fn narrowed_scope_is_accepted(

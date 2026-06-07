@@ -1,18 +1,18 @@
 use crate::check::core::ParsedAnswer;
-use crate::check::interrogation::policy::question_scope_suggestion_should_get_independent_verification;
+use crate::check::interrogation::policy::question_scope_suggestion_scope_for_independent_verification;
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::evaluator::EvaluatorError;
 
-pub(super) fn should_verify(
+pub(super) fn scope_for_verification(
     runtime: &CheckRuntime<'_>,
     state: &mut InterrogationRunState,
     enforced_scope: &[String],
     answer: &ParsedAnswer,
-) -> Result<bool, EvaluatorError> {
+) -> Result<Option<Vec<String>>, EvaluatorError> {
     if answer.error.is_some() {
-        return Ok(false);
+        return Ok(None);
     }
-    question_scope_suggestion_should_get_independent_verification(
+    question_scope_suggestion_scope_for_independent_verification(
         runtime,
         &runtime.config.agent,
         answer.question_scope_suggestion.as_deref(),
