@@ -15,7 +15,7 @@
 
 - q: "Can you find any obsolete, unused, stray, dead-end, duplicated, or redundant Git-tracked project files or code paths that are safe to remove or consolidate without changing intended functionality?"
   a: "no"
-  cooldown: 7d
+  cooldown: {pass: 7d, fail: 1d}
   thinking: xhigh
 
 - q: "Can you find any hand-written, non-generated source files that are excessively large or mix unrelated responsibilities enough that they should be split into smaller focused modules?"
