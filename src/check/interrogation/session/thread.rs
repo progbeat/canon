@@ -77,7 +77,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         request.enforced_scope,
         request.model,
         request.thinking,
-    )?;
+    );
     let response = match ask_current_session(runner, &session_id, state, diagnostic_log, request) {
         Ok(response) => response,
         Err(err) if had_existing_session && is_context_window_failure(&err) => {
@@ -88,7 +88,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
                 request.model,
                 None,
                 err.message_str(),
-            )?;
+            );
             write_thread_restart_event(
                 diagnostic_log,
                 &session_id,
@@ -97,7 +97,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
                 request.model,
                 &lifecycle_log.developer_instructions,
                 err.message_str(),
-            )?;
+            );
             let lifecycle_log = start_thread_session(
                 runtime,
                 runner,
@@ -113,7 +113,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
                 request.enforced_scope,
                 request.model,
                 request.thinking,
-            )?;
+            );
             match ask_current_session(runner, &session_id, state, diagnostic_log, request) {
                 Ok(response) => response,
                 Err(err) => return fail_after_session_error(state, err),

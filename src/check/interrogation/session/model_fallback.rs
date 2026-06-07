@@ -72,7 +72,7 @@ pub(crate) fn run_with_model_fallbacks<T>(
                     model.as_deref(),
                     next_model.and_then(Option::as_deref),
                     err.message_str(),
-                )?;
+                );
                 failures.push(format!(
                     "{}: {}",
                     model_label(model.as_deref()),
@@ -94,34 +94,31 @@ pub(crate) fn write_model_fallback_events(
     model: Option<&str>,
     next_model: Option<&str>,
     error: &str,
-) -> Result<(), String> {
+) {
     let Some(writer) = diagnostic_log.as_deref_mut() else {
-        return Ok(());
+        return;
     };
-    writer
-        .write_event(
+    // Fallback decisions must remain driven by evaluator errors; diagnostic
+    // event write failures are non-functional observability failures.
+    let _ = writer.write_event(
+        "warn",
+        "model.failure",
+        &[
+            ("id", json!(expectation_id)),
+            ("model", json!(model)),
+            ("error", json!(error)),
+        ],
+    );
+    if let Some(next_model) = next_model {
+        let _ = writer.write_event(
             "warn",
-            "model.failure",
+            "model.fallback",
             &[
                 ("id", json!(expectation_id)),
-                ("model", json!(model)),
-                ("error", json!(error)),
+                ("from", json!(model)),
+                ("to", json!(next_model)),
+                ("reason", json!(error)),
             ],
-        )
-        .map_err(|err| err.to_string())?;
-    if let Some(next_model) = next_model {
-        writer
-            .write_event(
-                "warn",
-                "model.fallback",
-                &[
-                    ("id", json!(expectation_id)),
-                    ("from", json!(model)),
-                    ("to", json!(next_model)),
-                    ("reason", json!(error)),
-                ],
-            )
-            .map_err(|err| err.to_string())?;
+        );
     }
-    Ok(())
 }
