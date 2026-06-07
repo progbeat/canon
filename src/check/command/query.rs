@@ -10,10 +10,10 @@ use crate::check::run::lazy_reset::{
     apply_lazy_full_scope_reset_for_cached, clear_active_lazy_full_scope_reset_ids,
 };
 use crate::check::run::selection::{selected_expectation_at, ExpectationIdentity};
+use crate::check::CheckRunCaches;
 use crate::config_types::{CheckConfig, Expectation};
-use crate::git::{TreeSource, VisibleTreeOidCache};
+use crate::git::TreeSource;
 use crate::hash::full_scope;
-use crate::history::HistoryCache;
 use crate::logs::{write_check_finish_event, write_check_start_event, DiagnosticLogWriter};
 use crate::scope::sanitize_scope;
 use std::collections::BTreeSet;
@@ -31,6 +31,7 @@ pub(crate) struct CheckQueryCommand<'a> {
     pub(crate) against_tree: &'a TreeSource,
     pub(crate) no_sandbox: bool,
     pub(crate) diagnostic_log: DiagnosticLogWriter,
+    pub(crate) check_caches: &'a mut CheckRunCaches,
 }
 
 pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<(), String> {
@@ -45,6 +46,7 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
         against_tree,
         no_sandbox,
         mut diagnostic_log,
+        check_caches,
     } = command;
     let no_applied_lazy_full_scope_reset_ids = BTreeSet::new();
     // `canon check -q` runs one ad-hoc query. When that query is exactly a
@@ -60,6 +62,7 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
         tree_source,
         matching_expectation.as_ref(),
         active_lazy_full_scope_reset_ids,
+        &mut *check_caches,
     ) {
         Ok(scope) => scope,
         Err(err) => {
@@ -67,6 +70,7 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
                 root,
                 &no_applied_lazy_full_scope_reset_ids,
                 &mut diagnostic_log,
+                &mut *check_caches,
                 &err,
             )?;
             return Err(err);
@@ -77,7 +81,6 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
         matching_expectation.as_ref(),
         active_lazy_full_scope_reset_ids,
     );
-    let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
     let mut execution = prepare_check_execution(
         root,
         config,
@@ -89,7 +92,8 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
             query: true,
             errors_on_failure: 1,
         },
-        &mut visible_tree_oid_cache,
+        &mut check_caches.lazy_reset,
+        &mut check_caches.visible_tree_oid,
     )?;
     let runtime = CheckRuntime::materialized(
         root,
@@ -106,6 +110,7 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
                 root,
                 &applied_lazy_full_scope_reset_ids,
                 &mut diagnostic_log,
+                &mut *check_caches,
                 &err,
             )?;
             return Err(err);
@@ -132,6 +137,7 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
                 root,
                 &applied_lazy_full_scope_reset_ids,
                 &mut diagnostic_log,
+                &mut *check_caches,
                 &err,
             )?;
             return Err(err);
@@ -146,6 +152,7 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
             root,
             &applied_lazy_full_scope_reset_ids,
             &mut diagnostic_log,
+            &mut *check_caches,
             &err,
         )?;
         return Err(err);
@@ -157,6 +164,7 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
                 root,
                 &applied_lazy_full_scope_reset_ids,
                 &mut diagnostic_log,
+                &mut *check_caches,
                 &err,
             )?;
             return Err(err);
@@ -170,6 +178,7 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
         root,
         &applied_lazy_full_scope_reset_ids,
         &mut diagnostic_log,
+        &mut *check_caches,
         None,
     )
 }
@@ -178,12 +187,14 @@ fn write_query_error_finish(
     root: &Path,
     applied_lazy_full_scope_reset_ids: &BTreeSet<String>,
     diagnostic_log: &mut DiagnosticLogWriter,
+    check_caches: &mut CheckRunCaches,
     err: &str,
 ) -> Result<(), String> {
     write_query_finish(
         root,
         applied_lazy_full_scope_reset_ids,
         diagnostic_log,
+        check_caches,
         Some(err),
     )
 }
@@ -192,18 +203,27 @@ fn write_query_finish(
     root: &Path,
     applied_lazy_full_scope_reset_ids: &BTreeSet<String>,
     diagnostic_log: &mut DiagnosticLogWriter,
+    check_caches: &mut CheckRunCaches,
     err: Option<&str>,
 ) -> Result<(), String> {
     let mut finish_error = err.map(str::to_string);
     // A query can consume only the matching expectation's active reset, and
     // only when its implicit scope actually used that reset. Unrelated active
     // reset markers remain for a later expectation run.
-    if let Err(reset_err) =
-        clear_active_lazy_full_scope_reset_ids(root, applied_lazy_full_scope_reset_ids)
-    {
+    if let Err(reset_err) = clear_active_lazy_full_scope_reset_ids(
+        root,
+        applied_lazy_full_scope_reset_ids,
+        &mut check_caches.lazy_reset,
+    ) {
         finish_error.get_or_insert(reset_err);
     }
-    if let Err(reset_err) = apply_lazy_full_scope_reset_for_cached(root, 0, &[], diagnostic_log) {
+    if let Err(reset_err) = apply_lazy_full_scope_reset_for_cached(
+        root,
+        0,
+        &[],
+        &mut check_caches.lazy_reset,
+        diagnostic_log,
+    ) {
         finish_error.get_or_insert(reset_err);
     }
     write_check_finish_event(diagnostic_log, true, finish_error.as_deref())
@@ -234,6 +254,7 @@ fn query_enforced_scope(
     tree_source: &TreeSource,
     matching_expectation: Option<&SelectedExpectation>,
     active_lazy_full_scope_reset_ids: &BTreeSet<String>,
+    check_caches: &mut CheckRunCaches,
 ) -> Result<Vec<String>, String> {
     if !query_scope.is_empty() {
         return sanitize_scope(query_scope).map_err(|err| format!("--scope: {}", err));
@@ -241,14 +262,12 @@ fn query_enforced_scope(
     let Some(expectation) = matching_expectation else {
         return Ok(full_scope());
     };
-    let mut history_cache = HistoryCache::default();
-    let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
     initial_visible_scope_for_expectation(
         root,
         tree_source,
         expectation,
-        &mut history_cache,
-        &mut visible_tree_oid_cache,
+        &mut check_caches.history,
+        &mut check_caches.visible_tree_oid,
         active_lazy_full_scope_reset_ids,
     )
 }

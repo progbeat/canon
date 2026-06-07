@@ -222,7 +222,8 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     if active_lazy_full_scope_reset {
         run_expectation_try!(clear_active_lazy_full_scope_reset(
             context.runtime.root,
-            expectation
+            expectation,
+            &mut context.caches.lazy_reset
         ));
     }
     Ok(ExpectationRunOutcome {

@@ -2,6 +2,7 @@ use super::failure::write_check_error_finish_event;
 use crate::app::LazyAppServerRunner;
 use crate::check::config::validation::check_config_loads_plugins;
 use crate::check::interrogation::state::CheckTreeContext;
+use crate::check::run::lazy_reset::LazyFullScopeResetCache;
 use crate::config_types::CheckConfig;
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::logs::DiagnosticLogWriter;
@@ -28,6 +29,7 @@ pub(crate) fn prepare_check_execution(
     config: &CheckConfig,
     diagnostic_log: &mut DiagnosticLogWriter,
     options: PrepareCheckExecutionOptions<'_>,
+    lazy_reset_cache: &mut LazyFullScopeResetCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<PreparedCheckExecution, String> {
     let staged_view =
@@ -39,6 +41,7 @@ pub(crate) fn prepare_check_execution(
                     diagnostic_log,
                     options.query,
                     options.errors_on_failure,
+                    lazy_reset_cache,
                     &err,
                 )?;
                 return Err(err);
@@ -69,7 +72,15 @@ fn write_prepare_check_failure(
     diagnostic_log: &mut DiagnosticLogWriter,
     query: bool,
     errors_on_failure: usize,
+    lazy_reset_cache: &mut LazyFullScopeResetCache,
     err: &str,
 ) -> Result<(), String> {
-    write_check_error_finish_event(root, diagnostic_log, query, errors_on_failure, err)
+    write_check_error_finish_event(
+        root,
+        diagnostic_log,
+        lazy_reset_cache,
+        query,
+        errors_on_failure,
+        err,
+    )
 }

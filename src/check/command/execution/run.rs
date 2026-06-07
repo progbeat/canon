@@ -51,10 +51,13 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
     let query_mode = command.query.is_some();
     let query_start_field = if query_mode { Some(true) } else { None };
-    if let Err(err) = activate_scheduled_lazy_full_scope_resets(root) {
+    let mut check_caches = CheckRunCaches::new();
+    if let Err(err) = activate_scheduled_lazy_full_scope_resets(root, &mut check_caches.lazy_reset)
+    {
         return fail_check_before_selection(
             root,
             &mut diagnostic_log,
+            &mut check_caches.lazy_reset,
             query_start_field,
             query_mode,
             1,
@@ -67,6 +70,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             return fail_check_before_selection(
                 root,
                 &mut diagnostic_log,
+                &mut check_caches.lazy_reset,
                 query_start_field,
                 query_mode,
                 1,
@@ -80,6 +84,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             return fail_check_before_selection(
                 root,
                 &mut diagnostic_log,
+                &mut check_caches.lazy_reset,
                 query_start_field,
                 query_mode,
                 0,
@@ -87,19 +92,21 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             )
         }
     };
-    let active_reset_ids = match active_lazy_full_scope_reset_ids(root, &identities) {
-        Ok(ids) => ids,
-        Err(err) => {
-            return fail_check_before_selection(
-                root,
-                &mut diagnostic_log,
-                query_start_field,
-                query_mode,
-                0,
-                err,
-            )
-        }
-    };
+    let active_reset_ids =
+        match active_lazy_full_scope_reset_ids(root, &identities, &mut check_caches.lazy_reset) {
+            Ok(ids) => ids,
+            Err(err) => {
+                return fail_check_before_selection(
+                    root,
+                    &mut diagnostic_log,
+                    &mut check_caches.lazy_reset,
+                    query_start_field,
+                    query_mode,
+                    0,
+                    err,
+                )
+            }
+        };
     if let Some(question) = command.query.as_deref() {
         return run_query_mode(
             root,
@@ -113,13 +120,22 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             diagnostic_log,
             query_start_field,
             query_mode,
+            &mut check_caches,
         );
     }
     let options =
         match resolve_check_options_with_identities(&config, &identities, &command.options) {
             Ok(options) => options,
             Err(err) => {
-                return fail_check_before_selection(root, &mut diagnostic_log, None, false, 0, err)
+                return fail_check_before_selection(
+                    root,
+                    &mut diagnostic_log,
+                    &mut check_caches.lazy_reset,
+                    None,
+                    false,
+                    0,
+                    err,
+                )
             }
         };
     write_check_start_event(
@@ -131,7 +147,6 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             .map(|expectation| expectation.id.clone())
             .collect(),
     )?;
-    let mut check_caches = CheckRunCaches::new();
     let mut execution = prepare_check_execution(
         root,
         &config,
@@ -143,10 +158,17 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             query: false,
             errors_on_failure: 0,
         },
+        &mut check_caches.lazy_reset,
         &mut check_caches.visible_tree_oid,
     )
     .map_err(CommandError::from)?;
-    cleanup_cache_dirs(root, &mut repo_cache, &identities, &mut diagnostic_log)?;
+    cleanup_cache_dirs(
+        root,
+        &mut repo_cache,
+        &identities,
+        &mut diagnostic_log,
+        &mut check_caches,
+    )?;
     let shared_output = SharedCheckOutput::stdout();
     let mut result_output = shared_output.clone();
     let runtime = CheckRuntime::materialized(
@@ -206,6 +228,7 @@ fn run_query_mode(
     diagnostic_log: DiagnosticLogWriter,
     query_start_field: Option<bool>,
     query_mode: bool,
+    check_caches: &mut CheckRunCaches,
 ) -> Result<(), CommandError> {
     let query_config_override;
     let query_config = match command.query_preset.as_deref() {
@@ -219,6 +242,7 @@ fn run_query_mode(
                 return fail_check_before_selection(
                     root,
                     &mut diagnostic_log,
+                    &mut check_caches.lazy_reset,
                     query_start_field,
                     query_mode,
                     0,
@@ -239,6 +263,7 @@ fn run_query_mode(
         against_tree,
         no_sandbox: command.no_sandbox,
         diagnostic_log,
+        check_caches,
     })
     .map_err(CommandError::from)
 }
@@ -248,6 +273,7 @@ fn cleanup_cache_dirs(
     repo_cache: &mut RepoInspectionCache,
     identities: &[crate::check::ExpectationIdentity],
     diagnostic_log: &mut DiagnosticLogWriter,
+    check_caches: &mut CheckRunCaches,
 ) -> Result<(), CommandError> {
     let cache_dir = repo_cache
         .git_path(root, CANON_CACHE_DIR_GIT_PATH)
@@ -255,7 +281,16 @@ fn cleanup_cache_dirs(
     let active_ids = active_expectation_ids_from_identities(identities);
     let cleanup = match cleanup_stale_cache_dirs(&cache_dir, &active_ids) {
         Ok(cleanup) => cleanup,
-        Err(err) => return fail_check_after_start(root, diagnostic_log, false, 1, err),
+        Err(err) => {
+            return fail_check_after_start(
+                root,
+                diagnostic_log,
+                &mut check_caches.lazy_reset,
+                false,
+                1,
+                err,
+            )
+        }
     };
     write_cache_cleanup_event(diagnostic_log, cleanup.removed, cleanup.kept)?;
     Ok(())

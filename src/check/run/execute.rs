@@ -3,6 +3,7 @@ mod progress;
 mod report;
 mod run;
 
+use crate::check::run::lazy_reset::LazyFullScopeResetCache;
 use crate::git::VisibleTreeOidCache;
 use crate::history::HistoryCache;
 use crate::logs::DiagnosticLogWriter;
@@ -13,6 +14,7 @@ pub(crate) use run::run_check_with_runner_and_caches;
 
 pub(crate) struct CheckRunCaches {
     pub(crate) history: HistoryCache,
+    pub(crate) lazy_reset: LazyFullScopeResetCache,
     pub(crate) visible_tree_oid: VisibleTreeOidCache,
 }
 
@@ -20,6 +22,7 @@ impl CheckRunCaches {
     pub(crate) fn new() -> CheckRunCaches {
         CheckRunCaches {
             history: HistoryCache::default(),
+            lazy_reset: LazyFullScopeResetCache::default(),
             visible_tree_oid: VisibleTreeOidCache::new(),
         }
     }

@@ -63,6 +63,7 @@ pub(crate) fn finish_check_report(
         context.config,
         report.evaluated,
         &report.cached,
+        &mut context.check_caches.lazy_reset,
         context.diagnostic_log,
     ) {
         finish_error.get_or_insert_with(|| err.clone());

@@ -1,6 +1,8 @@
 use crate::check::command::finish::{finish_check_report, CheckReportFinishContext};
 use crate::check::core::types::CheckRunReport;
-use crate::check::run::lazy_reset::apply_lazy_full_scope_reset_for_cached;
+use crate::check::run::lazy_reset::{
+    apply_lazy_full_scope_reset_for_cached, LazyFullScopeResetCache,
+};
 use crate::check::CheckRunCaches;
 use crate::cli::CommandError;
 use crate::config_types::CheckConfig;
@@ -40,23 +42,32 @@ pub(super) fn finish_check_error_report(
 pub(super) fn fail_check_before_selection(
     root: &Path,
     diagnostic_log: &mut DiagnosticLogWriter,
+    lazy_reset_cache: &mut LazyFullScopeResetCache,
     start_query: Option<bool>,
     finish_query: bool,
     errors: usize,
     err: String,
 ) -> Result<(), CommandError> {
     write_check_start_event(diagnostic_log, start_query, Vec::new())?;
-    fail_check_after_start(root, diagnostic_log, finish_query, errors, err)
+    fail_check_after_start(
+        root,
+        diagnostic_log,
+        lazy_reset_cache,
+        finish_query,
+        errors,
+        err,
+    )
 }
 
 pub(super) fn fail_check_after_start(
     root: &Path,
     diagnostic_log: &mut DiagnosticLogWriter,
+    lazy_reset_cache: &mut LazyFullScopeResetCache,
     query: bool,
     errors: usize,
     err: String,
 ) -> Result<(), CommandError> {
-    write_check_error_finish_event(root, diagnostic_log, query, errors, &err)
+    write_check_error_finish_event(root, diagnostic_log, lazy_reset_cache, query, errors, &err)
         .map_err(CommandError::from)?;
     Err(err.into())
 }
@@ -64,12 +75,15 @@ pub(super) fn fail_check_after_start(
 pub(super) fn write_check_error_finish_event(
     root: &Path,
     diagnostic_log: &mut DiagnosticLogWriter,
+    lazy_reset_cache: &mut LazyFullScopeResetCache,
     query: bool,
     _errors: usize,
     err: &str,
 ) -> Result<(), String> {
     let mut finish_error = err.to_string();
-    if let Err(reset_err) = apply_lazy_full_scope_reset_for_cached(root, 0, &[], diagnostic_log) {
+    if let Err(reset_err) =
+        apply_lazy_full_scope_reset_for_cached(root, 0, &[], lazy_reset_cache, diagnostic_log)
+    {
         finish_error.push_str("; lazy full-scope reset failed: ");
         finish_error.push_str(&reset_err);
     }
