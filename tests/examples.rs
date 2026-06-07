@@ -198,44 +198,6 @@ fn gate_reports_mixed_canon_changes_before_config_errors() {
 }
 
 #[test]
-fn gate_reports_missing_config_when_no_canon_changes_are_staged() {
-    let repo = temp_repo("canon-gate-no-config-example");
-    init_git_repo(&repo);
-    fs::write(repo.join("src-main.py"), "print('hello')\n").unwrap();
-    let output = Command::new("git")
-        .args(["add", "src-main.py"])
-        .current_dir(&repo)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let output = canon().arg("gate").current_dir(&repo).output().unwrap();
-
-    let _ = fs::remove_dir_all(&repo);
-
-    assert!(!output.status.success());
-    assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
-    assert_eq!(
-        String::from_utf8(output.stderr).unwrap(),
-        "canon gate: No canon check config found at .canon/check.yml\n\
-         ▷ If the human asked you to use any `canon-*` skill in this project, treat \
-         the missing config as permission to set up canon rather than asking for \
-         confirmation. Run `canon init`, inspect the current project enough to \
-         understand its purpose, public behavior, and important invariants, then \
-         draft a minimal `.canon/check.yml` that the human can grow over time. Use \
-         canon's own `.canon/check.yml` as a reference for structure and style: \
-         `https://raw.githubusercontent.com/progbeat/canon/main/.canon/check.yml`. \
-         Start with a few simple, objective expectations that protect important \
-         user-facing behavior.\n\
-         ▷ Fix the gate error and run `canon check` again!\n"
-    );
-}
-
-#[test]
 fn check_without_config_renders_documented_recovery_message() {
     let repo = temp_repo("canon-missing-config-example");
     init_git_repo(&repo);

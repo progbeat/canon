@@ -49,8 +49,7 @@ fn gate_regression_count(root: &Path, changed_paths: &[Vec<u8>]) -> Result<usize
     let config =
         match repo_cache.load_check_config(root, Path::new(CHECK_PATH), &TreeSource::Staged) {
             Ok(config) => config,
-            Err(_) if has_staged_canon_change(changed_paths) => return Ok(0),
-            Err(err) => return gate_result_or_failure(Err(err)),
+            Err(_) => return Ok(0),
         };
     let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
     let mut history_cache = HistoryCache::default();
@@ -78,12 +77,6 @@ fn has_mixed_canon_and_non_canon_changes(changed_paths: &[Vec<u8>]) -> bool {
         .iter()
         .any(|path| is_canon_project_path_bytes(path));
     has_canon_change && !is_canon_only_staged_change_bytes(changed_paths)
-}
-
-fn has_staged_canon_change(changed_paths: &[Vec<u8>]) -> bool {
-    changed_paths
-        .iter()
-        .any(|path| is_canon_project_path_bytes(path))
 }
 
 fn write_mixed_canon_change_failure() -> Result<(), String> {
