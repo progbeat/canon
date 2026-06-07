@@ -425,6 +425,7 @@ mod tests {
             expectations: vec![Expectation {
                 q: "Does it pass?".to_string(),
                 a: "yes".to_string(),
+                question_answer_only: false,
                 agent: AgentConfig {
                     models: Vec::new(),
                     thinking: "medium".to_string(),

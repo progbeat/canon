@@ -75,6 +75,7 @@ pub(crate) fn selected_expectation_at(
         display_id: identity.display_id.clone(),
         question: expectation.q.clone(),
         expected_answer: expectation.a.clone(),
+        question_answer_only: expectation.question_answer_only,
         agent: expectation.agent.clone(),
         cooldown,
     })

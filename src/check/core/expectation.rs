@@ -8,6 +8,7 @@ pub(crate) struct SelectedExpectation {
     pub(crate) display_id: String,
     pub(crate) question: String,
     pub(crate) expected_answer: String,
+    pub(crate) question_answer_only: bool,
     pub(crate) agent: AgentConfig,
     pub(crate) cooldown: Option<Cooldown>,
 }

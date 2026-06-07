@@ -320,16 +320,20 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
     // developer instructions and the turn prompt are rendered from
     // `resources/prompts/` plus runtime data.
     let enforced_scope = sanitize_scope(enforced_scope)?;
-    let against_tree_answer = against_tree_answer_with_cache(
-        runtime.root,
-        &runtime.tree_context.against_tree,
-        &expectation.agent,
-        expectation,
-        &enforced_scope,
-        history_cache,
-        &mut state.visible_tree_oid_cache,
-    )
-    .map_err(EvaluatorError::message)?;
+    let against_tree_answer = if expectation.question_answer_only {
+        None
+    } else {
+        against_tree_answer_with_cache(
+            runtime.root,
+            &runtime.tree_context.against_tree,
+            &expectation.agent,
+            expectation,
+            &enforced_scope,
+            history_cache,
+            &mut state.visible_tree_oid_cache,
+        )
+        .map_err(EvaluatorError::message)?
+    };
     let prompt = evaluator_turn_prompt(
         runtime.root,
         &expectation.question,

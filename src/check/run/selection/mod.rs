@@ -63,6 +63,7 @@ mod tests {
             expectations: vec![Expectation {
                 q: "Does selector cache reuse avoid unnecessary evaluator work?".to_string(),
                 a: "yes".to_string(),
+                question_answer_only: true,
                 agent: AgentConfig::implementation_default(),
                 cooldown: None,
             }],

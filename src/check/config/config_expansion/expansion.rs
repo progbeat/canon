@@ -61,10 +61,12 @@ impl RawExpectationExpansion<'_> {
         for (index, item) in items.into_iter().enumerate() {
             match item {
                 RawExpectationItem::Explicit(item) => {
+                    let question_answer_only = item.cooldown.is_none() && item.settings.is_empty();
                     let agent = self.resolve_expectation_agent(&item.settings)?;
                     self.expectations.push(Expectation {
                         q: item.q,
                         a: item.a,
+                        question_answer_only,
                         agent,
                         cooldown: item.cooldown,
                     })
@@ -98,6 +100,7 @@ impl RawExpectationExpansion<'_> {
             self.expectations.push(Expectation {
                 q: render_generator_expectation_question(&item.generated_question_format, &content),
                 a: item.a.clone(),
+                question_answer_only: false,
                 agent: self.resolve_expectation_agent(&item.settings)?,
                 cooldown: item.cooldown.clone(),
             });

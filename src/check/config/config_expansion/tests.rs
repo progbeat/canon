@@ -9,6 +9,40 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
+fn explicit_question_answer_only_marker_requires_no_extra_fields() {
+    let raw: RawCheckConfig = serde_saphyr::from_str(
+        r#"
+version: 1
+presets:
+  default: {}
+expectations:
+  - q: "Does plain q/a stay query-compatible?"
+    a: "yes"
+  - q: "Does cooldown customize the expectation?"
+    a: "yes"
+    cooldown: 7d
+  - q: "Does thinking customize the expectation?"
+    a: "yes"
+    thinking: high
+"#,
+    )
+    .expect("parse raw check config");
+
+    let config = expand_raw_check_config(
+        None,
+        Path::new("check.yml"),
+        raw,
+        None,
+        CheckConfigSource::Tree(TreeSource::Staged),
+    )
+    .expect("expand config");
+
+    assert!(config.expectations[0].question_answer_only);
+    assert!(!config.expectations[1].question_answer_only);
+    assert!(!config.expectations[2].question_answer_only);
+}
+
+#[test]
 fn include_cooldown_is_inherited_without_overriding_child_cooldown() {
     let root = test_root("include-cooldown-inheritance");
     git(&root, &["init"]);

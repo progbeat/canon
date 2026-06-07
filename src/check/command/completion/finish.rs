@@ -202,6 +202,7 @@ fn selected_expectation_from_record(
         display_id: record.display_id.clone(),
         question: record.question.clone()?,
         expected_answer: record.expected_answer.clone()?,
+        question_answer_only: false,
         agent: agent.clone(),
         cooldown: None,
     })
