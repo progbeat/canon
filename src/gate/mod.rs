@@ -29,22 +29,21 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
     // same HEAD-vs-staged regression count is zero. In that same-tree commit
     // case, remaining expectation failures are not gate failures; only a
     // staged regression from HEAD pass to staged fail blocks the hook.
-    let num_regressions = gate_regression_count(root, &changed_paths)?;
-    if num_regressions > 0 {
-        write_gate_regression_failure()?;
-        return Err(CommandError::GateFailed);
+    let num_regressions = gate_regression_count(root)?;
+    match gate_decision(num_regressions, &changed_paths) {
+        GateDecision::Pass => Ok(()),
+        GateDecision::RegressionFailure => {
+            write_gate_regression_failure()?;
+            Err(CommandError::GateFailed)
+        }
+        GateDecision::MixedCanonChangeFailure => {
+            write_mixed_canon_change_failure()?;
+            Err(CommandError::GateFailed)
+        }
     }
-    if has_mixed_canon_and_non_canon_changes(&changed_paths) {
-        write_mixed_canon_change_failure()?;
-        return Err(CommandError::GateFailed);
-    }
-    Ok(())
 }
 
-fn gate_regression_count(root: &Path, changed_paths: &[Vec<u8>]) -> Result<usize, CommandError> {
-    if has_staged_canon_change(changed_paths) {
-        return Ok(0);
-    }
+fn gate_regression_count(root: &Path) -> Result<usize, CommandError> {
     let mut repo_cache = RepoInspectionCache::new();
     let config =
         match repo_cache.load_check_config(root, Path::new(CHECK_PATH), &TreeSource::Staged) {
@@ -61,6 +60,22 @@ fn gate_regression_count(root: &Path, changed_paths: &[Vec<u8>]) -> Result<usize
     ))
 }
 
+enum GateDecision {
+    Pass,
+    RegressionFailure,
+    MixedCanonChangeFailure,
+}
+
+fn gate_decision(num_regressions: usize, changed_paths: &[Vec<u8>]) -> GateDecision {
+    if num_regressions > 0 {
+        return GateDecision::RegressionFailure;
+    }
+    if has_mixed_canon_and_non_canon_changes(changed_paths) {
+        return GateDecision::MixedCanonChangeFailure;
+    }
+    GateDecision::Pass
+}
+
 fn gate_result_or_failure<T>(result: Result<T, String>) -> Result<T, CommandError> {
     match result {
         Ok(value) => Ok(value),
@@ -73,13 +88,10 @@ fn gate_result_or_failure<T>(result: Result<T, String>) -> Result<T, CommandErro
 }
 
 fn has_mixed_canon_and_non_canon_changes(changed_paths: &[Vec<u8>]) -> bool {
-    has_staged_canon_change(changed_paths) && !is_canon_only_staged_change_bytes(changed_paths)
-}
-
-fn has_staged_canon_change(changed_paths: &[Vec<u8>]) -> bool {
-    changed_paths
+    let has_canon_change = changed_paths
         .iter()
-        .any(|path| is_canon_project_path_bytes(path))
+        .any(|path| is_canon_project_path_bytes(path));
+    has_canon_change && !is_canon_only_staged_change_bytes(changed_paths)
 }
 
 fn write_mixed_canon_change_failure() -> Result<(), String> {
