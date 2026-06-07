@@ -1,5 +1,4 @@
-use super::response::parse_evaluator_response;
-use crate::check::ParsedAnswer;
+use crate::check::{parse_evaluator_response, ParsedAnswer};
 use crate::config_types::AgentConfig;
 use crate::scope::effective_ignore_patterns;
 use std::collections::BTreeMap;
@@ -23,7 +22,7 @@ impl EvaluatorResponseParseCache {
         if let Some(parsed) = self.values.get(&key) {
             return parsed.clone();
         }
-        let parsed = parse_evaluator_response(text, agent);
+        let parsed = parse_evaluator_response(text);
         self.values.insert(key, parsed.clone());
         parsed
     }

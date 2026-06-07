@@ -48,6 +48,11 @@ impl ParsedAnswer {
     }
 }
 
+pub(crate) fn parse_evaluator_response(text: &str) -> Result<ParsedAnswer, String> {
+    let response = parse_evaluator_response_json(text)?;
+    response.into_schema_valid_parsed_answer()
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EvaluatorResponseJson {
@@ -64,6 +69,31 @@ pub(crate) struct EvaluatorResponseJson {
 }
 
 impl EvaluatorResponseJson {
+    fn into_schema_valid_parsed_answer(self) -> Result<ParsedAnswer, String> {
+        self.validate_schema()?;
+        if let Some(answer) = self.answer {
+            // Pass/fail comparison happens after parsing against the
+            // expectation's current expected answer.
+            return Ok(ParsedAnswer::answer(
+                answer,
+                self.evidence,
+                Some(self.question_scope_suggestion),
+            ));
+        }
+        let error = self
+            .error
+            .expect("schema validation ensures error is present");
+        // The Interrogation Policy schema permits qScopeSuggestion on an error
+        // response too. Preserve it for schema fidelity and diagnostics;
+        // narrowing policy still consumes suggestions only from answer
+        // responses.
+        Ok(ParsedAnswer::error_with_question_scope_suggestion(
+            error,
+            self.evidence,
+            Some(self.question_scope_suggestion),
+        ))
+    }
+
     pub(crate) fn validate_schema(&self) -> Result<(), String> {
         let has_answer = self.answer.is_some();
         let has_error = self.error.is_some();
@@ -106,6 +136,44 @@ impl EvaluatorResponseJson {
         }
         Ok(())
     }
+}
+
+pub(crate) fn parse_evaluator_response_json(text: &str) -> Result<EvaluatorResponseJson, String> {
+    let payload = evaluator_response_json_payload(text)?;
+    let raw = serde_json::from_str::<Value>(payload)
+        .map_err(|err| format!("failed to parse evaluator JSON response: {}", err))?;
+    reject_explicit_null_schema_fields(&raw)?;
+    serde_json::from_value::<EvaluatorResponseJson>(raw)
+        .map_err(|err| format!("failed to parse evaluator JSON response: {}", err))
+}
+
+fn reject_explicit_null_schema_fields(raw: &Value) -> Result<(), String> {
+    let Some(object) = raw.as_object() else {
+        return Err("evaluator response must be a JSON object".to_string());
+    };
+    for key in ["answer", "error", "qScopeSuggestion"] {
+        if object.get(key).is_some_and(Value::is_null) {
+            return Err(format!("{} must not be null", key));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn evaluator_response_json_payload(text: &str) -> Result<&str, String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err("evaluator response must be a JSON object".to_string());
+    }
+    let mut deserializer = serde_json::Deserializer::from_str(trimmed);
+    serde_json::Value::deserialize(&mut deserializer)
+        .map_err(|err| format!("failed to inspect evaluator JSON response: {}", err))?;
+    deserializer
+        .end()
+        .map_err(|_| "evaluator response must not contain surrounding prose".to_string())?;
+    if !trimmed.starts_with('{') {
+        return Err("evaluator response must be a JSON object".to_string());
+    }
+    Ok(trimmed)
 }
 
 fn contains_schema_single_line_violation(value: &str) -> bool {
@@ -161,7 +229,80 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::EvaluatorResponseJson;
+    use super::{parse_evaluator_response_json, EvaluatorResponseJson};
+
+    #[test]
+    fn evaluator_response_requires_question_scope_suggestion() {
+        let error = parse_evaluator_response_json(r#"{"answer":"yes","evidence":"`src/main.rs`"}"#)
+            .unwrap_err();
+
+        assert!(error.contains("qScopeSuggestion"));
+    }
+
+    #[test]
+    fn evaluator_response_rejects_empty_question_scope_suggestion() {
+        let response = parse_evaluator_response_json(
+            r#"{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":[]}"#,
+        )
+        .unwrap();
+
+        assert!(response
+            .validate_schema()
+            .unwrap_err()
+            .contains("qScopeSuggestion"));
+    }
+
+    #[test]
+    fn evaluator_response_rejects_empty_question_scope_suggestion_item() {
+        let response = parse_evaluator_response_json(
+            r#"{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":[""]}"#,
+        )
+        .unwrap();
+
+        assert!(response
+            .validate_schema()
+            .unwrap_err()
+            .contains("qScopeSuggestion"));
+    }
+
+    #[test]
+    fn evaluator_response_accepts_required_question_scope_suggestion() {
+        let response = parse_evaluator_response_json(
+            r#"{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":["src/main.rs"]}"#,
+        )
+        .unwrap();
+
+        response.validate_schema().unwrap();
+        assert_eq!(response.question_scope_suggestion, vec!["src/main.rs"]);
+    }
+
+    #[test]
+    fn evaluator_response_schema_allows_non_crlf_control_chars() {
+        let response = parse_evaluator_response_json(
+            "{\"answer\":\"yes\\t\",\"evidence\":\"`src/main.rs`\",\"qScopeSuggestion\":[\"src/main.rs\\u0008\"]}",
+        )
+        .unwrap();
+
+        response.validate_schema().unwrap();
+    }
+
+    #[test]
+    fn evaluator_response_schema_rejects_crlf_in_single_line_fields() {
+        let answer = parse_evaluator_response_json(
+            "{\"answer\":\"yes\\n\",\"evidence\":\"`src/main.rs`\",\"qScopeSuggestion\":[\"src/main.rs\"]}",
+        )
+        .unwrap();
+        let q_scope = parse_evaluator_response_json(
+            "{\"answer\":\"yes\",\"evidence\":\"`src/main.rs`\",\"qScopeSuggestion\":[\"src\\rmain.rs\"]}",
+        )
+        .unwrap();
+
+        assert!(answer.validate_schema().unwrap_err().contains("answer"));
+        assert!(q_scope
+            .validate_schema()
+            .unwrap_err()
+            .contains("qScopeSuggestion"));
+    }
 
     #[test]
     fn evaluator_response_schema_rejects_only_crlf_line_breaks() {

@@ -9,8 +9,8 @@ mod run_report;
 
 pub(crate) use answer::CheckResult;
 pub(crate) use evaluator_response::{
-    EvaluatorResponseJson, ParsedAnswer, ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION,
-    ERROR_UNPARSABLE,
+    parse_evaluator_response, EvaluatorResponseJson, ParsedAnswer, ERROR_INSUFFICIENT_EVIDENCE,
+    ERROR_INVALID_QUESTION, ERROR_UNPARSABLE,
 };
 pub(crate) use expectation::{Cooldown, SelectedExpectation};
 pub(crate) use line_break::{contains_line_break, is_line_break_char};

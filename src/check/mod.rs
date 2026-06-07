@@ -15,8 +15,8 @@ pub(crate) use config::{
     parse_tree_check_config_content_with_root,
 };
 pub(crate) use core::{
-    CheckRecord, CheckRecordOutcome, CheckResult, EvaluatorResponseJson, ParsedAnswer,
-    SelectedExpectation, ERROR_UNPARSABLE,
+    parse_evaluator_response, CheckRecord, CheckRecordOutcome, CheckResult, EvaluatorResponseJson,
+    ParsedAnswer, SelectedExpectation, ERROR_UNPARSABLE,
 };
 pub(crate) use interrogation::{
     write_agent_turn_failure_event, write_agent_turn_missing_usage_event,

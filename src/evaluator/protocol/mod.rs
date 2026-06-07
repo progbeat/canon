@@ -1,7 +1,6 @@
 pub(crate) mod response_cache;
 
 mod prompt;
-mod response;
 mod types;
 
 pub(crate) use prompt::{
