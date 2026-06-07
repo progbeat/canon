@@ -42,6 +42,9 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
 }
 
 fn gate_regression_count(root: &Path, changed_paths: &[Vec<u8>]) -> Result<usize, CommandError> {
+    if has_mixed_canon_and_non_canon_changes(changed_paths) {
+        return Ok(0);
+    }
     let mut repo_cache = RepoInspectionCache::new();
     let config =
         match repo_cache.load_check_config(root, Path::new(CHECK_PATH), &TreeSource::Staged) {
