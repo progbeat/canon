@@ -31,10 +31,11 @@ const PRE_COMMIT_HOOK_MANUAL_ADVICE: &str =
 pub(super) const GIT_WORKTREE_REQUIRED_FOR_HOOK_INSTALL: &str =
     "Can't safely install pre-commit hook: canon hook install requires a Git worktree.";
 
-// The `canon init` seed is compiled into the binary from a check-config source
-// file, not loaded at runtime as an evaluator interrogation prompt/instruction.
-// Interrogation texts live under `resources/prompts/`.
-const DEFAULT_CHECK_CONFIG_SOURCE: &str = include_str!("../../.canon/templates/default/check.yml");
+// The canon init seed is compiled into the binary from the default check-config
+// template file, not loaded at runtime as an evaluator prompt/instruction.
+// Interrogation texts live under resources/prompts.
+const DEFAULT_CHECK_CONFIG_TEMPLATE_FILE_CONTENTS: &str =
+    include_str!("../../.canon/templates/default/check.yml");
 
 pub(crate) fn run_init(root: &Path) -> Result<(), String> {
     let check_path = root.join(CHECK_PATH);
@@ -47,7 +48,9 @@ pub(crate) fn run_init(root: &Path) -> Result<(), String> {
     if let Some(parent) = check_path.parent() {
         ensure_project_dir_without_symlinks(root, parent)?;
     }
-    write_new_file(&check_path, DEFAULT_CHECK_CONFIG_SOURCE)?;
+    write_new_file(&check_path, DEFAULT_CHECK_CONFIG_TEMPLATE_FILE_CONTENTS)?;
+    // This success line becomes eligible only after the config file exists;
+    // `write_stdout_line` flushes it immediately and no later init work remains.
     write_stdout_line(&format!("Created {}", CHECK_PATH))?;
     Ok(())
 }
@@ -114,6 +117,8 @@ fn install_pre_commit_hook(root: &Path, preflight: &HookInstallPreflight) -> Res
         ensure_dir_without_symlinks(parent)?;
     }
     replace_file(hook_path, DEFAULT_PRE_COMMIT_HOOK)?;
+    // The managed hook file exists now. Emit that user-visible fact before the
+    // remaining install steps so the line is not held until command completion.
     write_stdout_line(&format!("Installed {}", DEFAULT_GIT_PRE_COMMIT_HOOK_PATH))?;
     make_executable(hook_path)?;
     configure_git_hooks_path(root, preflight)?;
@@ -130,6 +135,8 @@ pub(crate) fn run_hook_uninstall(root: &Path) -> Result<(), String> {
         unset_git_hooks_path(root)?;
     }
     remove_optional_file(&preflight.pre_commit_hook_path)?;
+    // The hook file has been removed by this point, and there is no later
+    // uninstall work to delay the flushed success line.
     write_stdout_line(&format!("Uninstalled {}", DEFAULT_GIT_PRE_COMMIT_HOOK_PATH))
 }
 

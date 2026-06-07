@@ -11,12 +11,10 @@
 - q: "Does the project avoid repeating expensive deterministic operations within a single high-level operation by reusing results keyed by all inputs that can affect them, including repository inspections, filesystem reads, parsed data, and derived hashes?"
   a: "yes"
   cooldown: 7d
-  thinking: xhigh
 
 - q: "Can you find any obsolete, unused, stray, dead-end, duplicated, or redundant Git-tracked project files or code paths that are safe to remove or consolidate without changing intended functionality?"
   a: "no"
-  cooldown: 7d
-  thinking: xhigh
+  cooldown: {pass: 7d, fail: 2h}
 
 - q: "Can you find any hand-written, non-generated source files that are excessively large or mix unrelated responsibilities enough that they should be split into smaller focused modules?"
   a: "no"
@@ -30,8 +28,8 @@
 
 - q: "Can you find any dirty hacks that can be avoided?"
   a: "no"
-  cooldown: 7d
-  thinking: xhigh
+  cooldown: {pass: 7d, fail: 30m}
+  thinking: high
 
 - q: "Does the project avoid unnecessary unsafe code?"
   a: "yes"
@@ -40,8 +38,8 @@
 
 - q: "Can you find any avoidable violations of commonly accepted idiomatic Rust practices that materially reduce this project's maintainability, correctness, readability, type safety, or future extensibility, excluding purely stylistic alternatives unless they create a concrete demonstrated risk?"
   a: "no"
-  cooldown: 7d
-  thinking: xhigh
+  cooldown: {pass: 7d, fail: 30m}
+  thinking: high
 
 - q: "Are writes under CANON_STATE_DIR amortized O(N) over N newly persisted bytes?"
   a: "yes"
@@ -96,4 +94,12 @@
 - q: "Can you find any high-confidence, practically exploitable security vulnerability?"
   a: "no"
   preset: smart
+  cooldown: {"pass": 7d, "fail": 1d}
+
+- q: "Can you find code structure that is overly flat?"
+  a: "no"
+  cooldown: {"pass": 7d, "fail": 1d}
+
+- q: 'Can you find tests that assert incidental implementation details instead of stable observable behavior through a public or component interface?'
+  a: "no"
   cooldown: {"pass": 7d, "fail": 1d}

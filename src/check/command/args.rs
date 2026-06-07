@@ -1,9 +1,10 @@
-use crate::check::core::types::CheckCommandArgs;
+use crate::check::core::CheckCommandArgs;
 use crate::check::run::selection::{
     add_check_option_args, matched_os_values, raw_check_options_from_matches,
 };
 use crate::check::CHECK_PATH;
 use crate::git::{validate_tree_arg, DEFAULT_AGAINST_TREE_ARG, STAGED_TREE_ARG};
+use crate::hash::full_scope;
 use crate::notes::arg_to_string;
 use crate::scope::normalize_repo_path;
 use clap::builder::OsStringValueParser;
@@ -79,6 +80,9 @@ pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommand
             "canon check -q cannot be combined with expectation selectors, --keep-going, --all, or --ignore-cooldown"
                 .to_string(),
         );
+    }
+    if query.is_some() && query_scope.is_empty() {
+        query_scope = full_scope();
     }
     Ok(CheckCommandArgs {
         config_path: config_path.unwrap_or_else(|| PathBuf::from(CHECK_PATH)),
@@ -179,6 +183,13 @@ mod tests {
 
         assert_eq!(command.query.as_deref(), Some("Can this pass?"));
         assert_eq!(command.query_preset.as_deref(), Some("smart"));
+    }
+
+    #[test]
+    fn query_defaults_to_full_scope() {
+        let command = parse(&["-q", "Can this pass?"]).unwrap();
+
+        assert_eq!(command.query_scope, vec![".".to_string()]);
     }
 
     #[test]

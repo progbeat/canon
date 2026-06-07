@@ -2,7 +2,7 @@
 
 **interrogation** is a `canon check` evaluator turn for one expectation question.
 
-Each evaluator task input is exactly the question string.
+Each evaluator task input is rendered from the turn prompt template.
 
 An evaluator response must be a single JSON object matching this JSON Schema:
 

@@ -16,6 +16,8 @@ Your job is to **protect** the canon and **enforce** it in the project.
 
 To check the canon against the staged tree, run `canon check` with escalation.
 
+When running canon check, **do not pass options** unless the human explicitly requests them.
+
 ### Change Constraints
 
 **Never ever make unrequested changes unless they directly improve the project's compliance with the canon.**
@@ -24,7 +26,7 @@ If a request contradicts the canon or the canon is internally inconsistent, stop
 
 Do not edit files under `.canon/` proactively. Edit them only when a human explicitly insists.
 
-**Every edit may potentially violate the canon**, so before editing project files, **always** read the relevant expectations under `.canon/`. Do not start editing until you know which `.canon/` expectations apply to the files or behavior you are about to change.
+**Every edit may potentially violate the canon**, so before editing project files, **always** identify the relevant expectations under `.canon/`. Do not start editing until you can explain why the planned change is compatible with those expectations.
 
 ### Canon Enforcement
 

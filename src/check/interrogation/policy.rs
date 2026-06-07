@@ -1,15 +1,16 @@
 use crate::check::core::errors::error_record_from_interrogation_error;
-use crate::check::core::types::{CheckRecord, InterrogationResult, SelectedExpectation};
-use crate::check::interrogation::model_fallback::interrogate_expectation_with_model_fallbacks;
-use crate::check::interrogation::narrowing::scope_narrowing_log_fields;
+use crate::check::core::{CheckRecord, InterrogationResult, SelectedExpectation};
 use crate::check::interrogation::state::{
-    should_retry_full_scope_after_restricted_response, CheckRuntime, InterrogationRunState,
+    should_retry_full_scope_after_error, CheckRuntime, InterrogationRunState,
+};
+use crate::check::interrogation::{
+    interrogate_expectation_with_model_fallbacks, scope_narrowing_log_fields,
 };
 use crate::config_types::AgentConfig;
 use crate::evaluator::EvaluatorRunner;
 use crate::git::VisibleTreeOidCache;
 use crate::hash::full_scope;
-use crate::history::is_reusable_history_record;
+use crate::history::{is_reusable_history_record, HistoryCache};
 use crate::logs::DiagnosticLogWriter;
 
 pub(crate) struct InterrogationCall<'a> {
@@ -39,6 +40,7 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     interrogation_run_state: &mut InterrogationRunState,
+    history_cache: &mut HistoryCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
     break_after_tokens: Option<u64>,
 ) -> Result<InterrogationResult, String> {
@@ -47,13 +49,16 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
         runner,
         diagnostic_log,
         interrogation_run_state,
+        history_cache,
         visible_tree_oid_cache,
     )?;
     let should_stop_after_current_expectation =
         turn_exceeds_break_after_tokens(&interrogation, break_after_tokens)
             || turn_has_context_compaction(&interrogation);
-    if should_retry_full_scope_after_restricted_response(&interrogation.record, call.enforced_scope)
-    {
+    if should_retry_full_scope_after_error(
+        interrogation.record.error.as_deref(),
+        call.enforced_scope,
+    ) {
         // Restricted insufficient-evidence is not final. Retry once with full
         // project scope and let that response become the record.
         *call.enforced_scope = full_scope();
@@ -62,6 +67,7 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
             runner,
             diagnostic_log,
             interrogation_run_state,
+            history_cache,
             visible_tree_oid_cache,
         )?;
         interrogation.stop_after_current_expectation |= should_stop_after_current_expectation;
@@ -76,6 +82,7 @@ pub(crate) fn interrogate_or_error_record<R: EvaluatorRunner>(
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     interrogation_run_state: &mut InterrogationRunState,
+    history_cache: &mut HistoryCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<InterrogationResult, String> {
     match interrogate_expectation_with_model_fallbacks(
@@ -84,6 +91,7 @@ pub(crate) fn interrogate_or_error_record<R: EvaluatorRunner>(
         runner,
         diagnostic_log,
         interrogation_run_state,
+        history_cache,
         call.scope,
     ) {
         Ok(interrogation) => Ok(interrogation),
@@ -117,7 +125,7 @@ pub(crate) fn turn_has_context_compaction(interrogation: &InterrogationResult) -
     interrogation.context_compacted
 }
 
-pub(crate) fn q_scope_suggestion_should_get_independent_verification(
+pub(crate) fn question_scope_suggestion_should_get_independent_verification(
     runtime: &CheckRuntime<'_>,
     agent: &AgentConfig,
     suggestion: Option<&[String]>,
@@ -154,10 +162,16 @@ pub(crate) fn narrowed_scope_is_accepted(
     // Acceptance means the q-scope suggestion graduated from evaluator claim
     // to verified reusable q-scope. Interrogation Policy requires the
     // independent verification turn to produce a schema-valid answer under
-    // that proposed scope. If verification needed full-scope retry, the
-    // restricted insufficient-evidence is not final, but the proposed scope is
-    // not verified.
-    is_reusable_history_record(narrowed) && narrowed.scope == proposed_scope
+    // that proposed scope.
+    is_reusable_history_record(narrowed)
+        && verified_q_scope_answer_is_accepted(&narrowed.scope, proposed_scope)
+}
+
+pub(crate) fn verified_q_scope_answer_is_accepted(
+    answer_scope: &[String],
+    proposed_scope: &[String],
+) -> bool {
+    answer_scope == proposed_scope
 }
 
 pub(crate) fn write_scope_narrowing_event(

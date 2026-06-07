@@ -2,9 +2,10 @@
 // plus current visibleTreeOid matching.
 use crate::check::{CheckRecord, CheckResult, SelectedExpectation};
 use crate::config_types::AgentConfig;
+use crate::evaluator::AgainstTreeAnswer;
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::history::HistoryCache;
-use crate::scope::sanitize_scope_for_hash;
+use crate::scope::{q_scope_from_visible_scope, visible_scope};
 use crate::time::parse_record_timestamp;
 use std::path::Path;
 
@@ -16,13 +17,18 @@ pub(crate) fn same_tree_history_record_with_cache(
     history_cache: &mut HistoryCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<Option<CheckRecord>, String> {
-    latest_history_record_matching_visible_tree_oid(root, expectation, history_cache, |scope| {
-        visible_tree_oid_cache.visible_tree_oid_for_reuse(root, source, agent, scope)
-    })
+    latest_history_record_matching_visible_tree_oid(
+        root,
+        agent,
+        expectation,
+        history_cache,
+        |scope| visible_tree_oid_cache.visible_tree_oid_for_reuse(root, source, agent, scope),
+    )
 }
 
 pub(crate) fn latest_history_record_matching_visible_tree_oid(
     root: &Path,
+    agent: &AgentConfig,
     expectation: &SelectedExpectation,
     history_cache: &mut HistoryCache,
     mut current_visible_tree_oid_for_scope: impl FnMut(&[String]) -> Result<Option<String>, String>,
@@ -32,7 +38,7 @@ pub(crate) fn latest_history_record_matching_visible_tree_oid(
     // newest-to-oldest visibleTreeOid match.
     let matched_record =
         scan_latest_history_records(root, expectation, history_cache, |mut record| {
-            let Ok(scope) = sanitize_scope_for_hash(&record.scope) else {
+            let Ok(scope) = q_scope_from_visible_scope(agent, &record.scope) else {
                 return Ok(HistoryRecordScan::Continue);
             };
             let Some(current_visible_tree_oid) = current_visible_tree_oid_for_scope(&scope)? else {
@@ -49,7 +55,7 @@ pub(crate) fn latest_history_record_matching_visible_tree_oid(
 
 pub(crate) fn cooldown_history_record(
     root: &Path,
-    _agent: &AgentConfig,
+    agent: &AgentConfig,
     expectation: &SelectedExpectation,
     history_cache: &mut HistoryCache,
     now: u64,
@@ -62,7 +68,7 @@ pub(crate) fn cooldown_history_record(
         // lookup which searches for the latest visibleTreeOid match. A newer
         // invalid scope, fail, bad timestamp, or expired result deliberately
         // blocks cooldown reuse of an older result.
-        let Ok(scope) = sanitize_scope_for_hash(&record.scope) else {
+        let Ok(scope) = q_scope_from_visible_scope(agent, &record.scope) else {
             return Ok(HistoryRecordScan::Done(None));
         };
         record.scope = scope;
@@ -82,6 +88,36 @@ pub(crate) fn cooldown_history_record(
         Ok(HistoryRecordScan::Done(Some(record)))
     })?;
     Ok(record.map(|record| cooldown_record_with_current_expectation(record, expectation)))
+}
+
+pub(crate) fn against_tree_answer_with_cache(
+    root: &Path,
+    source: &TreeSource,
+    agent: &AgentConfig,
+    expectation: &SelectedExpectation,
+    current_scope: &[String],
+    history_cache: &mut HistoryCache,
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
+) -> Result<Option<AgainstTreeAnswer>, String> {
+    let current_visible_scope = visible_scope(agent, current_scope)?;
+    let Some(against_tree_oid) = visible_tree_oid_cache.visible_tree_oid_for_visible_scope(
+        root,
+        source,
+        &current_visible_scope,
+    )?
+    else {
+        return Ok(None);
+    };
+    let records = history_cache.read_records(root, expectation)?;
+    for record in records.into_iter().rev() {
+        if record.scope == current_visible_scope && record.visible_tree_oid == against_tree_oid {
+            return Ok(Some(AgainstTreeAnswer {
+                answer: record.observed,
+                evidence: record.evidence,
+            }));
+        }
+    }
+    Ok(None)
 }
 
 pub(crate) enum CachedHistoryRecord {
@@ -104,18 +140,18 @@ pub(crate) fn cached_history_record(
 
 pub(crate) fn latest_stored_q_scope_with_cache(
     root: &Path,
-    _agent: &AgentConfig,
+    agent: &AgentConfig,
     expectation: &SelectedExpectation,
     history_cache: &mut HistoryCache,
 ) -> Result<Option<Vec<String>>, String> {
     // Expectation-mode `canon check` calls this before each fresh interrogation.
-    // It returns only the latest stored q-scope from answer history; it is not a
+    // It returns only the latest stored scope from answer history; it is not a
     // cached check result and does not let callers skip evaluator work. Cache
     // specifies that answer-history records contain schema-valid `answer`
-    // responses only, and each record's `qScope` is the q-scope used to form
-    // that record's visible tree.
+    // responses only, and each record's `visibleScope` is the scope used to
+    // form that record's visible tree.
     scan_latest_history_records(root, expectation, history_cache, |record| {
-        let Some(scope) = sanitized_answer_history_q_scope(&record) else {
+        let Some(scope) = sanitized_answer_history_q_scope(agent, &record) else {
             return Ok(HistoryRecordScan::Continue);
         };
         Ok(HistoryRecordScan::Done(Some(scope)))
@@ -143,8 +179,11 @@ fn scan_latest_history_records<T>(
     Ok(None)
 }
 
-fn sanitized_answer_history_q_scope(record: &CheckRecord) -> Option<Vec<String>> {
-    sanitize_scope_for_hash(&record.scope).ok()
+fn sanitized_answer_history_q_scope(
+    agent: &AgentConfig,
+    record: &CheckRecord,
+) -> Option<Vec<String>> {
+    q_scope_from_visible_scope(agent, &record.scope).ok()
 }
 
 fn record_with_current_expectation(
@@ -157,8 +196,8 @@ fn record_with_current_expectation(
     record.id = expectation.id.clone();
     record.display_id = expectation.display_id.clone();
     record.number = expectation.number;
-    record.prompt = Some(expectation.q.clone());
-    record.expected = Some(expectation.a.clone());
+    record.question = Some(expectation.question.clone());
+    record.expected_answer = Some(expectation.expected_answer.clone());
     record.result = current_result_for_history_record(&record, expectation);
     record
 }
@@ -169,7 +208,7 @@ fn cooldown_record_with_current_expectation(
 ) -> CheckRecord {
     let mut record = record_with_current_expectation(record, expectation);
     record.result = CheckResult::Pass;
-    record.observed = expectation.a.clone();
+    record.observed = expectation.expected_answer.clone();
     record.error = None;
     record
 }
@@ -178,20 +217,21 @@ pub(crate) fn is_reusable_history_record(record: &CheckRecord) -> bool {
     // Runtime persistence uses "reusable" to mean "schema-valid answer
     // response". Fail answers are reusable cache records; evaluator errors and
     // unparsable review records are not answer history.
-    record.expected_text().is_some() && record.error.is_none()
+    record.expected_answer_text().is_some() && record.error.is_none()
 }
 
 fn current_result_for_history_record(
     record: &CheckRecord,
     expectation: &SelectedExpectation,
 ) -> CheckResult {
-    CheckResult::from_expected_answer(&expectation.a, &record.observed)
+    CheckResult::from_expected_answer(&expectation.expected_answer, &record.observed)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::check::Cooldown;
+    use crate::check::{expectation_identities, select_expectations_with_identities};
+    use crate::config_types::{CheckConfig, CooldownConfig, Expectation};
     use crate::time::format_record_timestamp;
     use std::fs;
     use std::path::PathBuf;
@@ -217,17 +257,16 @@ mod tests {
             timestamp: timestamp.to_string(),
             number: 1,
             result: CheckResult::Pass,
-            prompt: Some("Does it pass?".to_string()),
-            expected: Some("yes".to_string()),
+            question: Some("Does it pass?".to_string()),
+            expected_answer: Some("yes".to_string()),
             observed: "yes".to_string(),
             error: None,
             evidence: evidence.to_string(),
             scope: vec![".".to_string()],
-            suggested_q_scope: None,
+            question_scope_suggestion: None,
             visible_tree_oid: "tree".to_string(),
             id: "11111111111111111111".to_string(),
             display_id: "1".to_string(),
-            cache_key: None,
         }
     }
 
@@ -257,7 +296,10 @@ mod tests {
         )
         .unwrap();
 
-        assert!(hit.is_none(), "invalid latest q-scope must block cooldown");
+        assert!(
+            hit.is_none(),
+            "invalid latest visible scope must block cooldown"
+        );
 
         let _ = fs::remove_dir_all(root);
     }
@@ -281,6 +323,7 @@ mod tests {
 
         let hit = latest_history_record_matching_visible_tree_oid(
             &root,
+            &expectation.agent,
             &expectation,
             &mut history_cache,
             |scope| {
@@ -299,32 +342,111 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    fn expectation_with_cooldown() -> SelectedExpectation {
-        SelectedExpectation {
-            number: 1,
-            id: "11111111111111111111".to_string(),
-            display_id: "1".to_string(),
-            q: "Does it pass?".to_string(),
-            a: "yes".to_string(),
-            agent: AgentConfig {
-                models: Vec::new(),
-                thinking: "medium".to_string(),
-                ignore: Vec::new(),
-                plugins: Vec::new(),
-            },
-            cooldown: Some(Cooldown {
-                pass_seconds: Some(100),
-                fail_seconds: None,
-            }),
-        }
+    #[test]
+    fn same_tree_history_record_ignores_evidence_file_refs() {
+        let root = git_project("same-tree-evidence-file-refs");
+        let expectation = expectation_with_cooldown();
+        let mut history_cache = HistoryCache::default();
+        let path = history_cache.path(&root, &expectation).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            format!(
+                "{}\n{}\n",
+                history_line(10, r#"["."]"#, "older pass"),
+                history_line(
+                    20,
+                    r#"["src/evaluator/config.rs"]"#,
+                    "`src/platform/unix.rs:126-700` is outside scope"
+                )
+            ),
+        )
+        .unwrap();
+
+        let hit = latest_history_record_matching_visible_tree_oid(
+            &root,
+            &expectation.agent,
+            &expectation,
+            &mut history_cache,
+            |_| Ok(Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string())),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            hit.evidence,
+            "`src/platform/unix.rs:126-700` is outside scope"
+        );
+
+        let _ = fs::remove_dir_all(root);
     }
 
-    fn history_line(timestamp: u64, q_scope: &str, evidence: &str) -> String {
+    #[test]
+    fn same_tree_history_record_derives_q_scope_from_stored_visible_scope() {
+        let root = git_project("same-tree-visible-scope");
+        let mut expectation = expectation_with_cooldown();
+        expectation.agent.ignore = vec![".canon/**".to_string()];
+        let mut history_cache = HistoryCache::default();
+        let path = history_cache.path(&root, &expectation).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            history_line(
+                10,
+                r#"["src",":(exclude,glob).canon/**"]"#,
+                "stored visible scope",
+            ),
+        )
+        .unwrap();
+
+        let hit = latest_history_record_matching_visible_tree_oid(
+            &root,
+            &expectation.agent,
+            &expectation,
+            &mut history_cache,
+            |scope| {
+                assert_eq!(scope, ["src".to_string()]);
+                Ok(Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()))
+            },
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(hit.evidence, "stored visible scope");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn expectation_with_cooldown() -> SelectedExpectation {
+        let config = CheckConfig {
+            version: 1,
+            presets: Default::default(),
+            agent: AgentConfig::implementation_default(),
+            expectations: vec![Expectation {
+                q: "Does it pass?".to_string(),
+                a: "yes".to_string(),
+                question_answer_only: false,
+                agent: AgentConfig {
+                    models: Vec::new(),
+                    thinking: "medium".to_string(),
+                    ignore: Vec::new(),
+                    plugins: Vec::new(),
+                },
+                cooldown: Some(CooldownConfig::Compact("100s".to_string())),
+            }],
+        };
+        let identities = expectation_identities(&config).unwrap();
+        select_expectations_with_identities(&config, &identities, &[])
+            .unwrap()
+            .remove(0)
+    }
+
+    fn history_line(timestamp: u64, visible_scope: &str, evidence: &str) -> String {
         format!(
-            r#"{{"timestamp":"{}","observed":"yes","evidence":"{}","qScope":{},"visibleTreeOid":"{}"}}"#,
+            r#"{{"timestamp":"{}","observed":"yes","evidence":"{}","visibleScope":{},"visibleTreeOid":"{}"}}"#,
             format_record_timestamp(timestamp),
             evidence,
-            q_scope,
+            visible_scope,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         )
     }

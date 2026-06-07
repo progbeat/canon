@@ -1,0 +1,76 @@
+use super::error::CommandError;
+use super::help::{
+    gate_help_command, hook_help_command, init_help_command, print_help_if_requested,
+};
+use crate::check::{check_help_command, run_check_command};
+use crate::gate::run_gate_command;
+use crate::hooks::{run_hook_command, run_init};
+use crate::project::{git_project_root, project_root_or_current};
+use clap::Command as ClapCommand;
+use std::ffi::OsString;
+use std::path::Path;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum BuiltinCommand {
+    Init,
+    Hook,
+    Check,
+    Gate,
+}
+
+impl BuiltinCommand {
+    pub(super) fn all() -> &'static [BuiltinCommand] {
+        &[
+            BuiltinCommand::Init,
+            BuiltinCommand::Hook,
+            BuiltinCommand::Check,
+            BuiltinCommand::Gate,
+        ]
+    }
+
+    pub(super) fn parse(value: &str) -> Option<BuiltinCommand> {
+        match value {
+            "init" => Some(BuiltinCommand::Init),
+            "hook" => Some(BuiltinCommand::Hook),
+            "check" => Some(BuiltinCommand::Check),
+            "gate" => Some(BuiltinCommand::Gate),
+            _ => None,
+        }
+    }
+
+    pub(super) fn help_command(self) -> ClapCommand {
+        match self {
+            BuiltinCommand::Init => init_help_command(),
+            BuiltinCommand::Hook => hook_help_command(),
+            BuiltinCommand::Check => check_help_command(),
+            BuiltinCommand::Gate => gate_help_command(),
+        }
+    }
+
+    pub(super) fn run(self, args: &[OsString]) -> Result<(), CommandError> {
+        if print_help_if_requested(args, self.help_command())? {
+            return Ok(());
+        }
+        match self {
+            BuiltinCommand::Init => {
+                if !args.is_empty() {
+                    return Err(CommandError::InitDoesNotAcceptArguments);
+                }
+                let root = project_root_or_current(Path::new("."))?;
+                run_init(&root).map_err(CommandError::from)
+            }
+            BuiltinCommand::Hook => {
+                let root = git_project_root(Path::new("."))?;
+                run_hook_command(&root, args).map_err(CommandError::from)
+            }
+            BuiltinCommand::Check => {
+                let root = git_project_root(Path::new("."))?;
+                run_check_command(&root, args)
+            }
+            BuiltinCommand::Gate => {
+                let root = git_project_root(Path::new("."))?;
+                run_gate_command(&root, args)
+            }
+        }
+    }
+}

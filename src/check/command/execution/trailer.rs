@@ -1,0 +1,42 @@
+use crate::app::LazyAppServerRunner;
+use crate::check::command::output::{summary_outcome_counts, write_summary_line};
+use crate::check::command::{collect_check_token_usage, print_token_usage_summary};
+use crate::check::core::CheckRunReport;
+use crate::check::CHECK_PATH;
+use crate::git::TreeSource;
+use std::io::Write;
+use std::path::Path;
+use std::time::Instant;
+
+pub(super) struct CompletedCheckRun {
+    pub(super) report: CheckRunReport,
+    pub(super) error: Option<String>,
+}
+
+pub(super) fn check_report_passed(report: &CheckRunReport) -> bool {
+    let counts = summary_outcome_counts(report);
+    counts.failed == 0 && counts.errors == 0
+}
+
+pub(super) fn check_command_writes_agent_message(
+    config_path: &Path,
+    checked_tree: &TreeSource,
+    against_tree: &TreeSource,
+    selectors_provided: bool,
+) -> bool {
+    !selectors_provided
+        && config_path == Path::new(CHECK_PATH)
+        && checked_tree.is_default_checked_tree()
+        && against_tree.is_default_against_tree()
+}
+
+pub(super) fn write_check_trailer(
+    runner: &mut LazyAppServerRunner,
+    result_output: &mut dyn Write,
+    report: &CheckRunReport,
+    started: Instant,
+) -> Result<(), String> {
+    let usage = collect_check_token_usage(runner)?;
+    print_token_usage_summary(Some(usage))?;
+    write_summary_line(result_output, report, started.elapsed())
+}

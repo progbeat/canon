@@ -1,4 +1,4 @@
-use crate::check::core::types::{
+use crate::check::core::{
     CheckRecord, CheckRecordOutcome, CheckResult, SelectedExpectation, ERROR_UNPARSABLE,
 };
 use crate::check::interrogation::state::CheckRuntime;
@@ -15,7 +15,6 @@ pub(crate) fn error_record_from_interrogation_error(
 ) -> Result<CheckRecord, String> {
     let visible_tree_oid = runtime.visible_tree_oid(visible_tree_oid_cache, agent, scope)?;
     CheckRecord::current_from_expectation(
-        agent,
         expectation,
         CheckRecordOutcome {
             result: CheckResult::Fail,
@@ -23,7 +22,7 @@ pub(crate) fn error_record_from_interrogation_error(
             error: Some(ERROR_UNPARSABLE.to_string()),
             evidence: error.to_string(),
             scope: scope.to_vec(),
-            suggested_q_scope: None,
+            question_scope_suggestion: None,
             visible_tree_oid,
         },
     )

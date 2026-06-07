@@ -1,1 +1,5 @@
-{{question}}
+{{ question }}{% if against_tree_answer %}
+
+Your previous answer at HEAD:
+{{ against_tree_answer|json }}
+{% endif %}

@@ -10,11 +10,16 @@ use std::io::{self, Write};
 use std::path::Path;
 
 #[cfg(unix)]
-#[path = "append/platform_unix.rs"]
-mod platform;
+#[path = "append/unix.rs"]
+mod unix;
 #[cfg(windows)]
-#[path = "append/platform_windows.rs"]
-mod platform;
+#[path = "append/windows.rs"]
+mod windows;
+
+#[cfg(unix)]
+use unix as imp;
+#[cfg(windows)]
+use windows as imp;
 
 pub(crate) fn record_note_text(
     note: &Note,
@@ -55,7 +60,7 @@ fn append_note_record(note: &Note, existed: bool, record: NoteRecord) -> Result<
 
 fn append_note_log_record(note: &Note, record: &NoteRecord) -> Result<u64, String> {
     let path = &note.path;
-    let mut file = platform::open_append_target(path)?;
+    let mut file = imp::open_append_target(path)?;
     let previous_size = file
         .metadata()
         .map(|metadata| metadata.len())
@@ -101,9 +106,9 @@ fn rollback_note_log_append(
         Ok(()) => return Ok(()),
         Err(err) => err,
     };
-    if platform::rollback_needs_reopen(&err) {
+    if imp::rollback_needs_reopen(&err) {
         drop(file);
-        let mut file = platform::open_rollback_target(path)?;
+        let mut file = imp::open_rollback_target(path)?;
         return truncate_note_log_append(&mut file, previous_size)
             .map_err(|err| rollback_note_log_append_error(path, previous_size, err));
     }
@@ -122,13 +127,4 @@ fn rollback_note_log_append_error(path: &Path, previous_size: u64, err: io::Erro
         previous_size,
         err
     )
-}
-
-#[cfg(test)]
-pub(crate) fn rollback_note_log_append_for_test(
-    path: &Path,
-    previous_size: u64,
-) -> Result<(), String> {
-    let file = platform::open_append_target(path)?;
-    rollback_note_log_append(path, file, previous_size)
 }

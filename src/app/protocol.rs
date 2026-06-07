@@ -5,6 +5,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 
+// This module owns app-server protocol parsing. Transport and usage handling
+// call these helpers from src/app/transport.rs and src/app/usage.rs.
 pub(crate) fn turn_idle_timed_out(last_activity: Instant, now: Instant) -> bool {
     now.duration_since(last_activity) >= Duration::from_secs(APP_SERVER_TURN_TIMEOUT_SECS)
 }
@@ -59,12 +61,6 @@ pub(crate) fn app_server_failure_kind(error: &Value) -> EvaluatorFailureKind {
 pub(crate) fn app_server_failure_from_value(method: &str, error: &Value) -> EvaluatorError {
     let failure = format!("app-server {} failed: {}", method, error);
     EvaluatorError::failure(app_server_failure_kind(error), failure)
-}
-
-#[cfg(test)]
-pub(crate) fn app_server_failure_from_message(method: &str, message: &str) -> EvaluatorError {
-    let failure = format!("app-server {} failed: {}", method, message);
-    EvaluatorError::message(failure)
 }
 
 pub(crate) fn app_server_failure_kind_from_code(code: &str) -> EvaluatorFailureKind {
@@ -203,11 +199,6 @@ pub(crate) fn parse_token_usage(value: &Value) -> Option<TokenUsage> {
     })
 }
 
-#[cfg(test)]
-pub(crate) fn app_server_error_message(message: &Value) -> Option<String> {
-    app_server_error_value(message).map(|error| app_server_error_display(&error))
-}
-
 pub(crate) fn app_server_error_value(message: &Value) -> Option<Value> {
     let method = message.get("method").and_then(Value::as_str)?;
     if method != "error" && method != "turn/failed" && method != "turn/error" {
@@ -231,16 +222,6 @@ pub(crate) fn app_server_error_value(message: &Value) -> Option<Value> {
         .or_else(|| Some(message_error_value(method)))
 }
 
-#[cfg(test)]
-pub(crate) fn app_server_error_display(error: &Value) -> String {
-    error
-        .get("message")
-        .and_then(Value::as_str)
-        .or_else(|| error.as_str())
-        .map(str::to_string)
-        .unwrap_or_else(|| error.to_string())
-}
-
 pub(crate) fn message_error_value(message: &str) -> Value {
     json!({ "message": message })
 }
@@ -258,10 +239,10 @@ pub(crate) fn string_at_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a 
 }
 
 pub(crate) fn turn_text(delta_text: String, completed_text: String) -> String {
-    if delta_text.trim().is_empty() {
-        completed_text
-    } else {
+    if completed_text.trim().is_empty() {
         delta_text
+    } else {
+        completed_text
     }
 }
 
@@ -269,12 +250,24 @@ pub(crate) fn append_completed_agent_text(message: &Value, output: &mut String) 
     let Some(params) = message.get("params") else {
         return;
     };
-    if let Some(item) = params.get("item") {
+    let payload = if let Some(item) = params.get("item") {
         if is_assistant_message_item(item) {
-            append_message_payload_text(item, output);
+            Some(item)
+        } else {
+            None
         }
     } else if message.get("method").and_then(Value::as_str) == Some("item/agentMessage/completed") {
-        append_message_payload_text(params, output);
+        Some(params)
+    } else {
+        None
+    };
+    let Some(payload) = payload else {
+        return;
+    };
+    let mut text = String::new();
+    append_message_payload_text(payload, &mut text);
+    if !text.trim().is_empty() {
+        *output = text;
     }
 }
 
@@ -357,5 +350,47 @@ mod tests {
         assert!(!is_assistant_message_item(
             &json!({"type": "agent_status_message"})
         ));
+    }
+
+    #[test]
+    fn completed_agent_text_keeps_last_assistant_message() {
+        let mut output = String::new();
+        append_completed_agent_text(
+            &json!({
+                "method": "item/completed",
+                "params": {
+                    "item": {
+                        "type": "agentMessage",
+                        "content": [{"type": "output_text", "text": "status"}]
+                    }
+                }
+            }),
+            &mut output,
+        );
+        append_completed_agent_text(
+            &json!({
+                "method": "item/completed",
+                "params": {
+                    "item": {
+                        "type": "agentMessage",
+                        "content": [{"type": "output_text", "text": "{\"answer\":\"no\"}"}]
+                    }
+                }
+            }),
+            &mut output,
+        );
+
+        assert_eq!(output, "{\"answer\":\"no\"}");
+    }
+
+    #[test]
+    fn turn_text_prefers_completed_message_over_delta_stream() {
+        assert_eq!(
+            turn_text(
+                "status{\"answer\":\"yes\"}".to_string(),
+                "{\"answer\":\"yes\"}".to_string()
+            ),
+            "{\"answer\":\"yes\"}"
+        );
     }
 }

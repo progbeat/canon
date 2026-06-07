@@ -12,7 +12,7 @@ Answer history files use JSON Lines format and store only schema-valid responses
 timestamp
 observed
 evidence
-qScope
+visibleScope
 visibleTreeOid
 ```
 
@@ -20,7 +20,7 @@ visibleTreeOid
 
 `timestamp` is UTC and records when the history record is produced.
 
-`qScope` stores the q-scope used to form the visible tree for this history record.
+`visibleScope` stores the visible scope used to form the visible tree for this history record.
 
 `visibleTreeOid` stores the scoped tree OID of the visible tree.
 

@@ -1,4 +1,4 @@
-use crate::check::core::types::{
+use crate::check::core::{
     contains_line_break, ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION, ERROR_UNPARSABLE,
 };
 use crate::check::run::selection::parse_cooldown;
