@@ -4,7 +4,10 @@ use crate::check::core::CheckRecord;
 use crate::json_util::compact_json_string_array;
 use std::io::Write;
 
-pub(crate) fn write_and_flush_result_output(
+// Evaluated `canon check` expectations use `CheckProgressOutput`, which emits
+// live dots before appending this module's completion text. This fallback is
+// for cached records and no-progress test callers.
+pub(crate) fn write_result_output_without_live_progress(
     result_output: &mut Option<&mut dyn Write>,
     record: &CheckRecord,
 ) -> Result<(), String> {

@@ -1,8 +1,8 @@
 use super::progress::cancel_progress_on_error;
 use super::CheckRunCaches;
 use crate::check::command::output::{
-    record_requires_human_review, start_check_progress_output, write_and_flush_result_output,
-    SharedCheckOutput,
+    record_requires_human_review, start_check_progress_output,
+    write_result_output_without_live_progress, SharedCheckOutput,
 };
 use crate::check::core::{CheckOptions, CheckRecord, SelectedExpectation};
 use crate::check::interrogation::policy::{
@@ -178,7 +178,7 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     if let Some(progress) = progress.take() {
         run_expectation_try!(progress.finish_with_record(&interrogation.record));
     } else {
-        run_expectation_try!(write_and_flush_result_output(
+        run_expectation_try!(write_result_output_without_live_progress(
             context.result_output,
             &interrogation.record
         ));

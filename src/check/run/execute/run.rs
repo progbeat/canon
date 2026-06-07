@@ -1,7 +1,7 @@
 use super::expectation::{run_expectation, ExpectationRunContext};
 use super::report::{check_run_report, skipped_count, CheckRunReportCounts};
 use super::CheckRunSideEffects;
-use crate::check::command::output::write_and_flush_result_output;
+use crate::check::command::output::write_result_output_without_live_progress;
 use crate::check::core::{
     check_run_error, CachedExpectation, CheckOptions, CheckRecord, CheckRunError, CheckRunReport,
 };
@@ -139,7 +139,7 @@ fn write_cached_failures(
     for CachedSelectionHit { expectation, hit } in cached_hits {
         let record = hit.record;
         if !record.passed() {
-            write_and_flush_result_output(result_output, &record)?;
+            write_result_output_without_live_progress(result_output, &record)?;
             records.push(record.clone());
         }
         cached.push(CachedExpectation {
