@@ -88,11 +88,9 @@ fn ask_with_model<R: EvaluatorRunner>(
             diagnostic_log,
             state,
             model,
-        );
-        if let Ok(narrowed) = narrowed {
-            if narrowing::answer_is_accepted(runtime, &narrowed.answer, &proposed_scope) {
-                result = narrowed;
-            }
+        )?;
+        if narrowing::answer_is_accepted(runtime, &narrowed.answer, &proposed_scope) {
+            result = narrowed;
         }
         result.answer.q_scope_suggestion = None;
     }
