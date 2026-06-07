@@ -1,5 +1,4 @@
 mod escape;
-mod progress;
 mod query;
 mod record;
 mod shared;
@@ -7,9 +6,11 @@ mod summary;
 mod usage;
 
 pub(crate) use escape::escape_check_output_text;
-pub(crate) use progress::{start_check_progress_output, CheckProgressOutput};
 pub(crate) use query::write_query_output;
-pub(crate) use record::{record_requires_human_review, write_result_output_without_live_progress};
+pub(crate) use record::{
+    record_requires_human_review, start_check_progress_output,
+    write_result_output_without_live_progress, CheckProgressOutput,
+};
 pub(crate) use shared::{write_stdout_record, SharedCheckOutput};
 pub(crate) use summary::{render_check_agent_messages, summary_outcome_counts, write_summary_line};
 pub(crate) use usage::render_token_usage_summary;
