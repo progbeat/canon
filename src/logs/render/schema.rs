@@ -27,7 +27,7 @@ fn required_runtime_log_fields(event: &str) -> Option<&'static [&'static str]> {
     match event {
         "agent.request" => Some(&["id", "attempt", "reason", "request"]),
         "agent.response" => Some(&["id", "attempt", "reason", "response"]),
-        "agent.turn_error" => Some(&["id", "attempt", "reason", "error", "response"]),
+        "agent.turn_error" => Some(&["id", "attempt", "reason", "response"]),
         "cache.cleanup" => Some(&["removed", "kept"]),
         "cache.hit" => Some(&["id", "result", "scope"]),
         "check.start" => Some(&["selected"]),

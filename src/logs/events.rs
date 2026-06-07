@@ -97,7 +97,6 @@ pub(crate) fn write_agent_failure_event(
         ("id", json!(expectation_id)),
         ("attempt", json!(attempt)),
         ("reason", json!(reason)),
-        ("error", json!(error)),
         ("response", raw_response),
     ];
     append_turn_usage_fields(&mut fields, turn_usage);
