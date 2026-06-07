@@ -111,8 +111,8 @@ should not change.
 
 An evaluator-provided scope claiming to be narrow enough to answer the current
 question. It may or may not be a valid q-scope. `canon check` only attempts to
-verify a valid suggestion when its induced visible tree has at least 25% fewer
-files than the current visible tree.
+verify a schema-valid suggestion when its induced visible tree has at least 25%
+fewer files than the current visible tree.
 
 ## Scope narrowing
 
@@ -147,10 +147,10 @@ evaluator after the visible scope is applied.
 ## Visible scope
 
 The scope applied to a staged tracked tree for an evaluator interrogation. It is
-the latest stored q-scope for the expectation, or full project scope when no
-q-scope is stored. Configured ignore patterns are normalized as
-project-relative pathspec items, converted to excluding pathspec items, and
-applied last.
+formed from the latest verified q-scope for the expectation, or full project
+scope when no verified q-scope is stored. Configured ignore patterns are
+normalized as project-relative pathspec items, converted to excluding pathspec
+items, and applied last.
 
 ## Visible tree
 
@@ -158,10 +158,10 @@ The scoped tree induced by a visible scope.
 
 ## Implementation Map
 
-`config_types::Expectation` and `check::selection::SelectedExpectation` carry
+`config_types::Expectation` and `check::core::SelectedExpectation` carry
 expectation questions and expected answers from config loading into check runs.
 
-`scope.rs` keeps scopes as Git pathspec lists: it normalizes repository paths,
+`scope` keeps scopes as Git pathspec lists: it normalizes repository paths,
 forms visible scopes by appending configured ignore patterns as excluding
 pathspec items, and matches tracked paths against those pathspec lists.
 
@@ -173,17 +173,17 @@ otherwise it serializes and hashes a synthetic tree object with the
 repository's object hash algorithm. `staged::worktree` uses that same OID when
 materializing evaluator-visible trees.
 
-`check::interrogation_state::initial_visible_scope_for_expectation` forms the
-base q-scope from the latest stored q-scope, or full project scope when none is
-available. `staged::worktree::materialize_evaluator_scope` then applies the
-visible scope before creating the evaluator working tree.
+`check::interrogation::state::initial_visible_scope_for_expectation` forms the
+base q-scope from the latest verified q-scope, or full project scope when none
+is available. `staged::worktree::StagedWorktreeView::materialize_visible_scope`
+then applies the visible scope before creating the evaluator working tree.
 
-`check::types::EvaluatorResponseJson` parses evaluator evidence and optional
-`qScopeSuggestion` values. `check::interrogation_policy` treats suggestions as
+`check::core::EvaluatorResponseJson` parses evaluator evidence and the required
+`qScopeSuggestion` value. `check::interrogation::policy` treats suggestions as
 unverified claims until an independent verification turn accepts them.
-`history::store` persists accepted answer records with `visibleScope` and
-`visibleTreeOid`; `history::reuse` reads only reusable answer history when
-seeding future q-scopes or same-tree cached results.
+`history` persists answer records with `visibleScope` and `visibleTreeOid`;
+`history::reuse` reads reusable answer history when seeding future q-scopes or
+same-tree cached results.
 
 `check::interrogation::ask_with_reused_thread` enforces evaluator-thread reuse.
 Its lookup key begins with evaluator model and `visibleTreeOid`, so a different
