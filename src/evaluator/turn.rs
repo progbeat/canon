@@ -2,23 +2,18 @@ use crate::check::{
     CheckRecord, CheckRecordOutcome, CheckResult, ParsedAnswer, SelectedExpectation,
 };
 use crate::config_types::AgentConfig;
-use crate::evaluator::response_cache::EvaluatorResponseParseCache;
-use crate::evaluator::types::{EvaluatorError, EvaluatorRunner};
-use crate::logs::DiagnosticLogWriter;
-use crate::token_usage_types::TokenUsage;
-use std::path::Path;
+use crate::evaluator::types::EvaluatorError;
 
+mod attempt;
 mod logging;
 mod parse;
 #[cfg(test)]
 mod tests;
+mod types;
 
-use logging::ask_and_log;
+pub(crate) use attempt::ask_once;
 pub(crate) use logging::{write_thread_lifecycle_event, write_thread_restart_event};
-use parse::{
-    insufficient_evidence_response_answer, parse_visible_evaluator_response,
-    unparsable_response_answer, EvaluatorResponseParseError, RESPONSE_REPAIR_PROMPT,
-};
+pub(crate) use types::{EvaluatorTurnContext, ParsedTurnResponse, ThreadLifecycleLog};
 
 pub(crate) fn evaluator_models(agent: &AgentConfig) -> Vec<Option<String>> {
     if agent.models.is_empty() {
@@ -105,108 +100,4 @@ pub(crate) fn record_from_response(
             visible_tree_oid,
         },
     )
-}
-
-// One evaluator turn: model labels, response parsing, request and response
-// logging, per-turn token usage, and record finalization.
-pub(crate) struct EvaluatorTurnContext<'a> {
-    pub(crate) session_id: &'a str,
-    pub(crate) model: Option<&'a str>,
-    pub(crate) thinking: &'a str,
-}
-
-pub(crate) struct ThreadLifecycleLog {
-    pub(crate) event: &'static str,
-    pub(crate) session_id: String,
-    pub(crate) developer_instructions: String,
-}
-
-pub(crate) struct ParsedTurnResponse {
-    pub(crate) answer: ParsedAnswer,
-    pub(crate) usage: Option<TokenUsage>,
-    pub(crate) context_compacted: bool,
-}
-
-pub(crate) struct RawTurnResponse {
-    pub(crate) text: String,
-    pub(crate) usage: Option<TokenUsage>,
-    pub(crate) context_compacted: bool,
-}
-
-pub(crate) fn ask_once<R: EvaluatorRunner>(
-    runner: &mut R,
-    turn: &EvaluatorTurnContext<'_>,
-    prompt: &str,
-    agent: &AgentConfig,
-    visible_scope: &[String],
-    session_root: Option<&Path>,
-    parser_cache: &mut EvaluatorResponseParseCache,
-    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    expectation_id: Option<&str>,
-) -> Result<ParsedTurnResponse, EvaluatorError> {
-    let response = ask_and_log(
-        runner,
-        turn,
-        prompt,
-        diagnostic_log,
-        expectation_id,
-        1,
-        "initial",
-    )?;
-    let mut usage = response.usage;
-    let mut context_compacted = response.context_compacted;
-    let parsed = match parse_visible_evaluator_response(
-        parser_cache,
-        &response.text,
-        agent,
-        visible_scope,
-        session_root,
-    ) {
-        Ok(answer) => answer,
-        Err(_) => {
-            let repair = ask_and_log(
-                runner,
-                turn,
-                RESPONSE_REPAIR_PROMPT,
-                diagnostic_log,
-                expectation_id,
-                2,
-                "repair",
-            )?;
-            usage = combined_turn_usage(usage, repair.usage);
-            context_compacted |= repair.context_compacted;
-            match parse_visible_evaluator_response(
-                parser_cache,
-                &repair.text,
-                agent,
-                visible_scope,
-                session_root,
-            ) {
-                Ok(answer) => answer,
-                Err(EvaluatorResponseParseError::OutOfScopeEvidence) => {
-                    insufficient_evidence_response_answer()
-                }
-                Err(EvaluatorResponseParseError::InvalidResponse(err)) => {
-                    unparsable_response_answer(&err, &repair.text)
-                }
-            }
-        }
-    };
-
-    Ok(ParsedTurnResponse {
-        answer: parsed,
-        usage,
-        context_compacted,
-    })
-}
-
-fn combined_turn_usage(
-    first: Option<TokenUsage>,
-    second: Option<TokenUsage>,
-) -> Option<TokenUsage> {
-    match (first, second) {
-        (Some(first), Some(second)) => Some(first.add(second)),
-        (Some(usage), None) | (None, Some(usage)) => Some(usage),
-        (None, None) => None,
-    }
 }

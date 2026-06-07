@@ -1,6 +1,6 @@
 use crate::check::{CheckRecord, CheckResult, EvaluatorResponseJson};
 use crate::config_types::AgentConfig;
-use crate::evidence::evidence_file_refs_are_visible;
+use crate::evidence::evidence_file_refs_are_visible_in_root;
 use crate::fs_util::for_each_nonempty_line;
 use crate::git::{git_object_oid_has_hex_len, git_object_oid_has_known_shape, VisibleTreeOidCache};
 use crate::logs::{external_log_error, DiagnosticLogError, DiagnosticLogResult};
@@ -36,7 +36,7 @@ pub(super) fn read_repository_history_records_from_path(
         ) {
             Ok(record) => {
                 if git_object_oid_has_hex_len(&record.visible_tree_oid, native_oid_hex_len)
-                    && evidence_file_refs_are_visible(&record.evidence, &record.scope)
+                    && evidence_file_refs_are_visible_in_root(&record.evidence, &record.scope, root)
                 {
                     records.push(record);
                 } else {

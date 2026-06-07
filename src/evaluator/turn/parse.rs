@@ -11,7 +11,7 @@ pub(super) fn parse_visible_evaluator_response(
     text: &str,
     agent: &AgentConfig,
     visible_scope: &[String],
-    session_root: Option<&Path>,
+    session_root: &Path,
 ) -> Result<ParsedAnswer, EvaluatorResponseParseError> {
     let answer = parser_cache
         .parse(text, agent)

@@ -7,12 +7,13 @@ use crate::check::interrogation::state::{
 };
 use crate::config_types::AgentConfig;
 use crate::evaluator::EvaluatorRunner;
-use crate::evidence::evidence_file_refs_are_visible;
+use crate::evidence::evidence_file_refs_are_visible_in_root;
 use crate::git::VisibleTreeOidCache;
 use crate::hash::full_scope;
 use crate::history::{is_reusable_history_record, HistoryCache};
 use crate::logs::DiagnosticLogWriter;
 use crate::scope::visible_scope;
+use std::path::Path;
 
 pub(crate) struct InterrogationCall<'a> {
     pub(crate) runtime: &'a CheckRuntime<'a>,
@@ -157,6 +158,7 @@ pub(crate) fn q_scope_suggestion_should_get_independent_verification(
 }
 
 pub(crate) fn narrowed_scope_is_accepted(
+    root: &Path,
     agent: &AgentConfig,
     narrowed: &CheckRecord,
     proposed_scope: &[String],
@@ -170,7 +172,7 @@ pub(crate) fn narrowed_scope_is_accepted(
     is_reusable_history_record(narrowed)
         && narrowed.scope == proposed_scope
         && visible_scope(agent, &narrowed.scope)
-            .map(|scope| evidence_file_refs_are_visible(&narrowed.evidence, &scope))
+            .map(|scope| evidence_file_refs_are_visible_in_root(&narrowed.evidence, &scope, root))
             .unwrap_or(false)
 }
 

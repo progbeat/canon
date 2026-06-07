@@ -1,4 +1,5 @@
-use super::{EvaluatorFailureKind, EvaluatorTurnContext, RawTurnResponse, ThreadLifecycleLog};
+use super::types::RawTurnResponse;
+use super::{EvaluatorFailureKind, EvaluatorTurnContext, ThreadLifecycleLog};
 use crate::check::{
     write_agent_turn_failure_event, write_agent_turn_missing_usage_event,
     write_agent_turn_request_event, write_agent_turn_response_event,

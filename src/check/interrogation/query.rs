@@ -1,21 +1,16 @@
-use crate::check::core::types::{
-    ParsedAnswer, QueryResult, ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION,
-    ERROR_UNPARSABLE,
-};
+mod narrowing;
+mod review;
+mod turn;
+
+use crate::check::core::types::QueryResult;
 use crate::check::interrogation::model_fallback::run_with_model_fallbacks;
-use crate::check::interrogation::policy::q_scope_suggestion_should_get_independent_verification;
 use crate::check::interrogation::records::{
-    finalize_query_answer, write_query_result_event, write_query_review_required_event,
+    write_query_result_event, write_query_review_required_event,
 };
-use crate::check::interrogation::state::{
-    should_retry_full_scope_after_error, CheckRuntime, InterrogationRunState,
-};
-use crate::check::interrogation::{ask_with_reused_thread, ThreadTurnRequest};
-use crate::evaluator::{evaluator_turn_prompt, EvaluatorError, EvaluatorRunner};
-use crate::evidence::evidence_file_refs_are_visible;
-use crate::hash::full_scope;
+use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
+use crate::evaluator::{EvaluatorError, EvaluatorRunner};
 use crate::logs::DiagnosticLogWriter;
-use crate::scope::{sanitize_scope, visible_scope};
+use crate::scope::sanitize_scope;
 
 #[derive(Clone, Copy)]
 pub(crate) struct QueryRequest<'a> {
@@ -31,6 +26,9 @@ pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
     diagnostic_log: Option<&mut DiagnosticLogWriter>,
     state: &mut InterrogationRunState,
 ) -> Result<QueryResult, String> {
+    // Query lifecycle start/finish events are emitted by `check::command::query`
+    // so they bracket scope parsing and execution preparation as well as the
+    // evaluator turn managed here.
     let mut diagnostic_log = diagnostic_log;
     run_with_model_fallbacks(
         &runtime.config.agent,
@@ -38,7 +36,7 @@ pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
         &mut diagnostic_log,
         None,
         |state, diagnostic_log, model| {
-            ask_query_with_model(
+            ask_with_model(
                 runtime,
                 QueryRequest {
                     question,
@@ -53,7 +51,7 @@ pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
     )
 }
 
-pub(crate) fn ask_query_with_model<R: EvaluatorRunner>(
+fn ask_with_model<R: EvaluatorRunner>(
     runtime: &CheckRuntime<'_>,
     query: QueryRequest<'_>,
     runner: &mut R,
@@ -65,7 +63,7 @@ pub(crate) fn ask_query_with_model<R: EvaluatorRunner>(
     // q-scope suggestions are trusted only after an independent verification
     // turn returns a schema-valid answer under the suggested scope.
     let mut active_scope = query.enforced_scope.to_vec();
-    let mut result = ask_query_with_full_scope_retry(
+    let mut result = turn::ask_with_full_scope_retry(
         runtime,
         query.question,
         &mut active_scope,
@@ -74,7 +72,7 @@ pub(crate) fn ask_query_with_model<R: EvaluatorRunner>(
         state,
         model,
     )?;
-    if query_should_verify_narrowing(runtime, state, &active_scope, &result.answer)? {
+    if narrowing::should_verify(runtime, state, &active_scope, &result.answer)? {
         let proposed_scope = sanitize_scope(
             result
                 .answer
@@ -83,7 +81,7 @@ pub(crate) fn ask_query_with_model<R: EvaluatorRunner>(
                 .expect("suggestion passed the file-count verification gate"),
         )?;
         let mut verification_scope = proposed_scope.clone();
-        let narrowed = ask_query_with_full_scope_retry(
+        let narrowed = turn::ask_with_full_scope_retry(
             runtime,
             query.question,
             &mut verification_scope,
@@ -93,16 +91,13 @@ pub(crate) fn ask_query_with_model<R: EvaluatorRunner>(
             model,
         );
         if let Ok(narrowed) = narrowed {
-            if query_narrowed_answer_is_accepted(runtime, &narrowed.answer, &proposed_scope) {
+            if narrowing::answer_is_accepted(runtime, &narrowed.answer, &proposed_scope) {
                 result = narrowed;
-            } else {
-                result.answer.q_scope_suggestion = None;
             }
-        } else {
-            result.answer.q_scope_suggestion = None;
         }
+        result.answer.q_scope_suggestion = None;
     }
-    if let Some(reason) = query_human_review_reason(&result) {
+    if let Some(reason) = review::human_review_reason(&result) {
         write_query_review_required_event(query.question, diagnostic_log, &result.answer, reason)?;
         return Err(EvaluatorError::message(format!(
             "query requires human review: {}",
@@ -111,107 +106,4 @@ pub(crate) fn ask_query_with_model<R: EvaluatorRunner>(
     }
     write_query_result_event(query.question, diagnostic_log, &result.answer)?;
     Ok(result)
-}
-
-fn ask_query_with_full_scope_retry<R: EvaluatorRunner>(
-    runtime: &CheckRuntime<'_>,
-    question: &str,
-    enforced_scope: &mut Vec<String>,
-    runner: &mut R,
-    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    state: &mut InterrogationRunState,
-    model: Option<&str>,
-) -> Result<QueryResult, EvaluatorError> {
-    let mut result = ask_query_once(
-        runtime,
-        question,
-        enforced_scope,
-        runner,
-        diagnostic_log,
-        state,
-        model,
-    )?;
-    if should_retry_full_scope_after_error(result.answer.error.as_deref(), enforced_scope) {
-        // Restricted insufficient-evidence is not final for query-mode
-        // interrogations either; retry once with full project scope.
-        *enforced_scope = full_scope();
-        result = ask_query_once(
-            runtime,
-            question,
-            enforced_scope,
-            runner,
-            diagnostic_log,
-            state,
-            model,
-        )?;
-    }
-    Ok(result)
-}
-
-fn ask_query_once<R: EvaluatorRunner>(
-    runtime: &CheckRuntime<'_>,
-    question: &str,
-    enforced_scope: &[String],
-    runner: &mut R,
-    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    state: &mut InterrogationRunState,
-    model: Option<&str>,
-) -> Result<QueryResult, EvaluatorError> {
-    let prompt = evaluator_turn_prompt(question, None)?;
-    let response = ask_with_reused_thread(
-        runtime,
-        runner,
-        diagnostic_log,
-        state,
-        ThreadTurnRequest {
-            agent: &runtime.config.agent,
-            enforced_scope,
-            model,
-            thinking: &runtime.config.agent.thinking,
-            expectation_id: None,
-            prompt: &prompt,
-        },
-    )?;
-    finalize_query_answer(runtime, state, enforced_scope, question, response.answer)
-}
-
-fn query_should_verify_narrowing(
-    runtime: &CheckRuntime<'_>,
-    state: &mut InterrogationRunState,
-    enforced_scope: &[String],
-    answer: &ParsedAnswer,
-) -> Result<bool, EvaluatorError> {
-    if answer.error.is_some() {
-        return Ok(false);
-    }
-    q_scope_suggestion_should_get_independent_verification(
-        runtime,
-        &runtime.config.agent,
-        answer.q_scope_suggestion.as_deref(),
-        enforced_scope,
-        &mut state.visible_tree_oid_cache,
-    )
-    .map_err(EvaluatorError::from)
-}
-
-fn query_narrowed_answer_is_accepted(
-    runtime: &CheckRuntime<'_>,
-    narrowed: &ParsedAnswer,
-    proposed_scope: &[String],
-) -> bool {
-    narrowed.error.is_none()
-        && narrowed.scope == proposed_scope
-        && visible_scope(&runtime.config.agent, &narrowed.scope)
-            .map(|scope| evidence_file_refs_are_visible(&narrowed.evidence, &scope))
-            .unwrap_or(false)
-}
-
-fn query_human_review_reason(result: &QueryResult) -> Option<&'static str> {
-    match result.answer.error.as_deref() {
-        Some(ERROR_INSUFFICIENT_EVIDENCE) => Some("insufficient evidence"),
-        Some(ERROR_INVALID_QUESTION) => Some("invalid question"),
-        Some(ERROR_UNPARSABLE) => Some("unparsable evaluator response"),
-        None => None,
-        Some(error) => unreachable!("unsupported evaluator error: {}", error),
-    }
 }

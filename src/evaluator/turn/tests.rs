@@ -1,12 +1,16 @@
 use super::*;
 use crate::check::{ERROR_INSUFFICIENT_EVIDENCE, ERROR_UNPARSABLE};
 use crate::config_types::AgentConfig;
+use crate::evaluator::{EvaluatorError, EvaluatorResponseParseCache, EvaluatorRunner};
 use crate::token_usage_types::EvaluatorTurnUsage;
 use std::fs;
 use std::path::Path;
 
 #[test]
 fn out_of_scope_evidence_after_repair_becomes_insufficient_evidence() {
+    let root = temp_root("out-of-scope");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/hidden.rs"), "hidden\n").unwrap();
     let mut runner = RunnerWithResponses::new(vec![
         r#"{"answer":"yes","evidence":"`src/hidden.rs` supports it.","qScopeSuggestion":["src/hidden.rs"]}"#,
         r#"{"answer":"yes","evidence":"`src/hidden.rs` still supports it.","qScopeSuggestion":["src/hidden.rs"]}"#,
@@ -20,7 +24,7 @@ fn out_of_scope_evidence_after_repair_becomes_insufficient_evidence() {
         "question",
         &AgentConfig::default(),
         &["src/visible.rs".to_string()],
-        None,
+        &root,
         &mut parser_cache,
         &mut diagnostic_log,
         Some("expectation"),
@@ -32,10 +36,13 @@ fn out_of_scope_evidence_after_repair_becomes_insufficient_evidence() {
         Some(ERROR_INSUFFICIENT_EVIDENCE)
     );
     assert!(parsed.answer.evidence.contains("outside the visible scope"));
+
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
 fn malformed_repair_response_stays_unparsable() {
+    let root = temp_root("unparsable");
     let mut runner = RunnerWithResponses::new(vec!["status", "still status"]);
     let mut parser_cache = EvaluatorResponseParseCache::new();
     let mut diagnostic_log = None;
@@ -46,7 +53,7 @@ fn malformed_repair_response_stays_unparsable() {
         "question",
         &AgentConfig::default(),
         &[".".to_string()],
-        None,
+        &root,
         &mut parser_cache,
         &mut diagnostic_log,
         Some("expectation"),
@@ -58,6 +65,8 @@ fn malformed_repair_response_stays_unparsable() {
         .answer
         .evidence
         .contains("evaluator response could not be parsed"));
+
+    let _ = fs::remove_dir_all(root);
 }
 
 #[test]
@@ -80,7 +89,7 @@ fn nonexistent_evidence_file_after_repair_becomes_insufficient_evidence() {
         "question",
         &AgentConfig::default(),
         &[".".to_string()],
-        Some(&root),
+        &root,
         &mut parser_cache,
         &mut diagnostic_log,
         Some("expectation"),
@@ -101,6 +110,17 @@ fn turn_context() -> EvaluatorTurnContext<'static> {
         model: None,
         thinking: "medium",
     }
+}
+
+fn temp_root(label: &str) -> std::path::PathBuf {
+    let root = std::env::temp_dir().join(format!(
+        "canon-turn-evidence-test-{}-{}",
+        label,
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    root
 }
 
 struct RunnerWithResponses {

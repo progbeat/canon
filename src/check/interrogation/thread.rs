@@ -136,12 +136,17 @@ fn ask_current_session<R: EvaluatorRunner>(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     request: ThreadTurnRequest<'_>,
 ) -> Result<ParsedTurnResponse, EvaluatorError> {
-    let session_root = state.session_roots_by_id.get(session_id).cloned();
+    let Some(session_root) = state.session_roots_by_id.get(session_id).cloned() else {
+        return Err(EvaluatorError::message(format!(
+            "missing evaluator session root for session {}",
+            session_id
+        )));
+    };
     ask_in_thread(
         runner,
         session_id,
         request.agent,
-        session_root.as_deref(),
+        session_root.as_path(),
         &mut state.parse_cache,
         diagnostic_log,
         request,
@@ -152,7 +157,7 @@ fn ask_in_thread<R: EvaluatorRunner>(
     runner: &mut R,
     session_id: &str,
     agent: &AgentConfig,
-    session_root: Option<&Path>,
+    session_root: &Path,
     parse_cache: &mut EvaluatorResponseParseCache,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     request: ThreadTurnRequest<'_>,
