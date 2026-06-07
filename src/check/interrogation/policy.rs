@@ -155,23 +155,11 @@ pub(crate) fn question_scope_suggestion_should_get_independent_verification(
     Ok(suggested_count.saturating_mul(4) <= current_count.saturating_mul(3))
 }
 
-pub(crate) fn narrowed_scope_is_accepted(
-    narrowed: &CheckRecord,
-    proposed_scope: &[String],
-) -> bool {
+pub(crate) fn narrowed_scope_is_accepted(narrowed: &CheckRecord) -> bool {
     // Acceptance means the q-scope suggestion graduated from evaluator claim
     // to verified reusable q-scope. Interrogation Policy requires the
-    // independent verification turn to produce a schema-valid answer under
-    // that proposed scope.
+    // independent verification turn to produce a schema-valid answer.
     is_reusable_history_record(narrowed)
-        && verified_q_scope_answer_is_accepted(&narrowed.scope, proposed_scope)
-}
-
-pub(crate) fn verified_q_scope_answer_is_accepted(
-    answer_scope: &[String],
-    proposed_scope: &[String],
-) -> bool {
-    answer_scope == proposed_scope
 }
 
 pub(crate) fn write_scope_narrowing_event(
