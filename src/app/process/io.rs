@@ -1,10 +1,11 @@
-use crate::app::server::AppServerRunner;
 use crate::evaluator::EvaluatorError;
 use crate::platform::check_interrupted;
 use serde_json::{json, Value};
 use std::io::Write;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
+
+use super::AppServerRunner;
 
 impl AppServerRunner {
     pub(crate) fn maybe_interrupt_turn(

@@ -1,5 +1,4 @@
 use crate::app::protocol::{context_compaction_event, token_usage_update};
-use crate::app::server::AppServerRunner;
 use crate::evaluator::EvaluatorError;
 use crate::token_usage_types::{
     ContextCompactionEvent, EvaluatorTurnUsage, TokenUsage, TokenUsageUpdate,
@@ -8,6 +7,8 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
+
+use super::AppServerRunner;
 
 const SESSION_RETIRE_CARRYOVER_TOKEN_LIMIT: u64 = 50_000;
 

@@ -2,7 +2,7 @@ use super::*;
 use crate::check::ERROR_UNPARSABLE;
 use crate::config_types::AgentConfig;
 use crate::evaluator::{EvaluatorError, EvaluatorResponseParseCache, EvaluatorRunner};
-use crate::token_usage_types::EvaluatorTurnUsage;
+use crate::token_usage_types::{EvaluatorTurnUsage, TokenUsage};
 use std::fs;
 use std::path::Path;
 
@@ -120,6 +120,15 @@ impl EvaluatorRunner for RunnerWithResponses {
     }
 
     fn take_last_turn_usage(&mut self) -> Option<EvaluatorTurnUsage> {
-        None
+        Some(EvaluatorTurnUsage {
+            thread_id: "session".to_string(),
+            turn_id: "turn".to_string(),
+            usage: TokenUsage {
+                total_tokens: 1,
+                ..TokenUsage::default()
+            },
+            token_usage_updates: Vec::new(),
+            context_compaction_events: Vec::new(),
+        })
     }
 }

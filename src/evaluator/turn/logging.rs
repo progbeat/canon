@@ -52,7 +52,7 @@ pub(super) fn ask_and_log<R: EvaluatorRunner>(
     };
     let turn_usage = runner.take_last_turn_usage();
     let response_usage = turn_usage.as_ref().map(|turn_usage| turn_usage.usage);
-    let missing_turn_usage = diagnostic_log.is_some() && turn_usage.is_none();
+    let missing_turn_usage = turn_usage.is_none();
     if let Some(writer) = diagnostic_log.as_deref_mut() {
         if missing_turn_usage {
             // A response without usage violates the app-server turn contract,

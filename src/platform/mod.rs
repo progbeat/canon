@@ -1,7 +1,6 @@
 use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[cfg(not(any(unix, windows)))]
@@ -39,14 +38,6 @@ pub(crate) fn reset_check_interrupted() {
 
 pub(crate) fn check_interrupted() -> bool {
     CHECK_INTERRUPTED.load(Ordering::SeqCst)
-}
-
-pub(crate) fn prepare_app_server_command(command: &mut Command) {
-    imp::prepare_app_server_command(command);
-}
-
-pub(crate) fn terminate_app_server_child(child: &mut Child) -> Result<(), String> {
-    imp::terminate_app_server_child(child).map_err(platform_error)
 }
 
 pub(crate) fn mirror_evaluator_codex_home_file(source: &Path, target: &Path) -> Result<(), String> {
@@ -197,11 +188,4 @@ pub(crate) fn os_string_from_bytes(bytes: Vec<u8>) -> Result<OsString, String> {
     {
         imp::os_string_from_bytes(bytes)
     }
-}
-
-fn wait_for_app_server_child(child: &mut Child) -> Result<(), String> {
-    child
-        .wait()
-        .map(|_| ())
-        .map_err(|err| format!("failed to wait for app-server child: {}", err))
 }

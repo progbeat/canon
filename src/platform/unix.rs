@@ -1,4 +1,3 @@
-mod app_server;
 mod chmod;
 mod dirs;
 mod error;
@@ -8,7 +7,6 @@ mod move_path;
 mod signals;
 mod snapshot;
 
-pub(crate) use app_server::{prepare_app_server_command, terminate_app_server_child};
 pub(crate) use chmod::{
     chmod_secret_dir_no_access, make_hook_executable, restore_secret_dir_mode, secret_dir_mode,
     set_materialized_dir_permissions, set_materialized_file_permissions,

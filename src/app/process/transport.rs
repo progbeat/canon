@@ -2,12 +2,13 @@ use crate::app::protocol::{
     agent_message_delta, app_server_error_value, app_server_failure_from_value, app_server_message,
     append_completed_agent_text, turn_idle_timed_out, turn_started_id, turn_text,
 };
-use crate::app::server::AppServerRunner;
 use crate::app::APP_SERVER_TURN_TIMEOUT_SECS;
 use crate::evaluator::{EvaluatorError, EvaluatorFailureKind};
 use crate::platform::check_interrupted;
 use serde_json::Value;
 use std::time::Instant;
+
+use super::AppServerRunner;
 
 pub(crate) struct AppServerTurnRequest {
     thread_id: String,

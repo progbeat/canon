@@ -1,11 +1,10 @@
 use super::{
-    configure_app_server_environment, prepare_evaluator_codex_home, spawn_app_server_reader,
-    spawn_app_server_stderr_reader,
+    configure_app_server_environment, prepare_app_server_command, prepare_evaluator_codex_home,
+    spawn_app_server_reader, spawn_app_server_stderr_reader, terminate_app_server_child,
+    AppServerRunner,
 };
-use crate::app::server::AppServerRunner;
 use crate::config_types::AgentConfig;
 use crate::evaluator::{app_server_args_with_no_sandbox, EvaluatorError};
-use crate::platform;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::env;
@@ -31,7 +30,7 @@ impl AppServerRunner {
         let codex_home = prepare_evaluator_codex_home(root).map_err(EvaluatorError::message)?;
         configure_app_server_environment(&mut command, &codex_home)
             .map_err(EvaluatorError::message)?;
-        platform::prepare_app_server_command(&mut command);
+        prepare_app_server_command(&mut command);
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -91,7 +90,7 @@ impl AppServerRunner {
 
 impl Drop for AppServerRunner {
     fn drop(&mut self) {
-        let _ = platform::terminate_app_server_child(&mut self.child);
+        let _ = terminate_app_server_child(&mut self.child);
         if let Some(reader) = self.reader.take() {
             let _ = reader.join();
         }
@@ -103,7 +102,7 @@ impl Drop for AppServerRunner {
 }
 
 fn cleanup_error_after_missing_pipe(child: &mut Child, message: &str) -> EvaluatorError {
-    match platform::terminate_app_server_child(child) {
+    match terminate_app_server_child(child) {
         Ok(()) => EvaluatorError::message(message),
         Err(err) => EvaluatorError::message(format!("{}; cleanup failed: {}", message, err)),
     }

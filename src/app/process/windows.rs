@@ -1,9 +1,5 @@
-use crate::platform::wait_for_app_server_child;
+use super::wait_for_app_server_child;
 use std::process::{Child, Command};
-
-pub(crate) fn install_check_signal_handlers() -> Result<(), String> {
-    Ok(())
-}
 
 pub(crate) fn prepare_app_server_command(_command: &mut Command) {}
 
