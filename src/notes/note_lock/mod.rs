@@ -4,14 +4,14 @@ use std::time::Duration;
 const NOTE_LOCK_STALE_AFTER_SECS: u64 = 600;
 
 #[cfg(unix)]
-mod platform_unix;
+mod unix;
 #[cfg(windows)]
-mod platform_windows;
+mod windows;
 
 #[cfg(unix)]
-use platform_unix as imp;
+use unix as imp;
 #[cfg(windows)]
-use platform_windows as imp;
+use windows as imp;
 
 pub(crate) struct NoteLock {
     _inner: imp::NoteLock,

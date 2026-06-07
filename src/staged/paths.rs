@@ -5,7 +5,7 @@ use std::process;
 const CANON_TREE_CACHE_DIR: &str = "CANON_TREE_CACHE_DIR";
 
 // Hardlink materialization cannot be evaluated from this file alone:
-// paths.rs owns tmp_dir selection, and worktree.rs owns lazy_tree_dir,
+// paths.rs owns tmp_dir selection, and worktree/mod.rs owns lazy_tree_dir,
 // trees_dir, unpacked_paths, visible_tree.entry_paths, and materialize().
 pub(crate) struct SnapshotRoot {
     path: PathBuf,
@@ -61,7 +61,7 @@ fn configured_tree_cache_dir() -> Option<PathBuf> {
 
 fn create_snapshot_root_from_configured_cache_dir(path: &Path) -> Result<SnapshotRoot, String> {
     // This file only owns the hardlink policy's tmp_dir selection. The
-    // remaining fields and materialize() flow live in src/staged/worktree.rs.
+    // remaining fields and materialize() flow live in src/staged/worktree/mod.rs.
     crate::platform::create_private_dir_all(path).map_err(|err| {
         format!(
             "failed to create {} {}: {}",

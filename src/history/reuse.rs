@@ -357,7 +357,7 @@ mod tests {
                 history_line(
                     20,
                     r#"["src/evaluator/config.rs"]"#,
-                    "`src/platform/platform_unix.rs:126-700` is outside scope"
+                    "`src/platform/unix.rs:126-700` is outside scope"
                 )
             ),
         )
@@ -375,7 +375,7 @@ mod tests {
 
         assert_eq!(
             hit.evidence,
-            "`src/platform/platform_unix.rs:126-700` is outside scope"
+            "`src/platform/unix.rs:126-700` is outside scope"
         );
 
         let _ = fs::remove_dir_all(root);

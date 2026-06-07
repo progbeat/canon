@@ -8,16 +8,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 compile_error!("canon requires Unix or Windows filesystem support");
 
 #[cfg(unix)]
-#[path = "platform_unix.rs"]
-mod platform_unix;
+mod unix;
 #[cfg(windows)]
-#[path = "platform_windows.rs"]
-mod platform_windows;
+mod windows;
 
 #[cfg(unix)]
-use platform_unix as imp;
+use unix as imp;
 #[cfg(windows)]
-use platform_windows as imp;
+use windows as imp;
 
 #[cfg(unix)]
 fn platform_error(error: imp::PlatformError) -> String {
