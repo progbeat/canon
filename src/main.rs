@@ -5,7 +5,6 @@ mod check;
 mod cli;
 mod config_types;
 mod evaluator;
-mod evidence;
 mod fs_util;
 mod gate;
 mod git;

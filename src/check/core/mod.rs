@@ -3,5 +3,5 @@ pub(super) mod types;
 
 pub(crate) use types::{
     CheckRecord, CheckRecordOutcome, CheckResult, EvaluatorResponseJson, ParsedAnswer,
-    SelectedExpectation, ERROR_INSUFFICIENT_EVIDENCE, ERROR_UNPARSABLE,
+    SelectedExpectation, ERROR_UNPARSABLE,
 };

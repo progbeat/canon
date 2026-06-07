@@ -1,6 +1,6 @@
 use crate::check::core::types::ParsedAnswer;
 use crate::check::interrogation::policy::{
-    q_scope_suggestion_should_get_independent_verification, verified_q_scope_evidence_is_accepted,
+    q_scope_suggestion_should_get_independent_verification, verified_q_scope_answer_is_accepted,
 };
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::evaluator::EvaluatorError;
@@ -24,17 +24,6 @@ pub(super) fn should_verify(
     .map_err(EvaluatorError::from)
 }
 
-pub(super) fn answer_is_accepted(
-    runtime: &CheckRuntime<'_>,
-    narrowed: &ParsedAnswer,
-    proposed_scope: &[String],
-) -> bool {
-    narrowed.error.is_none()
-        && verified_q_scope_evidence_is_accepted(
-            runtime.root,
-            &runtime.config.agent,
-            &narrowed.scope,
-            &narrowed.evidence,
-            proposed_scope,
-        )
+pub(super) fn answer_is_accepted(narrowed: &ParsedAnswer, proposed_scope: &[String]) -> bool {
+    narrowed.error.is_none() && verified_q_scope_answer_is_accepted(&narrowed.scope, proposed_scope)
 }

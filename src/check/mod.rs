@@ -16,7 +16,7 @@ pub(crate) use config::{
 };
 pub(crate) use core::{
     CheckRecord, CheckRecordOutcome, CheckResult, EvaluatorResponseJson, ParsedAnswer,
-    SelectedExpectation, ERROR_INSUFFICIENT_EVIDENCE, ERROR_UNPARSABLE,
+    SelectedExpectation, ERROR_UNPARSABLE,
 };
 pub(crate) use interrogation::{
     write_agent_turn_failure_event, write_agent_turn_missing_usage_event,

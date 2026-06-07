@@ -1,7 +1,6 @@
 use super::logging::ask_and_log;
 use super::parse::{
-    insufficient_evidence_response_answer, parse_visible_evaluator_response,
-    unparsable_response_answer, EvaluatorResponseParseError, RESPONSE_REPAIR_PROMPT,
+    parse_visible_evaluator_response, unparsable_response_answer, RESPONSE_REPAIR_PROMPT,
 };
 use super::{EvaluatorTurnContext, ParsedTurnResponse};
 use crate::config_types::AgentConfig;
@@ -61,12 +60,7 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
                 session_root,
             ) {
                 Ok(answer) => answer,
-                Err(EvaluatorResponseParseError::OutOfScopeEvidence) => {
-                    insufficient_evidence_response_answer()
-                }
-                Err(EvaluatorResponseParseError::InvalidResponse(err)) => {
-                    unparsable_response_answer(&err, &repair.text)
-                }
+                Err(err) => unparsable_response_answer(&err, &repair.text),
             }
         }
     };

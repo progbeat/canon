@@ -89,7 +89,7 @@ fn ask_with_model<R: EvaluatorRunner>(
             state,
             model,
         )?;
-        if narrowing::answer_is_accepted(runtime, &narrowed.answer, &proposed_scope) {
+        if narrowing::answer_is_accepted(&narrowed.answer, &proposed_scope) {
             result = narrowed;
         }
         result.answer.q_scope_suggestion = None;

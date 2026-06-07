@@ -343,8 +343,8 @@ mod tests {
     }
 
     #[test]
-    fn same_tree_history_record_skips_out_of_scope_evidence() {
-        let root = git_project("same-tree-out-of-scope-evidence");
+    fn same_tree_history_record_ignores_evidence_file_refs() {
+        let root = git_project("same-tree-evidence-file-refs");
         let expectation = expectation_with_cooldown();
         let mut history_cache = HistoryCache::default();
         let path = history_cache.path(&root, &expectation).unwrap();
@@ -373,7 +373,10 @@ mod tests {
         .unwrap()
         .unwrap();
 
-        assert_eq!(hit.evidence, "older pass");
+        assert_eq!(
+            hit.evidence,
+            "`src/platform/platform_unix.rs:126-700` is outside scope"
+        );
 
         let _ = fs::remove_dir_all(root);
     }

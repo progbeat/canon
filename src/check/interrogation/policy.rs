@@ -7,13 +7,10 @@ use crate::check::interrogation::state::{
 };
 use crate::config_types::AgentConfig;
 use crate::evaluator::EvaluatorRunner;
-use crate::evidence::evidence_file_refs_are_visible_in_root;
 use crate::git::VisibleTreeOidCache;
 use crate::hash::full_scope;
 use crate::history::{is_reusable_history_record, HistoryCache};
 use crate::logs::DiagnosticLogWriter;
-use crate::scope::visible_scope;
-use std::path::Path;
 
 pub(crate) struct InterrogationCall<'a> {
     pub(crate) runtime: &'a CheckRuntime<'a>,
@@ -158,38 +155,22 @@ pub(crate) fn q_scope_suggestion_should_get_independent_verification(
 }
 
 pub(crate) fn narrowed_scope_is_accepted(
-    root: &Path,
-    agent: &AgentConfig,
     narrowed: &CheckRecord,
     proposed_scope: &[String],
 ) -> bool {
     // Acceptance means the q-scope suggestion graduated from evaluator claim
     // to verified reusable q-scope. Interrogation Policy requires the
     // independent verification turn to produce a schema-valid answer under
-    // that proposed scope. If verification needed full-scope retry, the
-    // restricted insufficient-evidence is not final, but the proposed scope is
-    // not verified.
+    // that proposed scope.
     is_reusable_history_record(narrowed)
-        && verified_q_scope_evidence_is_accepted(
-            root,
-            agent,
-            &narrowed.scope,
-            &narrowed.evidence,
-            proposed_scope,
-        )
+        && verified_q_scope_answer_is_accepted(&narrowed.scope, proposed_scope)
 }
 
-pub(crate) fn verified_q_scope_evidence_is_accepted(
-    root: &Path,
-    agent: &AgentConfig,
+pub(crate) fn verified_q_scope_answer_is_accepted(
     answer_scope: &[String],
-    evidence: &str,
     proposed_scope: &[String],
 ) -> bool {
     answer_scope == proposed_scope
-        && visible_scope(agent, answer_scope)
-            .map(|scope| evidence_file_refs_are_visible_in_root(evidence, &scope, root))
-            .unwrap_or(false)
 }
 
 pub(crate) fn write_scope_narrowing_event(
