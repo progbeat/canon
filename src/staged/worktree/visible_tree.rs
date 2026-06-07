@@ -1,6 +1,5 @@
 use super::StagedWorktreeView;
 use crate::git::{git_object_oid_has_known_shape, StagedTrackedFile};
-use crate::scope::path_bytes_in_scope;
 use std::collections::BTreeMap;
 
 pub(super) struct VisibleTree {
@@ -23,12 +22,9 @@ impl StagedWorktreeView {
         if !git_object_oid_has_known_shape(visible_tree_oid) {
             return Err("visibleTreeOid must be a Git object ID hex string".to_string());
         }
-        let mut entry_paths = Vec::new();
-        for file in self.source_files()? {
-            if path_bytes_in_scope(&file.path, scope)? {
-                entry_paths.push(file);
-            }
-        }
+        let entry_paths = self
+            .source
+            .tracked_files_for_pathspecs(&self.source_root, scope)?;
         Ok(VisibleTree {
             oid: visible_tree_oid.to_string(),
             entry_paths,

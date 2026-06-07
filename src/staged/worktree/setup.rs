@@ -12,7 +12,6 @@ impl StagedWorktreeView {
         root: &Path,
         source: TreeSource,
     ) -> Result<StagedWorktreeView, String> {
-        let files = source.tracked_files(root)?;
         let snapshot_root = create_snapshot_root(root)?;
         let materialization_root = snapshot_root.path().to_path_buf();
         let remove_materialization_root_on_drop = snapshot_root.remove_on_drop();
@@ -35,18 +34,8 @@ impl StagedWorktreeView {
             lazy_tree_dir: materialization_root.join("lazy"),
             trees_dir: materialization_root.join("trees"),
             materialization_root,
-            source_files: RefCell::new(Some(files)),
             unpacked_paths: RefCell::new(BTreeSet::new()),
             blob_reader: RefCell::new(None),
         })
-    }
-
-    pub(super) fn source_files(&self) -> Result<Vec<crate::git::StagedTrackedFile>, String> {
-        if let Some(files) = self.source_files.borrow().as_ref() {
-            return Ok(files.clone());
-        }
-        let files = self.source.tracked_files(&self.source_root)?;
-        *self.source_files.borrow_mut() = Some(files.clone());
-        Ok(files)
     }
 }

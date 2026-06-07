@@ -93,6 +93,13 @@ pub(crate) fn staged_tracked_files(root: &Path) -> Result<Vec<StagedTrackedFile>
     tracked_files_for_pathspecs(root, None, &[])
 }
 
+pub(super) fn staged_tracked_files_for_pathspecs(
+    root: &Path,
+    pathspecs: &[String],
+) -> Result<Vec<StagedTrackedFile>, String> {
+    tracked_files_for_pathspecs(root, None, pathspecs)
+}
+
 pub(crate) fn head_tracked_files(root: &Path) -> Result<Option<Vec<StagedTrackedFile>>, String> {
     if !git_head_tree_exists(root)? {
         return Ok(None);
@@ -126,10 +133,19 @@ pub(crate) fn tree_tracked_files(
     root: &Path,
     treeish: &str,
 ) -> Result<Vec<StagedTrackedFile>, String> {
+    tree_tracked_files_for_pathspecs(root, treeish, &[])
+}
+
+pub(super) fn tree_tracked_files_for_pathspecs(
+    root: &Path,
+    treeish: &str,
+    pathspecs: &[String],
+) -> Result<Vec<StagedTrackedFile>, String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
-        .args(["ls-tree", "-rz", "--full-tree", "-r", treeish])
+        .args(["ls-tree", "-rz", "--full-tree", "-r", treeish, "--"])
+        .args(pathspecs)
         .output()
         .map_err(|err| format!("failed to run git ls-tree: {}", err))?;
     if !output.status.success() {
