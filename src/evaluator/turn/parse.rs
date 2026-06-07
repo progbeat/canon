@@ -4,7 +4,7 @@ use crate::evaluator::response_cache::{response_excerpt, EvaluatorResponseParseC
 use crate::evidence::evidence_file_refs_are_visible_in_root;
 use std::path::Path;
 
-pub(super) const RESPONSE_REPAIR_PROMPT: &str = "Your previous response was invalid for this same question. Return exactly one schema JSON object only, escaping quotes and backslashes inside strings. Do not include progress prose, markdown, or tool-call JSON. Cite only files visible in this evaluator working tree; if visible files are insufficient, use error:\"insufficient-evidence\".";
+pub(super) const RESPONSE_REPAIR_PROMPT: &str = "Your previous response was invalid for this same question. Return exactly one schema JSON object only, escaping quotes and backslashes inside strings. Do not include progress prose, markdown, or tool-call JSON. Cite only files visible in this evaluator working tree. Do not cite hidden `.canon/` paths, even when explaining access denial; cite the sandbox transcript or visible scope instead. If visible files are insufficient, use error:\"insufficient-evidence\".";
 
 pub(super) fn parse_visible_evaluator_response(
     parser_cache: &mut EvaluatorResponseParseCache,
@@ -44,4 +44,15 @@ pub(super) fn insufficient_evidence_response_answer() -> ParsedAnswer {
         ERROR_INSUFFICIENT_EVIDENCE.to_string(),
         "evaluator evidence cites files outside the visible scope".to_string(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RESPONSE_REPAIR_PROMPT;
+
+    #[test]
+    fn repair_prompt_rejects_hidden_canon_path_citations() {
+        assert!(RESPONSE_REPAIR_PROMPT.contains("Do not cite hidden `.canon/` paths"));
+        assert!(RESPONSE_REPAIR_PROMPT.contains("sandbox transcript"));
+    }
 }
