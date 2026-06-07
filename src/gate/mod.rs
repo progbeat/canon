@@ -28,29 +28,33 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
     // same HEAD-vs-staged regression count is zero. In that same-tree commit
     // case, remaining expectation failures are not gate failures; only a
     // staged regression from HEAD pass to staged fail blocks the hook.
-    if gate_result_or_failure(has_mixed_canon_and_non_canon_changes(root))? {
-        write_mixed_canon_change_failure()?;
-        return Err(CommandError::GateFailed);
-    }
-    let mut repo_cache = RepoInspectionCache::new();
-    let config =
-        match repo_cache.load_check_config(root, Path::new(CHECK_PATH), &TreeSource::Staged) {
-            Ok(config) => config,
-            Err(_) => return Ok(()),
-        };
-    let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
-    let mut history_cache = HistoryCache::default();
-    let num_regressions = gate_result_or_failure(gate_regression_count_with_config(
-        root,
-        &config,
-        &mut history_cache,
-        &mut visible_tree_oid_cache,
-    ))?;
+    let num_regressions = gate_regression_count(root)?;
     if num_regressions > 0 {
         write_gate_regression_failure()?;
         return Err(CommandError::GateFailed);
     }
+    if gate_result_or_failure(has_mixed_canon_and_non_canon_changes(root))? {
+        write_mixed_canon_change_failure()?;
+        return Err(CommandError::GateFailed);
+    }
     Ok(())
+}
+
+fn gate_regression_count(root: &Path) -> Result<usize, CommandError> {
+    let mut repo_cache = RepoInspectionCache::new();
+    let config =
+        match repo_cache.load_check_config(root, Path::new(CHECK_PATH), &TreeSource::Staged) {
+            Ok(config) => config,
+            Err(_) => return Ok(0),
+        };
+    let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
+    let mut history_cache = HistoryCache::default();
+    gate_result_or_failure(gate_regression_count_with_config(
+        root,
+        &config,
+        &mut history_cache,
+        &mut visible_tree_oid_cache,
+    ))
 }
 
 fn gate_result_or_failure<T>(result: Result<T, String>) -> Result<T, CommandError> {
