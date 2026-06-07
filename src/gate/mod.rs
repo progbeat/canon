@@ -28,6 +28,10 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
     // same HEAD-vs-staged regression count is zero. In that same-tree commit
     // case, remaining expectation failures are not gate failures; only a
     // staged regression from HEAD pass to staged fail blocks the hook.
+    if gate_result_or_failure(has_mixed_canon_and_non_canon_changes(root))? {
+        write_mixed_canon_change_failure()?;
+        return Err(CommandError::GateFailed);
+    }
     let mut repo_cache = RepoInspectionCache::new();
     let config = gate_result_or_failure(repo_cache.load_check_config(
         root,
@@ -44,13 +48,6 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
     ))?;
     if num_regressions > 0 {
         write_gate_regression_failure()?;
-        return Err(CommandError::GateFailed);
-    }
-    if gate_result_or_failure(has_mixed_canon_and_non_canon_changes(root))? {
-        write_stderr_line(
-            "canon gate: .canon/** changes must not be mixed with non-.canon changes",
-        )?;
-        write_stderr_line("▷ Ask human to handle .canon/ changes.")?;
         return Err(CommandError::GateFailed);
     }
     Ok(())
@@ -73,6 +70,11 @@ fn has_mixed_canon_and_non_canon_changes(root: &Path) -> Result<bool, String> {
         .iter()
         .any(|path| is_canon_project_path_bytes(path));
     Ok(has_canon_change && !is_canon_only_staged_change_bytes(&changed_paths))
+}
+
+fn write_mixed_canon_change_failure() -> Result<(), String> {
+    write_stderr_line("canon gate: .canon/** changes must not be mixed with non-.canon changes")?;
+    write_stderr_line("▷ Ask human to handle .canon/ changes.")
 }
 
 pub(crate) fn gate_regression_count_with_config(
