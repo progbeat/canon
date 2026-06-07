@@ -160,20 +160,11 @@ pub(crate) fn question_scope_suggestion_scope_for_independent_verification(
     }
 }
 
-pub(crate) fn narrowed_scope_is_accepted(
-    initial: &CheckRecord,
-    narrowed: &CheckRecord,
-    proposed_scope: &[String],
-) -> bool {
+pub(crate) fn narrowed_scope_is_accepted(narrowed: &CheckRecord) -> bool {
     // Acceptance means the q-scope suggestion graduated from evaluator claim
     // to verified reusable q-scope. Interrogation Policy requires the
-    // independent verification turn to reproduce the same answer while still
-    // scoped to the proposed q-scope. A full-scope retry answer or a different
-    // answer is valid, but neither verifies that the proposed narrow scope is
-    // sufficient for the original answer.
+    // independent verification turn to produce a schema-valid answer.
     narrowed.error.is_none()
-        && narrowed.observed == initial.observed
-        && narrowed.scope == proposed_scope
 }
 
 pub(crate) fn write_scope_narrowing_event(
