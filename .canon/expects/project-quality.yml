@@ -29,7 +29,7 @@
 - q: "Can you find any dirty hacks that can be avoided?"
   a: "no"
   cooldown: 7d
-  thinking: xhigh
+  thinking: high
 
 - q: "Does the project avoid unnecessary unsafe code?"
   a: "yes"
