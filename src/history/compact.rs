@@ -7,23 +7,16 @@ use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-static HISTORY_COMPACT_CHANCE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static HISTORY_COMPACT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 const HISTORY_COMPACT_KEEP_RECORDS: usize = 8;
 const HISTORY_COMPACT_CHANCE_DENOMINATOR: u64 = 16;
 
 pub(super) fn should_compact_history() -> bool {
-    should_compact_history_for_seed(compaction_chance_seed())
+    getrandom::u64().is_ok_and(should_compact_history_for_random_draw)
 }
 
-pub(super) fn should_compact_history_for_seed(seed: u64) -> bool {
-    seed.is_multiple_of(HISTORY_COMPACT_CHANCE_DENOMINATOR)
-}
-
-fn compaction_chance_seed() -> u64 {
-    let counter = HISTORY_COMPACT_CHANCE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let pid = u64::from(process::id());
-    counter.wrapping_add(pid)
+pub(super) fn should_compact_history_for_random_draw(draw: u64) -> bool {
+    draw.is_multiple_of(HISTORY_COMPACT_CHANCE_DENOMINATOR)
 }
 
 pub(super) fn compact_repository_history_locked(root: &Path, path: &Path) -> Result<(), String> {
