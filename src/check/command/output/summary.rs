@@ -1,4 +1,3 @@
-use super::record::record_requires_human_review;
 use super::shared::write_stdout_record;
 use crate::check::core::{for_each_unique_report_record, CheckRecord, CheckRunReport};
 use std::io::Write;
@@ -122,7 +121,7 @@ pub(crate) fn summary_outcome_counts(report: &CheckRunReport) -> SummaryOutcomeC
 fn add_summary_record(counts: &mut SummaryOutcomeCounts, record: &CheckRecord) {
     if record.passed() {
         counts.passed += 1;
-    } else if record_requires_human_review(record) {
+    } else if record.requires_human_review() {
         counts.errors += 1;
     } else {
         counts.failed += 1;

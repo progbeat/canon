@@ -24,7 +24,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     let CheckRunSideEffects {
         mut diagnostic_log,
         mut result_output,
-        progress_output,
+        live_progress_output,
         caches,
     } = side_effects;
     let mut records = Vec::new();
@@ -102,7 +102,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 runner,
                 diagnostic_log: &mut diagnostic_log,
                 result_output: &mut result_output,
-                progress_output: &progress_output,
+                live_progress_output: &live_progress_output,
                 caches,
                 interrogation_run_state: &mut interrogation_run_state,
             },

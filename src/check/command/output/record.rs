@@ -9,16 +9,19 @@ use std::time::Duration;
 
 const PROGRESS_DOT_INTERVAL: Duration = Duration::from_secs(60);
 
-pub(crate) struct CheckProgressOutput {
+pub(crate) struct LiveCheckProgressOutput {
     output: SharedCheckOutput,
     stop: Sender<()>,
     worker: Option<JoinHandle<Result<(), String>>>,
 }
 
-pub(crate) fn start_check_progress_output(
+pub(crate) fn start_live_check_progress_output(
     output: SharedCheckOutput,
     display_id: &str,
-) -> Result<CheckProgressOutput, String> {
+) -> Result<LiveCheckProgressOutput, String> {
+    // Evaluated expectations call this before evaluator work starts. The first
+    // dot is written and flushed immediately; the worker appends later dots
+    // while the evaluator is still running.
     let mut immediate_output = output.clone();
     write_stdout_record(
         &mut immediate_output,
@@ -37,14 +40,14 @@ pub(crate) fn start_check_progress_output(
         }
     });
 
-    Ok(CheckProgressOutput {
+    Ok(LiveCheckProgressOutput {
         output,
         stop,
         worker: Some(worker),
     })
 }
 
-impl CheckProgressOutput {
+impl LiveCheckProgressOutput {
     pub(crate) fn finish_with_record(mut self, record: &CheckRecord) -> Result<(), String> {
         self.stop_progress_worker()?;
         let completion = render_check_output_record_completion(record);
@@ -67,9 +70,8 @@ impl CheckProgressOutput {
     }
 }
 
-// Evaluated `canon check` expectations use `CheckProgressOutput`, which emits
-// live dots before appending this module's completion text. This fallback is
-// for cached records and no-progress test callers, so it emits no progress dots.
+// Cached records and no-progress test callers do not represent an evaluator
+// currently running, so they write only the completed result record.
 pub(crate) fn write_result_output_without_live_progress(
     result_output: &mut Option<&mut dyn Write>,
     record: &CheckRecord,
@@ -91,7 +93,7 @@ pub(super) fn render_check_output_record_completion(record: &CheckRecord) -> Str
     if record.passed() {
         return " OK\n".to_string();
     }
-    let is_error = record_requires_human_review(record);
+    let is_error = record.requires_human_review();
     let status = if is_error { "ERROR" } else { "FAILED" };
     let mut output = String::new();
     output.push_str(&format!(" {}\n", status));
@@ -100,7 +102,7 @@ pub(super) fn render_check_output_record_completion(record: &CheckRecord) -> Str
     if is_error {
         output.push_str("Error: ");
         let error = record
-            .review_error_text()
+            .human_review_reason()
             .expect("error records must expose an error value");
         output.push_str(&escape_check_output_text(error));
         output.push('\n');
@@ -125,8 +127,4 @@ pub(super) fn render_check_output_record_completion(record: &CheckRecord) -> Str
         }
     }
     output
-}
-
-pub(crate) fn record_requires_human_review(record: &CheckRecord) -> bool {
-    record.review_error_text().is_some()
 }

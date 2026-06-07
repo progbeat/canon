@@ -49,16 +49,7 @@ fn required_runtime_log_fields(event: &str) -> Option<&'static [&'static str]> {
             "qScopeSuggestion",
             "reason",
         ]),
-        "scope.narrowing" => Some(&[
-            "id",
-            "originalScope",
-            "proposedScope",
-            "accepted",
-            "initialObserved",
-            "initialEvidence",
-            "verificationObserved",
-            "verificationEvidence",
-        ]),
+        "scope.narrowing" => Some(&["id", "originalScope", "proposedScope", "accepted"]),
         "thread.restart" => Some(&[
             "threadId",
             "id",

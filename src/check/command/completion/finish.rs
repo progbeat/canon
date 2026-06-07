@@ -6,12 +6,10 @@ use crate::check::interrogation::write_check_lifecycle_finish_event;
 use crate::check::CheckRunCaches;
 use crate::cli::CommandError;
 use crate::config_types::{AgentConfig, CheckConfig};
-use crate::gate::{
-    gate_cached_result_for_tree, gate_regression_count_with_config, GateCacheResult,
-    GateComparisonTree,
-};
+use crate::gate::{gate_cached_result_for_tree, GateCacheResult, GateComparisonTree};
 use crate::git::VisibleTreeOidCache;
 use crate::history::HistoryCache;
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
 
@@ -110,6 +108,47 @@ fn report_passing_expectations(
     expectations
 }
 
+fn current_non_passes_with_prior_pass_count(
+    root: &Path,
+    agent: &AgentConfig,
+    report: &CheckRunReport,
+    history_cache: &mut HistoryCache,
+) -> Result<usize, String> {
+    let mut count = 0usize;
+    for expectation in report_non_passing_expectations(report, agent) {
+        let records = history_cache.read_records(root, &expectation)?;
+        if records.iter().any(CheckRecord::passed) {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+fn report_non_passing_expectations(
+    report: &CheckRunReport,
+    agent: &AgentConfig,
+) -> Vec<SelectedExpectation> {
+    let mut seen = BTreeSet::new();
+    let mut expectations = Vec::new();
+    for record in report.records.iter().filter(|record| !record.passed()) {
+        if let Some(expectation) = selected_expectation_from_record(record, agent) {
+            if seen.insert(expectation.id.clone()) {
+                expectations.push(expectation);
+            }
+        }
+    }
+    for cached in report
+        .cached
+        .iter()
+        .filter(|cached| !cached.record.passed())
+    {
+        if seen.insert(cached.expectation.id.clone()) {
+            expectations.push(cached.expectation.clone());
+        }
+    }
+    expectations
+}
+
 fn write_check_agent_message(
     root: &Path,
     config: &CheckConfig,
@@ -147,11 +186,8 @@ pub(crate) fn check_agent_messages(
         history_cache,
         visible_tree_oid_cache,
     )?;
-    // This is the check-command spec's `num_regressions`. Reusing gate's
-    // comparison keeps a same-tree commit instruction aligned with
-    // expectation-related `canon gate` failures.
     let num_regressions =
-        gate_regression_count_with_config(root, config, history_cache, visible_tree_oid_cache)?;
+        current_non_passes_with_prior_pass_count(root, agent, report, history_cache)?;
     let outcome_counts = summary_outcome_counts(report);
     let num_failed = outcome_counts.failed;
     let num_errors = outcome_counts.errors;
@@ -185,7 +221,9 @@ mod tests {
     use crate::check::core::{CheckResult, CheckRunReport};
     use crate::git::TreeSource;
     use crate::hash::full_scope;
+    use crate::history::append_current_history_record_with_cache;
     use crate::time::format_record_timestamp;
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
     use std::process;
@@ -238,34 +276,121 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn current_non_pass_with_any_prior_pass_is_a_regression() {
+        let root = git_project("current-non-pass-prior-pass-regression");
+        let agent = AgentConfig::default();
+        let scope = full_scope();
+        let pass_record = staged_scope_record(&root, &agent, &scope, "yes");
+        let expectation = selected_expectation_from_record(&pass_record, &agent).unwrap();
+        let mut history_cache = HistoryCache::default();
+        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
+        append_current_history_record_with_cache(
+            &root,
+            &TreeSource::Staged,
+            &expectation,
+            &pass_record,
+            &mut history_cache,
+            &mut visible_tree_oid_cache,
+        )
+        .unwrap();
+        let fail_record = staged_scope_record(&root, &agent, &scope, "no");
+        let report = CheckRunReport {
+            records: vec![fail_record],
+            cached: Vec::new(),
+            evaluated: 1,
+            skipped: 0,
+        };
+
+        let count =
+            current_non_passes_with_prior_pass_count(&root, &agent, &report, &mut history_cache)
+                .unwrap();
+
+        assert_eq!(count, 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn prior_pass_regression_agent_message_repairs_instead_of_commits() {
+        let root = git_project("prior-pass-regression-agent-message");
+        let agent = AgentConfig::default();
+        let scope = full_scope();
+        let pass_record = staged_scope_record(&root, &agent, &scope, "yes");
+        let expectation = selected_expectation_from_record(&pass_record, &agent).unwrap();
+        let mut history_cache = HistoryCache::default();
+        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
+        append_current_history_record_with_cache(
+            &root,
+            &TreeSource::Staged,
+            &expectation,
+            &pass_record,
+            &mut history_cache,
+            &mut visible_tree_oid_cache,
+        )
+        .unwrap();
+        let report = CheckRunReport {
+            records: vec![staged_scope_record(&root, &agent, &scope, "no")],
+            cached: Vec::new(),
+            evaluated: 1,
+            skipped: 0,
+        };
+        let config = CheckConfig {
+            version: 1,
+            presets: BTreeMap::new(),
+            agent: agent.clone(),
+            expectations: Vec::new(),
+        };
+
+        let messages = check_agent_messages(
+            &root,
+            &config,
+            &report,
+            &mut history_cache,
+            &mut visible_tree_oid_cache,
+        )
+        .unwrap();
+
+        assert_eq!(messages, render_check_agent_messages(1, 0, 0, 1));
+        let _ = fs::remove_dir_all(root);
+    }
+
     fn passing_report_for_staged_scope(
         root: &std::path::Path,
         agent: &AgentConfig,
         scope: &[String],
     ) -> CheckRunReport {
+        CheckRunReport {
+            records: vec![staged_scope_record(root, agent, scope, "yes")],
+            cached: Vec::new(),
+            evaluated: 1,
+            skipped: 0,
+        }
+    }
+
+    fn staged_scope_record(
+        root: &std::path::Path,
+        agent: &AgentConfig,
+        scope: &[String],
+        observed: &str,
+    ) -> CheckRecord {
         let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
         let visible_tree_oid = visible_tree_oid_cache
             .visible_tree_oid(root, &TreeSource::Staged, agent, scope)
             .unwrap();
-        CheckRunReport {
-            records: vec![CheckRecord {
-                timestamp: format_record_timestamp(0),
-                number: 1,
-                result: CheckResult::Pass,
-                question: Some("Does it pass?".to_string()),
-                expected_answer: Some("yes".to_string()),
-                observed: "yes".to_string(),
-                error: None,
-                evidence: "test evidence".to_string(),
-                scope: scope.to_vec(),
-                question_scope_suggestion: None,
-                visible_tree_oid,
-                id: "11111111111111111111".to_string(),
-                display_id: "1".to_string(),
-            }],
-            cached: Vec::new(),
-            evaluated: 1,
-            skipped: 0,
+        CheckRecord {
+            timestamp: format_record_timestamp(0),
+            number: 1,
+            result: CheckResult::from_expected_answer("yes", observed),
+            question: Some("Does it pass?".to_string()),
+            expected_answer: Some("yes".to_string()),
+            observed: observed.to_string(),
+            error: None,
+            evidence: "test evidence".to_string(),
+            scope: scope.to_vec(),
+            question_scope_suggestion: None,
+            visible_tree_oid,
+            id: "11111111111111111111".to_string(),
+            display_id: "1".to_string(),
         }
     }
 

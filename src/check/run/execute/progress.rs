@@ -1,8 +1,8 @@
-use crate::check::command::output::CheckProgressOutput;
+use crate::check::command::output::LiveCheckProgressOutput;
 
 pub(super) fn cancel_progress_on_error<T>(
     result: Result<T, String>,
-    progress: &mut Option<CheckProgressOutput>,
+    progress: &mut Option<LiveCheckProgressOutput>,
 ) -> Result<T, String> {
     match result {
         Ok(value) => Ok(value),

@@ -147,7 +147,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         CheckRunSideEffects {
             diagnostic_log: Some(&mut diagnostic_log),
             result_output: Some(&mut result_output),
-            progress_output: Some(shared_output.clone()),
+            live_progress_output: Some(shared_output.clone()),
             caches: &mut check_caches,
         },
     );

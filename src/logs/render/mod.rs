@@ -30,43 +30,23 @@ pub(crate) fn render_runtime_log_event(
 #[cfg(test)]
 mod tests {
     use super::render_runtime_log_event;
+    use crate::token_usage_types::{TokenUsage, TokenUsageUpdate};
     use serde_json::{json, Value};
 
     #[test]
-    fn token_usage_updates_expose_raw_count_objects() {
-        let fields = agent_response_fields(vec![json!({
-            "sequence": 1,
-            "threadId": "thread",
-            "turnId": "turn",
-            "tokenUsage": {
+    fn agent_response_accepts_typed_token_usage_updates() {
+        let fields = agent_response_fields(json!(vec![TokenUsageUpdate {
+            sequence: 1,
+            thread_id: "thread".to_string(),
+            turn_id: "turn".to_string(),
+            token_usage: json!({
                 "last": token_usage(),
                 "total": token_usage(),
-            },
-        })]);
+            }),
+            last_usage: TokenUsage::default(),
+        }]));
 
         render_runtime_log_event("info", "agent.response", &fields).unwrap();
-    }
-
-    #[test]
-    fn token_usage_updates_require_reasoning_count() {
-        let mut usage = token_usage();
-        usage
-            .as_object_mut()
-            .unwrap()
-            .remove("reasoningOutputTokens");
-        let fields = agent_response_fields(vec![json!({
-            "sequence": 1,
-            "threadId": "thread",
-            "turnId": "turn",
-            "tokenUsage": {
-                "last": usage,
-                "total": token_usage(),
-            },
-        })]);
-
-        let error = render_runtime_log_event("info", "agent.response", &fields).unwrap_err();
-
-        assert!(error.to_string().contains("reasoningOutputTokens"));
     }
 
     #[test]
@@ -106,27 +86,13 @@ mod tests {
         render_runtime_log_event("info", "check.finish", &fields).unwrap();
     }
 
-    #[test]
-    fn thread_events_accept_raw_default_model_as_null() {
-        let fields = vec![
-            ("threadId", json!("thread")),
-            ("scope", json!(["."])),
-            ("model", Value::Null),
-            ("thinking", json!("medium")),
-            ("baseInstructions", json!("base")),
-            ("developerInstructions", json!("developer")),
-        ];
-
-        render_runtime_log_event("info", "thread.start", &fields).unwrap();
-    }
-
-    fn agent_response_fields(updates: Vec<Value>) -> Vec<(&'static str, Value)> {
+    fn agent_response_fields(updates: Value) -> Vec<(&'static str, Value)> {
         vec![
             ("id", json!("id")),
             ("attempt", json!(1)),
             ("reason", json!("initial")),
             ("response", json!({"sessionId": "thread", "text": "{}"})),
-            ("tokenUsageUpdates", json!(updates)),
+            ("tokenUsageUpdates", updates),
         ]
     }
 

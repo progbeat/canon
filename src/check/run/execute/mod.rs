@@ -30,6 +30,6 @@ impl CheckRunCaches {
 pub(crate) struct CheckRunSideEffects<'out, 'cache, 'log> {
     pub(crate) diagnostic_log: Option<&'log mut DiagnosticLogWriter>,
     pub(crate) result_output: Option<&'out mut dyn Write>,
-    pub(crate) progress_output: Option<crate::check::command::output::SharedCheckOutput>,
+    pub(crate) live_progress_output: Option<crate::check::command::output::SharedCheckOutput>,
     pub(crate) caches: &'cache mut CheckRunCaches,
 }

@@ -1,8 +1,7 @@
 use super::progress::cancel_progress_on_error;
 use super::CheckRunCaches;
 use crate::check::command::output::{
-    record_requires_human_review, start_check_progress_output,
-    write_result_output_without_live_progress, SharedCheckOutput,
+    start_live_check_progress_output, write_result_output_without_live_progress, SharedCheckOutput,
 };
 use crate::check::core::{CheckOptions, CheckRecord, SelectedExpectation};
 use crate::check::interrogation::policy::{
@@ -31,7 +30,7 @@ pub(super) struct ExpectationRunContext<'a, 'out, 'log, R: EvaluatorRunner> {
     pub(super) runner: &'a mut R,
     pub(super) diagnostic_log: &'a mut Option<&'log mut DiagnosticLogWriter>,
     pub(super) result_output: &'a mut Option<&'out mut dyn Write>,
-    pub(super) progress_output: &'a Option<SharedCheckOutput>,
+    pub(super) live_progress_output: &'a Option<SharedCheckOutput>,
     pub(super) caches: &'a mut CheckRunCaches,
     pub(super) interrogation_run_state: &'a mut InterrogationRunState,
 }
@@ -82,8 +81,10 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         &mut context.caches.visible_tree_oid,
         context.active_lazy_full_scope_reset_ids,
     ));
-    let mut progress = match context.progress_output.as_ref() {
-        Some(output) => Some(run_expectation_try!(start_check_progress_output(
+    // Start live progress before the evaluator turn so the first dot is
+    // visible while the expectation is still being evaluated.
+    let mut progress = match context.live_progress_output.as_ref() {
+        Some(output) => Some(run_expectation_try!(start_live_check_progress_output(
             output.clone(),
             &expectation.display_id,
         ))),
@@ -112,7 +113,7 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
 
     let record_scope = interrogation.record.scope.clone();
     debug_assert!(scope_is_within(&record_scope, &verified_q_scope));
-    let proposed_q_scope = if record_requires_human_review(&interrogation.record) {
+    let proposed_q_scope = if interrogation.record.requires_human_review() {
         None
     } else {
         run_expectation_try!(cancel_progress_on_error(
@@ -127,7 +128,6 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         ))
     };
     if let Some(proposed_scope) = proposed_q_scope {
-        let initial_record = interrogation.record.clone();
         let mut verification_scope = proposed_scope.clone();
         let narrowed = run_expectation_try!(cancel_progress_on_error(
             interrogate_with_full_scope_retry(
@@ -157,8 +157,6 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
                 &verified_q_scope,
                 &proposed_scope,
                 accepted,
-                &initial_record,
-                &narrowed.record,
             ),
             &mut progress,
         ));
@@ -198,10 +196,11 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
             writer.write_record_event(DiagnosticRecordEvent::Expectation, &interrogation.record)
         );
     }
+    let human_review_required = interrogation.record.requires_human_review();
     let run_stop_signal_hit =
         break_after_tokens_hit || context_compaction_hit || stop_after_current_expectation;
-    let stop_run =
-        !context.options.keep_going && (!interrogation.record.passed() || run_stop_signal_hit);
+    let stop_run = !context.options.keep_going
+        && (!interrogation.record.passed() || human_review_required || run_stop_signal_hit);
     if run_stop_signal_hit {
         context.interrogation_run_state.clear_thread_sessions();
     }

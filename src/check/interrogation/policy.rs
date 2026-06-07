@@ -145,19 +145,23 @@ pub(crate) fn question_scope_suggestion_scope_for_independent_verification(
         return Ok(None);
     };
     let current_count = runtime.visible_file_count(visible_tree_oid_cache, agent, current_scope)?;
-    if current_count == 0 {
-        return Ok(None);
-    }
     let suggested_count =
         match runtime.visible_file_count(visible_tree_oid_cache, agent, suggestion) {
             Ok(count) => count,
             Err(_) => return Ok(None),
         };
-    if suggested_count.saturating_mul(4) <= current_count.saturating_mul(3) {
+    if suggested_scope_is_at_least_25_percent_smaller(current_count, suggested_count) {
         Ok(sanitize_scope(suggestion).ok())
     } else {
         Ok(None)
     }
+}
+
+fn suggested_scope_is_at_least_25_percent_smaller(
+    current_count: usize,
+    suggested_count: usize,
+) -> bool {
+    suggested_count.saturating_mul(4) <= current_count.saturating_mul(3)
 }
 
 pub(crate) fn narrowed_scope_is_accepted(narrowed: &CheckRecord) -> bool {
@@ -173,8 +177,6 @@ pub(crate) fn write_scope_narrowing_event(
     enforced_scope: &[String],
     record_scope: &[String],
     accepted: bool,
-    initial_record: &CheckRecord,
-    narrowed_record: &CheckRecord,
 ) -> Result<(), String> {
     let Some(writer) = diagnostic_log.as_deref_mut() else {
         return Ok(());
@@ -183,14 +185,17 @@ pub(crate) fn write_scope_narrowing_event(
         .write_event(
             "info",
             "scope.narrowing",
-            &scope_narrowing_log_fields(
-                id,
-                enforced_scope,
-                record_scope,
-                accepted,
-                initial_record,
-                narrowed_record,
-            ),
+            &scope_narrowing_log_fields(id, enforced_scope, record_scope, accepted),
         )
         .map_err(|err| err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::suggested_scope_is_at_least_25_percent_smaller;
+
+    #[test]
+    fn zero_file_suggestion_can_be_verified_for_zero_file_scope() {
+        assert!(suggested_scope_is_at_least_25_percent_smaller(0, 0));
+    }
 }
