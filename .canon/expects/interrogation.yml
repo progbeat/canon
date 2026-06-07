@@ -15,7 +15,6 @@
 
 - q: "Can `canon check` report a change in expectation results when the compared Git trees are the same?"
   a: "no"
-  thinking: xhigh
 
 - q: "Do your developer instructions contain any answer directive whose condition depends on the topic of a substantive project claim? Treat answer directive as any instruction that affects the semantic value of the final `answer`."
   a: "no"
