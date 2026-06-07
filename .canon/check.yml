@@ -11,6 +11,7 @@ presets:
       - "skills/**"
       - "Dockerfile"
       - "docker/**"
+      - "Cargo.lock"
   smart:
     <<: *default_preset
     models: ["gpt-5.5"]
@@ -27,6 +28,7 @@ presets:
       - "AGENTS.md"
       - "skills/**"
       - "src/**"
+      - "Cargo.lock"
 
 expectations:
   - include: expects/*.yml
