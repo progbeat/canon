@@ -1,6 +1,6 @@
 use super::record::record_requires_human_review;
 use super::shared::write_stdout_record;
-use crate::check::core::types::{for_each_unique_report_record, CheckRecord, CheckRunReport};
+use crate::check::core::{for_each_unique_report_record, CheckRecord, CheckRunReport};
 use std::io::Write;
 use std::time::Duration;
 

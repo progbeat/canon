@@ -1,7 +1,7 @@
 use crate::app::LazyAppServerRunner;
 use crate::check::command::output::{summary_outcome_counts, write_summary_line};
 use crate::check::command::{collect_check_token_usage, print_token_usage_summary};
-use crate::check::core::types::CheckRunReport;
+use crate::check::core::CheckRunReport;
 use crate::check::CHECK_PATH;
 use crate::git::TreeSource;
 use std::io::Write;

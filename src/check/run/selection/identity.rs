@@ -1,5 +1,5 @@
 use super::cooldown::parse_cooldown;
-use crate::check::core::types::SelectedExpectation;
+use crate::check::core::SelectedExpectation;
 use crate::config_types::CheckConfig;
 use crate::hash::expectation_id;
 use std::collections::BTreeSet;

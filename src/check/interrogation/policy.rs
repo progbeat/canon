@@ -1,5 +1,5 @@
 use crate::check::core::errors::error_record_from_interrogation_error;
-use crate::check::core::types::{CheckRecord, InterrogationResult, SelectedExpectation};
+use crate::check::core::{CheckRecord, InterrogationResult, SelectedExpectation};
 use crate::check::interrogation::state::{
     should_retry_full_scope_after_error, CheckRuntime, InterrogationRunState,
 };

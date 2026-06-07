@@ -4,7 +4,7 @@ use crate::check::command::{
     collect_check_token_usage, prepare_check_execution, print_token_usage_summary,
     PrepareCheckExecutionOptions,
 };
-use crate::check::core::types::QueryResult;
+use crate::check::core::QueryResult;
 use crate::check::interrogation::query::run_query_with_runner;
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::interrogation::{

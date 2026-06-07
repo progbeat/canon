@@ -1,6 +1,4 @@
-use crate::check::core::types::{
-    InterrogationResult, ParsedAnswer, QueryResult, SelectedExpectation,
-};
+use crate::check::core::{InterrogationResult, ParsedAnswer, QueryResult, SelectedExpectation};
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::evaluator::{record_from_response, EvaluatorError, ParsedTurnResponse};
 use crate::logs::{DiagnosticLogWriter, DiagnosticRecordEvent};

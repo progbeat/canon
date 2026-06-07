@@ -1,4 +1,4 @@
-use crate::check::core::types::{
+use crate::check::core::{
     CheckRecord, CheckRecordOutcome, CheckResult, SelectedExpectation, ERROR_UNPARSABLE,
 };
 use crate::check::interrogation::state::CheckRuntime;

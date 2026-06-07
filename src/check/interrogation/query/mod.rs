@@ -2,7 +2,7 @@ mod narrowing;
 mod review;
 mod turn;
 
-use crate::check::core::types::QueryResult;
+use crate::check::core::QueryResult;
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::interrogation::{
     run_with_model_fallbacks, write_query_result_event, write_query_review_required_event,

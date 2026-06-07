@@ -1,4 +1,4 @@
-use crate::check::core::types::{CachedExpectation, CheckRecord, SelectedExpectation};
+use crate::check::core::{CachedExpectation, CheckRecord, SelectedExpectation};
 use crate::check::run::selection::ExpectationIdentity;
 use crate::config_types::CheckConfig;
 use crate::fs_util::{ensure_dir_without_symlinks, for_each_nonempty_line, reject_symlink};

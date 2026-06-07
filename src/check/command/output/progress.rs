@@ -1,6 +1,6 @@
 use super::record::render_check_output_record_completion;
 use super::shared::{write_stdout_record, SharedCheckOutput};
-use crate::check::core::types::CheckRecord;
+use crate::check::core::CheckRecord;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;

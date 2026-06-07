@@ -1,4 +1,4 @@
-use crate::check::core::types::CheckRecord;
+use crate::check::core::CheckRecord;
 use serde_json::{json, Value};
 
 pub(crate) fn scope_narrowing_log_fields(

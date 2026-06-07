@@ -1,4 +1,4 @@
-use crate::check::core::types::{CheckRecord, SelectedExpectation};
+use crate::check::core::{CheckRecord, SelectedExpectation};
 use crate::config_types::AgentConfig;
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::history::{

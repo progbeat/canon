@@ -4,7 +4,7 @@ use crate::check::command::output::{
     record_requires_human_review, start_check_progress_output, write_and_flush_result_output,
     SharedCheckOutput,
 };
-use crate::check::core::types::{CheckOptions, CheckRecord, SelectedExpectation};
+use crate::check::core::{CheckOptions, CheckRecord, SelectedExpectation};
 use crate::check::interrogation::policy::{
     interrogate_with_full_scope_retry, narrowed_scope_is_accepted,
     question_scope_suggestion_should_get_independent_verification, turn_exceeds_break_after_tokens,

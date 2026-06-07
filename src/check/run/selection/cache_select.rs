@@ -1,5 +1,5 @@
 use super::order::order_by_latest_non_pass;
-use crate::check::core::types::{CheckOptions, SelectedExpectation};
+use crate::check::core::{CheckOptions, SelectedExpectation};
 use crate::check::run::cache::{
     cached_result_for_expectation, write_cache_hit, CachedResultLookup, CheckCacheHit,
 };

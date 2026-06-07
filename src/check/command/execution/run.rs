@@ -11,7 +11,7 @@ use super::trailer::{
 use crate::check::command::args::parse_check_command_args;
 use crate::check::command::output::SharedCheckOutput;
 use crate::check::command::{finish_check_report, CheckReportFinishContext};
-use crate::check::core::types::CheckCommandArgs;
+use crate::check::core::CheckCommandArgs;
 use crate::check::interrogation::{state::CheckRuntime, write_check_lifecycle_start_event};
 use crate::check::run::lazy_reset::{
     active_lazy_full_scope_reset_ids, apply_lazy_full_scope_reset,

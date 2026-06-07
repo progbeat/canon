@@ -1,4 +1,4 @@
-use crate::check::core::types::{SelectedExpectation, ERROR_INSUFFICIENT_EVIDENCE};
+use crate::check::core::{SelectedExpectation, ERROR_INSUFFICIENT_EVIDENCE};
 use crate::config_types::{AgentConfig, CheckConfig};
 use crate::evaluator::{
     app_server_model_key, evaluator_models, AppServerModelKey, EvaluatorResponseParseCache,

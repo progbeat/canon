@@ -1,5 +1,5 @@
 use super::identity::{select_expectations_with_identities, ExpectationIdentity};
-use crate::check::core::types::{CheckOptions, RawCheckOptions};
+use crate::check::core::{CheckOptions, RawCheckOptions};
 use crate::config_types::CheckConfig;
 use clap::builder::OsStringValueParser;
 use clap::{Arg, ArgAction, ArgMatches, Command};

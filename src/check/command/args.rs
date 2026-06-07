@@ -1,4 +1,4 @@
-use crate::check::core::types::CheckCommandArgs;
+use crate::check::core::CheckCommandArgs;
 use crate::check::run::selection::{
     add_check_option_args, matched_os_values, raw_check_options_from_matches,
 };

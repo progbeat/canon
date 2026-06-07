@@ -1,4 +1,4 @@
-use crate::check::core::types::{
+use crate::check::core::{
     for_each_unique_report_record, CachedExpectation, CheckRecord, CheckRunReport,
 };
 

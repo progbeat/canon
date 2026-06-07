@@ -1,4 +1,4 @@
-use crate::check::core::types::Cooldown;
+use crate::check::core::Cooldown;
 use crate::config_types::CooldownConfig;
 
 pub(crate) fn parse_cooldown(value: &CooldownConfig) -> Result<Cooldown, String> {

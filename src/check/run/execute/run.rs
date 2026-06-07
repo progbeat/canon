@@ -2,7 +2,7 @@ use super::expectation::{run_expectation, ExpectationRunContext};
 use super::report::{check_run_report, skipped_count, CheckRunReportCounts};
 use super::CheckRunSideEffects;
 use crate::check::command::output::write_and_flush_result_output;
-use crate::check::core::types::{
+use crate::check::core::{
     check_run_error, CachedExpectation, CheckOptions, CheckRecord, CheckRunError, CheckRunReport,
 };
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};

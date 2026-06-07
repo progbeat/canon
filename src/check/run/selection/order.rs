@@ -1,4 +1,4 @@
-use crate::check::core::types::{CheckRecord, CheckResult, SelectedExpectation};
+use crate::check::core::{CheckRecord, CheckResult, SelectedExpectation};
 use crate::check::run::order_state::latest_recorded_non_pass_timestamp_with_cache;
 use crate::history::HistoryCache;
 use crate::time::parse_record_timestamp;

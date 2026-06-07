@@ -1,4 +1,4 @@
-use crate::check::core::types::{
+use crate::check::core::{
     QueryResult, ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION, ERROR_UNPARSABLE,
 };
 
@@ -15,7 +15,7 @@ pub(super) fn human_review_reason(result: &QueryResult) -> Option<&'static str> 
 #[cfg(test)]
 mod tests {
     use super::human_review_reason;
-    use crate::check::core::types::{ParsedAnswer, QueryResult};
+    use crate::check::core::{ParsedAnswer, QueryResult};
 
     #[test]
     fn unknown_query_error_requires_human_review() {

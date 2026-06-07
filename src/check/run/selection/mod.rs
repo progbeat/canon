@@ -20,7 +20,7 @@ pub(crate) use order::order_by_latest_non_pass;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::check::core::types::{CheckOptions, CheckRecord, CheckRecordOutcome, CheckResult};
+    use crate::check::core::{CheckOptions, CheckRecord, CheckRecordOutcome, CheckResult};
     use crate::config_types::{AgentConfig, CheckConfig, Expectation};
     use crate::git::{TreeSource, VisibleTreeOidCache};
     use crate::history::{append_current_history_record_with_cache, HistoryCache};

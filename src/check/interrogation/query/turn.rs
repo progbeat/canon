@@ -1,4 +1,4 @@
-use crate::check::core::types::QueryResult;
+use crate::check::core::QueryResult;
 use crate::check::interrogation::finalize_query_answer;
 use crate::check::interrogation::state::{
     should_retry_full_scope_after_error, CheckRuntime, InterrogationRunState,

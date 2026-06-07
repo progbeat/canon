@@ -19,7 +19,7 @@ mod tests {
         render_check_agent_messages, start_check_progress_output, write_and_flush_result_output,
         SharedCheckOutput,
     };
-    use crate::check::core::types::{CheckRecord, CheckResult};
+    use crate::check::core::{CheckRecord, CheckResult};
     use std::io::{self, Write};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;

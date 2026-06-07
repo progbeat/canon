@@ -1,4 +1,4 @@
-use crate::check::core::types::{CheckRecord, SelectedExpectation};
+use crate::check::core::{CheckRecord, SelectedExpectation};
 use crate::fs_util::{ensure_dir_without_symlinks, reject_symlink};
 use crate::history::HistoryCache;
 use crate::time::{format_record_timestamp, parse_record_timestamp, unix_timestamp};

@@ -1,6 +1,6 @@
 use super::escape::escape_check_output_text;
 use super::shared::write_stdout_record;
-use crate::check::core::types::CheckRecord;
+use crate::check::core::CheckRecord;
 use crate::json_util::compact_json_string_array;
 use std::io::Write;
 use std::time::Duration;

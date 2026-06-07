@@ -1,7 +1,7 @@
 use crate::check::command::output::{
     render_check_agent_messages, summary_outcome_counts, write_stdout_record,
 };
-use crate::check::core::types::{CheckRecord, CheckRunReport, SelectedExpectation};
+use crate::check::core::{CheckRecord, CheckRunReport, SelectedExpectation};
 use crate::check::interrogation::write_check_lifecycle_finish_event;
 use crate::check::CheckRunCaches;
 use crate::cli::CommandError;
@@ -210,7 +210,7 @@ fn selected_expectation_from_record(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::check::core::types::{CheckResult, CheckRunReport};
+    use crate::check::core::{CheckResult, CheckRunReport};
     use crate::hash::full_scope;
     use crate::time::format_record_timestamp;
     use std::fs;

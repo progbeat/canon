@@ -1,4 +1,4 @@
-use crate::check::core::types::{InterrogationResult, SelectedExpectation};
+use crate::check::core::{InterrogationResult, SelectedExpectation};
 use crate::check::interrogation::interrogate_expectation_with_model;
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::config_types::AgentConfig;

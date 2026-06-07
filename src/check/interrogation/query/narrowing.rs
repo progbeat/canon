@@ -1,4 +1,4 @@
-use crate::check::core::types::ParsedAnswer;
+use crate::check::core::ParsedAnswer;
 use crate::check::interrogation::policy::{
     question_scope_suggestion_should_get_independent_verification,
     verified_q_scope_answer_is_accepted,
