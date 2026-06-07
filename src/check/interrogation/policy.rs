@@ -144,20 +144,17 @@ pub(crate) fn question_scope_suggestion_scope_for_independent_verification(
     let Some(suggestion) = suggestion else {
         return Ok(None);
     };
-    let Ok(proposed_scope) = sanitize_scope(suggestion) else {
-        return Ok(None);
-    };
     let current_count = runtime.visible_file_count(visible_tree_oid_cache, agent, current_scope)?;
     if current_count == 0 {
         return Ok(None);
     }
     let suggested_count =
-        match runtime.visible_file_count(visible_tree_oid_cache, agent, &proposed_scope) {
+        match runtime.visible_file_count(visible_tree_oid_cache, agent, suggestion) {
             Ok(count) => count,
             Err(_) => return Ok(None),
         };
     if suggested_count.saturating_mul(4) <= current_count.saturating_mul(3) {
-        Ok(Some(proposed_scope))
+        Ok(sanitize_scope(suggestion).ok())
     } else {
         Ok(None)
     }
