@@ -1,7 +1,7 @@
 use crate::check::core::{CachedExpectation, CheckRecord, SelectedExpectation};
 use crate::check::run::selection::ExpectationIdentity;
 use crate::config_types::CheckConfig;
-use crate::fs_util::{ensure_dir_without_symlinks, for_each_nonempty_line, reject_symlink};
+use crate::fs_util::{ensure_dir_without_symlinks, reject_symlink};
 use crate::git::resolve_git_path;
 use crate::hash::full_scope;
 use crate::logs::DiagnosticLogWriter;
@@ -9,7 +9,6 @@ use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 // Matches `.canon/specs/canon-check-lazy-full-scope-reset.md`:
@@ -98,13 +97,18 @@ pub(crate) fn clear_evaluated_lazy_full_scope_resets(
     records: &[CheckRecord],
     cache: &mut LazyFullScopeResetCache,
 ) -> Result<(), String> {
-    update_pending_lazy_full_scope_reset_ids(root, cache, |pending_ids| {
-        for record in records {
-            if active_ids.contains(&record.id) {
-                pending_ids.remove(&record.id);
-            }
-        }
-    })
+    let mut pending_ids = cache.read_pending_lazy_full_scope_reset_ids(root)?;
+    let removed_ids = records
+        .iter()
+        .filter(|record| active_ids.contains(&record.id) && pending_ids.contains(&record.id))
+        .map(|record| record.id.clone())
+        .collect::<Vec<_>>();
+    for id in &removed_ids {
+        remove_lazy_full_scope_reset_marker(root, id, cache)?;
+        pending_ids.remove(id);
+    }
+    cache.remember_pending_lazy_full_scope_reset_ids(root, pending_ids);
+    Ok(())
 }
 
 pub(crate) struct LazyFullScopeResetPlan {
@@ -154,12 +158,12 @@ impl LazyFullScopeResetCache {
         if let Some(ids) = self.pending_ids.get(&root_key) {
             return Ok(ids.clone());
         }
-        let path = self.lazy_full_scope_reset_pending_path(root)?;
         let mut ids = BTreeSet::new();
-        for_each_nonempty_line(&path, |_, line| {
-            ids.insert(line);
-            Ok(())
-        })?;
+        for id in read_pending_lazy_full_scope_reset_marker_entries(
+            &self.lazy_full_scope_reset_pending_path(root)?,
+        )? {
+            ids.insert(id);
+        }
         self.pending_ids.insert(root_key, ids.clone());
         Ok(ids)
     }
@@ -248,37 +252,55 @@ fn cached_expectation_fingerprint(
         .collect()
 }
 
-fn update_pending_lazy_full_scope_reset_ids(
-    root: &Path,
-    cache: &mut LazyFullScopeResetCache,
-    update: impl FnOnce(&mut BTreeSet<String>),
-) -> Result<(), String> {
-    let mut pending_ids = cache.read_pending_lazy_full_scope_reset_ids(root)?;
-    update(&mut pending_ids);
-    write_pending_lazy_full_scope_reset_ids(root, pending_ids, cache)
+fn read_pending_lazy_full_scope_reset_marker_entries(path: &Path) -> Result<Vec<String>, String> {
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(format!("failed to read {}: {}", path.display(), err)),
+    };
+    let mut ids = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|err| format!("failed to read {}: {}", path.display(), err))?;
+        let metadata = entry
+            .metadata()
+            .map_err(|err| format!("failed to inspect {}: {}", entry.path().display(), err))?;
+        if !metadata.is_file() {
+            continue;
+        }
+        let Some(id) = entry.file_name().to_str().map(str::to_string) else {
+            return Err(format!(
+                "pending lazy reset marker must be valid UTF-8: {}",
+                entry.path().display()
+            ));
+        };
+        ids.push(id);
+    }
+    Ok(ids)
 }
 
-fn write_pending_lazy_full_scope_reset_ids(
+fn remove_lazy_full_scope_reset_marker(
     root: &Path,
-    ids: BTreeSet<String>,
+    id: &str,
+    cache: &mut LazyFullScopeResetCache,
+) -> Result<(), String> {
+    let marker = lazy_full_scope_reset_marker_path(root, id, cache)?;
+    match fs::remove_file(&marker) {
+        Ok(()) => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => return Err(format!("failed to delete {}: {}", marker.display(), err)),
+    }
+    remove_empty_lazy_full_scope_reset_dir(root, cache)
+}
+
+fn remove_empty_lazy_full_scope_reset_dir(
+    root: &Path,
     cache: &mut LazyFullScopeResetCache,
 ) -> Result<(), String> {
     let path = cache.lazy_full_scope_reset_pending_path(root)?;
-    if ids.is_empty() {
-        remove_lazy_full_scope_reset_file_at_path(&path)?;
-        cache.remember_pending_lazy_full_scope_reset_ids(root, ids);
-        return Ok(());
-    }
-    let file_ids = ids.iter().cloned().collect::<Vec<_>>();
-    write_id_list_file(&path, &file_ids)?;
-    cache.remember_pending_lazy_full_scope_reset_ids(root, ids);
-    Ok(())
-}
-
-fn remove_lazy_full_scope_reset_file_at_path(path: &Path) -> Result<(), String> {
-    match fs::remove_file(path) {
+    match fs::remove_dir(&path) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::DirectoryNotEmpty => Ok(()),
         Err(err) => Err(format!("failed to delete {}: {}", path.display(), err)),
     }
 }
@@ -340,34 +362,46 @@ pub(crate) fn queue_lazy_full_scope_resets(
     cache: &mut LazyFullScopeResetCache,
 ) -> Result<(), String> {
     let mut pending_ids = cache.read_pending_lazy_full_scope_reset_ids(root)?;
-    pending_ids.extend(
-        expectations
-            .iter()
-            .map(|expectation| expectation.id.clone()),
-    );
-    write_pending_lazy_full_scope_reset_ids(root, pending_ids, cache)
+    let new_ids = expectations
+        .iter()
+        .map(|expectation| expectation.id.clone())
+        .filter(|id| !pending_ids.contains(id))
+        .collect::<Vec<_>>();
+    for id in &new_ids {
+        write_lazy_full_scope_reset_marker(root, id, cache)?;
+        pending_ids.insert(id.clone());
+    }
+    cache.remember_pending_lazy_full_scope_reset_ids(root, pending_ids);
+    Ok(())
 }
 
-fn write_id_list_file(path: &Path, ids: &[String]) -> Result<(), String> {
-    let ids = ids.iter().map(|id| id.as_str()).collect::<Vec<_>>();
-    if let Some(parent) = path.parent() {
+fn write_lazy_full_scope_reset_marker(
+    root: &Path,
+    id: &str,
+    cache: &mut LazyFullScopeResetCache,
+) -> Result<(), String> {
+    let marker = lazy_full_scope_reset_marker_path(root, id, cache)?;
+    if let Some(parent) = marker.parent() {
         ensure_dir_without_symlinks(parent)?;
     }
-    reject_symlink(path)?;
-    let mut file = fs::OpenOptions::new()
+    reject_symlink(&marker)?;
+    match fs::OpenOptions::new()
         .write(true)
-        .create(true)
-        .truncate(true)
-        .open(path)
-        .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
-    for id in ids {
-        file.write_all(id.as_bytes())
-            .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
-        file.write_all(b"\n")
-            .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
+        .create_new(true)
+        .open(&marker)
+    {
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+        Err(err) => Err(format!("failed to write {}: {}", marker.display(), err)),
     }
-    file.flush()
-        .map_err(|err| format!("failed to flush {}: {}", path.display(), err))
+}
+
+fn lazy_full_scope_reset_marker_path(
+    root: &Path,
+    id: &str,
+    cache: &mut LazyFullScopeResetCache,
+) -> Result<PathBuf, String> {
+    Ok(cache.lazy_full_scope_reset_pending_path(root)?.join(id))
 }
 
 fn random_reset_seed() -> Result<u64, String> {
