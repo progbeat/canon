@@ -198,6 +198,35 @@ fn gate_reports_mixed_canon_changes_before_config_errors() {
 }
 
 #[test]
+fn gate_passes_without_config_when_no_regressions_or_mixed_canon_changes() {
+    let repo = temp_repo("canon-gate-no-config-example");
+    init_git_repo(&repo);
+    fs::write(repo.join("src-main.py"), "print('hello')\n").unwrap();
+    let output = Command::new("git")
+        .args(["add", "src-main.py"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = canon().arg("gate").current_dir(&repo).output().unwrap();
+
+    let _ = fs::remove_dir_all(&repo);
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
+    assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
+}
+
+#[test]
 fn check_without_config_renders_documented_recovery_message() {
     let repo = temp_repo("canon-missing-config-example");
     init_git_repo(&repo);

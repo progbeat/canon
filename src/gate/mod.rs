@@ -33,11 +33,11 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
         return Err(CommandError::GateFailed);
     }
     let mut repo_cache = RepoInspectionCache::new();
-    let config = gate_result_or_failure(repo_cache.load_check_config(
-        root,
-        Path::new(CHECK_PATH),
-        &TreeSource::Staged,
-    ))?;
+    let config =
+        match repo_cache.load_check_config(root, Path::new(CHECK_PATH), &TreeSource::Staged) {
+            Ok(config) => config,
+            Err(_) => return Ok(()),
+        };
     let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
     let mut history_cache = HistoryCache::default();
     let num_regressions = gate_result_or_failure(gate_regression_count_with_config(
