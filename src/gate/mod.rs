@@ -24,28 +24,30 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
             "canon gate does not accept arguments\n▷ Run `canon gate` without arguments.".into(),
         );
     }
+    let changed_paths = gate_result_or_failure(staged_changed_path_bytes(root))?;
     // `canon check` prints "Commit the staged changes NOW!" only when this
     // same HEAD-vs-staged regression count is zero. In that same-tree commit
     // case, remaining expectation failures are not gate failures; only a
     // staged regression from HEAD pass to staged fail blocks the hook.
-    let num_regressions = gate_regression_count(root)?;
+    let num_regressions = gate_regression_count(root, &changed_paths)?;
     if num_regressions > 0 {
         write_gate_regression_failure()?;
         return Err(CommandError::GateFailed);
     }
-    if gate_result_or_failure(has_mixed_canon_and_non_canon_changes(root))? {
+    if has_mixed_canon_and_non_canon_changes(&changed_paths) {
         write_mixed_canon_change_failure()?;
         return Err(CommandError::GateFailed);
     }
     Ok(())
 }
 
-fn gate_regression_count(root: &Path) -> Result<usize, CommandError> {
+fn gate_regression_count(root: &Path, changed_paths: &[Vec<u8>]) -> Result<usize, CommandError> {
     let mut repo_cache = RepoInspectionCache::new();
     let config =
         match repo_cache.load_check_config(root, Path::new(CHECK_PATH), &TreeSource::Staged) {
             Ok(config) => config,
-            Err(_) => return Ok(0),
+            Err(_) if has_staged_canon_change(changed_paths) => return Ok(0),
+            Err(err) => return gate_result_or_failure(Err(err)),
         };
     let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
     let mut history_cache = HistoryCache::default();
@@ -68,12 +70,17 @@ fn gate_result_or_failure<T>(result: Result<T, String>) -> Result<T, CommandErro
     }
 }
 
-fn has_mixed_canon_and_non_canon_changes(root: &Path) -> Result<bool, String> {
-    let changed_paths = staged_changed_path_bytes(root)?;
+fn has_mixed_canon_and_non_canon_changes(changed_paths: &[Vec<u8>]) -> bool {
     let has_canon_change = changed_paths
         .iter()
         .any(|path| is_canon_project_path_bytes(path));
-    Ok(has_canon_change && !is_canon_only_staged_change_bytes(&changed_paths))
+    has_canon_change && !is_canon_only_staged_change_bytes(changed_paths)
+}
+
+fn has_staged_canon_change(changed_paths: &[Vec<u8>]) -> bool {
+    changed_paths
+        .iter()
+        .any(|path| is_canon_project_path_bytes(path))
 }
 
 fn write_mixed_canon_change_failure() -> Result<(), String> {
