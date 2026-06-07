@@ -2,7 +2,6 @@ use crate::check::command::output::{
     render_check_agent_messages, summary_outcome_counts, write_stdout_record,
 };
 use crate::check::core::types::{CheckRecord, CheckRunReport, SelectedExpectation};
-use crate::check::run::lazy_reset::apply_lazy_full_scope_reset;
 use crate::check::CheckRunCaches;
 use crate::cli::CommandError;
 use crate::config_types::{AgentConfig, CheckConfig};
@@ -21,10 +20,10 @@ use std::path::Path;
 // token usage stderr output lives in `command::reporting`, and
 // `command::execution`
 // orchestrates their order before calling `finish_check_report`. This module
-// owns only the post-summary agent message plus cleanup and finish logging.
-// Success and error reports share cleanup, finish logging, and the post-summary
-// message to the agent when allowed by the command form. The optional error
-// only changes the finish log payload and final command result.
+// owns only the post-summary agent message plus finish logging. Success and
+// error reports share finish logging and the post-summary message to the agent
+// when allowed by the command form. The optional error only changes the finish
+// log payload and final command result.
 pub(crate) struct CheckReportFinishContext<'a, 'b> {
     pub(crate) root: &'a Path,
     pub(crate) config: &'a CheckConfig,
@@ -42,8 +41,8 @@ pub(crate) fn finish_check_report(
     // No eligible public output piece is pending here: per-expectation output
     // and the public trailer have already been rendered, written, and flushed
     // by their own writers. This post-trailer step cannot delay stdout/stderr
-    // that was eligible earlier; it computes only the agent message, lazy
-    // reset, and finish lifecycle log.
+    // that was eligible earlier; it computes only the agent message and finish
+    // lifecycle log.
     let mut post_finish_error = None;
     let mut finish_error = error.map(str::to_string);
     if context.write_agent_message {
@@ -57,17 +56,6 @@ pub(crate) fn finish_check_report(
             finish_error.get_or_insert_with(|| err.to_string());
             post_finish_error.get_or_insert(err);
         }
-    }
-    if let Err(err) = apply_lazy_full_scope_reset(
-        context.root,
-        context.config,
-        report.evaluated,
-        &report.cached,
-        &mut context.check_caches.lazy_reset,
-        context.diagnostic_log,
-    ) {
-        finish_error.get_or_insert_with(|| err.clone());
-        post_finish_error.get_or_insert_with(|| err.into());
     }
     write_check_finish_event(context.diagnostic_log, false, finish_error.as_deref())?;
     if let Some(err) = post_finish_error {

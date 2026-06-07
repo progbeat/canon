@@ -13,7 +13,6 @@ use crate::check::interrogation::policy::{
 use crate::check::interrogation::state::{
     initial_visible_scope_for_expectation, CheckRuntime, InterrogationRunState,
 };
-use crate::check::run::lazy_reset::clear_active_lazy_full_scope_reset;
 use crate::check::run::order_state::{
     write_latest_non_pass_error_with_cache, write_latest_non_pass_record_with_cache,
 };
@@ -77,9 +76,6 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         return_expectation_error!("interrupted");
     }
 
-    let active_lazy_full_scope_reset = context
-        .active_lazy_full_scope_reset_ids
-        .contains(&expectation.id);
     let mut verified_q_scope = run_expectation_try!(initial_visible_scope_for_expectation(
         context.runtime.root,
         context.runtime.tree_source,
@@ -218,13 +214,6 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         !context.options.keep_going && (!interrogation.record.passed() || run_stop_signal_hit);
     if run_stop_signal_hit {
         context.interrogation_run_state.clear_thread_sessions();
-    }
-    if active_lazy_full_scope_reset {
-        run_expectation_try!(clear_active_lazy_full_scope_reset(
-            context.runtime.root,
-            expectation,
-            &mut context.caches.lazy_reset
-        ));
     }
     Ok(ExpectationRunOutcome {
         record: interrogation.record,

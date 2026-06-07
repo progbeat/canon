@@ -13,7 +13,10 @@ use crate::check::command::output::SharedCheckOutput;
 use crate::check::command::query::{run_check_query_command, CheckQueryCommand};
 use crate::check::core::types::CheckCommandArgs;
 use crate::check::interrogation::state::CheckRuntime;
-use crate::check::run::lazy_reset::active_lazy_full_scope_reset_ids;
+use crate::check::run::lazy_reset::{
+    active_lazy_full_scope_reset_ids, apply_lazy_full_scope_reset,
+    clear_evaluated_lazy_full_scope_resets,
+};
 use crate::check::run::selection::{expectation_identities, resolve_check_options_with_identities};
 use crate::check::{run_check_with_runner_and_caches, CheckRunCaches, CheckRunSideEffects};
 use crate::cli::CommandError;
@@ -168,6 +171,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         &mut execution.runner,
         &completed,
         started,
+        &active_reset_ids,
         write_agent_message,
     )
 }
@@ -246,6 +250,7 @@ fn finish_completed_check(
     runner: &mut crate::app::LazyAppServerRunner,
     completed: &CompletedCheckRun,
     started: Instant,
+    active_reset_ids: &std::collections::BTreeSet<String>,
     write_agent_message: bool,
 ) -> Result<(), CommandError> {
     if let Err(err) = result_output.flush() {
@@ -271,6 +276,28 @@ fn finish_completed_check(
             error: err,
         });
     }
+    let mut completed_error = completed.error.clone();
+    let mut post_finish_error = None;
+    if let Err(err) = clear_evaluated_lazy_full_scope_resets(
+        root,
+        active_reset_ids,
+        &completed.report.records,
+        &mut check_caches.lazy_reset,
+    ) {
+        completed_error.get_or_insert_with(|| err.clone());
+        post_finish_error.get_or_insert_with(|| err.into());
+    }
+    if let Err(err) = apply_lazy_full_scope_reset(
+        root,
+        config,
+        completed.report.evaluated,
+        &completed.report.cached,
+        &mut check_caches.lazy_reset,
+        diagnostic_log,
+    ) {
+        completed_error.get_or_insert_with(|| err.clone());
+        post_finish_error.get_or_insert_with(|| err.into());
+    }
     finish_check_report(
         CheckReportFinishContext {
             root,
@@ -281,8 +308,11 @@ fn finish_completed_check(
             write_agent_message,
         },
         &completed.report,
-        completed.error.as_deref(),
+        completed_error.as_deref(),
     )?;
+    if let Some(err) = post_finish_error {
+        return Err(err);
+    }
     if completed.error.is_none() && check_report_passed(&completed.report) {
         Ok(())
     } else {

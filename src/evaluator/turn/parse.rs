@@ -4,7 +4,7 @@ use crate::evaluator::response_cache::{response_excerpt, EvaluatorResponseParseC
 use crate::evidence::evidence_file_refs_are_visible_in_root;
 use std::path::Path;
 
-pub(super) const RESPONSE_REPAIR_PROMPT: &str = "Your previous response was invalid for this same question. Return exactly one schema JSON object only. Do not include progress prose, markdown, or tool-call JSON. Cite only files visible in this evaluator working tree; if visible files are insufficient, use error:\"insufficient-evidence\".";
+pub(super) const RESPONSE_REPAIR_PROMPT: &str = "Your previous response was invalid for this same question. Return exactly one schema JSON object only, escaping quotes and backslashes inside strings. Do not include progress prose, markdown, or tool-call JSON. Cite only files visible in this evaluator working tree; if visible files are insufficient, use error:\"insufficient-evidence\".";
 
 pub(super) fn parse_visible_evaluator_response(
     parser_cache: &mut EvaluatorResponseParseCache,

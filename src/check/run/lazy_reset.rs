@@ -1,4 +1,4 @@
-use crate::check::core::types::{CachedExpectation, SelectedExpectation};
+use crate::check::core::types::{CachedExpectation, CheckRecord, SelectedExpectation};
 use crate::check::run::selection::ExpectationIdentity;
 use crate::config_types::CheckConfig;
 use crate::fs_util::{ensure_dir_without_symlinks, for_each_nonempty_line, reject_symlink};
@@ -92,21 +92,18 @@ pub(crate) fn active_lazy_full_scope_reset_ids(
     cache.active_lazy_full_scope_reset_ids(root, identities)
 }
 
-pub(crate) fn clear_active_lazy_full_scope_reset(
+pub(crate) fn clear_evaluated_lazy_full_scope_resets(
     root: &Path,
-    expectation: &SelectedExpectation,
-    cache: &mut LazyFullScopeResetCache,
-) -> Result<(), String> {
-    clear_active_lazy_full_scope_reset_id(root, &expectation.id, cache)
-}
-
-fn clear_active_lazy_full_scope_reset_id(
-    root: &Path,
-    id: &str,
+    active_ids: &BTreeSet<String>,
+    records: &[CheckRecord],
     cache: &mut LazyFullScopeResetCache,
 ) -> Result<(), String> {
     update_pending_lazy_full_scope_reset_ids(root, cache, |pending_ids| {
-        pending_ids.remove(id);
+        for record in records {
+            if active_ids.contains(&record.id) {
+                pending_ids.remove(&record.id);
+            }
+        }
     })
 }
 
