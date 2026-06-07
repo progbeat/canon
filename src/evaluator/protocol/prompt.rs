@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-const TEMPLATE_OUTPUT_HEAD_BYTES: usize = 32 * 1024;
+const TEMPLATE_OUTPUT_HEAD_BYTES: usize = 8 * 1024;
 
 static TEMPLATE_OUTPUT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -54,11 +54,12 @@ pub(crate) fn developer_instructions(
 }
 
 pub(crate) fn evaluator_turn_prompt(
+    root: &Path,
     question: &str,
     against_tree_answer: Option<&AgainstTreeAnswer>,
 ) -> Result<String, String> {
     render_resource_template(
-        Path::new("."),
+        root,
         EVALUATOR_TURN_PROMPT_TEMPLATE.trim_end(),
         context! {
             question => question,
@@ -85,9 +86,29 @@ fn render_resource_template(
     let template = environment
         .template_from_str(template)
         .map_err(|err| format!("failed to parse prompt template: {}", err))?;
-    template
-        .render(context)
-        .map_err(|err| format!("failed to render prompt template: {}", err))
+    let rendered = render_template_from_root(root, || template.render(context))?;
+    rendered.map_err(|err| format!("failed to render prompt template: {}", err))
+}
+
+fn render_template_from_root<T>(root: &Path, render: impl FnOnce() -> T) -> Result<T, String> {
+    let previous =
+        std::env::current_dir().map_err(|err| format!("failed to read current dir: {err}"))?;
+    std::env::set_current_dir(root).map_err(|err| {
+        format!(
+            "failed to enter prompt template root {}: {}",
+            root.display(),
+            err
+        )
+    })?;
+    let rendered = render();
+    std::env::set_current_dir(&previous).map_err(|err| {
+        format!(
+            "failed to restore current dir {}: {}",
+            previous.display(),
+            err
+        )
+    })?;
+    Ok(rendered)
 }
 
 fn json_filter(value: Value) -> Result<String, Error> {
@@ -251,6 +272,7 @@ mod tests {
     #[test]
     fn turn_prompt_includes_against_tree_answer_when_available() {
         let prompt = evaluator_turn_prompt(
+            Path::new(env!("CARGO_MANIFEST_DIR")),
             "Does it pass?",
             Some(&AgainstTreeAnswer {
                 answer: "yes".to_string(),
