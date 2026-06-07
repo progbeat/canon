@@ -20,5 +20,9 @@
   a: "no"
   cooldown: 7d
 
+- q: "Can you find any logic that depends on the content of the evidence provided by the evaluator agent?"
+  a: "no"
+  cooldown: 1d
+
 # - q: "Do the dev instructions require knowing any specialized terms whose meaning is not available from the dev instructions themselves?"
 #   a: "no"
