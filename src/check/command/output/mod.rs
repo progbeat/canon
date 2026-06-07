@@ -42,13 +42,13 @@ mod tests {
     }
 
     #[test]
-    fn check_result_output_without_live_progress_writes_immediate_dot() {
+    fn check_result_output_without_live_progress_writes_no_dot() {
         let mut bytes = Vec::new();
         let mut result_output = Some(&mut bytes as &mut dyn Write);
 
         write_result_output_without_live_progress(&mut result_output, &passing_record()).unwrap();
 
-        assert_eq!(String::from_utf8(bytes).unwrap(), "j. OK\n");
+        assert_eq!(String::from_utf8(bytes).unwrap(), "j OK\n");
     }
 
     #[test]

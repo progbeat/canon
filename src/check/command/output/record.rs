@@ -69,7 +69,7 @@ impl CheckProgressOutput {
 
 // Evaluated `canon check` expectations use `CheckProgressOutput`, which emits
 // live dots before appending this module's completion text. This fallback is
-// for cached records and no-progress test callers.
+// for cached records and no-progress test callers, so it emits no progress dots.
 pub(crate) fn write_result_output_without_live_progress(
     result_output: &mut Option<&mut dyn Write>,
     record: &CheckRecord,
@@ -82,7 +82,7 @@ pub(crate) fn write_result_output_without_live_progress(
 }
 
 fn render_check_output_record(record: &CheckRecord) -> String {
-    let mut output = format!("{}.", record.display_id);
+    let mut output = record.display_id.clone();
     output.push_str(&render_check_output_record_completion(record));
     output
 }
