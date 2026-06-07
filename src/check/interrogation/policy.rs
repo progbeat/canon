@@ -10,7 +10,7 @@ use crate::config_types::AgentConfig;
 use crate::evaluator::EvaluatorRunner;
 use crate::git::VisibleTreeOidCache;
 use crate::hash::full_scope;
-use crate::history::{is_reusable_history_record, HistoryCache};
+use crate::history::HistoryCache;
 use crate::logs::DiagnosticLogWriter;
 
 pub(crate) struct InterrogationCall<'a> {
@@ -155,11 +155,16 @@ pub(crate) fn question_scope_suggestion_should_get_independent_verification(
     Ok(suggested_count.saturating_mul(4) <= current_count.saturating_mul(3))
 }
 
-pub(crate) fn narrowed_scope_is_accepted(narrowed: &CheckRecord) -> bool {
+pub(crate) fn narrowed_scope_is_accepted(
+    narrowed: &CheckRecord,
+    proposed_scope: &[String],
+) -> bool {
     // Acceptance means the q-scope suggestion graduated from evaluator claim
     // to verified reusable q-scope. Interrogation Policy requires the
-    // independent verification turn to produce a schema-valid answer.
-    is_reusable_history_record(narrowed)
+    // independent verification turn to produce an answer while still scoped to
+    // the proposed q-scope. A full-scope retry answer is valid, but it does not
+    // verify that the proposed narrow scope is sufficient.
+    narrowed.error.is_none() && narrowed.scope == proposed_scope
 }
 
 pub(crate) fn write_scope_narrowing_event(

@@ -22,6 +22,6 @@ pub(super) fn should_verify(
     .map_err(EvaluatorError::from)
 }
 
-pub(super) fn answer_is_accepted(narrowed: &ParsedAnswer) -> bool {
-    narrowed.error.is_none()
+pub(super) fn answer_is_accepted(narrowed: &ParsedAnswer, proposed_scope: &[String]) -> bool {
+    narrowed.error.is_none() && narrowed.scope == proposed_scope
 }
