@@ -1,8 +1,8 @@
 {{ static_developer_instructions }}
 
 ```
-{% filter sh(display="git diff --numstat --cached") %}
-git diff --numstat {{ against_tree_oid|shq }} {{ checked_tree_oid|shq }}
+{% filter sh(display=diff_command) %}
+{{ diff_command }}
 {% endfilter %}
 
 $ sandbox --read-only --scope {{ visible_scope|json }}

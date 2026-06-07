@@ -47,6 +47,11 @@ pub(crate) fn developer_instructions(
             static_developer_instructions => STATIC_DEVELOPER_INSTRUCTIONS.trim_end(),
             against_tree_oid => context.against_tree_oid,
             checked_tree_oid => context.checked_tree_oid,
+            diff_command => format!(
+                "git diff --numstat {} {}",
+                shell_quote(context.against_tree_oid),
+                shell_quote(context.checked_tree_oid)
+            ),
             visible_scope => context.visible_scope,
             num_invisible_files => context.checked_file_count.saturating_sub(context.visible_file_count),
         },
@@ -241,7 +246,10 @@ mod tests {
         assert!(instructions.contains("leading inspection summaries"));
         assert!(instructions.contains("backslash immediately before a backtick"));
         assert!(instructions.contains("Do not cite hidden `.canon/` files"));
-        assert!(instructions.contains("$ git diff --numstat --cached\n"));
+        assert!(instructions.contains(&format!(
+            "$ git diff --numstat '{}' '{}'\n",
+            against_tree_oid, checked_tree_oid
+        )));
         assert!(instructions.contains("$ sandbox --read-only --scope [\".\"]"));
         assert!(instructions.contains("Hidden files: 0."));
 
