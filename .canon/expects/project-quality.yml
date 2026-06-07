@@ -38,7 +38,7 @@
 
 - q: "Can you find any avoidable violations of commonly accepted idiomatic Rust practices that materially reduce this project's maintainability, correctness, readability, type safety, or future extensibility, excluding purely stylistic alternatives unless they create a concrete demonstrated risk?"
   a: "no"
-  cooldown: 7d
+  cooldown: {pass: 7d, fail: 30m}
   thinking: high
 
 - q: "Are writes under CANON_STATE_DIR amortized O(N) over N newly persisted bytes?"
