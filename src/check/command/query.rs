@@ -84,10 +84,7 @@ fn run_started_check_query_command(
         diagnostic_log,
         check_caches,
     } = command;
-    let enforced_scope = match query_enforced_scope(query_scope) {
-        Ok(scope) => scope,
-        Err(err) => return Err(err),
-    };
+    let enforced_scope = query_enforced_scope(query_scope)?;
     let mut execution = prepare_check_execution(
         root,
         config,
@@ -106,10 +103,7 @@ fn run_started_check_query_command(
         config,
         no_sandbox,
     );
-    let mut interrogation_run_state = match InterrogationRunState::new(runtime.no_sandbox()) {
-        Ok(state) => state,
-        Err(err) => return Err(err),
-    };
+    let mut interrogation_run_state = InterrogationRunState::new(runtime.no_sandbox())?;
     let result = run_query_with_runner(
         &runtime,
         question,
@@ -125,9 +119,7 @@ fn run_started_check_query_command(
             return Err(err);
         }
     };
-    if let Err(err) = write_successful_query_output(&result, &mut execution.runner) {
-        return Err(err);
-    }
+    write_successful_query_output(&result, &mut execution.runner)?;
     Ok(())
 }
 

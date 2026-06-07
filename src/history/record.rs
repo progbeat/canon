@@ -161,7 +161,7 @@ fn validate_schema_valid_answer_history_record(record: &CheckRecord) -> Result<(
 fn has_duplicate_scope_entries(scope: &[String]) -> bool {
     let mut seen = Vec::new();
     for entry in scope {
-        if seen.iter().any(|existing| *existing == entry) {
+        if seen.contains(&entry) {
             return true;
         }
         seen.push(entry);
