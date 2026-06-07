@@ -7,6 +7,7 @@ use crate::scope::visible_scope;
 use crate::time::parse_record_timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashSet;
 use std::path::Path;
 
 // Cache-spec answer history records are JSON Lines with the required field
@@ -143,12 +144,11 @@ fn validate_schema_valid_answer_history_record(record: &CheckRecord) -> Result<(
 }
 
 fn has_duplicate_scope_entries(scope: &[String]) -> bool {
-    let mut seen = Vec::new();
+    let mut seen = HashSet::with_capacity(scope.len());
     for entry in scope {
-        if seen.contains(&entry) {
+        if !seen.insert(entry.as_str()) {
             return true;
         }
-        seen.push(entry);
     }
     false
 }

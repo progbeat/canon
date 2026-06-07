@@ -15,8 +15,8 @@ pub(crate) const ERROR_INSUFFICIENT_EVIDENCE: &str = "insufficient-evidence";
 pub(crate) const ERROR_INVALID_QUESTION: &str = "invalid-question";
 pub(crate) const ERROR_UNPARSABLE: &str = "unparsable";
 
-// Shared by config validation and check-output escaping so every public
-// single-line field uses one line-break definition.
+// Shared by config validation and check-output escaping for text that must
+// stay visually on one terminal/config line.
 pub(crate) fn is_line_break_char(char: char) -> bool {
     matches!(
         char,
@@ -158,6 +158,9 @@ impl EvaluatorResponseJson {
 }
 
 fn contains_schema_single_line_violation(value: &str) -> bool {
+    // Interrogation Policy defines the evaluator JSON Schema pattern as
+    // CR/LF-only. Other Unicode line separators remain schema-valid text and
+    // are escaped later when rendered in check output.
     value.chars().any(|char| matches!(char, '\r' | '\n'))
 }
 
@@ -465,7 +468,7 @@ pub(crate) fn check_run_error(error: String, report: CheckRunReport) -> CheckRun
 
 #[cfg(test)]
 mod tests {
-    use super::{observed_yes_no_answer, CheckResult};
+    use super::{observed_yes_no_answer, CheckResult, EvaluatorResponseJson};
 
     #[test]
     fn yes_no_answers_with_explanatory_separator_match_expected_answer() {
@@ -488,5 +491,24 @@ mod tests {
             CheckResult::from_expected_answer("maybe", "maybe — plausible"),
             CheckResult::Fail
         );
+    }
+
+    #[test]
+    fn evaluator_response_schema_rejects_only_crlf_line_breaks() {
+        let schema_valid_unicode_separator = EvaluatorResponseJson {
+            answer: Some("yes\u{2028}still schema text".to_string()),
+            error: None,
+            evidence: "ok".to_string(),
+            question_scope_suggestion: vec![".".to_string()],
+        };
+        assert!(schema_valid_unicode_separator.validate_schema().is_ok());
+
+        let schema_invalid_crlf = EvaluatorResponseJson {
+            answer: Some("yes\nno".to_string()),
+            error: None,
+            evidence: "ok".to_string(),
+            question_scope_suggestion: vec![".".to_string()],
+        };
+        assert!(schema_invalid_crlf.validate_schema().is_err());
     }
 }
