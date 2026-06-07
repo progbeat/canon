@@ -5,6 +5,12 @@ use std::io::Write;
 use std::time::Duration;
 
 const ALL_CHECKS_PASSED_MESSAGE: &str = "✓ All checks passed. Commit is allowed.";
+const VERIFY_EVIDENCE_MESSAGE: &str =
+    "❕ Verify that the evidence supports the observed answer and answers the expectation question; treat unsupported evidence as a readability issue.";
+const PLAN_REPAIR_MESSAGE: &str =
+    "❕ Plan the repair, then run `canon show -- <PATHSPEC>...` for the planned edit paths to identify expectations that may be affected.";
+const USE_EXPECTATIONS_MESSAGE: &str =
+    "❕ Use the matching expectations to avoid regressions while fixing the issues.";
 const FIX_ISSUES_MESSAGE: &str = "▷ Fix the issues and run `canon check` again!";
 const THEN_FIX_REMAINING_MESSAGE: &str =
     "▷ Then fix the remaining issues and run `canon check` again!";
@@ -57,7 +63,9 @@ pub(crate) fn render_check_agent_messages(
 ) -> Vec<String> {
     let num_issues = num_failed + num_errors;
     if num_regressions > 0 || (num_issues > 0 && num_fixes == 0) {
-        return vec![FIX_ISSUES_MESSAGE.to_string()];
+        let mut messages = repair_instruction_messages();
+        messages.push(FIX_ISSUES_MESSAGE.to_string());
+        return messages;
     }
     if num_issues == 0 && num_fixes == 0 {
         return vec![ALL_CHECKS_PASSED_MESSAGE.to_string()];
@@ -65,9 +73,18 @@ pub(crate) fn render_check_agent_messages(
 
     let mut messages = vec![pass_improvement_notice(num_fixes).expect("positive fix count")];
     if num_issues > 0 {
+        messages.extend(repair_instruction_messages());
         messages.push(THEN_FIX_REMAINING_MESSAGE.to_string());
     }
     messages
+}
+
+fn repair_instruction_messages() -> Vec<String> {
+    vec![
+        VERIFY_EVIDENCE_MESSAGE.to_string(),
+        PLAN_REPAIR_MESSAGE.to_string(),
+        USE_EXPECTATIONS_MESSAGE.to_string(),
+    ]
 }
 
 fn pass_improvement_notice(count: usize) -> Option<String> {

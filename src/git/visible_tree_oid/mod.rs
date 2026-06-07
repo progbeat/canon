@@ -1,7 +1,7 @@
 use super::program::{head_tracked_files, staged_tracked_files, StagedTrackedFile};
 use super::tree_source::TreeSource;
 use crate::config_types::AgentConfig;
-use crate::scope::{effective_ignore_patterns, visible_scope};
+use crate::scope::{effective_ignore_patterns, path_bytes_in_scope, visible_scope};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -116,6 +116,23 @@ impl VisibleTreeOidCache {
             .iter()
             .filter(|entry| !scope_entry_is_tree(entry))
             .count())
+    }
+
+    pub(crate) fn visible_scope_intersects_pathspecs(
+        &mut self,
+        root: &Path,
+        source: &TreeSource,
+        visible_scope: &[String],
+        pathspecs: &[String],
+    ) -> Result<bool, String> {
+        for file in self.files_for_source(root, source)? {
+            if path_bytes_in_scope(&file.path, visible_scope)?
+                && path_bytes_in_scope(&file.path, pathspecs)?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub(crate) fn repository_native_object_oid_hex_len(

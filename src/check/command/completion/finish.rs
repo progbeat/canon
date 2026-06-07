@@ -10,7 +10,7 @@ use crate::gate::{
     gate_cached_result_for_tree, gate_regression_count_with_config, GateCacheResult,
     GateComparisonTree,
 };
-use crate::git::{TreeSource, VisibleTreeOidCache};
+use crate::git::VisibleTreeOidCache;
 use crate::history::HistoryCache;
 use std::io::Write;
 use std::path::Path;
@@ -73,11 +73,6 @@ fn staged_passes_failed_at_head_count_with_cache(
 ) -> Result<usize, String> {
     let mut count = 0usize;
     for passing in report_passing_expectations(report, agent) {
-        match staged_visible_tree_matches_head(root, agent, &passing.scope, visible_tree_oid_cache)?
-        {
-            Some(true) | None => continue,
-            Some(false) => {}
-        }
         match gate_cached_result_for_tree(
             root,
             agent,
@@ -95,26 +90,6 @@ fn staged_passes_failed_at_head_count_with_cache(
 
 struct PassingExpectation {
     expectation: SelectedExpectation,
-    scope: Vec<String>,
-}
-
-fn staged_visible_tree_matches_head(
-    root: &Path,
-    agent: &AgentConfig,
-    scope: &[String],
-    visible_tree_oid_cache: &mut VisibleTreeOidCache,
-) -> Result<Option<bool>, String> {
-    let Some(staged) = visible_tree_oid_cache.visible_tree_oid_for_reuse(
-        root,
-        &TreeSource::Staged,
-        agent,
-        scope,
-    )?
-    else {
-        return Ok(None);
-    };
-    let head = visible_tree_oid_cache.gate_head_tree_fingerprint(root, agent, scope)?;
-    Ok(Some(head.as_deref() == Some(staged.as_str())))
 }
 
 fn report_passing_expectations(
@@ -124,16 +99,12 @@ fn report_passing_expectations(
     let mut expectations = Vec::new();
     for record in report.records.iter().filter(|record| record.passed()) {
         if let Some(expectation) = selected_expectation_from_record(record, agent) {
-            expectations.push(PassingExpectation {
-                expectation,
-                scope: record.scope.clone(),
-            });
+            expectations.push(PassingExpectation { expectation });
         }
     }
     for cached in report.cached.iter().filter(|cached| cached.record.passed()) {
         expectations.push(PassingExpectation {
             expectation: cached.expectation.clone(),
-            scope: cached.record.scope.clone(),
         });
     }
     expectations
@@ -212,6 +183,7 @@ fn selected_expectation_from_record(
 mod tests {
     use super::*;
     use crate::check::core::{CheckResult, CheckRunReport};
+    use crate::git::TreeSource;
     use crate::hash::full_scope;
     use crate::time::format_record_timestamp;
     use std::fs;
@@ -221,8 +193,8 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn same_visible_tree_pass_is_not_a_head_improvement() {
-        let root = git_project("same-visible-tree-pass-not-improvement");
+    fn same_visible_tree_pass_with_missing_head_cache_is_an_improvement() {
+        let root = git_project("same-visible-tree-pass-improvement");
         let agent = AgentConfig::default();
         let scope = full_scope();
         let report = passing_report_for_staged_scope(&root, &agent, &scope);
@@ -238,7 +210,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(count, 0);
+        assert_eq!(count, 1);
         let _ = fs::remove_dir_all(root);
     }
 

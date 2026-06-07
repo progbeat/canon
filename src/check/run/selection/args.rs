@@ -46,6 +46,7 @@ pub(crate) fn add_check_option_args(command: Command) -> Command {
         )
         .arg(
             Arg::new("selectors")
+                .value_name("SELECTOR")
                 .help("Expectation selectors: ID prefixes or full expectation IDs")
                 .num_args(0..)
                 .action(ArgAction::Append)

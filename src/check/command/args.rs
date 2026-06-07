@@ -105,29 +105,39 @@ pub(crate) fn check_help_command() -> Command {
             check_value_arg("config")
                 .short('c')
                 .long("config")
+                .value_name("PATH")
                 .help("Read expectations from this config file [default: .canon/check.yml]"),
         )
-        .arg(check_value_arg("query").short('q').help("Ask one question"))
+        .arg(
+            check_value_arg("query")
+                .short('q')
+                .value_name("QUESTION")
+                .help("Ask one question"),
+        )
         .arg(
             check_value_arg("preset")
                 .long("preset")
+                .value_name("PRESET")
                 .help("Select a preset by name for the question [default: default]"),
         )
         .arg(
             check_value_arg("scope")
                 .short('s')
                 .long("scope")
+                .value_name("PATHSPEC")
                 .help("Set the visible scope for the question")
                 .action(ArgAction::Append),
         )
         .arg(
             check_value_arg("tree")
                 .long("tree")
+                .value_name("TREE")
                 .help("Check this Git tree [default: :staged]"),
         )
         .arg(
             check_value_arg("against_tree")
                 .long("against-tree")
+                .value_name("TREE")
                 .help("Compare against this Git tree [default: HEAD]"),
         )
         .arg(

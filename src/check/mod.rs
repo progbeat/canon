@@ -5,6 +5,7 @@ mod config;
 mod core;
 mod interrogation;
 mod run;
+mod show;
 
 pub(crate) use command::preflight::{
     is_canon_only_staged_change_bytes, is_canon_project_path_bytes, staged_changed_path_bytes,
@@ -26,3 +27,4 @@ pub(crate) use run::{
     expectation_identities, run_check_with_runner_and_caches, select_expectations_with_identities,
     CheckRunCaches, CheckRunSideEffects, ExpectationIdentity,
 };
+pub(crate) use show::{run_show_command, show_help_command};

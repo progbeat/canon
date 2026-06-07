@@ -6,6 +6,7 @@ mod shared;
 mod summary;
 mod usage;
 
+pub(crate) use escape::escape_check_output_text;
 pub(crate) use progress::{start_check_progress_output, CheckProgressOutput};
 pub(crate) use query::write_query_output;
 pub(crate) use record::{record_requires_human_review, write_and_flush_result_output};
@@ -73,7 +74,12 @@ mod tests {
     fn check_agent_messages_follow_spec_branch_order() {
         assert_eq!(
             render_check_agent_messages(1, 0, 0, 0),
-            vec!["▷ Fix the issues and run `canon check` again!"]
+            vec![
+                "❕ Verify that the evidence supports the observed answer and answers the expectation question; treat unsupported evidence as a readability issue.",
+                "❕ Plan the repair, then run `canon show -- <PATHSPEC>...` for the planned edit paths to identify expectations that may be affected.",
+                "❕ Use the matching expectations to avoid regressions while fixing the issues.",
+                "▷ Fix the issues and run `canon check` again!"
+            ]
         );
         assert_eq!(
             render_check_agent_messages(0, 0, 0, 0),
@@ -87,12 +93,20 @@ mod tests {
             render_check_agent_messages(1, 0, 2, 0),
             vec![
                 "▷ +2 passes compared to HEAD. Commit the staged changes NOW!",
+                "❕ Verify that the evidence supports the observed answer and answers the expectation question; treat unsupported evidence as a readability issue.",
+                "❕ Plan the repair, then run `canon show -- <PATHSPEC>...` for the planned edit paths to identify expectations that may be affected.",
+                "❕ Use the matching expectations to avoid regressions while fixing the issues.",
                 "▷ Then fix the remaining issues and run `canon check` again!"
             ]
         );
         assert_eq!(
             render_check_agent_messages(0, 0, 1, 1),
-            vec!["▷ Fix the issues and run `canon check` again!"]
+            vec![
+                "❕ Verify that the evidence supports the observed answer and answers the expectation question; treat unsupported evidence as a readability issue.",
+                "❕ Plan the repair, then run `canon show -- <PATHSPEC>...` for the planned edit paths to identify expectations that may be affected.",
+                "❕ Use the matching expectations to avoid regressions while fixing the issues.",
+                "▷ Fix the issues and run `canon check` again!"
+            ]
         );
     }
 
