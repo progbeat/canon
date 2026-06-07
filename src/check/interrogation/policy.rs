@@ -170,9 +170,25 @@ pub(crate) fn narrowed_scope_is_accepted(
     // restricted insufficient-evidence is not final, but the proposed scope is
     // not verified.
     is_reusable_history_record(narrowed)
-        && narrowed.scope == proposed_scope
-        && visible_scope(agent, &narrowed.scope)
-            .map(|scope| evidence_file_refs_are_visible_in_root(&narrowed.evidence, &scope, root))
+        && verified_q_scope_evidence_is_accepted(
+            root,
+            agent,
+            &narrowed.scope,
+            &narrowed.evidence,
+            proposed_scope,
+        )
+}
+
+pub(crate) fn verified_q_scope_evidence_is_accepted(
+    root: &Path,
+    agent: &AgentConfig,
+    answer_scope: &[String],
+    evidence: &str,
+    proposed_scope: &[String],
+) -> bool {
+    answer_scope == proposed_scope
+        && visible_scope(agent, answer_scope)
+            .map(|scope| evidence_file_refs_are_visible_in_root(evidence, &scope, root))
             .unwrap_or(false)
 }
 
