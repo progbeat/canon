@@ -31,10 +31,11 @@ const PRE_COMMIT_HOOK_MANUAL_ADVICE: &str =
 pub(super) const GIT_WORKTREE_REQUIRED_FOR_HOOK_INSTALL: &str =
     "Can't safely install pre-commit hook: canon hook install requires a Git worktree.";
 
-// The `canon init` seed is compiled into the binary from a check-config source
-// file, not loaded at runtime as an evaluator interrogation prompt/instruction.
-// Interrogation texts live under `resources/prompts/`.
-const DEFAULT_CHECK_CONFIG_SOURCE: &str = include_str!("../../.canon/templates/default/check.yml");
+// The canon init seed is compiled into the binary from the default check-config
+// template file, not loaded at runtime as an evaluator prompt/instruction.
+// Interrogation texts live under resources/prompts.
+const DEFAULT_CHECK_CONFIG_TEMPLATE_FILE_CONTENTS: &str =
+    include_str!("../../.canon/templates/default/check.yml");
 
 pub(crate) fn run_init(root: &Path) -> Result<(), String> {
     let check_path = root.join(CHECK_PATH);
@@ -47,7 +48,7 @@ pub(crate) fn run_init(root: &Path) -> Result<(), String> {
     if let Some(parent) = check_path.parent() {
         ensure_project_dir_without_symlinks(root, parent)?;
     }
-    write_new_file(&check_path, DEFAULT_CHECK_CONFIG_SOURCE)?;
+    write_new_file(&check_path, DEFAULT_CHECK_CONFIG_TEMPLATE_FILE_CONTENTS)?;
     // This success line becomes eligible only after the config file exists;
     // `write_stdout_line` flushes it immediately and no later init work remains.
     write_stdout_line(&format!("Created {}", CHECK_PATH))?;

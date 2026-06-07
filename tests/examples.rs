@@ -3,7 +3,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const DEFAULT_CHECK_TEMPLATE: &str = include_str!("../.canon/templates/default/check.yml");
+// This mirrors the template include path used by canon init so the behavior can
+// be verified from visible source without reading ignored canon expectation data.
+const DEFAULT_CHECK_TEMPLATE_FILE_CONTENTS: &str =
+    include_str!("../.canon/templates/default/check.yml");
 
 fn canon() -> Command {
     Command::new(env!("CARGO_BIN_EXE_canon"))
@@ -49,10 +52,15 @@ fn init_creates_default_template_and_refuses_overwrite() {
     );
     assert_eq!(
         fs::read_to_string(repo.join(".canon/check.yml")).unwrap(),
-        DEFAULT_CHECK_TEMPLATE
+        DEFAULT_CHECK_TEMPLATE_FILE_CONTENTS
     );
 
     let output = canon().arg("init").current_dir(&repo).output().unwrap();
+
+    assert_eq!(
+        fs::read_to_string(repo.join(".canon/check.yml")).unwrap(),
+        DEFAULT_CHECK_TEMPLATE_FILE_CONTENTS
+    );
 
     let _ = fs::remove_dir_all(&repo);
 
