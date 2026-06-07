@@ -7,11 +7,13 @@ presets:
     ignore:
       - ".canon/**"  # prevents evaluator agents from reading expected answers and avoids reevaluating full-scope expectations when canon changes
       - ".github/**"
+      - 'docker/**'
+      - 'skills/**'
+      - '.dockerignore'
       - "AGENTS.md"
-      - "skills/**"
-      - "Dockerfile"
-      - "docker/**"
       - "Cargo.lock"
+      - "Dockerfile"
+      - "LICENSE"
   smart:
     <<: *default_preset
     models: ["gpt-5.5"]
@@ -25,10 +27,11 @@ presets:
     ignore:  # overrides default_preset.ignore
       - ".canon/**"
       - ".github/**"
-      - "AGENTS.md"
       - "skills/**"
       - "src/**"
+      - "AGENTS.md"
       - "Cargo.lock"
+      - "LICENSE"
 
 expectations:
   - include: expects/*.yml
