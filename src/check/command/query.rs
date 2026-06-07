@@ -5,10 +5,13 @@ use crate::check::command::{prepare_check_execution, PrepareCheckExecutionOption
 use crate::check::core::types::QueryResult;
 use crate::check::interrogation::query::run_query_with_runner;
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
+use crate::check::interrogation::{
+    write_query_lifecycle_finish_event, write_query_lifecycle_start_event,
+};
 use crate::check::CheckRunCaches;
 use crate::config_types::CheckConfig;
 use crate::git::TreeSource;
-use crate::logs::{write_query_finish_event, write_query_start_event, DiagnosticLogWriter};
+use crate::logs::DiagnosticLogWriter;
 use crate::scope::sanitize_scope;
 use std::io;
 use std::path::Path;
@@ -37,7 +40,7 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
         mut diagnostic_log,
         check_caches,
     } = command;
-    write_query_start_event(&mut diagnostic_log).map_err(|err| err.to_string())?;
+    write_query_lifecycle_start_event(&mut diagnostic_log).map_err(|err| err.to_string())?;
     let result = run_started_check_query_command(StartedCheckQueryCommand {
         root,
         config,
@@ -50,7 +53,8 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
         check_caches,
     });
     let finish_error = result.as_ref().err().map(String::as_str);
-    write_query_finish_event(&mut diagnostic_log, finish_error).map_err(|err| err.to_string())?;
+    write_query_lifecycle_finish_event(&mut diagnostic_log, finish_error)
+        .map_err(|err| err.to_string())?;
     result
 }
 

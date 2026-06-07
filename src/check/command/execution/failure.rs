@@ -1,9 +1,12 @@
 use crate::check::command::finish::{finish_check_report, CheckReportFinishContext};
 use crate::check::core::types::CheckRunReport;
+use crate::check::interrogation::{
+    write_check_lifecycle_finish_event, write_check_lifecycle_start_event,
+};
 use crate::check::CheckRunCaches;
 use crate::cli::CommandError;
 use crate::config_types::CheckConfig;
-use crate::logs::{write_check_finish_event, write_check_start_event, DiagnosticLogWriter};
+use crate::logs::DiagnosticLogWriter;
 use std::io::Write;
 use std::path::Path;
 
@@ -42,7 +45,7 @@ pub(super) fn fail_check_before_selection(
     finish_query: bool,
     err: String,
 ) -> Result<(), CommandError> {
-    write_check_start_event(diagnostic_log, start_query, Vec::new())?;
+    write_check_lifecycle_start_event(diagnostic_log, start_query, Vec::new())?;
     fail_check_after_start(diagnostic_log, finish_query, err)
 }
 
@@ -60,5 +63,6 @@ pub(super) fn write_check_error_finish_event(
     query: bool,
     err: &str,
 ) -> Result<(), String> {
-    write_check_finish_event(diagnostic_log, query, Some(err)).map_err(|err| err.to_string())
+    write_check_lifecycle_finish_event(diagnostic_log, query, Some(err))
+        .map_err(|err| err.to_string())
 }

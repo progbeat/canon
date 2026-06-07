@@ -1,10 +1,12 @@
 use super::{EvaluatorFailureKind, EvaluatorTurnContext, RawTurnResponse, ThreadLifecycleLog};
+use crate::check::{
+    write_agent_turn_failure_event, write_agent_turn_missing_usage_event,
+    write_agent_turn_request_event, write_agent_turn_response_event,
+};
 use crate::evaluator::prompt::EVALUATOR_BASE_INSTRUCTIONS;
 use crate::evaluator::types::{EvaluatorError, EvaluatorRunner};
 use crate::logs::{
-    write_agent_failure_event, write_agent_missing_usage_event, write_agent_request_event,
-    write_agent_response_event, AgentTurnLogRequest, DiagnosticLogWriter,
-    ThreadLifecycleEventFields, ThreadRestartEventFields,
+    AgentTurnLogRequest, DiagnosticLogWriter, ThreadLifecycleEventFields, ThreadRestartEventFields,
 };
 
 pub(super) fn ask_and_log<R: EvaluatorRunner>(
@@ -17,7 +19,7 @@ pub(super) fn ask_and_log<R: EvaluatorRunner>(
     reason: &str,
 ) -> Result<RawTurnResponse, EvaluatorError> {
     if let Some(writer) = diagnostic_log.as_deref_mut() {
-        write_agent_request_event(
+        write_agent_turn_request_event(
             writer,
             expectation_id,
             attempt,
@@ -35,7 +37,7 @@ pub(super) fn ask_and_log<R: EvaluatorRunner>(
         Err(err) => {
             let turn_usage = runner.take_last_turn_usage();
             if let Some(writer) = diagnostic_log.as_deref_mut() {
-                write_agent_failure_event(
+                write_agent_turn_failure_event(
                     writer,
                     expectation_id,
                     attempt,
@@ -55,7 +57,7 @@ pub(super) fn ask_and_log<R: EvaluatorRunner>(
         if missing_turn_usage {
             // A response without usage violates the app-server turn contract,
             // so it is not logged as a completed `agent.response`.
-            write_agent_missing_usage_event(
+            write_agent_turn_missing_usage_event(
                 writer,
                 expectation_id,
                 attempt,
@@ -67,7 +69,7 @@ pub(super) fn ask_and_log<R: EvaluatorRunner>(
             let turn_usage = turn_usage
                 .as_ref()
                 .expect("missing_turn_usage is false when usage exists");
-            write_agent_response_event(
+            write_agent_turn_response_event(
                 writer,
                 expectation_id,
                 attempt,

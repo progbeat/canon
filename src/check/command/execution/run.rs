@@ -12,7 +12,7 @@ use crate::check::command::finish::{finish_check_report, CheckReportFinishContex
 use crate::check::command::output::SharedCheckOutput;
 use crate::check::command::query::{run_check_query_command, CheckQueryCommand};
 use crate::check::core::types::CheckCommandArgs;
-use crate::check::interrogation::state::CheckRuntime;
+use crate::check::interrogation::{state::CheckRuntime, write_check_lifecycle_start_event};
 use crate::check::run::lazy_reset::{
     active_lazy_full_scope_reset_ids, apply_lazy_full_scope_reset,
     clear_evaluated_lazy_full_scope_resets,
@@ -22,7 +22,7 @@ use crate::check::{run_check_with_runner_and_caches, CheckRunCaches, CheckRunSid
 use crate::cli::CommandError;
 use crate::git::TreeSource;
 use crate::history::{active_expectation_ids_from_identities, cleanup_stale_cache_dirs};
-use crate::logs::{write_cache_cleanup_event, write_check_start_event, DiagnosticLogWriter};
+use crate::logs::{write_cache_cleanup_event, DiagnosticLogWriter};
 use crate::platform::{install_check_signal_handlers, reset_check_interrupted};
 use crate::repo_inspection::RepoInspectionCache;
 use crate::state_paths::CANON_CACHE_DIR_GIT_PATH;
@@ -106,7 +106,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             Ok(options) => options,
             Err(err) => return fail_check_before_selection(&mut diagnostic_log, None, false, err),
         };
-    write_check_start_event(
+    write_check_lifecycle_start_event(
         &mut diagnostic_log,
         None,
         options

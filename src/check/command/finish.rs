@@ -2,6 +2,7 @@ use crate::check::command::output::{
     render_check_agent_messages, summary_outcome_counts, write_stdout_record,
 };
 use crate::check::core::types::{CheckRecord, CheckRunReport, SelectedExpectation};
+use crate::check::interrogation::write_check_lifecycle_finish_event;
 use crate::check::CheckRunCaches;
 use crate::cli::CommandError;
 use crate::config_types::{AgentConfig, CheckConfig};
@@ -11,7 +12,6 @@ use crate::gate::{
 };
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::history::HistoryCache;
-use crate::logs::write_check_finish_event;
 use std::io::Write;
 use std::path::Path;
 
@@ -57,7 +57,7 @@ pub(crate) fn finish_check_report(
             post_finish_error.get_or_insert(err);
         }
     }
-    write_check_finish_event(context.diagnostic_log, false, finish_error.as_deref())?;
+    write_check_lifecycle_finish_event(context.diagnostic_log, false, finish_error.as_deref())?;
     if let Some(err) = post_finish_error {
         return Err(err);
     }

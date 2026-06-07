@@ -4,6 +4,9 @@ use crate::token_usage_types::{EvaluatorTurnUsage, TokenUsage};
 use serde::Serialize;
 use serde_json::{json, Value};
 
+// Check lifecycle event helpers are routed through
+// `check::interrogation::runtime_logs` so lifecycle logging is visible beside
+// evaluator communication logging while the JSON event schemas stay centralized.
 pub(crate) fn write_check_start_event(
     diagnostic_log: &mut DiagnosticLogWriter,
     query: Option<bool>,

@@ -75,6 +75,7 @@ fn line_part_is_digits_or_range(part: &str) -> bool {
 
 fn looks_like_project_file_path(path: &str) -> bool {
     if path.is_empty()
+        || path.ends_with('/')
         || path.starts_with(':')
         || path.bytes().any(|byte| {
             matches!(byte, b'*' | b'?' | b'[' | b']') || byte.is_ascii_whitespace() || byte == b'\0'
@@ -83,6 +84,9 @@ fn looks_like_project_file_path(path: &str) -> bool {
         return false;
     }
     let path = path.strip_prefix("./").unwrap_or(path);
+    if path.starts_with("canon/") {
+        return false;
+    }
     if path.contains('/') {
         return true;
     }
@@ -151,7 +155,7 @@ mod tests {
         let visible_scope = vec!["src".to_string()];
 
         assert!(evidence_file_refs_are_visible(
-            "`qScopeSuggestion`, `record.scope`, `canon gate`, `.canon/**`, `:(exclude,glob).canon/**`, and `:10-20` are not file refs.",
+            "`qScopeSuggestion`, `record.scope`, `canon gate`, `canon/logs`, `.canon/**`, `.canon/`, `:(exclude,glob).canon/**`, and `:10-20` are not file refs.",
             &visible_scope,
         ));
     }
