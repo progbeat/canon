@@ -14,11 +14,9 @@ pub(crate) use config::{
     codex_reasoning_effort, expand_staged_generator_paths_from_listing,
     parse_tree_check_config_content_with_root,
 };
-#[cfg(test)]
-pub(crate) use core::Cooldown;
 pub(crate) use core::{
     CheckRecord, CheckRecordOutcome, CheckResult, EvaluatorResponseJson, ParsedAnswer,
-    SelectedExpectation, ERROR_UNPARSABLE,
+    SelectedExpectation, ERROR_INSUFFICIENT_EVIDENCE, ERROR_UNPARSABLE,
 };
 pub(crate) use run::{
     expectation_identities, run_check_with_runner_and_caches, select_expectations_with_identities,

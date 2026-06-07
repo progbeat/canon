@@ -1,10 +1,8 @@
-use crate::check::core::types::{CheckRecord, ObservedAnswerState, SelectedExpectation};
+use crate::check::core::types::{SelectedExpectation, ERROR_INSUFFICIENT_EVIDENCE};
 use crate::config_types::{AgentConfig, CheckConfig};
 use crate::evaluator::{
     app_server_model_key, evaluator_models, AppServerModelKey, EvaluatorResponseParseCache,
 };
-#[cfg(test)]
-use crate::git::staged_tree_oid;
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::hash::full_scope;
 use crate::history::{latest_stored_q_scope_with_cache, HistoryCache};
@@ -14,19 +12,11 @@ use crate::staged::StagedWorktreeView;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-#[cfg(test)]
-static STAGED_RUNTIME_TREE_SOURCE: TreeSource = TreeSource::Staged;
-
-pub(crate) fn should_retry_full_scope_after_restricted_response(
-    record: &CheckRecord,
-    scope: &[String],
-) -> bool {
+pub(crate) fn should_retry_full_scope_after_error(error: Option<&str>, scope: &[String]) -> bool {
     if scope == full_scope() {
         return false;
     }
-    if ObservedAnswerState::from_error(record.error.as_deref())
-        == ObservedAnswerState::InsufficientEvidence
-    {
+    if error == Some(ERROR_INSUFFICIENT_EVIDENCE) {
         return true;
     }
     false
@@ -119,7 +109,7 @@ pub(crate) struct CheckRuntime<'a> {
     pub(crate) tree_source: &'a TreeSource,
     pub(crate) tree_context: CheckTreeContext,
     no_sandbox: bool,
-    session_roots: CheckSessionRoots<'a>,
+    staged_view: &'a StagedWorktreeView,
 }
 
 #[derive(Clone)]
@@ -130,35 +120,7 @@ pub(crate) struct CheckTreeContext {
     pub(crate) checked_file_count: usize,
 }
 
-enum CheckSessionRoots<'a> {
-    #[cfg(test)]
-    Fixed(&'a Path),
-    Materialized(&'a StagedWorktreeView),
-}
-
 impl<'a> CheckRuntime<'a> {
-    #[cfg(test)]
-    pub(crate) fn fixed(
-        root: &'a Path,
-        snapshot_root: &'a Path,
-        config: &'a CheckConfig,
-    ) -> CheckRuntime<'a> {
-        let checked_tree_oid = staged_tree_oid(root).unwrap_or_else(|_| String::new());
-        CheckRuntime {
-            root,
-            config,
-            tree_source: &STAGED_RUNTIME_TREE_SOURCE,
-            tree_context: CheckTreeContext {
-                checked_tree_oid: checked_tree_oid.clone(),
-                against_tree_oid: checked_tree_oid,
-                against_tree: STAGED_RUNTIME_TREE_SOURCE.clone(),
-                checked_file_count: 0,
-            },
-            no_sandbox: true,
-            session_roots: CheckSessionRoots::Fixed(snapshot_root),
-        }
-    }
-
     pub(crate) fn materialized(
         root: &'a Path,
         staged_view: &'a StagedWorktreeView,
@@ -173,7 +135,7 @@ impl<'a> CheckRuntime<'a> {
             tree_source,
             tree_context,
             no_sandbox,
-            session_roots: CheckSessionRoots::Materialized(staged_view),
+            staged_view,
         }
     }
 
@@ -205,18 +167,13 @@ impl<'a> CheckRuntime<'a> {
         scope: &[String],
         visible_tree_oid: &str,
     ) -> Result<PathBuf, String> {
-        match self.session_roots {
-            #[cfg(test)]
-            CheckSessionRoots::Fixed(path) => Ok(path.to_path_buf()),
-            CheckSessionRoots::Materialized(staged_view) => {
-                // Configured ignore patterns shape the evaluator-visible Git
-                // tree before the lazy hardlink materialization step. From
-                // here down, materialization applies only this visible scope
-                // pathspec to checked Git entries.
-                let visible_scope = visible_scope(agent, scope)?;
-                staged_view.materialize_visible_scope(&visible_scope, visible_tree_oid)
-            }
-        }
+        // Configured ignore patterns shape the evaluator-visible Git tree
+        // before the lazy hardlink materialization step. From here down,
+        // materialization applies only this visible scope pathspec to checked
+        // Git entries.
+        let visible_scope = visible_scope(agent, scope)?;
+        self.staged_view
+            .materialize_visible_scope(&visible_scope, visible_tree_oid)
     }
 }
 
@@ -227,6 +184,7 @@ pub(crate) struct InterrogationRunState {
     // visible tree cannot look up an existing session from another tree.
     pub(crate) thread_sessions_by_reuse_key: BTreeMap<String, String>,
     pub(crate) session_instructions: BTreeMap<String, String>,
+    pub(crate) session_roots_by_id: BTreeMap<String, PathBuf>,
     pub(crate) unavailable_models: BTreeSet<AppServerModelKey>,
     pub(crate) visible_tree_oid_cache: VisibleTreeOidCache,
     pub(crate) parse_cache: EvaluatorResponseParseCache,
@@ -244,6 +202,7 @@ impl InterrogationRunState {
             session_isolations: BTreeMap::new(),
             thread_sessions_by_reuse_key: BTreeMap::new(),
             session_instructions: BTreeMap::new(),
+            session_roots_by_id: BTreeMap::new(),
             unavailable_models: BTreeSet::new(),
             visible_tree_oid_cache: VisibleTreeOidCache::new(),
             parse_cache: EvaluatorResponseParseCache::new(),
@@ -271,6 +230,7 @@ impl InterrogationRunState {
         self.session_isolations.clear();
         self.thread_sessions_by_reuse_key.clear();
         self.session_instructions.clear();
+        self.session_roots_by_id.clear();
     }
 
     pub(crate) fn isolate_session_root(

@@ -4,11 +4,10 @@ use super::CheckRunSideEffects;
 use crate::check::command::output::write_and_flush_result_output;
 use crate::check::core::types::{
     check_run_error, CachedExpectation, CheckOptions, CheckRecord, CheckRunError, CheckRunReport,
-    NarrowingStats,
 };
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::run::selection::{
-    order_expectations_by_latest_non_pass, select_expectations_after_cache, CachedFailureMode,
+    order_by_latest_non_pass, select_expectations_after_cache, CachedFailureMode,
     CachedSelectionContext, CachedSelectionHit,
 };
 use crate::evaluator::EvaluatorRunner;
@@ -32,11 +31,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     let mut records = Vec::new();
     let mut cached = Vec::new();
     let total_expectations = runtime.config.expectations.len();
-    let mut selected = 0usize;
-    let silent = 0usize;
     let mut evaluated = 0usize;
-    let mut narrowing = NarrowingStats::default();
-    let non_selected = options.non_selected.clone();
     let root = runtime.root;
     macro_rules! current_error {
         ($error:expr) => {
@@ -44,15 +39,11 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 $error,
                 check_run_report(
                     records.clone(),
-                    non_selected.clone(),
                     cached.clone(),
                     CheckRunReportCounts {
                         evaluated,
-                        selected,
                         skipped: skipped_count(total_expectations, &records, &cached),
-                        silent,
                     },
-                    narrowing,
                 ),
             )
         };
@@ -93,20 +84,16 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     {
         return Ok(current_report(
             records,
-            non_selected,
             cached,
             total_expectations,
             evaluated,
-            selected,
-            silent,
-            narrowing,
         ));
     }
-    selected = selection.selected.len();
-    let check_work_queue = run_try!(order_expectations_by_latest_non_pass(
+    let check_work_queue = run_try!(order_by_latest_non_pass(
         root,
         selection.selected,
-        &mut caches.history
+        &mut caches.history,
+        |expectation| expectation
     ));
     for expectation in &check_work_queue {
         let outcome = match run_expectation(
@@ -128,32 +115,21 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             Err(error) => return Err(current_error!(error)),
         };
         evaluated += 1;
-        narrowing.attempted += outcome.narrowing.attempted;
-        narrowing.accepted += outcome.narrowing.accepted;
-        narrowing.rejected += outcome.narrowing.rejected;
         records.push(outcome.record);
         if outcome.stop_run {
             return Ok(current_report(
                 records,
-                non_selected,
                 cached,
                 total_expectations,
                 evaluated,
-                selected,
-                silent,
-                narrowing,
             ));
         }
     }
     Ok(current_report(
         records,
-        non_selected,
         cached,
         total_expectations,
         evaluated,
-        selected,
-        silent,
-        narrowing,
     ))
 }
 
@@ -180,25 +156,10 @@ fn write_cached_failures(
 
 fn current_report(
     records: Vec<CheckRecord>,
-    non_selected: Vec<crate::check::core::types::SelectedExpectation>,
     cached: Vec<CachedExpectation>,
     total_expectations: usize,
     evaluated: usize,
-    selected: usize,
-    silent: usize,
-    narrowing: NarrowingStats,
 ) -> CheckRunReport {
     let skipped = skipped_count(total_expectations, &records, &cached);
-    check_run_report(
-        records,
-        non_selected,
-        cached,
-        CheckRunReportCounts {
-            evaluated,
-            selected,
-            skipped,
-            silent,
-        },
-        narrowing,
-    )
+    check_run_report(records, cached, CheckRunReportCounts { evaluated, skipped })
 }

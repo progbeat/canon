@@ -1,7 +1,6 @@
 use super::record::record_requires_human_review;
 use super::shared::write_stdout_record;
-use crate::check::core::types::{CheckRecord, CheckRunReport};
-use std::collections::BTreeSet;
+use crate::check::core::types::{for_each_unique_report_record, CheckRecord, CheckRunReport};
 use std::io::Write;
 use std::time::Duration;
 
@@ -97,22 +96,9 @@ pub(crate) fn summary_outcome_counts(report: &CheckRunReport) -> SummaryOutcomeC
         failed: 0,
         errors: 0,
     };
-    let mut seen = BTreeSet::new();
-    for record in &report.records {
-        if seen.insert(record.id.clone()) {
-            add_summary_record(&mut counts, record);
-        }
-    }
-    for cached in &report.cached {
-        let id = if cached.record.id.is_empty() {
-            &cached.expectation.id
-        } else {
-            &cached.record.id
-        };
-        if seen.insert(id.clone()) {
-            add_summary_record(&mut counts, &cached.record);
-        }
-    }
+    for_each_unique_report_record(&report.records, &report.cached, |record| {
+        add_summary_record(&mut counts, record)
+    });
     counts
 }
 

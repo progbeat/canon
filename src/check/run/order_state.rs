@@ -10,15 +10,6 @@ use std::path::{Path, PathBuf};
 
 const LATEST_NON_PASS_FILE: &str = "latest-non-pass.json";
 
-#[cfg(test)]
-pub(crate) fn latest_recorded_non_pass_timestamp(
-    root: &Path,
-    expectation: &SelectedExpectation,
-) -> Result<Option<u64>, String> {
-    let mut history_cache = HistoryCache::default();
-    latest_recorded_non_pass_timestamp_with_cache(root, expectation, &mut history_cache)
-}
-
 pub(crate) fn latest_recorded_non_pass_timestamp_with_cache(
     root: &Path,
     expectation: &SelectedExpectation,
@@ -45,16 +36,6 @@ pub(crate) fn latest_recorded_non_pass_timestamp_with_cache(
     let timestamp = parse_record_timestamp(&record.timestamp);
     history_cache.latest_non_pass.insert(path, timestamp);
     Ok(timestamp)
-}
-
-#[cfg(test)]
-pub(crate) fn write_latest_non_pass_record(
-    root: &Path,
-    expectation: &SelectedExpectation,
-    record: &CheckRecord,
-) -> Result<(), String> {
-    let mut history_cache = HistoryCache::default();
-    write_latest_non_pass_record_with_cache(root, expectation, record, &mut history_cache)
 }
 
 pub(crate) fn write_latest_non_pass_record_with_cache(

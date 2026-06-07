@@ -1,5 +1,4 @@
 mod append;
-mod cache_key;
 mod cleanup;
 mod compact;
 mod record;
@@ -7,7 +6,6 @@ mod reuse;
 mod store;
 
 pub(crate) use append::append_current_history_record_with_cache;
-pub(crate) use cache_key::history_cache_key;
 pub(crate) use cleanup::{active_expectation_ids_from_identities, cleanup_stale_cache_dirs};
 pub(crate) use reuse::{
     against_tree_answer_with_cache, cached_history_record, cooldown_history_record,

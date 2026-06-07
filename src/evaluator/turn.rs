@@ -1,15 +1,24 @@
 use crate::check::{
     CheckRecord, CheckRecordOutcome, CheckResult, ParsedAnswer, SelectedExpectation,
-    ERROR_UNPARSABLE,
 };
 use crate::config_types::AgentConfig;
-use crate::evaluator::prompt::EVALUATOR_BASE_INSTRUCTIONS;
-use crate::evaluator::response_cache::{response_excerpt, EvaluatorResponseParseCache};
+use crate::evaluator::response_cache::EvaluatorResponseParseCache;
 use crate::evaluator::types::{EvaluatorError, EvaluatorRunner};
 use crate::logs::DiagnosticLogWriter;
-use crate::token_usage_types::{EvaluatorTurnUsage, TokenUsage};
-use serde::Serialize;
-use serde_json::{json, Value};
+use crate::token_usage_types::TokenUsage;
+use std::path::Path;
+
+mod logging;
+mod parse;
+#[cfg(test)]
+mod tests;
+
+use logging::ask_and_log;
+pub(crate) use logging::{write_thread_lifecycle_event, write_thread_restart_event};
+use parse::{
+    insufficient_evidence_response_answer, parse_visible_evaluator_response,
+    unparsable_response_answer, EvaluatorResponseParseError, RESPONSE_REPAIR_PROMPT,
+};
 
 pub(crate) fn evaluator_models(agent: &AgentConfig) -> Vec<Option<String>> {
     if agent.models.is_empty() {
@@ -72,7 +81,6 @@ impl EvaluatorFailureKind {
 }
 
 pub(crate) fn record_from_response(
-    agent: &AgentConfig,
     expectation: &SelectedExpectation,
     response: ParsedAnswer,
     enforced_scope: Vec<String>,
@@ -86,7 +94,6 @@ pub(crate) fn record_from_response(
     let error = response.error.clone();
     let suggested_q_scope = response.q_scope_suggestion.clone();
     CheckRecord::current_from_expectation(
-        agent,
         expectation,
         CheckRecordOutcome {
             result,
@@ -131,6 +138,8 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
     turn: &EvaluatorTurnContext<'_>,
     prompt: &str,
     agent: &AgentConfig,
+    visible_scope: &[String],
+    session_root: Option<&Path>,
     parser_cache: &mut EvaluatorResponseParseCache,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     expectation_id: Option<&str>,
@@ -144,237 +153,60 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
         1,
         "initial",
     )?;
-    let parsed = match parser_cache.parse(&response.text, agent) {
+    let mut usage = response.usage;
+    let mut context_compacted = response.context_compacted;
+    let parsed = match parse_visible_evaluator_response(
+        parser_cache,
+        &response.text,
+        agent,
+        visible_scope,
+        session_root,
+    ) {
         Ok(answer) => answer,
-        Err(err) => unparsable_response_answer(&err, &response.text),
+        Err(_) => {
+            let repair = ask_and_log(
+                runner,
+                turn,
+                RESPONSE_REPAIR_PROMPT,
+                diagnostic_log,
+                expectation_id,
+                2,
+                "repair",
+            )?;
+            usage = combined_turn_usage(usage, repair.usage);
+            context_compacted |= repair.context_compacted;
+            match parse_visible_evaluator_response(
+                parser_cache,
+                &repair.text,
+                agent,
+                visible_scope,
+                session_root,
+            ) {
+                Ok(answer) => answer,
+                Err(EvaluatorResponseParseError::OutOfScopeEvidence) => {
+                    insufficient_evidence_response_answer()
+                }
+                Err(EvaluatorResponseParseError::InvalidResponse(err)) => {
+                    unparsable_response_answer(&err, &repair.text)
+                }
+            }
+        }
     };
 
     Ok(ParsedTurnResponse {
         answer: parsed,
-        usage: response.usage,
-        context_compacted: response.context_compacted,
-    })
-}
-
-fn unparsable_response_answer(err: &str, response: &str) -> ParsedAnswer {
-    ParsedAnswer::error(
-        ERROR_UNPARSABLE.to_string(),
-        format!(
-            "evaluator response could not be parsed: {}\nresponse: {}",
-            err,
-            response_excerpt(response)
-        ),
-    )
-}
-
-pub(crate) fn ask_and_log<R: EvaluatorRunner>(
-    runner: &mut R,
-    turn: &EvaluatorTurnContext<'_>,
-    prompt: &str,
-    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    expectation_id: Option<&str>,
-    attempt: usize,
-    reason: &str,
-) -> Result<RawTurnResponse, EvaluatorError> {
-    if let Some(writer) = diagnostic_log.as_deref_mut() {
-        let raw_request = serde_json::to_value(EvaluatorTurnLogRequest {
-            session_id: turn.session_id,
-            prompt,
-            model: turn.model,
-            thinking: turn.thinking,
-        })
-        .map_err(|err| format!("failed to encode evaluator turn request log: {}", err))?;
-        writer.write_event(
-            "info",
-            "agent.request",
-            &[
-                ("id", json!(expectation_id)),
-                ("attempt", json!(attempt)),
-                ("reason", json!(reason)),
-                ("request", raw_request),
-            ],
-        )?;
-    }
-    let response = match runner.ask(turn.session_id, prompt, turn.model, turn.thinking) {
-        Ok(response) => response,
-        Err(err) => {
-            let turn_usage = runner.take_last_turn_usage();
-            if let Some(writer) = diagnostic_log.as_deref_mut() {
-                let raw_response = json!({
-                    "sessionId": turn.session_id,
-                    "error": err.message_str(),
-                });
-                let mut fields = vec![
-                    ("id", json!(expectation_id)),
-                    ("attempt", json!(attempt)),
-                    ("reason", json!(reason)),
-                    ("error", json!(err.message_str())),
-                    ("response", raw_response),
-                ];
-                append_turn_usage_fields(&mut fields, turn_usage.as_ref());
-                let event = if turn_usage.is_some() {
-                    "agent.response"
-                } else {
-                    append_missing_turn_usage_fields(&mut fields, turn.session_id);
-                    "agent.turn_error"
-                };
-                writer.write_event("error", event, &fields)?;
-            }
-            return Err(err);
-        }
-    };
-    let turn_usage = runner.take_last_turn_usage();
-    let response_usage = turn_usage.as_ref().map(|turn_usage| turn_usage.usage);
-    let missing_turn_usage = diagnostic_log.is_some() && turn_usage.is_none();
-    if let Some(writer) = diagnostic_log.as_deref_mut() {
-        let raw_response = json!({
-            "sessionId": turn.session_id,
-            "text": response.clone(),
-        });
-        let mut fields: Vec<(&'static str, Value)> = vec![
-            ("id", json!(expectation_id)),
-            ("attempt", json!(attempt)),
-            ("reason", json!(reason)),
-            ("response", raw_response),
-        ];
-        append_turn_usage_fields(&mut fields, turn_usage.as_ref());
-        if missing_turn_usage {
-            // A response without usage violates the app-server turn contract,
-            // so it is not logged as a completed `agent.response`.
-            fields.push(("error", json!("missing evaluator turn usage")));
-            append_missing_turn_usage_fields(&mut fields, turn.session_id);
-            writer.write_event("error", "agent.turn_error", &fields)?;
-        } else {
-            writer.write_event("info", "agent.response", &fields)?;
-        }
-    }
-    if missing_turn_usage {
-        return Err(EvaluatorError::failure(
-            EvaluatorFailureKind::UnknownAppServer,
-            "missing evaluator turn usage",
-        ));
-    }
-    let context_compacted = turn_usage
-        .as_ref()
-        .is_some_and(|turn_usage| !turn_usage.context_compaction_events.is_empty());
-    Ok(RawTurnResponse {
-        text: response,
-        usage: response_usage,
+        usage,
         context_compacted,
     })
 }
 
-pub(crate) fn write_thread_lifecycle_event(
-    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    lifecycle_log: &ThreadLifecycleLog,
-    enforced_scope: &[String],
-    model: Option<&str>,
-    thinking: &str,
-) -> Result<(), String> {
-    write_thread_event(
-        diagnostic_log,
-        "info",
-        lifecycle_log.event,
-        &[
-            ("threadId", json!(&lifecycle_log.session_id)),
-            ("scope", json!(enforced_scope)),
-            ("model", json!(model)),
-            ("thinking", json!(thinking)),
-            ("baseInstructions", json!(EVALUATOR_BASE_INSTRUCTIONS)),
-            (
-                "developerInstructions",
-                json!(&lifecycle_log.developer_instructions),
-            ),
-        ],
-    )
-}
-
-pub(crate) fn write_thread_restart_event(
-    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    session_id: &str,
-    expectation_id: Option<&str>,
-    enforced_scope: &[String],
-    model: Option<&str>,
-    developer_instructions: &str,
-    reason: &str,
-) -> Result<(), String> {
-    write_thread_event(
-        diagnostic_log,
-        "warn",
-        "thread.restart",
-        &[
-            ("threadId", json!(session_id)),
-            ("id", json!(expectation_id)),
-            ("scope", json!(enforced_scope)),
-            ("model", json!(model)),
-            ("baseInstructions", json!(EVALUATOR_BASE_INSTRUCTIONS)),
-            ("developerInstructions", json!(developer_instructions)),
-            ("reason", json!(reason)),
-        ],
-    )
-}
-
-fn write_thread_event(
-    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    level: &str,
-    event: &str,
-    fields: &[(&str, Value)],
-) -> Result<(), String> {
-    let Some(writer) = diagnostic_log.as_deref_mut() else {
-        return Ok(());
-    };
-    writer
-        .write_event(level, event, fields)
-        .map_err(|err| err.to_string())
-}
-
-fn append_turn_usage_fields(
-    fields: &mut Vec<(&'static str, Value)>,
-    turn_usage: Option<&EvaluatorTurnUsage>,
-) {
-    let Some(EvaluatorTurnUsage {
-        thread_id,
-        turn_id,
-        usage,
-        token_usage_updates,
-        context_compaction_events,
-        ..
-    }) = turn_usage
-    else {
-        return;
-    };
-    fields.push(("threadId", json!(thread_id)));
-    fields.push(("turnId", json!(turn_id)));
-    if !token_usage_updates.is_empty() {
-        fields.push(("tokenUsageUpdates", json!(token_usage_updates)));
-    } else {
-        fields.push(("tokenUsage", token_usage_log_value(*usage)));
+fn combined_turn_usage(
+    first: Option<TokenUsage>,
+    second: Option<TokenUsage>,
+) -> Option<TokenUsage> {
+    match (first, second) {
+        (Some(first), Some(second)) => Some(first.add(second)),
+        (Some(usage), None) | (None, Some(usage)) => Some(usage),
+        (None, None) => None,
     }
-    if !context_compaction_events.is_empty() {
-        fields.push(("contextCompactionEvents", json!(context_compaction_events)));
-    }
-}
-
-fn append_missing_turn_usage_fields(fields: &mut Vec<(&'static str, Value)>, session_id: &str) {
-    fields.push(("threadId", json!(session_id)));
-    fields.push(("tokenUsageUnavailable", json!(true)));
-}
-
-fn token_usage_log_value(usage: TokenUsage) -> Value {
-    json!({
-        "totalTokens": usage.total_tokens,
-        "inputTokens": usage.input_tokens,
-        "cachedInputTokens": usage.cached_input_tokens,
-        "outputTokens": usage.output_tokens,
-        "reasoningOutputTokens": usage.reasoning_output_tokens,
-    })
-}
-
-#[derive(Serialize)]
-struct EvaluatorTurnLogRequest<'a> {
-    #[serde(rename = "sessionId")]
-    session_id: &'a str,
-    prompt: &'a str,
-    model: Option<&'a str>,
-    thinking: &'a str,
 }

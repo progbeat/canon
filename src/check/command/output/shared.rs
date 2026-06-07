@@ -36,18 +36,7 @@ impl Write for SharedCheckOutput {
     }
 }
 
-pub(crate) fn write_stdout_line_record(
-    writer: &mut dyn Write,
-    line: &str,
-    description: &str,
-) -> Result<(), String> {
-    let mut output = String::with_capacity(line.len() + 1);
-    output.push_str(line);
-    output.push('\n');
-    write_stdout_record(writer, output.as_bytes(), description)
-}
-
-pub(super) fn write_stdout_record(
+pub(crate) fn write_stdout_record(
     writer: &mut dyn Write,
     bytes: &[u8],
     description: &str,

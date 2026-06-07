@@ -47,27 +47,6 @@ pub(crate) fn select_expectations_with_identities(
         .collect::<Result<Vec<_>, _>>()
 }
 
-pub(crate) fn initial_non_selected_expectations_with_identities(
-    config: &CheckConfig,
-    identities: &[ExpectationIdentity],
-    selected: &[SelectedExpectation],
-) -> Result<Vec<SelectedExpectation>, String> {
-    let selected_ids = selected
-        .iter()
-        .map(|expectation| expectation.id.clone())
-        .collect::<BTreeSet<_>>();
-    let mut non_selected = Vec::new();
-    for index in 0..config.expectations.len() {
-        let identity = identities
-            .get(index)
-            .ok_or_else(|| "expectation identity count mismatch".to_string())?;
-        if !selected_ids.contains(&identity.id) {
-            non_selected.push(selected_expectation_at(config, identities, index, false)?);
-        }
-    }
-    Ok(non_selected)
-}
-
 pub(crate) fn selected_expectation_at(
     config: &CheckConfig,
     identities: &[ExpectationIdentity],

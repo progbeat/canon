@@ -132,7 +132,6 @@ impl HistoryReadRecord {
             visible_tree_oid: self.visible_tree_oid,
             id: String::new(),
             display_id: String::new(),
-            cache_key: None,
         }
     }
 }
@@ -276,7 +275,6 @@ mod tests {
             visible_tree_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             id: "11111111111111111111".to_string(),
             display_id: "1".to_string(),
-            cache_key: None,
         };
 
         let line = render_answer_history_record(&agent, &record).unwrap();

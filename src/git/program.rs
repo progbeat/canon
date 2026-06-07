@@ -254,14 +254,6 @@ impl GitBlobReader {
         GitBlobReader::new_with_git_program(root, OsStr::new("git"))
     }
 
-    #[cfg(all(test, unix))]
-    pub(crate) fn new_with_test_git_program(
-        root: &Path,
-        git_program: &OsStr,
-    ) -> Result<GitBlobReader, String> {
-        GitBlobReader::new_with_git_program(root, git_program)
-    }
-
     fn new_with_git_program(root: &Path, git_program: &OsStr) -> Result<GitBlobReader, String> {
         let mut child = Command::new(git_program)
             .arg("-C")
@@ -372,15 +364,6 @@ impl Drop for GitBlobReader {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
-}
-
-#[cfg(all(test, unix))]
-pub(crate) fn read_git_blobs_with_git_program(
-    root: &Path,
-    object_ids: &[String],
-    git_program: &OsStr,
-) -> Result<Vec<Vec<u8>>, String> {
-    read_git_blobs_with_git_program_inner(root, object_ids, git_program)
 }
 
 fn read_git_blobs_with_git_program_inner(

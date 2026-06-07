@@ -230,7 +230,8 @@ fn current_result_for_history_record(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::check::Cooldown;
+    use crate::check::{expectation_identities, select_expectations_with_identities};
+    use crate::config_types::{CheckConfig, CooldownConfig, Expectation};
     use crate::time::format_record_timestamp;
     use std::fs;
     use std::path::PathBuf;
@@ -266,7 +267,6 @@ mod tests {
             visible_tree_oid: "tree".to_string(),
             id: "11111111111111111111".to_string(),
             display_id: "1".to_string(),
-            cache_key: None,
         }
     }
 
@@ -415,23 +415,28 @@ mod tests {
     }
 
     fn expectation_with_cooldown() -> SelectedExpectation {
-        SelectedExpectation {
-            number: 1,
-            id: "11111111111111111111".to_string(),
-            display_id: "1".to_string(),
-            q: "Does it pass?".to_string(),
-            a: "yes".to_string(),
-            agent: AgentConfig {
-                models: Vec::new(),
-                thinking: "medium".to_string(),
-                ignore: Vec::new(),
-                plugins: Vec::new(),
-            },
-            cooldown: Some(Cooldown {
-                pass_seconds: Some(100),
-                fail_seconds: None,
-            }),
-        }
+        let config = CheckConfig {
+            version: 1,
+            presets: Default::default(),
+            agent: AgentConfig::implementation_default(),
+            expectations: vec![Expectation {
+                q: "Does it pass?".to_string(),
+                a: "yes".to_string(),
+                prompt_scope: Vec::new(),
+                agent: AgentConfig {
+                    models: Vec::new(),
+                    thinking: "medium".to_string(),
+                    ignore: Vec::new(),
+                    plugins: Vec::new(),
+                },
+                cooldown: Some(CooldownConfig::Compact("100s".to_string())),
+                thinking: None,
+            }],
+        };
+        let identities = expectation_identities(&config).unwrap();
+        select_expectations_with_identities(&config, &identities, &[])
+            .unwrap()
+            .remove(0)
     }
 
     fn history_line(timestamp: u64, visible_scope: &str, evidence: &str) -> String {

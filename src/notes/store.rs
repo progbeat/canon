@@ -1,5 +1,5 @@
 use crate::fs_util::ensure_dir_without_symlinks;
-use crate::hash::hash_key;
+use crate::hash::hash_60;
 use crate::notes::header::{initial_content, validate_note_key, verify_note_key};
 use crate::notes::index::{remove_index, upsert_index, write_file_atomically};
 use crate::notes::note_lock::{lock_note, NoteLock};
@@ -29,7 +29,7 @@ pub(crate) fn note_for_key(config: &Config, key: &str) -> Result<Note, String> {
     // A distinct key names retained user data, not a cache entry. Repeated
     // writes/appends to a bounded retained key set are compacted in place; the
     // retained set itself changes only when the user creates or deletes notes.
-    let hash = hash_key(key);
+    let hash = hash_60(key.as_bytes());
     let path = config.root.join(format!("{}.md", hash));
     Ok(Note {
         key: key.to_string(),

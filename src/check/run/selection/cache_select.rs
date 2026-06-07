@@ -1,4 +1,4 @@
-use super::order::latest_non_pass_timestamp_with_cache;
+use super::order::order_by_latest_non_pass;
 use crate::check::core::types::{CheckOptions, SelectedExpectation};
 use crate::check::run::cache::{
     cached_result_for_expectation, write_cache_hit, CachedResultLookup, CheckCacheHit,
@@ -73,49 +73,13 @@ pub(crate) fn select_expectations_after_cache(
     }
     if cached_failure_seen && cached_failure_mode == CachedFailureMode::StopDefaultSelection {
         selected.clear();
-        cached = order_cached_failures_first(context.root, cached, context.history_cache)?;
+        cached = order_by_latest_non_pass(context.root, cached, context.history_cache, |hit| {
+            &hit.expectation
+        })?;
     }
     Ok(CachedSelection {
         selected,
         cached,
         cached_failure_seen,
     })
-}
-
-fn order_cached_failures_first(
-    root: &Path,
-    cached: Vec<CachedSelectionHit>,
-    history_cache: &mut HistoryCache,
-) -> Result<Vec<CachedSelectionHit>, String> {
-    let mut ordered_cached = cached
-        .into_iter()
-        .enumerate()
-        .map(|(index, hit)| {
-            Ok(OrderedCachedSelectionHit {
-                latest_non_pass: latest_non_pass_timestamp_with_cache(
-                    root,
-                    &hit.expectation,
-                    history_cache,
-                )?,
-                index,
-                hit,
-            })
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    ordered_cached.sort_by(|left, right| {
-        right
-            .latest_non_pass
-            .cmp(&left.latest_non_pass)
-            .then_with(|| left.index.cmp(&right.index))
-    });
-    Ok(ordered_cached
-        .into_iter()
-        .map(|ordered| ordered.hit)
-        .collect())
-}
-
-struct OrderedCachedSelectionHit {
-    hit: CachedSelectionHit,
-    latest_non_pass: u64,
-    index: usize,
 }

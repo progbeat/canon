@@ -1,9 +1,9 @@
 use crate::config_types::AgentConfig;
-use crate::history::history_cache_key;
 use crate::time::{format_record_timestamp, unix_timestamp};
 use crate::token_usage_types::TokenUsage;
 use serde::{de, Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
@@ -52,20 +52,6 @@ impl Cooldown {
             CheckResult::Fail => self.fail_seconds,
         }
     }
-
-    pub(crate) fn cache_key(self) -> String {
-        format!(
-            "pass={};fail={}",
-            cooldown_key_part(self.pass_seconds),
-            cooldown_key_part(self.fail_seconds)
-        )
-    }
-}
-
-fn cooldown_key_part(seconds: Option<u64>) -> String {
-    seconds
-        .map(|seconds| seconds.to_string())
-        .unwrap_or_else(|| "none".to_string())
 }
 
 #[derive(Debug, Clone)]
@@ -108,31 +94,6 @@ impl ParsedAnswer {
             scope: Vec::new(),
             q_scope_suggestion,
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ObservedAnswerState {
-    Answer,
-    InsufficientEvidence,
-    InvalidQuestion,
-    Unparsable,
-    Unknown,
-}
-
-impl ObservedAnswerState {
-    pub(crate) fn from_error(error: Option<&str>) -> ObservedAnswerState {
-        match error {
-            None => ObservedAnswerState::Answer,
-            Some(ERROR_INSUFFICIENT_EVIDENCE) => ObservedAnswerState::InsufficientEvidence,
-            Some(ERROR_INVALID_QUESTION) => ObservedAnswerState::InvalidQuestion,
-            Some(ERROR_UNPARSABLE) => ObservedAnswerState::Unparsable,
-            Some(_) => ObservedAnswerState::Unknown,
-        }
-    }
-
-    pub(crate) fn requires_human_review(self) -> bool {
-        !matches!(self, ObservedAnswerState::Answer)
     }
 }
 
@@ -262,12 +223,34 @@ impl CheckResult {
     // Used by evaluator turns, history loading, and selection filters whenever
     // an observed answer must be classified against the current expectation.
     pub(crate) fn from_expected_answer(expected: &str, observed: &str) -> CheckResult {
-        if observed == expected {
+        if observed == expected || observed_yes_no_answer(observed) == Some(expected) {
             CheckResult::Pass
         } else {
             CheckResult::Fail
         }
     }
+}
+
+fn observed_yes_no_answer(observed: &str) -> Option<&'static str> {
+    let observed = observed.trim_start();
+    let (answer, rest) = observed.split_once(char::is_whitespace)?;
+    let had_answer_separator = answer.ends_with([':', '-', '.', ',', ';', '\u{2013}', '\u{2014}']);
+    let answer = answer.trim_end_matches([':', '-', '.', ',', ';', '\u{2013}', '\u{2014}']);
+    let canonical = if answer.eq_ignore_ascii_case("yes") {
+        "yes"
+    } else if answer.eq_ignore_ascii_case("no") {
+        "no"
+    } else {
+        return None;
+    };
+    let rest = rest.trim_start();
+    if rest.is_empty()
+        || (!had_answer_separator
+            && !rest.starts_with([':', '-', '.', ',', ';', '\u{2013}', '\u{2014}']))
+    {
+        return None;
+    }
+    Some(canonical)
 }
 
 fn default_check_result() -> CheckResult {
@@ -315,9 +298,6 @@ pub(crate) struct CheckRecord {
     pub(crate) id: String,
     #[serde(default, skip)]
     pub(crate) display_id: String,
-    #[allow(dead_code)]
-    #[serde(default, rename = "cacheKey")]
-    pub(crate) cache_key: Option<String>,
 }
 
 pub(crate) struct CheckRecordOutcome {
@@ -343,26 +323,11 @@ impl CheckRecord {
     }
 
     pub(crate) fn current_from_expectation(
-        agent: &AgentConfig,
         expectation: &SelectedExpectation,
         outcome: CheckRecordOutcome,
     ) -> Result<CheckRecord, String> {
-        Ok(Self::from_expectation(
-            format_record_timestamp(unix_timestamp()?),
-            expectation,
-            Some(history_cache_key(agent, expectation)?),
-            outcome,
-        ))
-    }
-
-    pub(crate) fn from_expectation(
-        timestamp: String,
-        expectation: &SelectedExpectation,
-        cache_key: Option<String>,
-        outcome: CheckRecordOutcome,
-    ) -> CheckRecord {
-        CheckRecord {
-            timestamp,
+        Ok(CheckRecord {
+            timestamp: format_record_timestamp(unix_timestamp()?),
             id: expectation.id.clone(),
             display_id: expectation.display_id.clone(),
             number: expectation.number,
@@ -375,8 +340,7 @@ impl CheckRecord {
             scope: outcome.scope,
             suggested_q_scope: outcome.suggested_q_scope,
             visible_tree_oid: outcome.visible_tree_oid,
-            cache_key,
-        }
+        })
     }
 
     pub(crate) fn prompt_text(&self) -> &str {
@@ -391,11 +355,7 @@ impl CheckRecord {
 pub(crate) struct CheckOptions {
     // CLI-expanded selected expectations before check-only work-saving filters.
     pub(crate) selected: Vec<SelectedExpectation>,
-    pub(crate) non_selected: Vec<SelectedExpectation>,
     pub(crate) selectors_provided: bool,
-    #[cfg_attr(not(test), allow(dead_code))]
-    // Command-selector misses before check-only work-saving filters.
-    pub(crate) skipped: usize,
     // `--keep-going` continues after non-pass results among selected
     // expectations; it does not bypass default cache-based selection.
     pub(crate) keep_going: bool,
@@ -446,13 +406,6 @@ pub(crate) struct QueryResult {
     pub(crate) answer: ParsedAnswer,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct NarrowingStats {
-    pub(crate) attempted: usize,
-    pub(crate) accepted: usize,
-    pub(crate) rejected: usize,
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct CachedExpectation {
     pub(crate) expectation: SelectedExpectation,
@@ -462,25 +415,35 @@ pub(crate) struct CachedExpectation {
 #[derive(Debug, Clone)]
 pub(crate) struct CheckRunReport {
     pub(crate) records: Vec<CheckRecord>,
-    #[allow(dead_code)]
-    pub(crate) non_selected: Vec<SelectedExpectation>,
     pub(crate) cached: Vec<CachedExpectation>,
     // Freshly evaluated expectations in this run.
     pub(crate) evaluated: usize,
-    // Expectations selected for evaluator work in this run.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) selected: usize,
     // Expectations not covered by pass, fail, or human-review summary
     // categories.
     pub(crate) skipped: usize,
-    // Skipped expectations that were selected by the command but intentionally
-    // produce no per-expectation stdout.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) silent: usize,
-    // Kept for internal assertions around scope-narrowing behavior; public
-    // output and runtime logs rely on the per-event narrowing records instead.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) narrowing: NarrowingStats,
+}
+
+pub(crate) fn for_each_unique_report_record(
+    records: &[CheckRecord],
+    cached: &[CachedExpectation],
+    mut visit: impl FnMut(&CheckRecord),
+) {
+    let mut seen = BTreeSet::new();
+    for record in records {
+        if seen.insert(record.id.clone()) {
+            visit(record);
+        }
+    }
+    for cached in cached {
+        let id = if cached.record.id.is_empty() {
+            &cached.expectation.id
+        } else {
+            &cached.record.id
+        };
+        if seen.insert(id.clone()) {
+            visit(&cached.record);
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -495,5 +458,33 @@ pub(crate) fn check_run_error(error: String, report: CheckRunReport) -> CheckRun
     CheckRunError {
         error,
         report: Box::new(report),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{observed_yes_no_answer, CheckResult};
+
+    #[test]
+    fn yes_no_answers_with_explanatory_separator_match_expected_answer() {
+        assert_eq!(observed_yes_no_answer("No — not found"), Some("no"));
+        assert_eq!(observed_yes_no_answer("YES: supported"), Some("yes"));
+        assert_eq!(
+            CheckResult::from_expected_answer("no", "No — not found"),
+            CheckResult::Pass
+        );
+    }
+
+    #[test]
+    fn exact_answers_without_yes_no_separator_still_compare_exactly() {
+        assert_eq!(observed_yes_no_answer("No evidence"), None);
+        assert_eq!(
+            CheckResult::from_expected_answer("no", "No evidence"),
+            CheckResult::Fail
+        );
+        assert_eq!(
+            CheckResult::from_expected_answer("maybe", "maybe — plausible"),
+            CheckResult::Fail
+        );
     }
 }

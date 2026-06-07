@@ -1,10 +1,15 @@
-use crate::check::core::types::{ObservedAnswerState, ParsedAnswer, QueryResult};
+use crate::check::core::types::{
+    ParsedAnswer, QueryResult, ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION,
+    ERROR_UNPARSABLE,
+};
 use crate::check::interrogation::model_fallback::run_with_model_fallbacks;
 use crate::check::interrogation::policy::q_scope_suggestion_should_get_independent_verification;
 use crate::check::interrogation::records::{
     finalize_query_answer, write_query_result_event, write_query_review_required_event,
 };
-use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
+use crate::check::interrogation::state::{
+    should_retry_full_scope_after_error, CheckRuntime, InterrogationRunState,
+};
 use crate::check::interrogation::{ask_with_reused_thread, ThreadTurnRequest};
 use crate::evaluator::{evaluator_turn_prompt, EvaluatorError, EvaluatorRunner};
 use crate::evidence::evidence_file_refs_are_visible;
@@ -127,7 +132,7 @@ fn ask_query_with_full_scope_retry<R: EvaluatorRunner>(
         state,
         model,
     )?;
-    if query_should_retry_full_scope_after_restricted_response(&result.answer, enforced_scope) {
+    if should_retry_full_scope_after_error(result.answer.error.as_deref(), enforced_scope) {
         // Restricted insufficient-evidence is not final for query-mode
         // interrogations either; retry once with full project scope.
         *enforced_scope = full_scope();
@@ -171,25 +176,13 @@ fn ask_query_once<R: EvaluatorRunner>(
     finalize_query_answer(runtime, state, enforced_scope, question, response.answer)
 }
 
-fn query_should_retry_full_scope_after_restricted_response(
-    answer: &ParsedAnswer,
-    scope: &[String],
-) -> bool {
-    scope != full_scope()
-        && ObservedAnswerState::from_error(answer.error.as_deref())
-            == ObservedAnswerState::InsufficientEvidence
-}
-
 fn query_should_verify_narrowing(
     runtime: &CheckRuntime<'_>,
     state: &mut InterrogationRunState,
     enforced_scope: &[String],
     answer: &ParsedAnswer,
 ) -> Result<bool, EvaluatorError> {
-    if !matches!(
-        ObservedAnswerState::from_error(answer.error.as_deref()),
-        ObservedAnswerState::Answer
-    ) {
+    if answer.error.is_some() {
         return Ok(false);
     }
     q_scope_suggestion_should_get_independent_verification(
@@ -207,21 +200,19 @@ fn query_narrowed_answer_is_accepted(
     narrowed: &ParsedAnswer,
     proposed_scope: &[String],
 ) -> bool {
-    matches!(
-        ObservedAnswerState::from_error(narrowed.error.as_deref()),
-        ObservedAnswerState::Answer
-    ) && narrowed.scope == proposed_scope
+    narrowed.error.is_none()
+        && narrowed.scope == proposed_scope
         && visible_scope(&runtime.config.agent, &narrowed.scope)
             .map(|scope| evidence_file_refs_are_visible(&narrowed.evidence, &scope))
             .unwrap_or(false)
 }
 
 fn query_human_review_reason(result: &QueryResult) -> Option<&'static str> {
-    match ObservedAnswerState::from_error(result.answer.error.as_deref()) {
-        ObservedAnswerState::InsufficientEvidence => Some("insufficient evidence"),
-        ObservedAnswerState::InvalidQuestion => Some("invalid question"),
-        ObservedAnswerState::Unparsable => Some("unparsable evaluator response"),
-        ObservedAnswerState::Unknown => Some("unknown evaluator error"),
-        ObservedAnswerState::Answer => None,
+    match result.answer.error.as_deref() {
+        Some(ERROR_INSUFFICIENT_EVIDENCE) => Some("insufficient evidence"),
+        Some(ERROR_INVALID_QUESTION) => Some("invalid question"),
+        Some(ERROR_UNPARSABLE) => Some("unparsable evaluator response"),
+        None => None,
+        Some(error) => unreachable!("unsupported evaluator error: {}", error),
     }
 }

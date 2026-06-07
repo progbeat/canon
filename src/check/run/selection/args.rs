@@ -1,7 +1,4 @@
-use super::identity::{
-    initial_non_selected_expectations_with_identities, select_expectations_with_identities,
-    ExpectationIdentity,
-};
+use super::identity::{select_expectations_with_identities, ExpectationIdentity};
 use crate::check::core::types::{CheckOptions, RawCheckOptions};
 use crate::config_types::CheckConfig;
 use clap::builder::OsStringValueParser;
@@ -14,14 +11,9 @@ pub(crate) fn resolve_check_options_with_identities(
     options: &RawCheckOptions,
 ) -> Result<CheckOptions, String> {
     let selected = select_expectations_with_identities(config, identities, &options.selectors)?;
-    let non_selected =
-        initial_non_selected_expectations_with_identities(config, identities, &selected)?;
-    let skipped = config.expectations.len().saturating_sub(selected.len());
     Ok(CheckOptions {
         selected,
-        non_selected,
         selectors_provided: !options.selectors.is_empty(),
-        skipped,
         keep_going: options.keep_going,
         ignore_cooldown: options.ignore_cooldown,
         break_after_tokens: options.break_after_tokens,

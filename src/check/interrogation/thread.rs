@@ -16,6 +16,7 @@ use crate::history::{against_tree_answer_with_cache, HistoryCache};
 use crate::logs::DiagnosticLogWriter;
 use crate::scope::{sanitize_scope, visible_scope};
 use std::collections::BTreeSet;
+use std::path::Path;
 
 #[derive(Clone, Copy)]
 pub(crate) struct ThreadTurnRequest<'a> {
@@ -135,10 +136,12 @@ fn ask_current_session<R: EvaluatorRunner>(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     request: ThreadTurnRequest<'_>,
 ) -> Result<ParsedTurnResponse, EvaluatorError> {
+    let session_root = state.session_roots_by_id.get(session_id).cloned();
     ask_in_thread(
         runner,
         session_id,
         request.agent,
+        session_root.as_deref(),
         &mut state.parse_cache,
         diagnostic_log,
         request,
@@ -149,6 +152,7 @@ fn ask_in_thread<R: EvaluatorRunner>(
     runner: &mut R,
     session_id: &str,
     agent: &AgentConfig,
+    session_root: Option<&Path>,
     parse_cache: &mut EvaluatorResponseParseCache,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     request: ThreadTurnRequest<'_>,
@@ -158,11 +162,15 @@ fn ask_in_thread<R: EvaluatorRunner>(
         model: request.model,
         thinking: request.thinking,
     };
+    let visible_scope =
+        visible_scope(agent, request.enforced_scope).map_err(EvaluatorError::message)?;
     ask_once(
         runner,
         &turn,
         request.prompt,
         agent,
+        &visible_scope,
+        session_root,
         parse_cache,
         diagnostic_log,
         request.expectation_id,
@@ -217,6 +225,9 @@ fn start_thread_session<R: EvaluatorRunner>(
     state
         .session_instructions
         .insert(created.clone(), developer_instructions.clone());
+    state
+        .session_roots_by_id
+        .insert(created.clone(), session_cwd.to_path_buf());
     if let Some(isolation) = session_isolation {
         state.session_isolations.insert(created.clone(), isolation);
     }
@@ -269,6 +280,9 @@ fn retire_thread_sessions_after_turn(
         .retain(|_, session_id| !retired_sessions.contains(session_id));
     state
         .session_instructions
+        .retain(|session_id, _| !retired_sessions.contains(session_id));
+    state
+        .session_roots_by_id
         .retain(|session_id, _| !retired_sessions.contains(session_id));
     state
         .session_isolations

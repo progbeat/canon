@@ -23,7 +23,6 @@ pub(crate) fn finalize_interrogation_response(
         turn_response.answer,
     )?;
     let record = record_from_response(
-        &expectation.agent,
         expectation,
         finalized.response,
         finalized.scope,

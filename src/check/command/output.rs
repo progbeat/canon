@@ -9,7 +9,7 @@ mod usage;
 pub(crate) use progress::{start_check_progress_output, CheckProgressOutput};
 pub(crate) use query::write_query_output;
 pub(crate) use record::{record_requires_human_review, write_and_flush_result_output};
-pub(crate) use shared::{write_stdout_line_record, SharedCheckOutput};
+pub(crate) use shared::{write_stdout_record, SharedCheckOutput};
 pub(crate) use summary::{render_check_agent_messages, summary_outcome_counts, write_summary_line};
 pub(crate) use usage::render_token_usage_summary;
 
@@ -115,7 +115,6 @@ mod tests {
             visible_tree_oid: "visible".to_string(),
             id: "11111111111111111111".to_string(),
             display_id: "j".to_string(),
-            cache_key: None,
         }
     }
 }

@@ -239,10 +239,10 @@ pub(crate) fn string_at_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a 
 }
 
 pub(crate) fn turn_text(delta_text: String, completed_text: String) -> String {
-    if delta_text.trim().is_empty() {
-        completed_text
-    } else {
+    if completed_text.trim().is_empty() {
         delta_text
+    } else {
+        completed_text
     }
 }
 
@@ -250,12 +250,24 @@ pub(crate) fn append_completed_agent_text(message: &Value, output: &mut String) 
     let Some(params) = message.get("params") else {
         return;
     };
-    if let Some(item) = params.get("item") {
+    let payload = if let Some(item) = params.get("item") {
         if is_assistant_message_item(item) {
-            append_message_payload_text(item, output);
+            Some(item)
+        } else {
+            None
         }
     } else if message.get("method").and_then(Value::as_str) == Some("item/agentMessage/completed") {
-        append_message_payload_text(params, output);
+        Some(params)
+    } else {
+        None
+    };
+    let Some(payload) = payload else {
+        return;
+    };
+    let mut text = String::new();
+    append_message_payload_text(payload, &mut text);
+    if !text.trim().is_empty() {
+        *output = text;
     }
 }
 
@@ -338,5 +350,47 @@ mod tests {
         assert!(!is_assistant_message_item(
             &json!({"type": "agent_status_message"})
         ));
+    }
+
+    #[test]
+    fn completed_agent_text_keeps_last_assistant_message() {
+        let mut output = String::new();
+        append_completed_agent_text(
+            &json!({
+                "method": "item/completed",
+                "params": {
+                    "item": {
+                        "type": "agentMessage",
+                        "content": [{"type": "output_text", "text": "status"}]
+                    }
+                }
+            }),
+            &mut output,
+        );
+        append_completed_agent_text(
+            &json!({
+                "method": "item/completed",
+                "params": {
+                    "item": {
+                        "type": "agentMessage",
+                        "content": [{"type": "output_text", "text": "{\"answer\":\"no\"}"}]
+                    }
+                }
+            }),
+            &mut output,
+        );
+
+        assert_eq!(output, "{\"answer\":\"no\"}");
+    }
+
+    #[test]
+    fn turn_text_prefers_completed_message_over_delta_stream() {
+        assert_eq!(
+            turn_text(
+                "status{\"answer\":\"yes\"}".to_string(),
+                "{\"answer\":\"yes\"}".to_string()
+            ),
+            "{\"answer\":\"yes\"}"
+        );
     }
 }

@@ -1,11 +1,21 @@
 use crate::scope::{normalize_repo_path, path_bytes_in_scope};
+use std::path::Path;
 
 pub(crate) fn evidence_file_refs_are_visible(evidence: &str, visible_scope: &[String]) -> bool {
+    evidence_file_refs_are_visible_in_root(evidence, visible_scope, None)
+}
+
+pub(crate) fn evidence_file_refs_are_visible_in_root(
+    evidence: &str,
+    visible_scope: &[String],
+    root: Option<&Path>,
+) -> bool {
     backtick_refs(evidence).all(|reference| {
         let Some(path) = project_file_ref_path(reference) else {
             return true;
         };
         path_bytes_in_scope(path.as_bytes(), visible_scope).unwrap_or(false)
+            && root.is_none_or(|root| root.join(&path).exists())
     })
 }
 
@@ -105,7 +115,8 @@ fn file_extension_is_common_project_file(extension: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::evidence_file_refs_are_visible;
+    use super::{evidence_file_refs_are_visible, evidence_file_refs_are_visible_in_root};
+    use std::fs;
 
     #[test]
     fn file_refs_must_be_inside_visible_scope() {
@@ -143,5 +154,26 @@ mod tests {
             "`qScopeSuggestion`, `record.scope`, `:(exclude,glob).canon/**`, and `:10-20` are not file refs.",
             &visible_scope,
         ));
+    }
+
+    #[test]
+    fn file_refs_must_exist_when_root_is_available() {
+        let root = std::env::temp_dir().join(format!("canon-evidence-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        assert!(evidence_file_refs_are_visible_in_root(
+            "`src/main.rs` exists.",
+            &[".".to_string()],
+            Some(&root),
+        ));
+        assert!(!evidence_file_refs_are_visible_in_root(
+            "`src/deleted.rs` does not exist.",
+            &[".".to_string()],
+            Some(&root),
+        ));
+
+        let _ = fs::remove_dir_all(root);
     }
 }

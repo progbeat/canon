@@ -4,7 +4,7 @@ use crate::check::command::output::{
     record_requires_human_review, start_check_progress_output, write_and_flush_result_output,
     SharedCheckOutput,
 };
-use crate::check::core::types::{CheckOptions, CheckRecord, NarrowingStats, SelectedExpectation};
+use crate::check::core::types::{CheckOptions, CheckRecord, SelectedExpectation};
 use crate::check::interrogation::policy::{
     interrogate_with_full_scope_retry, narrowed_scope_is_accepted,
     q_scope_suggestion_should_get_independent_verification, turn_exceeds_break_after_tokens,
@@ -41,7 +41,6 @@ pub(super) struct ExpectationRunContext<'a, 'out, 'log, R: EvaluatorRunner> {
 
 pub(super) struct ExpectationRunOutcome {
     pub(super) record: CheckRecord,
-    pub(super) narrowing: NarrowingStats,
     pub(super) stop_run: bool,
 }
 
@@ -119,7 +118,6 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
 
     let record_scope = interrogation.record.scope.clone();
     debug_assert!(scope_is_within(&record_scope, &verified_q_scope));
-    let mut narrowing = NarrowingStats::default();
     if !record_requires_human_review(&interrogation.record)
         && run_expectation_try!(cancel_progress_on_error(
             q_scope_suggestion_should_get_independent_verification(
@@ -132,7 +130,6 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
             &mut progress,
         ))
     {
-        narrowing.attempted += 1;
         let initial_record = interrogation.record.clone();
         let proposed_scope = run_expectation_try!(cancel_progress_on_error(
             sanitize_scope(
@@ -166,11 +163,6 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         stop_after_current_expectation |= narrowed.stop_after_current_expectation;
         let accepted =
             narrowed_scope_is_accepted(&expectation.agent, &narrowed.record, &proposed_scope);
-        if accepted {
-            narrowing.accepted += 1;
-        } else {
-            narrowing.rejected += 1;
-        }
         run_expectation_try!(cancel_progress_on_error(
             write_scope_narrowing_event(
                 context.diagnostic_log,
@@ -235,7 +227,6 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     }
     Ok(ExpectationRunOutcome {
         record: interrogation.record,
-        narrowing,
         stop_run,
     })
 }

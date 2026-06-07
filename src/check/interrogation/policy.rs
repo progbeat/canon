@@ -3,7 +3,7 @@ use crate::check::core::types::{CheckRecord, InterrogationResult, SelectedExpect
 use crate::check::interrogation::model_fallback::interrogate_expectation_with_model_fallbacks;
 use crate::check::interrogation::narrowing::scope_narrowing_log_fields;
 use crate::check::interrogation::state::{
-    should_retry_full_scope_after_restricted_response, CheckRuntime, InterrogationRunState,
+    should_retry_full_scope_after_error, CheckRuntime, InterrogationRunState,
 };
 use crate::config_types::AgentConfig;
 use crate::evaluator::EvaluatorRunner;
@@ -56,8 +56,10 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
     let should_stop_after_current_expectation =
         turn_exceeds_break_after_tokens(&interrogation, break_after_tokens)
             || turn_has_context_compaction(&interrogation);
-    if should_retry_full_scope_after_restricted_response(&interrogation.record, call.enforced_scope)
-    {
+    if should_retry_full_scope_after_error(
+        interrogation.record.error.as_deref(),
+        call.enforced_scope,
+    ) {
         // Restricted insufficient-evidence is not final. Retry once with full
         // project scope and let that response become the record.
         *call.enforced_scope = full_scope();

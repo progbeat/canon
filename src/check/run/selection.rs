@@ -16,7 +16,7 @@ pub(crate) use identity::{
     expectation_identities, select_expectations_with_identities, selected_expectation_at,
     ExpectationIdentity,
 };
-pub(crate) use order::order_expectations_by_latest_non_pass;
+pub(crate) use order::order_by_latest_non_pass;
 
 #[cfg(test)]
 mod tests {
@@ -81,9 +81,7 @@ mod tests {
         let expectation = selected_expectation_at(&config, &identities, 0, true).unwrap();
         let options = CheckOptions {
             selected: vec![expectation.clone()],
-            non_selected: Vec::new(),
             selectors_provided: true,
-            skipped: 0,
             keep_going: false,
             ignore_cooldown: false,
             break_after_tokens: None,
@@ -96,7 +94,6 @@ mod tests {
             .visible_tree_oid(&root, &source, &expectation.agent, &scope)
             .unwrap();
         let record = CheckRecord::current_from_expectation(
-            &expectation.agent,
             &expectation,
             CheckRecordOutcome {
                 result: CheckResult::Pass,

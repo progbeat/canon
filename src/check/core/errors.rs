@@ -15,7 +15,6 @@ pub(crate) fn error_record_from_interrogation_error(
 ) -> Result<CheckRecord, String> {
     let visible_tree_oid = runtime.visible_tree_oid(visible_tree_oid_cache, agent, scope)?;
     CheckRecord::current_from_expectation(
-        agent,
         expectation,
         CheckRecordOutcome {
             result: CheckResult::Fail,

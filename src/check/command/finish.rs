@@ -1,5 +1,5 @@
 use crate::check::command::output::{
-    render_check_agent_messages, summary_outcome_counts, write_stdout_line_record,
+    render_check_agent_messages, summary_outcome_counts, write_stdout_record,
 };
 use crate::check::command::reporting::write_check_finish_event;
 use crate::check::core::types::{CheckRecord, CheckRunReport, SelectedExpectation};
@@ -165,7 +165,9 @@ fn write_check_agent_message(
         &mut caches.visible_tree_oid,
     )?;
     for message in messages {
-        write_stdout_line_record(output, &message, "check agent message")?;
+        let mut line = message;
+        line.push('\n');
+        write_stdout_record(output, line.as_bytes(), "check agent message")?;
     }
     Ok(())
 }
@@ -178,8 +180,13 @@ pub(crate) fn check_agent_messages(
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<Vec<String>, String> {
     let agent = &config.agent;
-    let num_fixes =
-        staged_pass_notice_count(root, agent, report, history_cache, visible_tree_oid_cache)?;
+    let num_fixes = staged_passes_failed_at_head_count_with_cache(
+        root,
+        agent,
+        report,
+        history_cache,
+        visible_tree_oid_cache,
+    )?;
     // This is the check-command spec's `num_regressions`. Reusing gate's
     // comparison keeps a same-tree commit instruction aligned with
     // expectation-related `canon gate` failures.
@@ -194,22 +201,6 @@ pub(crate) fn check_agent_messages(
         num_fixes,
         num_regressions,
     ))
-}
-
-pub(crate) fn staged_pass_notice_count(
-    root: &Path,
-    agent: &AgentConfig,
-    report: &CheckRunReport,
-    history_cache: &mut HistoryCache,
-    visible_tree_oid_cache: &mut VisibleTreeOidCache,
-) -> Result<usize, String> {
-    staged_passes_failed_at_head_count_with_cache(
-        root,
-        agent,
-        report,
-        history_cache,
-        visible_tree_oid_cache,
-    )
 }
 
 fn selected_expectation_from_record(
@@ -230,7 +221,7 @@ fn selected_expectation_from_record(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::check::core::types::{CheckResult, CheckRunReport, NarrowingStats};
+    use crate::check::core::types::{CheckResult, CheckRunReport};
     use crate::hash::full_scope;
     use crate::time::format_record_timestamp;
     use std::fs;
@@ -248,7 +239,7 @@ mod tests {
         let mut history_cache = HistoryCache::default();
         let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
 
-        let count = staged_pass_notice_count(
+        let count = staged_passes_failed_at_head_count_with_cache(
             &root,
             &agent,
             &report,
@@ -272,7 +263,7 @@ mod tests {
         let mut history_cache = HistoryCache::default();
         let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
 
-        let count = staged_pass_notice_count(
+        let count = staged_passes_failed_at_head_count_with_cache(
             &root,
             &agent,
             &report,
@@ -309,15 +300,10 @@ mod tests {
                 visible_tree_oid,
                 id: "11111111111111111111".to_string(),
                 display_id: "1".to_string(),
-                cache_key: None,
             }],
-            non_selected: Vec::new(),
             cached: Vec::new(),
             evaluated: 1,
-            selected: 1,
             skipped: 0,
-            silent: 0,
-            narrowing: NarrowingStats::default(),
         }
     }
 
