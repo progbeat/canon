@@ -70,6 +70,7 @@ name = "canon"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "getrandom",
  "libc",
  "minijinja",
  "serde",

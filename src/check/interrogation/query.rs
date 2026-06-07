@@ -26,7 +26,6 @@ pub(crate) struct QueryRequest<'a> {
 pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
     runtime: &CheckRuntime<'_>,
     question: &str,
-    _expected_answer: Option<&str>,
     enforced_scope: &[String],
     runner: &mut R,
     diagnostic_log: Option<&mut DiagnosticLogWriter>,

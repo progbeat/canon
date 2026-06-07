@@ -17,6 +17,19 @@ pub(crate) fn write_check_start_event(
     diagnostic_log.write_event("info", "check.start", &fields)
 }
 
+pub(crate) fn write_query_start_event(
+    diagnostic_log: &mut DiagnosticLogWriter,
+) -> DiagnosticLogResult<()> {
+    write_check_start_event(diagnostic_log, Some(true), Vec::new())
+}
+
+pub(crate) fn write_query_finish_event(
+    diagnostic_log: &mut DiagnosticLogWriter,
+    err: Option<&str>,
+) -> DiagnosticLogResult<()> {
+    write_check_finish_event(diagnostic_log, true, err)
+}
+
 pub(crate) fn write_check_finish_event(
     diagnostic_log: &mut DiagnosticLogWriter,
     query: bool,

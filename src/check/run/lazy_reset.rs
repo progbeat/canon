@@ -1,19 +1,21 @@
 use crate::check::core::types::{CachedExpectation, SelectedExpectation};
 use crate::check::run::selection::ExpectationIdentity;
 use crate::config_types::CheckConfig;
-use crate::fs_util::{
-    ensure_dir_without_symlinks, for_each_nonempty_line, write_temp_file_then_replace,
-};
+use crate::fs_util::{ensure_dir_without_symlinks, for_each_nonempty_line, reject_symlink};
 use crate::git::resolve_git_path;
 use crate::hash::full_scope;
 use crate::logs::DiagnosticLogWriter;
-use crate::state_paths::CANON_CACHE_DIR_GIT_PATH;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+
+// Matches `.canon/specs/canon-check-lazy-full-scope-reset.md`:
+// stochastic_round(num_evaluated_expectations / 128).
+const LAZY_FULL_SCOPE_RESET_EVALUATIONS_PER_SAMPLE: f64 = 128.0;
+const LAZY_FULL_SCOPE_RESET_PENDING_GIT_PATH: &str = "canon/lazy-full-scope-reset";
 
 pub(crate) fn apply_lazy_full_scope_reset(
     root: &Path,
@@ -40,7 +42,16 @@ pub(crate) fn apply_lazy_full_scope_reset_for_cached(
     diagnostic_log: &mut DiagnosticLogWriter,
 ) -> Result<(), String> {
     let reset =
-        plan_lazy_full_scope_reset(evaluated_expectations, cached, cache, random_reset_seed())?;
+        plan_lazy_full_scope_reset(evaluated_expectations, cached, cache, random_reset_seed()?)?;
+    apply_lazy_full_scope_reset_plan(root, &reset, cache, diagnostic_log)
+}
+
+fn apply_lazy_full_scope_reset_plan(
+    root: &Path,
+    reset: &LazyFullScopeResetPlan,
+    cache: &mut LazyFullScopeResetCache,
+    diagnostic_log: &mut DiagnosticLogWriter,
+) -> Result<(), String> {
     diagnostic_log
         .write_event(
             "info",
@@ -60,7 +71,7 @@ pub(crate) fn apply_lazy_full_scope_reset_for_cached(
             ],
         )
         .map_err(|err| err.to_string())?;
-    if let Err(error) = schedule_lazy_full_scope_resets(root, &reset.expectations, cache) {
+    if let Err(error) = queue_lazy_full_scope_resets(root, &reset.expectations, cache) {
         diagnostic_log
             .write_event(
                 "error",
@@ -69,22 +80,6 @@ pub(crate) fn apply_lazy_full_scope_reset_for_cached(
             )
             .map_err(|err| err.to_string())?;
         return Err(error);
-    }
-    Ok(())
-}
-
-pub(crate) fn activate_scheduled_lazy_full_scope_resets(
-    root: &Path,
-    cache: &mut LazyFullScopeResetCache,
-) -> Result<(), String> {
-    let ids = read_scheduled_lazy_full_scope_resets(root, cache)?;
-    if !ids.is_empty() {
-        // Activation is the scheduled reset taking effect for this invocation:
-        // cache lookup treats active IDs as not reusable, and fresh
-        // interrogation starts from full project scope. The active marker is
-        // cleared only after that full-scope record is written.
-        write_active_lazy_full_scope_reset_markers(root, &ids, cache)?;
-        remove_scheduled_lazy_full_scope_resets(root, cache)?;
     }
     Ok(())
 }
@@ -105,26 +100,14 @@ pub(crate) fn clear_active_lazy_full_scope_reset(
     clear_active_lazy_full_scope_reset_id(root, &expectation.id, cache)
 }
 
-pub(crate) fn clear_active_lazy_full_scope_reset_ids(
-    root: &Path,
-    ids: &BTreeSet<String>,
-    cache: &mut LazyFullScopeResetCache,
-) -> Result<(), String> {
-    for id in ids {
-        clear_active_lazy_full_scope_reset_id(root, id, cache)?;
-    }
-    Ok(())
-}
-
 fn clear_active_lazy_full_scope_reset_id(
     root: &Path,
     id: &str,
     cache: &mut LazyFullScopeResetCache,
 ) -> Result<(), String> {
-    let path = cache.active_lazy_full_scope_reset_path(root, id)?;
-    remove_active_lazy_full_scope_reset_at_path(&path)?;
-    cache.clear_active_reset_marker_reads();
-    Ok(())
+    update_pending_lazy_full_scope_reset_ids(root, cache, |pending_ids| {
+        pending_ids.remove(id);
+    })
 }
 
 pub(crate) struct LazyFullScopeResetPlan {
@@ -135,10 +118,8 @@ pub(crate) struct LazyFullScopeResetPlan {
 
 #[derive(Default)]
 pub(crate) struct LazyFullScopeResetCache {
-    schedule_paths: BTreeMap<PathBuf, PathBuf>,
-    active_paths: BTreeMap<(PathBuf, String), PathBuf>,
-    scheduled_ids: BTreeMap<PathBuf, Vec<String>>,
-    active_id_sets: BTreeMap<(PathBuf, Vec<String>), BTreeSet<String>>,
+    pending_paths: BTreeMap<PathBuf, PathBuf>,
+    pending_ids: BTreeMap<PathBuf, BTreeSet<String>>,
     candidates: BTreeMap<Vec<CachedExpectationFingerprint>, Vec<SelectedExpectation>>,
 }
 
@@ -158,52 +139,36 @@ pub(crate) fn plan_lazy_full_scope_reset(
 }
 
 impl LazyFullScopeResetCache {
-    fn lazy_full_scope_reset_schedule_path(&mut self, root: &Path) -> Result<PathBuf, String> {
+    fn lazy_full_scope_reset_pending_path(&mut self, root: &Path) -> Result<PathBuf, String> {
         let root = root.to_path_buf();
-        if let Some(path) = self.schedule_paths.get(&root) {
+        if let Some(path) = self.pending_paths.get(&root) {
             return Ok(path.clone());
         }
-        let path = resolve_git_path(&root, "canon/lazy-full-scope-reset")?;
-        self.schedule_paths.insert(root, path.clone());
+        let path = resolve_git_path(&root, LAZY_FULL_SCOPE_RESET_PENDING_GIT_PATH)?;
+        self.pending_paths.insert(root, path.clone());
         Ok(path)
     }
 
-    fn active_lazy_full_scope_reset_path(
+    fn read_pending_lazy_full_scope_reset_ids(
         &mut self,
         root: &Path,
-        id: &str,
-    ) -> Result<PathBuf, String> {
-        let key = (root.to_path_buf(), id.to_string());
-        if let Some(path) = self.active_paths.get(&key) {
-            return Ok(path.clone());
-        }
-        let path = resolve_git_path(root, CANON_CACHE_DIR_GIT_PATH)?
-            .join(id)
-            .join("lazy-full-scope-reset");
-        self.active_paths.insert(key, path.clone());
-        Ok(path)
-    }
-
-    fn read_scheduled_lazy_full_scope_resets(
-        &mut self,
-        root: &Path,
-    ) -> Result<Vec<String>, String> {
+    ) -> Result<BTreeSet<String>, String> {
         let root_key = root.to_path_buf();
-        if let Some(ids) = self.scheduled_ids.get(&root_key) {
+        if let Some(ids) = self.pending_ids.get(&root_key) {
             return Ok(ids.clone());
         }
-        let path = self.lazy_full_scope_reset_schedule_path(root)?;
-        let mut ids = Vec::new();
+        let path = self.lazy_full_scope_reset_pending_path(root)?;
+        let mut ids = BTreeSet::new();
         for_each_nonempty_line(&path, |_, line| {
-            ids.push(line);
+            ids.insert(line);
             Ok(())
         })?;
-        self.scheduled_ids.insert(root_key, ids.clone());
+        self.pending_ids.insert(root_key, ids.clone());
         Ok(ids)
     }
 
-    fn remember_scheduled_lazy_full_scope_resets(&mut self, root: &Path, ids: Vec<String>) {
-        self.scheduled_ids.insert(root.to_path_buf(), ids);
+    fn remember_pending_lazy_full_scope_reset_ids(&mut self, root: &Path, ids: BTreeSet<String>) {
+        self.pending_ids.insert(root.to_path_buf(), ids);
     }
 
     fn active_lazy_full_scope_reset_ids(
@@ -211,26 +176,17 @@ impl LazyFullScopeResetCache {
         root: &Path,
         identities: &[ExpectationIdentity],
     ) -> Result<BTreeSet<String>, String> {
-        let identity_ids = identities
+        let pending_ids = self.read_pending_lazy_full_scope_reset_ids(root)?;
+        Ok(identities
             .iter()
-            .map(|identity| identity.id.clone())
-            .collect::<Vec<_>>();
-        let key = (root.to_path_buf(), identity_ids.clone());
-        if let Some(ids) = self.active_id_sets.get(&key) {
-            return Ok(ids.clone());
-        }
-        let mut ids = BTreeSet::new();
-        for id in identity_ids {
-            if self.active_lazy_full_scope_reset_path(root, &id)?.exists() {
-                ids.insert(id);
-            }
-        }
-        self.active_id_sets.insert(key, ids.clone());
-        Ok(ids)
-    }
-
-    fn clear_active_reset_marker_reads(&mut self) {
-        self.active_id_sets.clear();
+            .filter_map(|identity| {
+                if pending_ids.contains(&identity.id) {
+                    Some(identity.id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect())
     }
 
     fn lazy_full_scope_reset_candidates(
@@ -295,27 +251,34 @@ fn cached_expectation_fingerprint(
         .collect()
 }
 
-fn write_active_lazy_full_scope_reset_markers(
+fn update_pending_lazy_full_scope_reset_ids(
     root: &Path,
-    ids: &[String],
+    cache: &mut LazyFullScopeResetCache,
+    update: impl FnOnce(&mut BTreeSet<String>),
+) -> Result<(), String> {
+    let mut pending_ids = cache.read_pending_lazy_full_scope_reset_ids(root)?;
+    update(&mut pending_ids);
+    write_pending_lazy_full_scope_reset_ids(root, pending_ids, cache)
+}
+
+fn write_pending_lazy_full_scope_reset_ids(
+    root: &Path,
+    ids: BTreeSet<String>,
     cache: &mut LazyFullScopeResetCache,
 ) -> Result<(), String> {
-    for id in ids {
-        let path = cache.active_lazy_full_scope_reset_path(root, id)?;
-        if let Some(parent) = path.parent() {
-            ensure_dir_without_symlinks(parent)?;
-        }
-        let temp_path = lazy_full_scope_reset_schedule_temp_path(&path)?;
-        write_temp_file_then_replace(&temp_path, &path, |file| {
-            file.write_all(b"full\n")
-                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))
-        })?;
+    let path = cache.lazy_full_scope_reset_pending_path(root)?;
+    if ids.is_empty() {
+        remove_lazy_full_scope_reset_file_at_path(&path)?;
+        cache.remember_pending_lazy_full_scope_reset_ids(root, ids);
+        return Ok(());
     }
-    cache.clear_active_reset_marker_reads();
+    let file_ids = ids.iter().cloned().collect::<Vec<_>>();
+    write_id_list_file(&path, &file_ids)?;
+    cache.remember_pending_lazy_full_scope_reset_ids(root, ids);
     Ok(())
 }
 
-fn remove_active_lazy_full_scope_reset_at_path(path: &Path) -> Result<(), String> {
+fn remove_lazy_full_scope_reset_file_at_path(path: &Path) -> Result<(), String> {
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
@@ -328,7 +291,10 @@ pub(crate) fn lazy_full_scope_reset_count(
     seed: u64,
     candidate_count: usize,
 ) -> usize {
-    let count = stochastic_round(evaluated_expectations as f64 / 128.0, seed);
+    let count = stochastic_round(
+        evaluated_expectations as f64 / LAZY_FULL_SCOPE_RESET_EVALUATIONS_PER_SAMPLE,
+        seed,
+    );
     std::cmp::min(count, candidate_count)
 }
 
@@ -371,83 +337,44 @@ pub(crate) fn sample_reset_expectations(
     sampled
 }
 
-pub(crate) fn schedule_lazy_full_scope_resets(
+pub(crate) fn queue_lazy_full_scope_resets(
     root: &Path,
     expectations: &[SelectedExpectation],
     cache: &mut LazyFullScopeResetCache,
 ) -> Result<(), String> {
-    let path = cache.lazy_full_scope_reset_schedule_path(root)?;
-    if expectations.is_empty() {
-        remove_scheduled_lazy_full_scope_resets_at_path(&path)?;
-        cache.remember_scheduled_lazy_full_scope_resets(root, Vec::new());
-        return Ok(());
-    }
-    let temp_path = lazy_full_scope_reset_schedule_temp_path(&path)?;
-    write_temp_file_then_replace(&temp_path, &path, |file| {
-        for expectation in expectations {
-            file.write_all(expectation.id.as_bytes())
-                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
-            file.write_all(b"\n")
-                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
-        }
-        Ok(())
-    })?;
-    cache.remember_scheduled_lazy_full_scope_resets(
-        root,
+    let mut pending_ids = cache.read_pending_lazy_full_scope_reset_ids(root)?;
+    pending_ids.extend(
         expectations
             .iter()
-            .map(|expectation| expectation.id.clone())
-            .collect(),
+            .map(|expectation| expectation.id.clone()),
     );
-    Ok(())
+    write_pending_lazy_full_scope_reset_ids(root, pending_ids, cache)
 }
 
-fn read_scheduled_lazy_full_scope_resets(
-    root: &Path,
-    cache: &mut LazyFullScopeResetCache,
-) -> Result<Vec<String>, String> {
-    cache.read_scheduled_lazy_full_scope_resets(root)
-}
-
-fn remove_scheduled_lazy_full_scope_resets(
-    root: &Path,
-    cache: &mut LazyFullScopeResetCache,
-) -> Result<(), String> {
-    let path = cache.lazy_full_scope_reset_schedule_path(root)?;
-    remove_scheduled_lazy_full_scope_resets_at_path(&path)?;
-    cache.remember_scheduled_lazy_full_scope_resets(root, Vec::new());
-    Ok(())
-}
-
-fn remove_scheduled_lazy_full_scope_resets_at_path(path: &Path) -> Result<(), String> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(format!("failed to delete {}: {}", path.display(), err)),
+fn write_id_list_file(path: &Path, ids: &[String]) -> Result<(), String> {
+    let ids = ids.iter().map(|id| id.as_str()).collect::<Vec<_>>();
+    if let Some(parent) = path.parent() {
+        ensure_dir_without_symlinks(parent)?;
     }
+    reject_symlink(path)?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
+        .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
+    for id in ids {
+        file.write_all(id.as_bytes())
+            .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
+        file.write_all(b"\n")
+            .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
+    }
+    file.flush()
+        .map_err(|err| format!("failed to flush {}: {}", path.display(), err))
 }
 
-fn lazy_full_scope_reset_schedule_temp_path(path: &Path) -> Result<PathBuf, String> {
-    let file_name = path.file_name().ok_or_else(|| {
-        format!(
-            "lazy reset schedule path has no file name: {}",
-            path.display()
-        )
-    })?;
-    let mut temp_name = file_name.to_os_string();
-    temp_name.push(format!(
-        ".tmp.{}.{}",
-        std::process::id(),
-        random_reset_seed()
-    ));
-    Ok(path.with_file_name(temp_name))
-}
-
-fn random_reset_seed() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_nanos() as u64)
-        .unwrap_or(0)
+fn random_reset_seed() -> Result<u64, String> {
+    getrandom::u64().map_err(|err| format!("failed to read lazy reset randomness: {}", err))
 }
 
 struct ResetRng {

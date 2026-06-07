@@ -107,13 +107,9 @@ pub(crate) struct Expectation {
     pub(crate) q: String,
     pub(crate) a: String,
     #[serde(default, skip)]
-    pub(crate) prompt_scope: Vec<String>,
-    #[serde(default, skip)]
     pub(crate) agent: AgentConfig,
     #[serde(default)]
     pub(crate) cooldown: Option<CooldownConfig>,
-    #[serde(default)]
-    pub(crate) thinking: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]

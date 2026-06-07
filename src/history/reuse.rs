@@ -422,7 +422,6 @@ mod tests {
             expectations: vec![Expectation {
                 q: "Does it pass?".to_string(),
                 a: "yes".to_string(),
-                prompt_scope: Vec::new(),
                 agent: AgentConfig {
                     models: Vec::new(),
                     thinking: "medium".to_string(),
@@ -430,7 +429,6 @@ mod tests {
                     plugins: Vec::new(),
                 },
                 cooldown: Some(CooldownConfig::Compact("100s".to_string())),
-                thinking: None,
             }],
         };
         let identities = expectation_identities(&config).unwrap();

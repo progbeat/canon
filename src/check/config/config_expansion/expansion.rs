@@ -65,10 +65,8 @@ impl RawExpectationExpansion<'_> {
                     self.expectations.push(Expectation {
                         q: item.q,
                         a: item.a,
-                        prompt_scope: Vec::new(),
                         agent,
                         cooldown: item.cooldown,
-                        thinking: item.settings.thinking,
                     })
                 }
                 RawExpectationItem::Generator(item) => {
@@ -100,10 +98,8 @@ impl RawExpectationExpansion<'_> {
             self.expectations.push(Expectation {
                 q: render_generator_expectation_question(&item.generated_question_format, &content),
                 a: item.a.clone(),
-                prompt_scope: if uses_content { vec![file] } else { Vec::new() },
                 agent: self.resolve_expectation_agent(&item.settings)?,
                 cooldown: item.cooldown.clone(),
-                thinking: item.settings.thinking.clone(),
             });
         }
         Ok(())

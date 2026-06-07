@@ -13,8 +13,7 @@ pub(crate) use cache_select::{
 };
 pub(crate) use cooldown::parse_cooldown;
 pub(crate) use identity::{
-    expectation_identities, select_expectations_with_identities, selected_expectation_at,
-    ExpectationIdentity,
+    expectation_identities, select_expectations_with_identities, ExpectationIdentity,
 };
 pub(crate) use order::order_by_latest_non_pass;
 
@@ -64,10 +63,8 @@ mod tests {
             expectations: vec![Expectation {
                 q: "Does selector cache reuse avoid unnecessary evaluator work?".to_string(),
                 a: "yes".to_string(),
-                prompt_scope: Vec::new(),
                 agent: AgentConfig::implementation_default(),
                 cooldown: None,
-                thinking: None,
             }],
         }
     }
@@ -78,7 +75,7 @@ mod tests {
         init_git_repo(&root);
         let config = one_expectation_config();
         let identities = expectation_identities(&config).unwrap();
-        let expectation = selected_expectation_at(&config, &identities, 0, true).unwrap();
+        let expectation = identity::selected_expectation_at(&config, &identities, 0, true).unwrap();
         let options = CheckOptions {
             selected: vec![expectation.clone()],
             selectors_provided: true,

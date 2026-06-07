@@ -13,9 +13,7 @@ use crate::check::command::output::SharedCheckOutput;
 use crate::check::command::query::{run_check_query_command, CheckQueryCommand};
 use crate::check::core::types::CheckCommandArgs;
 use crate::check::interrogation::state::CheckRuntime;
-use crate::check::run::lazy_reset::{
-    activate_scheduled_lazy_full_scope_resets, active_lazy_full_scope_reset_ids,
-};
+use crate::check::run::lazy_reset::active_lazy_full_scope_reset_ids;
 use crate::check::run::selection::{expectation_identities, resolve_check_options_with_identities};
 use crate::check::{run_check_with_runner_and_caches, CheckRunCaches, CheckRunSideEffects};
 use crate::cli::CommandError;
@@ -52,42 +50,38 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     let query_mode = command.query.is_some();
     let query_start_field = if query_mode { Some(true) } else { None };
     let mut check_caches = CheckRunCaches::new();
-    if let Err(err) = activate_scheduled_lazy_full_scope_resets(root, &mut check_caches.lazy_reset)
-    {
-        return fail_check_before_selection(
-            root,
-            &mut diagnostic_log,
-            &mut check_caches.lazy_reset,
-            query_start_field,
-            query_mode,
-            1,
-            err,
-        );
-    }
     let config = match repo_cache.load_check_config(root, &command.config_path, &checked_tree) {
         Ok(config) => config,
         Err(err) => {
             return fail_check_before_selection(
-                root,
                 &mut diagnostic_log,
-                &mut check_caches.lazy_reset,
                 query_start_field,
                 query_mode,
-                1,
                 err,
             )
         }
     };
+    if let Some(question) = command.query.as_deref() {
+        return run_query_mode(
+            root,
+            &command,
+            &checked_tree,
+            &against_tree,
+            &config,
+            question,
+            diagnostic_log,
+            query_start_field,
+            query_mode,
+            &mut check_caches,
+        );
+    }
     let identities = match expectation_identities(&config) {
         Ok(identities) => identities,
         Err(err) => {
             return fail_check_before_selection(
-                root,
                 &mut diagnostic_log,
-                &mut check_caches.lazy_reset,
                 query_start_field,
                 query_mode,
-                0,
                 err,
             )
         }
@@ -97,46 +91,17 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             Ok(ids) => ids,
             Err(err) => {
                 return fail_check_before_selection(
-                    root,
                     &mut diagnostic_log,
-                    &mut check_caches.lazy_reset,
                     query_start_field,
                     query_mode,
-                    0,
                     err,
                 )
             }
         };
-    if let Some(question) = command.query.as_deref() {
-        return run_query_mode(
-            root,
-            &command,
-            &checked_tree,
-            &against_tree,
-            &config,
-            &identities,
-            &active_reset_ids,
-            question,
-            diagnostic_log,
-            query_start_field,
-            query_mode,
-            &mut check_caches,
-        );
-    }
     let options =
         match resolve_check_options_with_identities(&config, &identities, &command.options) {
             Ok(options) => options,
-            Err(err) => {
-                return fail_check_before_selection(
-                    root,
-                    &mut diagnostic_log,
-                    &mut check_caches.lazy_reset,
-                    None,
-                    false,
-                    0,
-                    err,
-                )
-            }
+            Err(err) => return fail_check_before_selection(&mut diagnostic_log, None, false, err),
         };
     write_check_start_event(
         &mut diagnostic_log,
@@ -147,28 +112,20 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             .map(|expectation| expectation.id.clone())
             .collect(),
     )?;
-    let mut execution = prepare_check_execution(
+    let mut execution = match prepare_check_execution(
         root,
         &config,
-        &mut diagnostic_log,
         PrepareCheckExecutionOptions {
             tree_source: &checked_tree,
             against_tree: &against_tree,
             no_sandbox: command.no_sandbox,
-            query: false,
-            errors_on_failure: 0,
         },
-        &mut check_caches.lazy_reset,
         &mut check_caches.visible_tree_oid,
-    )
-    .map_err(CommandError::from)?;
-    cleanup_cache_dirs(
-        root,
-        &mut repo_cache,
-        &identities,
-        &mut diagnostic_log,
-        &mut check_caches,
-    )?;
+    ) {
+        Ok(execution) => execution,
+        Err(err) => return fail_check_after_start(&mut diagnostic_log, false, err),
+    };
+    cleanup_cache_dirs(root, &mut repo_cache, &identities, &mut diagnostic_log)?;
     let shared_output = SharedCheckOutput::stdout();
     let mut result_output = shared_output.clone();
     let runtime = CheckRuntime::materialized(
@@ -222,8 +179,6 @@ fn run_query_mode(
     checked_tree: &TreeSource,
     against_tree: &TreeSource,
     config: &crate::config_types::CheckConfig,
-    identities: &[crate::check::ExpectationIdentity],
-    active_reset_ids: &std::collections::BTreeSet<String>,
     question: &str,
     diagnostic_log: DiagnosticLogWriter,
     query_start_field: Option<bool>,
@@ -240,12 +195,9 @@ fn run_query_mode(
             Err(err) => {
                 let mut diagnostic_log = diagnostic_log;
                 return fail_check_before_selection(
-                    root,
                     &mut diagnostic_log,
-                    &mut check_caches.lazy_reset,
                     query_start_field,
                     query_mode,
-                    0,
                     err,
                 );
             }
@@ -255,8 +207,6 @@ fn run_query_mode(
     run_check_query_command(CheckQueryCommand {
         root,
         config: query_config,
-        identities,
-        active_lazy_full_scope_reset_ids: active_reset_ids,
         question,
         query_scope: &command.query_scope,
         tree_source: checked_tree,
@@ -273,7 +223,6 @@ fn cleanup_cache_dirs(
     repo_cache: &mut RepoInspectionCache,
     identities: &[crate::check::ExpectationIdentity],
     diagnostic_log: &mut DiagnosticLogWriter,
-    check_caches: &mut CheckRunCaches,
 ) -> Result<(), CommandError> {
     let cache_dir = repo_cache
         .git_path(root, CANON_CACHE_DIR_GIT_PATH)
@@ -281,16 +230,7 @@ fn cleanup_cache_dirs(
     let active_ids = active_expectation_ids_from_identities(identities);
     let cleanup = match cleanup_stale_cache_dirs(&cache_dir, &active_ids) {
         Ok(cleanup) => cleanup,
-        Err(err) => {
-            return fail_check_after_start(
-                root,
-                diagnostic_log,
-                &mut check_caches.lazy_reset,
-                false,
-                1,
-                err,
-            )
-        }
+        Err(err) => return fail_check_after_start(diagnostic_log, false, err),
     };
     write_cache_cleanup_event(diagnostic_log, cleanup.removed, cleanup.kept)?;
     Ok(())
