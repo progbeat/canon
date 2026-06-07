@@ -25,7 +25,7 @@ fn render_query_output(answer: &ParsedAnswer) -> String {
     output.push_str("Evidence: ");
     output.push_str(&escape_check_output_text(&answer.evidence));
     output.push('\n');
-    if let Some(suggestion) = answer.q_scope_suggestion.as_deref() {
+    if let Some(suggestion) = answer.question_scope_suggestion.as_deref() {
         output.push_str("Suggested q-scope: ");
         output.push_str(&compact_json_string_array(suggestion));
         output.push('\n');

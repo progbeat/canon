@@ -116,8 +116,8 @@ fn record_log_fields(record: &CheckRecord) -> Vec<(&'static str, Value)> {
         ("observed", json!(record.observed)),
         ("evidence", json!(record.evidence)),
         ("scope", json!(record.scope)),
-        ("prompt", json!(record.prompt_text())),
-        ("expected", json!(record.expected_text())),
+        ("prompt", json!(record.question_text())),
+        ("expected", json!(record.expected_answer_text())),
     ]
 }
 

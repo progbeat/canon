@@ -196,8 +196,8 @@ fn record_with_current_expectation(
     record.id = expectation.id.clone();
     record.display_id = expectation.display_id.clone();
     record.number = expectation.number;
-    record.prompt = Some(expectation.q.clone());
-    record.expected = Some(expectation.a.clone());
+    record.question = Some(expectation.question.clone());
+    record.expected_answer = Some(expectation.expected_answer.clone());
     record.result = current_result_for_history_record(&record, expectation);
     record
 }
@@ -208,7 +208,7 @@ fn cooldown_record_with_current_expectation(
 ) -> CheckRecord {
     let mut record = record_with_current_expectation(record, expectation);
     record.result = CheckResult::Pass;
-    record.observed = expectation.a.clone();
+    record.observed = expectation.expected_answer.clone();
     record.error = None;
     record
 }
@@ -217,14 +217,14 @@ pub(crate) fn is_reusable_history_record(record: &CheckRecord) -> bool {
     // Runtime persistence uses "reusable" to mean "schema-valid answer
     // response". Fail answers are reusable cache records; evaluator errors and
     // unparsable review records are not answer history.
-    record.expected_text().is_some() && record.error.is_none()
+    record.expected_answer_text().is_some() && record.error.is_none()
 }
 
 fn current_result_for_history_record(
     record: &CheckRecord,
     expectation: &SelectedExpectation,
 ) -> CheckResult {
-    CheckResult::from_expected_answer(&expectation.a, &record.observed)
+    CheckResult::from_expected_answer(&expectation.expected_answer, &record.observed)
 }
 
 #[cfg(test)]
@@ -257,13 +257,13 @@ mod tests {
             timestamp: timestamp.to_string(),
             number: 1,
             result: CheckResult::Pass,
-            prompt: Some("Does it pass?".to_string()),
-            expected: Some("yes".to_string()),
+            question: Some("Does it pass?".to_string()),
+            expected_answer: Some("yes".to_string()),
             observed: "yes".to_string(),
             error: None,
             evidence: evidence.to_string(),
             scope: vec![".".to_string()],
-            suggested_q_scope: None,
+            question_scope_suggestion: None,
             visible_tree_oid: "tree".to_string(),
             id: "11111111111111111111".to_string(),
             display_id: "1".to_string(),

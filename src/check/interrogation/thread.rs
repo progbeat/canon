@@ -330,7 +330,7 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
         &mut state.visible_tree_oid_cache,
     )
     .map_err(EvaluatorError::message)?;
-    let prompt = evaluator_turn_prompt(&expectation.q, against_tree_answer.as_ref())
+    let prompt = evaluator_turn_prompt(&expectation.question, against_tree_answer.as_ref())
         .map_err(EvaluatorError::message)?;
     let thinking = effective_thinking(&expectation.agent, expectation);
     let response = ask_with_reused_thread(

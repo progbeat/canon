@@ -41,12 +41,12 @@ fn required_runtime_log_fields(event: &str) -> Option<&'static [&'static str]> {
         "lazy_full_scope_reset.error" => Some(&["message"]),
         "model.failure" => Some(&["id", "model", "error"]),
         "model.fallback" => Some(&["id", "from", "to", "reason"]),
-        "query.result" => Some(&["prompt", "observed", "evidence", "suggestedQScope"]),
+        "query.result" => Some(&["prompt", "observed", "evidence", "qScopeSuggestion"]),
         "query.review_required" => Some(&[
             "prompt",
             "observed",
             "evidence",
-            "suggestedQScope",
+            "qScopeSuggestion",
             "reason",
         ]),
         "scope.narrowing" => Some(&[

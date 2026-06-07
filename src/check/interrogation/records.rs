@@ -71,7 +71,10 @@ pub(crate) fn write_query_result_event(
                 ("prompt", json!(question)),
                 ("observed", json!(answer.answer.clone())),
                 ("evidence", json!(answer.evidence.clone())),
-                ("suggestedQScope", json!(answer.q_scope_suggestion.clone())),
+                (
+                    "qScopeSuggestion",
+                    json!(answer.question_scope_suggestion.clone()),
+                ),
             ],
         )?;
     }
@@ -92,7 +95,10 @@ pub(crate) fn write_query_review_required_event(
                 ("prompt", json!(question)),
                 ("observed", json!(answer.answer.clone())),
                 ("evidence", json!(answer.evidence.clone())),
-                ("suggestedQScope", json!(answer.q_scope_suggestion.clone())),
+                (
+                    "qScopeSuggestion",
+                    json!(answer.question_scope_suggestion.clone()),
+                ),
                 ("reason", json!(reason)),
             ],
         )?;

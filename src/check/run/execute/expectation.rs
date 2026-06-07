@@ -7,7 +7,7 @@ use crate::check::command::output::{
 use crate::check::core::types::{CheckOptions, CheckRecord, SelectedExpectation};
 use crate::check::interrogation::policy::{
     interrogate_with_full_scope_retry, narrowed_scope_is_accepted,
-    q_scope_suggestion_should_get_independent_verification, turn_exceeds_break_after_tokens,
+    question_scope_suggestion_should_get_independent_verification, turn_exceeds_break_after_tokens,
     turn_has_context_compaction, write_scope_narrowing_event, ScopedInterrogation,
 };
 use crate::check::interrogation::state::{
@@ -116,10 +116,10 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     debug_assert!(scope_is_within(&record_scope, &verified_q_scope));
     if !record_requires_human_review(&interrogation.record)
         && run_expectation_try!(cancel_progress_on_error(
-            q_scope_suggestion_should_get_independent_verification(
+            question_scope_suggestion_should_get_independent_verification(
                 context.runtime,
                 &expectation.agent,
-                interrogation.record.suggested_q_scope.as_deref(),
+                interrogation.record.question_scope_suggestion.as_deref(),
                 &verified_q_scope,
                 &mut context.caches.visible_tree_oid,
             ),
@@ -130,7 +130,7 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         let proposed_scope = run_expectation_try!(cancel_progress_on_error(
             sanitize_scope(
                 initial_record
-                    .suggested_q_scope
+                    .question_scope_suggestion
                     .as_deref()
                     .expect("suggestion passed the file-count verification gate"),
             ),
@@ -173,7 +173,7 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         if accepted {
             interrogation = narrowed;
         } else {
-            interrogation.record.suggested_q_scope = None;
+            interrogation.record.question_scope_suggestion = None;
             debug_assert_eq!(interrogation.record.scope, verified_q_scope);
         }
     }

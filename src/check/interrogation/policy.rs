@@ -124,7 +124,7 @@ pub(crate) fn turn_has_context_compaction(interrogation: &InterrogationResult) -
     interrogation.context_compacted
 }
 
-pub(crate) fn q_scope_suggestion_should_get_independent_verification(
+pub(crate) fn question_scope_suggestion_should_get_independent_verification(
     runtime: &CheckRuntime<'_>,
     agent: &AgentConfig,
     suggestion: Option<&[String]>,

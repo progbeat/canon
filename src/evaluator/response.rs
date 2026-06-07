@@ -15,7 +15,7 @@ pub(crate) fn parse_evaluator_response(
         return Ok(ParsedAnswer::answer(
             answer,
             response.evidence,
-            Some(response.q_scope_suggestion),
+            Some(response.question_scope_suggestion),
         ));
     }
     let error = response
@@ -24,10 +24,10 @@ pub(crate) fn parse_evaluator_response(
     // The Interrogation Policy schema permits qScopeSuggestion on an error
     // response too. Preserve it for schema fidelity and diagnostics; narrowing
     // policy still consumes suggestions only from answer responses.
-    Ok(ParsedAnswer::error_with_q_scope_suggestion(
+    Ok(ParsedAnswer::error_with_question_scope_suggestion(
         error,
         response.evidence,
-        Some(response.q_scope_suggestion),
+        Some(response.question_scope_suggestion),
     ))
 }
 
@@ -74,7 +74,7 @@ mod tests {
     use super::parse_evaluator_response_json;
 
     #[test]
-    fn evaluator_response_requires_q_scope_suggestion() {
+    fn evaluator_response_requires_question_scope_suggestion() {
         let error = parse_evaluator_response_json(r#"{"answer":"yes","evidence":"`src/main.rs`"}"#)
             .unwrap_err();
 
@@ -82,7 +82,7 @@ mod tests {
     }
 
     #[test]
-    fn evaluator_response_rejects_empty_q_scope_suggestion() {
+    fn evaluator_response_rejects_empty_question_scope_suggestion() {
         let response = parse_evaluator_response_json(
             r#"{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":[]}"#,
         )
@@ -95,7 +95,7 @@ mod tests {
     }
 
     #[test]
-    fn evaluator_response_rejects_empty_q_scope_suggestion_item() {
+    fn evaluator_response_rejects_empty_question_scope_suggestion_item() {
         let response = parse_evaluator_response_json(
             r#"{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":[""]}"#,
         )
@@ -108,14 +108,14 @@ mod tests {
     }
 
     #[test]
-    fn evaluator_response_accepts_required_q_scope_suggestion() {
+    fn evaluator_response_accepts_required_question_scope_suggestion() {
         let response = parse_evaluator_response_json(
             r#"{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":["src/main.rs"]}"#,
         )
         .unwrap();
 
         response.validate_schema().unwrap();
-        assert_eq!(response.q_scope_suggestion, vec!["src/main.rs"]);
+        assert_eq!(response.question_scope_suggestion, vec!["src/main.rs"]);
     }
 
     #[test]

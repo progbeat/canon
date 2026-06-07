@@ -73,8 +73,8 @@ pub(crate) fn selected_expectation_at(
         number: index + 1,
         id: identity.id.clone(),
         display_id: identity.display_id.clone(),
-        q: expectation.q.clone(),
-        a: expectation.a.clone(),
+        question: expectation.q.clone(),
+        expected_answer: expectation.a.clone(),
         agent: expectation.agent.clone(),
         cooldown,
     })

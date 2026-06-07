@@ -24,7 +24,7 @@ impl HistoryCache {
         expectation: &SelectedExpectation,
     ) -> Result<Vec<CheckRecord>, String> {
         let path = self.path(root, expectation)?;
-        let records_key = history_records_key(&path, &expectation.a);
+        let records_key = history_records_key(&path, &expectation.expected_answer);
         if let Some(records) = self.records.get(&records_key) {
             return Ok(records.clone());
         }
@@ -32,7 +32,8 @@ impl HistoryCache {
         // answer-history rows are checked against the repository-native Git
         // object hash algorithm. The lower-level line parser only validates the
         // portable JSONL shape used by compaction and parser tests.
-        let records = read_repository_history_records_from_path(root, &path, &expectation.a)?;
+        let records =
+            read_repository_history_records_from_path(root, &path, &expectation.expected_answer)?;
         self.records.insert(records_key, records.clone());
         Ok(records)
     }
@@ -83,6 +84,6 @@ pub(super) fn record_for_expected_answer(
 ) -> CheckRecord {
     let mut record = record.clone();
     record.result = CheckResult::from_expected_answer(expected_answer, &record.observed);
-    record.expected = Some(expected_answer.to_string());
+    record.expected_answer = Some(expected_answer.to_string());
     record
 }

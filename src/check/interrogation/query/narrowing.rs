@@ -1,6 +1,7 @@
 use crate::check::core::types::ParsedAnswer;
 use crate::check::interrogation::policy::{
-    q_scope_suggestion_should_get_independent_verification, verified_q_scope_answer_is_accepted,
+    question_scope_suggestion_should_get_independent_verification,
+    verified_q_scope_answer_is_accepted,
 };
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::evaluator::EvaluatorError;
@@ -14,10 +15,10 @@ pub(super) fn should_verify(
     if answer.error.is_some() {
         return Ok(false);
     }
-    q_scope_suggestion_should_get_independent_verification(
+    question_scope_suggestion_should_get_independent_verification(
         runtime,
         &runtime.config.agent,
-        answer.q_scope_suggestion.as_deref(),
+        answer.question_scope_suggestion.as_deref(),
         enforced_scope,
         &mut state.visible_tree_oid_cache,
     )

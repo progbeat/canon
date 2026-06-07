@@ -73,7 +73,7 @@ fn ask_with_model<R: EvaluatorRunner>(
         model,
     )?;
     if narrowing::should_verify(runtime, state, &active_scope, &result.answer)? {
-        let Some(suggestion) = result.answer.q_scope_suggestion.as_deref() else {
+        let Some(suggestion) = result.answer.question_scope_suggestion.as_deref() else {
             return Err(EvaluatorError::message(
                 "q-scope verification requested without a suggestion",
             ));
@@ -92,7 +92,7 @@ fn ask_with_model<R: EvaluatorRunner>(
         if narrowing::answer_is_accepted(&narrowed.answer, &proposed_scope) {
             result = narrowed;
         }
-        result.answer.q_scope_suggestion = None;
+        result.answer.question_scope_suggestion = None;
     }
     if let Some(reason) = review::human_review_reason(&result) {
         write_query_review_required_event(query.question, diagnostic_log, &result.answer, reason)?;

@@ -22,7 +22,7 @@ pub(crate) fn error_record_from_interrogation_error(
             error: Some(ERROR_UNPARSABLE.to_string()),
             evidence: error.to_string(),
             scope: scope.to_vec(),
-            suggested_q_scope: None,
+            question_scope_suggestion: None,
             visible_tree_oid,
         },
     )

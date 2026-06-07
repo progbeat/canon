@@ -32,7 +32,7 @@ pub(super) fn render_check_output_record_completion(record: &CheckRecord) -> Str
     let status = if is_error { "ERROR" } else { "FAILED" };
     let mut output = String::new();
     output.push_str(&format!(" {}\n", status));
-    output.push_str(&escape_check_output_text(record.prompt_text()));
+    output.push_str(&escape_check_output_text(record.question_text()));
     output.push('\n');
     if is_error {
         output.push_str("Error: ");
@@ -44,7 +44,7 @@ pub(super) fn render_check_output_record_completion(record: &CheckRecord) -> Str
     } else {
         output.push_str("Expected: ");
         output.push_str(&escape_check_output_text(
-            record.expected_text().unwrap_or(""),
+            record.expected_answer_text().unwrap_or(""),
         ));
         output.push('\n');
         output.push_str("Observed: ");
@@ -55,7 +55,7 @@ pub(super) fn render_check_output_record_completion(record: &CheckRecord) -> Str
     output.push_str(&escape_check_output_text(&record.evidence));
     output.push('\n');
     if !is_error {
-        if let Some(suggestion) = record.suggested_q_scope.as_deref() {
+        if let Some(suggestion) = record.question_scope_suggestion.as_deref() {
             output.push_str("Suggested q-scope: ");
             output.push_str(&compact_json_string_array(suggestion));
             output.push('\n');

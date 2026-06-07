@@ -98,7 +98,7 @@ mod tests {
                 error: None,
                 evidence: "cached pass".to_string(),
                 scope,
-                suggested_q_scope: None,
+                question_scope_suggestion: None,
                 visible_tree_oid,
             },
         )

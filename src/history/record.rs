@@ -7,7 +7,6 @@ use crate::scope::visible_scope;
 use crate::time::parse_record_timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
 use std::path::Path;
 
 // Cache-spec answer history records are JSON Lines with the required field
@@ -27,29 +26,20 @@ pub(super) fn read_repository_history_records_from_path(
         VisibleTreeOidCache::new().repository_native_object_oid_hex_len(root)?;
     let mut records = Vec::new();
     for_each_nonempty_line(path, |line_number, line| {
-        match parse_history_record_line_for_expected(
+        let record = parse_history_record_line_for_expected(
             path,
             line_number,
             &line,
             Some(expected_answer),
-        ) {
-            Ok(record) => {
-                if git_object_oid_has_hex_len(&record.visible_tree_oid, native_oid_hex_len) {
-                    records.push(record);
-                } else {
-                    // A history row is reusable only when its persisted tree
-                    // hash has the repository-native shape. Rows that fail
-                    // that cache-integrity check are ignored like other
-                    // corrupt cache data.
-                }
-            }
-            Err(_) => {
-                // History is a reusable cache, not authoritative project data.
-                // Corrupt cache lines are ignored here and dropped by the same
-                // parser during compaction, while real file I/O errors still
-                // propagate from `for_each_nonempty_line`.
-            }
+        )?;
+        if !git_object_oid_has_hex_len(&record.visible_tree_oid, native_oid_hex_len) {
+            return Err(format!(
+                "invalid answer history record in {} line {}: visibleTreeOid must match this repository's Git object hash algorithm",
+                path.display(),
+                line_number
+            ));
         }
+        records.push(record);
         Ok(())
     })?;
     Ok(records)
@@ -104,13 +94,11 @@ struct HistoryReadRecord {
     #[serde(rename = "visibleTreeOid")]
     visible_tree_oid: String,
     #[serde(default)]
-    #[serde(flatten)]
-    extra_fields: BTreeMap<String, Value>,
+    error: Option<Value>,
 }
 
 impl HistoryReadRecord {
     fn into_check_record(self, expected_answer: Option<&str>) -> CheckRecord {
-        let has_error_field = self.extra_fields.contains_key("error");
         let result = expected_answer
             .map(|expected| CheckResult::from_expected_answer(expected, &self.observed))
             .unwrap_or(CheckResult::Pass);
@@ -118,13 +106,13 @@ impl HistoryReadRecord {
             timestamp: self.timestamp,
             number: 0,
             result,
-            prompt: None,
-            expected: expected_answer.map(str::to_string),
+            question: None,
+            expected_answer: expected_answer.map(str::to_string),
             observed: self.observed,
-            error: has_error_field.then(|| "error".to_string()),
+            error: self.error.map(|_| "error".to_string()),
             evidence: self.evidence,
             scope: self.visible_scope,
-            suggested_q_scope: None,
+            question_scope_suggestion: None,
             visible_tree_oid: self.visible_tree_oid,
             id: String::new(),
             display_id: String::new(),
@@ -173,7 +161,7 @@ fn validate_history_answer_response_schema(record: &CheckRecord) -> Result<(), S
         // History rows store the cache-required answer fields, not the full
         // evaluator response. Use a schema-valid placeholder so this check
         // continues to validate the persisted answer/evidence contract.
-        q_scope_suggestion: vec![".".to_string()],
+        question_scope_suggestion: vec![".".to_string()],
     };
     response.validate_schema().map_err(|message| {
         format!("observed must match evaluator response answer schema: {message}")
@@ -243,11 +231,16 @@ struct HistoryLogRecord<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_history_record_line, render_answer_history_record};
+    use super::{
+        parse_history_record_line, read_repository_history_records_from_path,
+        render_answer_history_record,
+    };
     use crate::check::{CheckRecord, CheckResult};
     use crate::config_types::AgentConfig;
     use serde_json::Value;
+    use std::fs;
     use std::path::Path;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn answer_history_record_writes_visible_scope_field() {
@@ -261,13 +254,13 @@ mod tests {
             timestamp: "1970-01-01T00:00:00Z".to_string(),
             number: 1,
             result: CheckResult::Pass,
-            prompt: Some("Does it pass?".to_string()),
-            expected: Some("yes".to_string()),
+            question: Some("Does it pass?".to_string()),
+            expected_answer: Some("yes".to_string()),
             observed: "yes".to_string(),
             error: None,
             evidence: "`src/main.rs`".to_string(),
             scope: vec![".".to_string()],
-            suggested_q_scope: None,
+            question_scope_suggestion: None,
             visible_tree_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             id: "11111111111111111111".to_string(),
             display_id: "1".to_string(),
@@ -290,5 +283,42 @@ mod tests {
         let err = parse_history_record_line(Path::new("history.jsonl"), 1, line).unwrap_err();
 
         assert!(err.contains("visibleScope must not contain duplicate entries"));
+    }
+
+    #[test]
+    fn answer_history_rejects_error_records() {
+        let line = r#"{"timestamp":"1970-01-01T00:00:00Z","observed":"insufficient-evidence","error":"insufficient-evidence","evidence":"missing","visibleScope":["."],"visibleTreeOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}"#;
+
+        let err = parse_history_record_line(Path::new("history.jsonl"), 1, line).unwrap_err();
+
+        assert!(err.contains("error responses are not answer history records"));
+    }
+
+    #[test]
+    fn repository_history_read_reports_invalid_lines() {
+        let path = temp_history_path("invalid");
+        fs::write(&path, "not json\n").unwrap();
+
+        let err = read_repository_history_records_from_path(repo_root(), &path, "yes").unwrap_err();
+
+        assert!(err.contains("invalid history JSON"));
+        let _ = fs::remove_file(path);
+    }
+
+    fn repo_root() -> &'static Path {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+    }
+
+    fn temp_history_path(label: &str) -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        std::env::temp_dir().join(format!(
+            "canon-history-record-test-{}-{}-{}.jsonl",
+            label,
+            std::process::id(),
+            unique
+        ))
     }
 }

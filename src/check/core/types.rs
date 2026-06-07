@@ -33,8 +33,8 @@ pub(crate) struct SelectedExpectation {
     pub(crate) number: usize,
     pub(crate) id: String,
     pub(crate) display_id: String,
-    pub(crate) q: String,
-    pub(crate) a: String,
+    pub(crate) question: String,
+    pub(crate) expected_answer: String,
     pub(crate) agent: AgentConfig,
     pub(crate) cooldown: Option<Cooldown>,
 }
@@ -60,39 +60,39 @@ pub(crate) struct ParsedAnswer {
     pub(crate) error: Option<String>,
     pub(crate) evidence: String,
     pub(crate) scope: Vec<String>,
-    pub(crate) q_scope_suggestion: Option<Vec<String>>,
+    pub(crate) question_scope_suggestion: Option<Vec<String>>,
 }
 
 impl ParsedAnswer {
     pub(crate) fn answer(
         answer: String,
         evidence: String,
-        q_scope_suggestion: Option<Vec<String>>,
+        question_scope_suggestion: Option<Vec<String>>,
     ) -> ParsedAnswer {
         ParsedAnswer {
             answer,
             error: None,
             evidence,
             scope: Vec::new(),
-            q_scope_suggestion,
+            question_scope_suggestion,
         }
     }
 
     pub(crate) fn error(error: String, evidence: String) -> ParsedAnswer {
-        ParsedAnswer::error_with_q_scope_suggestion(error, evidence, None)
+        ParsedAnswer::error_with_question_scope_suggestion(error, evidence, None)
     }
 
-    pub(crate) fn error_with_q_scope_suggestion(
+    pub(crate) fn error_with_question_scope_suggestion(
         error: String,
         evidence: String,
-        q_scope_suggestion: Option<Vec<String>>,
+        question_scope_suggestion: Option<Vec<String>>,
     ) -> ParsedAnswer {
         ParsedAnswer {
             answer: error.clone(),
             error: Some(error),
             evidence,
             scope: Vec::new(),
-            q_scope_suggestion,
+            question_scope_suggestion,
         }
     }
 }
@@ -107,9 +107,9 @@ pub(crate) struct EvaluatorResponseJson {
     pub(crate) evidence: String,
     #[serde(
         rename = "qScopeSuggestion",
-        deserialize_with = "deserialize_q_scope_suggestion"
+        deserialize_with = "deserialize_question_scope_suggestion"
     )]
-    pub(crate) q_scope_suggestion: Vec<String>,
+    pub(crate) question_scope_suggestion: Vec<String>,
 }
 
 impl EvaluatorResponseJson {
@@ -141,12 +141,12 @@ impl EvaluatorResponseJson {
         // only after an independent answer-producing turn.
         // Interrogation Policy's JSON Schema sets `minItems: 1` for
         // `qScopeSuggestion`, so an empty array is a response-schema error.
-        if self.q_scope_suggestion.is_empty() {
+        if self.question_scope_suggestion.is_empty() {
             return Err("qScopeSuggestion must contain at least one path".to_string());
         }
         // Each item follows the schema's `minLength: 1` and
         // `pattern: "^[^\\r\\n]*$"` constraints.
-        for item in &self.q_scope_suggestion {
+        for item in &self.question_scope_suggestion {
             if item.is_empty() || contains_schema_single_line_violation(item) {
                 return Err(
                     "qScopeSuggestion items must be non-empty single-line strings".to_string(),
@@ -194,7 +194,7 @@ where
         .map_err(de::Error::custom)
 }
 
-fn deserialize_q_scope_suggestion<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+fn deserialize_question_scope_suggestion<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: de::Deserializer<'de>,
 {
@@ -269,7 +269,7 @@ impl std::fmt::Display for CheckResult {
 // The type deliberately does not implement `Serialize`; persisted history and
 // runtime-log records must go through dedicated render structs, which write the
 // full expectation ID and never the human display/selector prefix.
-// Deserialization keeps result/prompt/expected metadata optional so
+// Deserialization keeps result/question/expected-answer metadata optional so
 // spec-minimal history records that contain only the cache-required prefix do
 // not get confused with real empty strings. Cache readers recompute current
 // result from observed vs the current expected answer.
@@ -281,17 +281,19 @@ pub(crate) struct CheckRecord {
     #[serde(default = "default_check_result")]
     pub(crate) result: CheckResult,
     #[serde(default)]
-    pub(crate) prompt: Option<String>,
+    #[serde(alias = "prompt")]
+    pub(crate) question: Option<String>,
     #[serde(default)]
-    pub(crate) expected: Option<String>,
+    #[serde(alias = "expected")]
+    pub(crate) expected_answer: Option<String>,
     pub(crate) observed: String,
     #[serde(default)]
     pub(crate) error: Option<String>,
     pub(crate) evidence: String,
     #[serde(rename = "visibleScope", alias = "qScope", alias = "scope")]
     pub(crate) scope: Vec<String>,
-    #[serde(default, rename = "suggestedQScope")]
-    pub(crate) suggested_q_scope: Option<Vec<String>>,
+    #[serde(default, rename = "qScopeSuggestion", alias = "suggestedQScope")]
+    pub(crate) question_scope_suggestion: Option<Vec<String>>,
     #[serde(rename = "visibleTreeOid", alias = "scopeTreeOid", alias = "scopeHash")]
     pub(crate) visible_tree_oid: String,
     #[serde(default)]
@@ -306,7 +308,7 @@ pub(crate) struct CheckRecordOutcome {
     pub(crate) error: Option<String>,
     pub(crate) evidence: String,
     pub(crate) scope: Vec<String>,
-    pub(crate) suggested_q_scope: Option<Vec<String>>,
+    pub(crate) question_scope_suggestion: Option<Vec<String>>,
     pub(crate) visible_tree_oid: String,
 }
 
@@ -332,23 +334,23 @@ impl CheckRecord {
             display_id: expectation.display_id.clone(),
             number: expectation.number,
             result: outcome.result,
-            prompt: Some(expectation.q.clone()),
-            expected: Some(expectation.a.clone()),
+            question: Some(expectation.question.clone()),
+            expected_answer: Some(expectation.expected_answer.clone()),
             observed: outcome.observed,
             error: outcome.error,
             evidence: outcome.evidence,
             scope: outcome.scope,
-            suggested_q_scope: outcome.suggested_q_scope,
+            question_scope_suggestion: outcome.question_scope_suggestion,
             visible_tree_oid: outcome.visible_tree_oid,
         })
     }
 
-    pub(crate) fn prompt_text(&self) -> &str {
-        self.prompt.as_deref().unwrap_or("")
+    pub(crate) fn question_text(&self) -> &str {
+        self.question.as_deref().unwrap_or("")
     }
 
-    pub(crate) fn expected_text(&self) -> Option<&str> {
-        self.expected.as_deref()
+    pub(crate) fn expected_answer_text(&self) -> Option<&str> {
+        self.expected_answer.as_deref()
     }
 }
 

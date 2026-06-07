@@ -64,7 +64,7 @@ fn latest_history_non_pass_timestamp(
     Ok(history_cache
         .read_records(root, expectation)?
         .into_iter()
-        .filter(|record| history_record_is_non_pass(record, &expectation.a))
+        .filter(|record| history_record_is_non_pass(record, &expectation.expected_answer))
         .filter_map(|record| parse_record_timestamp(&record.timestamp))
         .max())
 }

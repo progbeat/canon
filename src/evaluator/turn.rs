@@ -84,10 +84,10 @@ pub(crate) fn record_from_response(
     let result = if response.error.is_some() {
         CheckResult::Fail
     } else {
-        CheckResult::from_expected_answer(&expectation.a, &response.answer)
+        CheckResult::from_expected_answer(&expectation.expected_answer, &response.answer)
     };
     let error = response.error.clone();
-    let suggested_q_scope = response.q_scope_suggestion.clone();
+    let question_scope_suggestion = response.question_scope_suggestion.clone();
     CheckRecord::current_from_expectation(
         expectation,
         CheckRecordOutcome {
@@ -96,7 +96,7 @@ pub(crate) fn record_from_response(
             error,
             evidence: response.evidence,
             scope: enforced_scope,
-            suggested_q_scope,
+            question_scope_suggestion,
             visible_tree_oid,
         },
     )
