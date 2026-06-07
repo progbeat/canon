@@ -23,7 +23,6 @@ mod tests {
     use crate::check::core::{CheckRecord, CheckResult};
     use std::io::{self, Write};
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
 
     #[derive(Clone)]
     struct CapturedOutput {
@@ -42,18 +41,13 @@ mod tests {
     }
 
     #[test]
-    fn check_result_output_rounds_progress_dots_to_elapsed_minutes() {
+    fn check_result_output_without_live_progress_writes_immediate_dot() {
         let mut bytes = Vec::new();
         let mut result_output = Some(&mut bytes as &mut dyn Write);
 
-        write_and_flush_result_output(
-            &mut result_output,
-            &passing_record(),
-            Duration::from_secs(60) + Duration::from_nanos(1),
-        )
-        .unwrap();
+        write_and_flush_result_output(&mut result_output, &passing_record()).unwrap();
 
-        assert_eq!(String::from_utf8(bytes).unwrap(), "j.. OK\n");
+        assert_eq!(String::from_utf8(bytes).unwrap(), "j. OK\n");
     }
 
     #[test]

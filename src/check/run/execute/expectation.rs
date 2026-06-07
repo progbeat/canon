@@ -23,7 +23,6 @@ use crate::platform::check_interrupted;
 use crate::scope::{sanitize_scope, scope_is_within};
 use std::collections::BTreeSet;
 use std::io::Write;
-use std::time::Instant;
 
 pub(super) struct ExpectationRunContext<'a, 'out, 'log, R: EvaluatorRunner> {
     pub(super) runtime: &'a CheckRuntime<'a>,
@@ -33,7 +32,6 @@ pub(super) struct ExpectationRunContext<'a, 'out, 'log, R: EvaluatorRunner> {
     pub(super) diagnostic_log: &'a mut Option<&'log mut DiagnosticLogWriter>,
     pub(super) result_output: &'a mut Option<&'out mut dyn Write>,
     pub(super) progress_output: &'a Option<SharedCheckOutput>,
-    pub(super) started: Instant,
     pub(super) caches: &'a mut CheckRunCaches,
     pub(super) interrogation_run_state: &'a mut InterrogationRunState,
 }
@@ -182,8 +180,7 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     } else {
         run_expectation_try!(write_and_flush_result_output(
             context.result_output,
-            &interrogation.record,
-            context.started.elapsed()
+            &interrogation.record
         ));
     }
     if is_reusable_history_record(&interrogation.record) {

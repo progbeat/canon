@@ -3,23 +3,20 @@ use super::shared::write_stdout_record;
 use crate::check::core::CheckRecord;
 use crate::json_util::compact_json_string_array;
 use std::io::Write;
-use std::time::Duration;
 
 pub(crate) fn write_and_flush_result_output(
     result_output: &mut Option<&mut dyn Write>,
     record: &CheckRecord,
-    elapsed: Duration,
 ) -> Result<(), String> {
     if let Some(writer) = result_output.as_mut() {
-        let line = render_check_output_record(record, elapsed);
+        let line = render_check_output_record(record);
         write_stdout_record(*writer, line.as_bytes(), "check result")?;
     }
     Ok(())
 }
 
-fn render_check_output_record(record: &CheckRecord, elapsed: Duration) -> String {
-    let dots = result_elapsed_dots(elapsed);
-    let mut output = format!("{}{}", record.display_id, dots);
+fn render_check_output_record(record: &CheckRecord) -> String {
+    let mut output = format!("{}.", record.display_id);
     output.push_str(&render_check_output_record_completion(record));
     output
 }
@@ -62,20 +59,6 @@ pub(super) fn render_check_output_record_completion(record: &CheckRecord) -> Str
         }
     }
     output
-}
-
-fn result_elapsed_dots(elapsed: Duration) -> String {
-    ".".repeat(result_elapsed_dot_count(elapsed))
-}
-
-fn result_elapsed_dot_count(elapsed: Duration) -> usize {
-    const NANOS_PER_MINUTE: u128 = 60 * 1_000_000_000;
-    let elapsed_nanos = elapsed.as_nanos();
-    let mut dots = elapsed_nanos / NANOS_PER_MINUTE;
-    if !elapsed_nanos.is_multiple_of(NANOS_PER_MINUTE) {
-        dots += 1;
-    }
-    usize::try_from(dots.max(1)).unwrap_or(usize::MAX)
 }
 
 pub(crate) fn record_requires_human_review(record: &CheckRecord) -> bool {
