@@ -9,6 +9,7 @@ use crate::logs::DiagnosticLogWriter;
 use crate::token_usage_types::TokenUsage;
 use std::path::Path;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn ask_once<R: EvaluatorRunner>(
     runner: &mut R,
     turn: &EvaluatorTurnContext<'_>,

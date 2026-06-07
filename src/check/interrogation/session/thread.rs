@@ -305,6 +305,7 @@ fn fail_after_session_error<T>(
     Err(err)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
     runtime: &CheckRuntime<'_>,
     expectation: &SelectedExpectation,
