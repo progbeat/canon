@@ -42,7 +42,7 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
 }
 
 fn gate_regression_count(root: &Path, changed_paths: &[Vec<u8>]) -> Result<usize, CommandError> {
-    if has_mixed_canon_and_non_canon_changes(changed_paths) {
+    if has_staged_canon_change(changed_paths) {
         return Ok(0);
     }
     let mut repo_cache = RepoInspectionCache::new();
@@ -73,10 +73,13 @@ fn gate_result_or_failure<T>(result: Result<T, String>) -> Result<T, CommandErro
 }
 
 fn has_mixed_canon_and_non_canon_changes(changed_paths: &[Vec<u8>]) -> bool {
-    let has_canon_change = changed_paths
+    has_staged_canon_change(changed_paths) && !is_canon_only_staged_change_bytes(changed_paths)
+}
+
+fn has_staged_canon_change(changed_paths: &[Vec<u8>]) -> bool {
+    changed_paths
         .iter()
-        .any(|path| is_canon_project_path_bytes(path));
-    has_canon_change && !is_canon_only_staged_change_bytes(changed_paths)
+        .any(|path| is_canon_project_path_bytes(path))
 }
 
 fn write_mixed_canon_change_failure() -> Result<(), String> {
