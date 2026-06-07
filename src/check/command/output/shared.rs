@@ -24,7 +24,11 @@ impl Write for SharedCheckOutput {
             .inner
             .lock()
             .map_err(|_| io::Error::other("check output lock poisoned"))?;
-        writer.write(bytes)
+        let written = writer.write(bytes)?;
+        if written > 0 {
+            writer.flush()?;
+        }
+        Ok(written)
     }
 
     fn flush(&mut self) -> io::Result<()> {
