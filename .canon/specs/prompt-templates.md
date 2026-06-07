@@ -4,11 +4,13 @@
 
 Prompt template rendering starts with the repository root as the current working directory.
 
-Prompt templates may execute shell commands during render with a `sh` block filter.
-The `sh(display=...)` argument sets the command text shown in the rendered terminal transcript; the block body is the command Canon executes.
-If `display` is omitted, the executed command text is also shown.
+Prompt templates may execute shell commands during rendering with a `sh` block filter.
 
-When command output exceeds 32 KiB, it is saved to a temporary file, and the rendered transcript shows only the output head, followed by exactly one truncation line in this format:
+The rendered block body is the command executed during rendering.
+
+The rendered terminal transcript starts with a command line prefixed by `$ `. If `display=...` is provided, that command line uses exactly the `display` text. It does not show the rendered block body. If `display` is omitted, the command line shows the rendered block body.
+
+When command output exceeds 8 KiB, it is saved to a temporary file, and the rendered transcript shows only the output head, followed by exactly one truncation line in this format:
 
 ```
 [truncated: showing first N of M lines; full output: <path>]
@@ -17,6 +19,7 @@ When command output exceeds 32 KiB, it is saved to a temporary file, and the ren
 ## Example
 
 Template:
+
 ```jinja
 {% filter sh(display="git diff --name-status --cached") %}
 git diff --name-status {{ against_tree_oid|shq }} {{ checked_tree_oid|shq }}
@@ -24,8 +27,11 @@ git diff --name-status {{ against_tree_oid|shq }} {{ checked_tree_oid|shq }}
 ```
 
 Rendered:
+
 ```sh
 $ git diff --name-status --cached
 A	foo.txt
 M	Cargo.toml
 ```
+
+The rendered block body is executed during template rendering, but the transcript shows the `display` text.
