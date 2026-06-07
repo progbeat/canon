@@ -240,6 +240,7 @@ mod tests {
         assert!(instructions.contains("first non-whitespace character must be `{`"));
         assert!(instructions.contains("leading inspection summaries"));
         assert!(instructions.contains("backslash immediately before a backtick"));
+        assert!(instructions.contains("Do not cite hidden `.canon/` files"));
         assert!(instructions.contains("$ git diff --numstat --cached\n"));
         assert!(instructions.contains("$ sandbox --read-only --scope [\".\"]"));
         assert!(instructions.contains("Hidden files: 0."));
