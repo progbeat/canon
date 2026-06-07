@@ -73,13 +73,12 @@ fn ask_with_model<R: EvaluatorRunner>(
         model,
     )?;
     if narrowing::should_verify(runtime, state, &active_scope, &result.answer)? {
-        let proposed_scope = sanitize_scope(
-            result
-                .answer
-                .q_scope_suggestion
-                .as_deref()
-                .expect("suggestion passed the file-count verification gate"),
-        )?;
+        let Some(suggestion) = result.answer.q_scope_suggestion.as_deref() else {
+            return Err(EvaluatorError::message(
+                "q-scope verification requested without a suggestion",
+            ));
+        };
+        let proposed_scope = sanitize_scope(suggestion)?;
         let mut verification_scope = proposed_scope.clone();
         let narrowed = turn::ask_with_full_scope_retry(
             runtime,

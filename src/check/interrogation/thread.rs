@@ -60,7 +60,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         .cloned();
     let had_existing_session = existing_session.is_some();
     let lifecycle_log = match existing_session {
-        Some(existing) => thread_reuse_log(state, existing, request),
+        Some(existing) => thread_reuse_log(state, existing)?,
         None => start_thread_session(
             runtime,
             runner,
@@ -249,18 +249,18 @@ fn start_thread_session<R: EvaluatorRunner>(
 fn thread_reuse_log(
     state: &InterrogationRunState,
     session_id: String,
-    _request: ThreadTurnRequest<'_>,
-) -> ThreadLifecycleLog {
-    let developer_instructions = state
-        .session_instructions
-        .get(&session_id)
-        .cloned()
-        .unwrap_or_default();
-    ThreadLifecycleLog {
+) -> Result<ThreadLifecycleLog, EvaluatorError> {
+    let Some(developer_instructions) = state.session_instructions.get(&session_id).cloned() else {
+        return Err(EvaluatorError::message(format!(
+            "missing developer instructions for reused session {}",
+            session_id
+        )));
+    };
+    Ok(ThreadLifecycleLog {
         event: "thread.reuse",
         session_id,
         developer_instructions,
-    }
+    })
 }
 
 fn clear_thread_sessions_after_failure(state: &mut InterrogationRunState) {
