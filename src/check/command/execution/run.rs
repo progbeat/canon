@@ -3,14 +3,14 @@ use super::failure::{
     CheckErrorReportFinish,
 };
 use super::prepare::{prepare_check_execution, PrepareCheckExecutionOptions};
+use super::query::{run_check_query_command, CheckQueryCommand};
 use super::query_preset::check_config_with_query_preset;
 use super::trailer::{
     check_command_writes_agent_message, check_report_passed, write_check_trailer, CompletedCheckRun,
 };
 use crate::check::command::args::parse_check_command_args;
-use crate::check::command::finish::{finish_check_report, CheckReportFinishContext};
 use crate::check::command::output::SharedCheckOutput;
-use crate::check::command::query::{run_check_query_command, CheckQueryCommand};
+use crate::check::command::{finish_check_report, CheckReportFinishContext};
 use crate::check::core::types::CheckCommandArgs;
 use crate::check::interrogation::{state::CheckRuntime, write_check_lifecycle_start_event};
 use crate::check::run::lazy_reset::{

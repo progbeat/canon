@@ -3,11 +3,10 @@ mod review;
 mod turn;
 
 use crate::check::core::types::QueryResult;
-use crate::check::interrogation::model_fallback::run_with_model_fallbacks;
-use crate::check::interrogation::records::{
-    write_query_result_event, write_query_review_required_event,
-};
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
+use crate::check::interrogation::{
+    run_with_model_fallbacks, write_query_result_event, write_query_review_required_event,
+};
 use crate::evaluator::{EvaluatorError, EvaluatorRunner};
 use crate::logs::DiagnosticLogWriter;
 use crate::scope::sanitize_scope;
@@ -26,9 +25,9 @@ pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
     diagnostic_log: Option<&mut DiagnosticLogWriter>,
     state: &mut InterrogationRunState,
 ) -> Result<QueryResult, String> {
-    // Query lifecycle start/finish events are emitted by `check::command::query`
-    // so they bracket scope parsing and execution preparation as well as the
-    // evaluator turn managed here.
+    // Query lifecycle start/finish events are emitted by
+    // `check::command::execution::query` so they bracket scope parsing and
+    // execution preparation as well as the evaluator turn managed here.
     let mut diagnostic_log = diagnostic_log;
     run_with_model_fallbacks(
         &runtime.config.agent,

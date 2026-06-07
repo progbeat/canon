@@ -4,8 +4,7 @@ use crate::check::{
     write_agent_turn_failure_event, write_agent_turn_missing_usage_event,
     write_agent_turn_request_event, write_agent_turn_response_event,
 };
-use crate::evaluator::prompt::EVALUATOR_BASE_INSTRUCTIONS;
-use crate::evaluator::types::{EvaluatorError, EvaluatorRunner};
+use crate::evaluator::{EvaluatorError, EvaluatorRunner, EVALUATOR_BASE_INSTRUCTIONS};
 use crate::logs::{
     AgentTurnLogRequest, DiagnosticLogWriter, ThreadLifecycleEventFields, ThreadRestartEventFields,
 };

@@ -1,9 +1,10 @@
 use crate::check::core::errors::error_record_from_interrogation_error;
 use crate::check::core::types::{CheckRecord, InterrogationResult, SelectedExpectation};
-use crate::check::interrogation::model_fallback::interrogate_expectation_with_model_fallbacks;
-use crate::check::interrogation::narrowing::scope_narrowing_log_fields;
 use crate::check::interrogation::state::{
     should_retry_full_scope_after_error, CheckRuntime, InterrogationRunState,
+};
+use crate::check::interrogation::{
+    interrogate_expectation_with_model_fallbacks, scope_narrowing_log_fields,
 };
 use crate::config_types::AgentConfig;
 use crate::evaluator::EvaluatorRunner;

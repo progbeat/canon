@@ -14,13 +14,13 @@ static TEMPLATE_OUTPUT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 // templates. User-authored expectation questions are runtime data inserted into
 // the turn prompt template.
 const DEVELOPER_INSTRUCTIONS_TEMPLATE: &str =
-    include_str!("../../resources/prompts/evaluator_developer_instructions.txt");
+    include_str!("../../../resources/prompts/evaluator_developer_instructions.txt");
 const STATIC_DEVELOPER_INSTRUCTIONS: &str =
-    include_str!("../../resources/prompts/evaluator_static_developer_instructions.txt");
+    include_str!("../../../resources/prompts/evaluator_static_developer_instructions.txt");
 pub(crate) const EVALUATOR_BASE_INSTRUCTIONS: &str =
-    include_str!("../../resources/prompts/evaluator_base_instructions.txt");
+    include_str!("../../../resources/prompts/evaluator_base_instructions.txt");
 const EVALUATOR_TURN_PROMPT_TEMPLATE: &str =
-    include_str!("../../resources/prompts/evaluator_turn_prompt.txt");
+    include_str!("../../../resources/prompts/evaluator_turn_prompt.txt");
 
 pub(crate) struct DeveloperInstructionsContext<'a> {
     pub(crate) root: &'a Path,

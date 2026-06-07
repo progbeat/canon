@@ -6,6 +6,6 @@ pub(super) fn render_generator_expectation_question(
     // `{{content}}` substitution to produce user-authored expectation
     // questions. This is deliberately separate from Canon-owned evaluator
     // prompt/instruction templates, which are loaded only by
-    // `evaluator::prompt` from `resources/prompts/`.
+    // `evaluator::protocol` from `resources/prompts/`.
     generated_question_format.replace("{{content}}", content)
 }

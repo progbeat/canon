@@ -1,6 +1,6 @@
+use super::model_fallback::write_model_fallback_events;
 use crate::check::core::types::{InterrogationResult, SelectedExpectation};
-use crate::check::interrogation::model_fallback::write_model_fallback_events;
-use crate::check::interrogation::records::finalize_interrogation_response;
+use crate::check::interrogation::finalize_interrogation_response;
 use crate::check::interrogation::state::{
     evaluator_thread_reuse_key, CheckRuntime, InterrogationRunState,
 };

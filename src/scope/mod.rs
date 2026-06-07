@@ -10,7 +10,7 @@ use std::path::Path;
 // `staged::worktree`; q-scope verification and visible-scope storage/reuse live
 // in `check::interrogation::policy`, `history::store`, and `history::reuse`;
 // evaluator-thread reuse invariants live in `check::interrogation::state` and
-// `check::interrogation::thread`.
+// `check::interrogation::session`.
 
 pub(crate) fn sanitize_scope(scope: &[String]) -> Result<Vec<String>, String> {
     sanitize_scope_paths(scope)

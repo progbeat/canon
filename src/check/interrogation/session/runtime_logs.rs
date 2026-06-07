@@ -8,9 +8,9 @@ use crate::token_usage_types::EvaluatorTurnUsage;
 
 // Command execution owns lifecycle bracketing because it must cover selection,
 // preparation, output, and early failures. The concrete call sites are
-// `check::command::execution::{run,failure}`, `check::command::finish`, and
-// `check::command::query`; this module keeps those events routed through the
-// interrogation logging boundary alongside evaluator communication events.
+// `check::command::execution::{run,failure,query}` and
+// `check::command::completion`; this module keeps those events routed through
+// the interrogation logging boundary alongside evaluator communication events.
 pub(crate) fn write_check_lifecycle_start_event(
     diagnostic_log: &mut DiagnosticLogWriter,
     query: Option<bool>,

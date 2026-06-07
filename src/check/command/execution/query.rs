@@ -1,7 +1,9 @@
 use crate::app::LazyAppServerRunner;
 use crate::check::command::output::write_query_output;
-use crate::check::command::reporting::{collect_check_token_usage, print_token_usage_summary};
-use crate::check::command::{prepare_check_execution, PrepareCheckExecutionOptions};
+use crate::check::command::{
+    collect_check_token_usage, prepare_check_execution, print_token_usage_summary,
+    PrepareCheckExecutionOptions,
+};
 use crate::check::core::types::QueryResult;
 use crate::check::interrogation::query::run_query_with_runner;
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};

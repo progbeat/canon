@@ -1,5 +1,6 @@
 mod failure;
 mod prepare;
+mod query;
 mod query_preset;
 mod run;
 mod trailer;

@@ -1,4 +1,4 @@
-use crate::check::command::finish::{finish_check_report, CheckReportFinishContext};
+use crate::check::command::{finish_check_report, CheckReportFinishContext};
 use crate::check::core::types::CheckRunReport;
 use crate::check::interrogation::{
     write_check_lifecycle_finish_event, write_check_lifecycle_start_event,

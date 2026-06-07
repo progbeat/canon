@@ -2,7 +2,7 @@ use crate::check::{
     CheckRecord, CheckRecordOutcome, CheckResult, ParsedAnswer, SelectedExpectation,
 };
 use crate::config_types::AgentConfig;
-use crate::evaluator::types::EvaluatorError;
+use crate::evaluator::EvaluatorError;
 
 mod attempt;
 mod logging;
