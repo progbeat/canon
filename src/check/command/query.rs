@@ -1,7 +1,5 @@
 use crate::check::command::output::write_query_output;
-use crate::check::command::reporting::{
-    collect_check_token_usage, print_token_usage_summary, write_check_finish_event,
-};
+use crate::check::command::reporting::{collect_check_token_usage, print_token_usage_summary};
 use crate::check::command::{prepare_check_execution, PrepareCheckExecutionOptions};
 use crate::check::core::types::SelectedExpectation;
 use crate::check::interrogation::query::run_query_with_runner;
@@ -16,9 +14,8 @@ use crate::config_types::{CheckConfig, Expectation};
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::hash::full_scope;
 use crate::history::HistoryCache;
-use crate::logs::DiagnosticLogWriter;
+use crate::logs::{write_check_finish_event, write_check_start_event, DiagnosticLogWriter};
 use crate::scope::sanitize_scope;
-use serde_json::json;
 use std::collections::BTreeSet;
 use std::io;
 use std::path::Path;
@@ -54,15 +51,7 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
     // plain q/a expectation, reuse the expectation-mode initial q-scope so the
     // first evaluator input stays identical. An explicit `--scope` remains a
     // hard query boundary; query mode still verifies narrower reusable scopes.
-    diagnostic_log
-        .write_event(
-            "info",
-            "check.start",
-            &[
-                ("query", json!(true)),
-                ("selected", json!(Vec::<usize>::new())),
-            ],
-        )
+    write_check_start_event(&mut diagnostic_log, Some(true), Vec::new())
         .map_err(|err| err.to_string())?;
     let matching_expectation = matching_q_a_only_expectation(config, identities, question)?;
     let enforced_scope = match query_enforced_scope(
@@ -218,6 +207,7 @@ fn write_query_finish(
         finish_error.get_or_insert(reset_err);
     }
     write_check_finish_event(diagnostic_log, true, finish_error.as_deref())
+        .map_err(|err| err.to_string())
 }
 
 fn query_applied_lazy_full_scope_reset_ids(

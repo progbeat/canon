@@ -1,9 +1,7 @@
 use crate::app::LazyAppServerRunner;
 use crate::check::command::output::render_token_usage_summary;
-use crate::logs::DiagnosticLogWriter;
 use crate::output::write_stderr_line;
 use crate::token_usage_types::TokenUsage;
-use serde_json::json;
 
 pub(crate) fn collect_check_token_usage(
     runner: &mut LazyAppServerRunner,
@@ -12,20 +10,6 @@ pub(crate) fn collect_check_token_usage(
         .drain_token_usage_updates()
         .map_err(|err| err.to_string())?;
     Ok(runner.token_usage().unwrap_or_default())
-}
-
-pub(crate) fn write_check_finish_event(
-    diagnostic_log: &mut DiagnosticLogWriter,
-    query: bool,
-    error: Option<&str>,
-) -> Result<(), String> {
-    let mut fields = vec![("query", json!(query))];
-    if let Some(error) = error {
-        fields.push(("error", json!(error)));
-    }
-    diagnostic_log
-        .write_event("info", "check.finish", &fields)
-        .map_err(|err| err.to_string())
 }
 
 pub(crate) fn print_token_usage_summary(usage: Option<TokenUsage>) -> Result<(), String> {

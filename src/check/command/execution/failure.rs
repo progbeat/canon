@@ -1,12 +1,10 @@
 use crate::check::command::finish::{finish_check_report, CheckReportFinishContext};
-use crate::check::command::reporting::write_check_finish_event;
 use crate::check::core::types::CheckRunReport;
 use crate::check::run::lazy_reset::apply_lazy_full_scope_reset_for_cached;
 use crate::check::CheckRunCaches;
 use crate::cli::CommandError;
 use crate::config_types::CheckConfig;
-use crate::logs::DiagnosticLogWriter;
-use serde_json::json;
+use crate::logs::{write_check_finish_event, write_check_start_event, DiagnosticLogWriter};
 use std::io::Write;
 use std::path::Path;
 
@@ -37,21 +35,6 @@ pub(super) fn finish_check_error_report(
         Some(&error),
     )?;
     Err(error.into())
-}
-
-pub(super) fn write_check_start_event(
-    diagnostic_log: &mut DiagnosticLogWriter,
-    query: Option<bool>,
-    selected: Vec<String>,
-) -> Result<(), CommandError> {
-    let mut fields = Vec::new();
-    if let Some(query) = query {
-        fields.push(("query", json!(query)));
-    }
-    fields.push(("selected", json!(selected)));
-    diagnostic_log
-        .write_event("info", "check.start", &fields)
-        .map_err(CommandError::from)
 }
 
 pub(super) fn fail_check_before_selection(
@@ -91,4 +74,5 @@ pub(super) fn write_check_error_finish_event(
         finish_error.push_str(&reset_err);
     }
     write_check_finish_event(diagnostic_log, query, Some(&finish_error))
+        .map_err(|err| err.to_string())
 }

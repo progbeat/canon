@@ -1,6 +1,6 @@
 use super::failure::{
     fail_check_after_start, fail_check_before_selection, finish_check_error_report,
-    write_check_start_event, CheckErrorReportFinish,
+    CheckErrorReportFinish,
 };
 use super::prepare::{prepare_check_execution, PrepareCheckExecutionOptions};
 use super::query_preset::check_config_with_query_preset;
@@ -21,11 +21,10 @@ use crate::check::{run_check_with_runner_and_caches, CheckRunCaches, CheckRunSid
 use crate::cli::CommandError;
 use crate::git::TreeSource;
 use crate::history::{active_expectation_ids_from_identities, cleanup_stale_cache_dirs};
-use crate::logs::DiagnosticLogWriter;
+use crate::logs::{write_cache_cleanup_event, write_check_start_event, DiagnosticLogWriter};
 use crate::platform::{install_check_signal_handlers, reset_check_interrupted};
 use crate::repo_inspection::RepoInspectionCache;
 use crate::state_paths::CANON_CACHE_DIR_GIT_PATH;
-use serde_json::json;
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::Path;
@@ -258,14 +257,7 @@ fn cleanup_cache_dirs(
         Ok(cleanup) => cleanup,
         Err(err) => return fail_check_after_start(root, diagnostic_log, false, 1, err),
     };
-    diagnostic_log.write_event(
-        "info",
-        "cache.cleanup",
-        &[
-            ("removed", json!(cleanup.removed)),
-            ("kept", json!(cleanup.kept)),
-        ],
-    )?;
+    write_cache_cleanup_event(diagnostic_log, cleanup.removed, cleanup.kept)?;
     Ok(())
 }
 

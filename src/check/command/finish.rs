@@ -1,7 +1,6 @@
 use crate::check::command::output::{
     render_check_agent_messages, summary_outcome_counts, write_stdout_record,
 };
-use crate::check::command::reporting::write_check_finish_event;
 use crate::check::core::types::{CheckRecord, CheckRunReport, SelectedExpectation};
 use crate::check::run::lazy_reset::apply_lazy_full_scope_reset;
 use crate::check::CheckRunCaches;
@@ -13,6 +12,7 @@ use crate::gate::{
 };
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::history::HistoryCache;
+use crate::logs::write_check_finish_event;
 use std::io::Write;
 use std::path::Path;
 
