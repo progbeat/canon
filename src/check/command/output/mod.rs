@@ -1,14 +1,16 @@
 mod escape;
-mod progress;
 mod query;
 mod record;
 mod shared;
 mod summary;
 mod usage;
 
-pub(crate) use progress::{start_check_progress_output, CheckProgressOutput};
+pub(crate) use escape::escape_check_output_text;
 pub(crate) use query::write_query_output;
-pub(crate) use record::{record_requires_human_review, write_and_flush_result_output};
+pub(crate) use record::{
+    start_live_check_progress_output, write_result_output_without_live_progress,
+    LiveCheckProgressOutput,
+};
 pub(crate) use shared::{write_stdout_record, SharedCheckOutput};
 pub(crate) use summary::{render_check_agent_messages, summary_outcome_counts, write_summary_line};
 pub(crate) use usage::render_token_usage_summary;
@@ -16,13 +18,21 @@ pub(crate) use usage::render_token_usage_summary;
 #[cfg(test)]
 mod tests {
     use super::{
-        render_check_agent_messages, start_check_progress_output, write_and_flush_result_output,
-        SharedCheckOutput,
+        render_check_agent_messages, start_live_check_progress_output,
+        write_result_output_without_live_progress, SharedCheckOutput,
     };
     use crate::check::core::{CheckRecord, CheckResult};
     use std::io::{self, Write};
     use std::sync::{Arc, Mutex};
-    use std::time::Duration;
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum AgentMessageKind {
+        AllClear,
+        CommitNotice,
+        RepairInstruction,
+        FixIssues,
+        ThenFixRemaining,
+    }
 
     #[derive(Clone)]
     struct CapturedOutput {
@@ -41,59 +51,109 @@ mod tests {
     }
 
     #[test]
-    fn check_result_output_rounds_progress_dots_to_elapsed_minutes() {
+    fn check_result_output_without_live_progress_writes_no_dot() {
         let mut bytes = Vec::new();
         let mut result_output = Some(&mut bytes as &mut dyn Write);
 
-        write_and_flush_result_output(
-            &mut result_output,
-            &passing_record(),
-            Duration::from_secs(60) + Duration::from_nanos(1),
-        )
-        .unwrap();
+        write_result_output_without_live_progress(&mut result_output, &passing_record()).unwrap();
 
-        assert_eq!(String::from_utf8(bytes).unwrap(), "j.. OK\n");
+        let rendered = String::from_utf8(bytes).unwrap();
+        assert!(rendered.starts_with("j "));
+        assert!(rendered.ends_with("OK\n"));
+        assert!(!rendered.starts_with("j."));
     }
 
     #[test]
-    fn progress_output_writes_prefix_before_completion() {
+    fn live_progress_output_writes_prefix_before_completion() {
         let bytes = Arc::new(Mutex::new(Vec::new()));
         let output = SharedCheckOutput::new(Box::new(CapturedOutput {
             bytes: bytes.clone(),
         }));
 
-        let progress = start_check_progress_output(output, "j").unwrap();
-        assert_eq!(captured_string(&bytes), "j.");
+        let progress = start_live_check_progress_output(output, "j").unwrap();
+        let started = captured_string(&bytes);
+        assert!(started.starts_with('j'));
+        assert!(started.ends_with('.'));
+        assert!(!started.contains('\n'));
 
         progress.finish_with_record(&passing_record()).unwrap();
-        assert_eq!(captured_string(&bytes), "j. OK\n");
+        let completed = captured_string(&bytes);
+        assert!(completed.starts_with(&started));
+        assert!(completed.ends_with("OK\n"));
     }
 
     #[test]
     fn check_agent_messages_follow_spec_branch_order() {
         assert_eq!(
-            render_check_agent_messages(1, 0, 0, 0),
-            vec!["▷ Fix the issues and run `canon check` again!"]
-        );
-        assert_eq!(
-            render_check_agent_messages(0, 0, 0, 0),
-            vec!["✓ All checks passed. Commit is allowed."]
-        );
-        assert_eq!(
-            render_check_agent_messages(0, 0, 1, 0),
-            vec!["▷ +1 pass compared to HEAD. Commit the staged changes NOW!"]
-        );
-        assert_eq!(
-            render_check_agent_messages(1, 0, 2, 0),
+            agent_message_kinds(render_check_agent_messages(&issues(&["a"]), &[], 0, 0)),
             vec![
-                "▷ +2 passes compared to HEAD. Commit the staged changes NOW!",
-                "▷ Then fix the remaining issues and run `canon check` again!"
+                AgentMessageKind::RepairInstruction,
+                AgentMessageKind::RepairInstruction,
+                AgentMessageKind::RepairInstruction,
+                AgentMessageKind::FixIssues,
             ]
         );
         assert_eq!(
-            render_check_agent_messages(0, 0, 1, 1),
-            vec!["▷ Fix the issues and run `canon check` again!"]
+            agent_message_kinds(render_check_agent_messages(&[], &[], 0, 0)),
+            vec![AgentMessageKind::AllClear]
         );
+        assert_eq!(
+            agent_message_kinds(render_check_agent_messages(&[], &[], 1, 0)),
+            vec![AgentMessageKind::CommitNotice]
+        );
+        assert_eq!(
+            agent_message_kinds(render_check_agent_messages(&issues(&["a"]), &[], 2, 0)),
+            vec![
+                AgentMessageKind::CommitNotice,
+                AgentMessageKind::RepairInstruction,
+                AgentMessageKind::RepairInstruction,
+                AgentMessageKind::RepairInstruction,
+                AgentMessageKind::ThenFixRemaining,
+            ]
+        );
+        assert_eq!(
+            agent_message_kinds(render_check_agent_messages(&issues(&["a"]), &[], 1, 1)),
+            vec![
+                AgentMessageKind::RepairInstruction,
+                AgentMessageKind::RepairInstruction,
+                AgentMessageKind::RepairInstruction,
+                AgentMessageKind::FixIssues,
+            ]
+        );
+    }
+
+    #[test]
+    fn repair_message_excludes_already_shown_issue_ids() {
+        let messages = render_check_agent_messages(&issues(&["a"]), &issues(&["b"]), 0, 0);
+
+        assert!(messages
+            .iter()
+            .any(|message| message.contains("run `canon show not:a not:b -- <PATHSPEC>...`")));
+    }
+
+    fn issues(ids: &[&str]) -> Vec<String> {
+        ids.iter().map(|id| (*id).to_string()).collect()
+    }
+
+    fn agent_message_kinds(messages: Vec<String>) -> Vec<AgentMessageKind> {
+        messages
+            .iter()
+            .map(|message| {
+                if message.starts_with('✓') {
+                    AgentMessageKind::AllClear
+                } else if message.contains("compared to HEAD") {
+                    AgentMessageKind::CommitNotice
+                } else if message.starts_with('❕') {
+                    AgentMessageKind::RepairInstruction
+                } else if message.starts_with("▷ Then") {
+                    AgentMessageKind::ThenFixRemaining
+                } else if message.starts_with('▷') {
+                    AgentMessageKind::FixIssues
+                } else {
+                    panic!("unclassified agent message: {message}");
+                }
+            })
+            .collect()
     }
 
     fn captured_string(bytes: &Arc<Mutex<Vec<u8>>>) -> String {

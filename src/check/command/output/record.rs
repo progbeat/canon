@@ -1,25 +1,90 @@
 use super::escape::escape_check_output_text;
-use super::shared::write_stdout_record;
+use super::shared::{write_stdout_record, SharedCheckOutput};
 use crate::check::core::CheckRecord;
 use crate::json_util::compact_json_string_array;
 use std::io::Write;
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-pub(crate) fn write_and_flush_result_output(
+const PROGRESS_DOT_INTERVAL: Duration = Duration::from_secs(60);
+
+pub(crate) struct LiveCheckProgressOutput {
+    output: SharedCheckOutput,
+    stop: Sender<()>,
+    worker: Option<JoinHandle<Result<(), String>>>,
+}
+
+pub(crate) fn start_live_check_progress_output(
+    output: SharedCheckOutput,
+    display_id: &str,
+) -> Result<LiveCheckProgressOutput, String> {
+    // Evaluated expectations call this before evaluator work starts. The first
+    // dot is written and flushed immediately; the worker appends later dots
+    // while the evaluator is still running.
+    let mut immediate_output = output.clone();
+    write_stdout_record(
+        &mut immediate_output,
+        format!("{}.", display_id).as_bytes(),
+        "check progress prefix",
+    )?;
+
+    let (stop, stop_requested) = mpsc::channel();
+    let mut progress_output = output.clone();
+    let worker = thread::spawn(move || loop {
+        match stop_requested.recv_timeout(PROGRESS_DOT_INTERVAL) {
+            Ok(()) | Err(RecvTimeoutError::Disconnected) => return Ok(()),
+            Err(RecvTimeoutError::Timeout) => {
+                write_stdout_record(&mut progress_output, b".", "check progress dot")?;
+            }
+        }
+    });
+
+    Ok(LiveCheckProgressOutput {
+        output,
+        stop,
+        worker: Some(worker),
+    })
+}
+
+impl LiveCheckProgressOutput {
+    pub(crate) fn finish_with_record(mut self, record: &CheckRecord) -> Result<(), String> {
+        self.stop_progress_worker()?;
+        let completion = render_check_output_record_completion(record);
+        let mut output = self.output.clone();
+        write_stdout_record(&mut output, completion.as_bytes(), "check result")
+    }
+
+    pub(crate) fn cancel(mut self) -> Result<(), String> {
+        self.stop_progress_worker()
+    }
+
+    fn stop_progress_worker(&mut self) -> Result<(), String> {
+        let _ = self.stop.send(());
+        let Some(worker) = self.worker.take() else {
+            return Ok(());
+        };
+        worker
+            .join()
+            .map_err(|_| "check progress thread panicked".to_string())?
+    }
+}
+
+// Cached records and no-progress test callers do not represent an evaluator
+// currently running, so they write only the completed result record.
+pub(crate) fn write_result_output_without_live_progress(
     result_output: &mut Option<&mut dyn Write>,
     record: &CheckRecord,
-    elapsed: Duration,
 ) -> Result<(), String> {
     if let Some(writer) = result_output.as_mut() {
-        let line = render_check_output_record(record, elapsed);
+        let line = render_check_output_record(record);
         write_stdout_record(*writer, line.as_bytes(), "check result")?;
     }
     Ok(())
 }
 
-fn render_check_output_record(record: &CheckRecord, elapsed: Duration) -> String {
-    let dots = result_elapsed_dots(elapsed);
-    let mut output = format!("{}{}", record.display_id, dots);
+fn render_check_output_record(record: &CheckRecord) -> String {
+    let mut output = record.display_id.clone();
     output.push_str(&render_check_output_record_completion(record));
     output
 }
@@ -28,7 +93,7 @@ pub(super) fn render_check_output_record_completion(record: &CheckRecord) -> Str
     if record.passed() {
         return " OK\n".to_string();
     }
-    let is_error = record_requires_human_review(record);
+    let is_error = record.requires_human_review();
     let status = if is_error { "ERROR" } else { "FAILED" };
     let mut output = String::new();
     output.push_str(&format!(" {}\n", status));
@@ -37,7 +102,7 @@ pub(super) fn render_check_output_record_completion(record: &CheckRecord) -> Str
     if is_error {
         output.push_str("Error: ");
         let error = record
-            .review_error_text()
+            .human_review_reason()
             .expect("error records must expose an error value");
         output.push_str(&escape_check_output_text(error));
         output.push('\n');
@@ -62,22 +127,4 @@ pub(super) fn render_check_output_record_completion(record: &CheckRecord) -> Str
         }
     }
     output
-}
-
-fn result_elapsed_dots(elapsed: Duration) -> String {
-    ".".repeat(result_elapsed_dot_count(elapsed))
-}
-
-fn result_elapsed_dot_count(elapsed: Duration) -> usize {
-    const NANOS_PER_MINUTE: u128 = 60 * 1_000_000_000;
-    let elapsed_nanos = elapsed.as_nanos();
-    let mut dots = elapsed_nanos / NANOS_PER_MINUTE;
-    if !elapsed_nanos.is_multiple_of(NANOS_PER_MINUTE) {
-        dots += 1;
-    }
-    usize::try_from(dots.max(1)).unwrap_or(usize::MAX)
-}
-
-pub(crate) fn record_requires_human_review(record: &CheckRecord) -> bool {
-    record.review_error_text().is_some()
 }

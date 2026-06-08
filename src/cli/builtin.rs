@@ -2,7 +2,7 @@ use super::error::CommandError;
 use super::help::{
     gate_help_command, hook_help_command, init_help_command, print_help_if_requested,
 };
-use crate::check::{check_help_command, run_check_command};
+use crate::check::{check_help_command, run_check_command, run_show_command, show_help_command};
 use crate::gate::run_gate_command;
 use crate::hooks::{run_hook_command, run_init};
 use crate::project::{git_project_root, project_root_or_current};
@@ -15,6 +15,7 @@ pub(super) enum BuiltinCommand {
     Init,
     Hook,
     Check,
+    Show,
     Gate,
 }
 
@@ -24,6 +25,7 @@ impl BuiltinCommand {
             BuiltinCommand::Init,
             BuiltinCommand::Hook,
             BuiltinCommand::Check,
+            BuiltinCommand::Show,
             BuiltinCommand::Gate,
         ]
     }
@@ -33,6 +35,7 @@ impl BuiltinCommand {
             "init" => Some(BuiltinCommand::Init),
             "hook" => Some(BuiltinCommand::Hook),
             "check" => Some(BuiltinCommand::Check),
+            "show" => Some(BuiltinCommand::Show),
             "gate" => Some(BuiltinCommand::Gate),
             _ => None,
         }
@@ -43,6 +46,7 @@ impl BuiltinCommand {
             BuiltinCommand::Init => init_help_command(),
             BuiltinCommand::Hook => hook_help_command(),
             BuiltinCommand::Check => check_help_command(),
+            BuiltinCommand::Show => show_help_command(),
             BuiltinCommand::Gate => gate_help_command(),
         }
     }
@@ -66,6 +70,10 @@ impl BuiltinCommand {
             BuiltinCommand::Check => {
                 let root = git_project_root(Path::new("."))?;
                 run_check_command(&root, args)
+            }
+            BuiltinCommand::Show => {
+                let root = git_project_root(Path::new("."))?;
+                run_show_command(&root, args)
             }
             BuiltinCommand::Gate => {
                 let root = git_project_root(Path::new("."))?;

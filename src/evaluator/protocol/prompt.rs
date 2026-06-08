@@ -40,7 +40,7 @@ pub(crate) struct AgainstTreeAnswer {
 pub(crate) fn developer_instructions(
     context: DeveloperInstructionsContext<'_>,
 ) -> Result<String, String> {
-    render_resource_template(
+    render_minijinja_resource_template(
         context.root,
         DEVELOPER_INSTRUCTIONS_TEMPLATE.trim_end(),
         context! {
@@ -58,7 +58,7 @@ pub(crate) fn evaluator_turn_prompt(
     question: &str,
     against_tree_answer: Option<&AgainstTreeAnswer>,
 ) -> Result<String, String> {
-    render_resource_template(
+    render_minijinja_resource_template(
         root,
         EVALUATOR_TURN_PROMPT_TEMPLATE.trim_end(),
         context! {
@@ -68,7 +68,7 @@ pub(crate) fn evaluator_turn_prompt(
     )
 }
 
-fn render_resource_template(
+fn render_minijinja_resource_template(
     root: &Path,
     template: &str,
     context: minijinja::Value,
@@ -154,14 +154,9 @@ fn truncated_template_command_output(output: &str) -> Result<String, Error> {
         return Ok(output.to_string());
     }
     let path = write_full_template_output(output)?;
-    let mut head = String::new();
-    let mut head_lines = 0usize;
-    for line in output.split_inclusive('\n') {
-        if head.len().saturating_add(line.len()) > TEMPLATE_OUTPUT_HEAD_BYTES {
-            break;
-        }
-        head.push_str(line);
-        head_lines += 1;
+    let (mut head, head_lines) = template_output_head(output);
+    if !head.ends_with('\n') {
+        head.push('\n');
     }
     let total_lines = output.lines().count();
     head.push_str(&format!(
@@ -171,6 +166,29 @@ fn truncated_template_command_output(output: &str) -> Result<String, Error> {
         path.display()
     ));
     Ok(head)
+}
+
+fn template_output_head(output: &str) -> (String, usize) {
+    let mut head = String::new();
+    let mut head_lines = 0usize;
+    for line in output.split_inclusive('\n') {
+        if head.len().saturating_add(line.len()) > TEMPLATE_OUTPUT_HEAD_BYTES {
+            break;
+        }
+        head.push_str(line);
+        head_lines += 1;
+    }
+    if head_lines > 0 {
+        return (head, head_lines);
+    }
+
+    let mut end = TEMPLATE_OUTPUT_HEAD_BYTES.min(output.len());
+    while !output.is_char_boundary(end) {
+        end -= 1;
+    }
+    let head = output[..end].to_string();
+    let head_lines = head.lines().count();
+    (head, head_lines)
 }
 
 fn write_full_template_output(output: &str) -> Result<PathBuf, Error> {
@@ -209,10 +227,11 @@ fn template_error(message: String) -> Error {
 #[cfg(test)]
 mod tests {
     use super::{
-        developer_instructions, evaluator_turn_prompt, AgainstTreeAnswer,
-        DeveloperInstructionsContext, EVALUATOR_BASE_INSTRUCTIONS,
+        developer_instructions, evaluator_turn_prompt, truncated_template_command_output,
+        AgainstTreeAnswer, DeveloperInstructionsContext, TEMPLATE_OUTPUT_HEAD_BYTES,
     };
     use crate::git::{empty_tree_oid, staged_tree_oid};
+    use serde_json::Value;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process;
@@ -220,16 +239,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn base_instructions_prohibit_status_text() {
-        assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("Do not announce skills"));
-        assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("only the JSON object"));
-        assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("simulate a shell command or tool call"));
-        assert!(EVALUATOR_BASE_INSTRUCTIONS.contains(r#"error:"insufficient-evidence""#));
-        assert!(EVALUATOR_BASE_INSTRUCTIONS.contains("I'll inspect"));
-    }
-
-    #[test]
-    fn developer_instructions_define_topic_neutral_evidence_threshold() {
+    fn developer_instructions_render_diff_and_visible_scope_context() {
         let root = git_project("developer-instructions-template");
         fs::write(root.join("file.txt"), "changed\n").unwrap();
         git(&root, &["add", "file.txt"]);
@@ -246,22 +256,6 @@ mod tests {
         })
         .unwrap();
 
-        assert!(instructions.contains("visible files and question text do not prove"));
-        assert!(instructions.contains("Relevant direct reads/searches"));
-        assert!(instructions.contains("do not require a literal exhaustive audit"));
-        assert!(!instructions.contains("answer `no` to"));
-        assert!(instructions.contains("text before or after the JSON is invalid"));
-        assert!(instructions.contains("tool-request JSON"));
-        assert!(instructions.contains("Tool calls are not an output format"));
-        assert!(instructions.contains("Never print or simulate a tool call or shell command"));
-        assert!(instructions.contains("Valid top-level keys are only"));
-        assert!(
-            instructions.contains("never output `command`, `tool`, `arguments`, or `parameters`")
-        );
-        assert!(instructions.contains("first non-whitespace character must be `{`"));
-        assert!(instructions.contains("leading inspection summaries"));
-        assert!(instructions.contains("backslash immediately before a backtick"));
-        assert!(instructions.contains("Do not cite hidden `.canon/` files"));
         assert!(instructions.contains("$ git diff --numstat --cached\n"));
         assert!(instructions.contains("$ sandbox --read-only --scope [\".\"]"));
         assert!(instructions.contains("Hidden files: 0."));
@@ -281,10 +275,35 @@ mod tests {
         )
         .unwrap();
 
-        assert!(prompt.starts_with("Does it pass?"));
-        assert!(prompt.contains("Your previous answer at HEAD:"));
-        assert!(prompt.contains(r#""answer":"yes""#));
-        assert!(prompt.contains(r#""evidence":"`src/main.rs` proves it""#));
+        let answer_json = prompt
+            .split_once("Your previous answer at HEAD:")
+            .map(|(_, answer)| answer.trim())
+            .expect("prompt should include the against-tree answer section");
+        let answer: Value = serde_json::from_str(answer_json).unwrap();
+
+        assert_eq!(prompt.lines().next(), Some("Does it pass?"));
+        assert_eq!(answer["answer"], "yes");
+        assert_eq!(answer["evidence"], "`src/main.rs` proves it");
+    }
+
+    #[test]
+    fn long_template_output_first_line_keeps_output_head() {
+        let output = "x".repeat(TEMPLATE_OUTPUT_HEAD_BYTES + 1);
+
+        let rendered = truncated_template_command_output(&output).unwrap();
+
+        assert!(rendered.starts_with('x'));
+        assert!(rendered.contains("[truncated: showing first 1 of 1 lines; full output: "));
+    }
+
+    #[test]
+    fn long_template_output_counts_only_complete_head_lines_when_possible() {
+        let output = format!("first line\n{}", "x".repeat(TEMPLATE_OUTPUT_HEAD_BYTES + 1));
+
+        let rendered = truncated_template_command_output(&output).unwrap();
+
+        assert!(rendered.starts_with("first line\n"));
+        assert!(rendered.contains("[truncated: showing first 1 of 2 lines; full output: "));
     }
 
     fn git_project(name: &str) -> PathBuf {

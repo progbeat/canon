@@ -1,3 +1,4 @@
+{# MiniJinja template rendered by evaluator::protocol::prompt::render_minijinja_resource_template. #}
 {{ static_developer_instructions }}
 
 ```

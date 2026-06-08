@@ -84,7 +84,7 @@ impl DiagnosticLogWriter {
     ) -> DiagnosticLogResult<()> {
         let fields = record_log_fields(record);
         self.write_event("info", event.result_event(), &fields)?;
-        if let Some(reason) = record.review_error_text() {
+        if let Some(reason) = record.human_review_reason() {
             let mut review_fields = fields;
             review_fields.push(("reason", json!(reason)));
             self.write_event("warn", event.review_event(), &review_fields)?;

@@ -1,7 +1,7 @@
 use crate::check::core::is_line_break_char;
 use crate::logs::push_json_control_escape;
 
-pub(super) fn escape_check_output_text(value: &str) -> String {
+pub(crate) fn escape_check_output_text(value: &str) -> String {
     let mut output = String::new();
     for ch in value.chars() {
         match ch {

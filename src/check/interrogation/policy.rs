@@ -10,8 +10,9 @@ use crate::config_types::AgentConfig;
 use crate::evaluator::EvaluatorRunner;
 use crate::git::VisibleTreeOidCache;
 use crate::hash::full_scope;
-use crate::history::{is_reusable_history_record, HistoryCache};
+use crate::history::HistoryCache;
 use crate::logs::DiagnosticLogWriter;
+use crate::scope::sanitize_scope;
 
 pub(crate) struct InterrogationCall<'a> {
     pub(crate) runtime: &'a CheckRuntime<'a>,
@@ -125,53 +126,50 @@ pub(crate) fn turn_has_context_compaction(interrogation: &InterrogationResult) -
     interrogation.context_compacted
 }
 
-pub(crate) fn question_scope_suggestion_should_get_independent_verification(
+pub(crate) fn question_scope_suggestion_scope_for_independent_verification(
     runtime: &CheckRuntime<'_>,
     agent: &AgentConfig,
     suggestion: Option<&[String]>,
     current_scope: &[String],
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
-) -> Result<bool, String> {
+) -> Result<Option<Vec<String>>, String> {
     // Glossary-level q-scope suggestions are evaluator-provided claims. This
     // helper implements only the Interrogation Policy gate for whether such a
     // claim is worth an independent verification turn: at least 25% fewer
     // visible files. The response JSON Schema does not require repo-relative
     // or semantically sufficient paths; sufficiency is established only when
-    // the independent verification produces an answer. A false result leaves
+    // the independent verification produces an answer. Returning `None` leaves
     // the evaluator's claim unverified; it does not redefine what a q-scope
     // suggestion is.
     let Some(suggestion) = suggestion else {
-        return Ok(false);
+        return Ok(None);
     };
     let current_count = runtime.visible_file_count(visible_tree_oid_cache, agent, current_scope)?;
-    if current_count == 0 {
-        return Ok(false);
-    }
     let suggested_count =
         match runtime.visible_file_count(visible_tree_oid_cache, agent, suggestion) {
             Ok(count) => count,
-            Err(_) => return Ok(false),
+            Err(_) => return Ok(None),
         };
-    Ok(suggested_count.saturating_mul(4) <= current_count.saturating_mul(3))
+    if suggested_scope_is_at_least_25_percent_smaller(current_count, suggested_count) {
+        Ok(sanitize_scope(suggestion).ok())
+    } else {
+        Ok(None)
+    }
 }
 
-pub(crate) fn narrowed_scope_is_accepted(
-    narrowed: &CheckRecord,
-    proposed_scope: &[String],
+fn suggested_scope_is_at_least_25_percent_smaller(
+    current_count: usize,
+    suggested_count: usize,
 ) -> bool {
+    suggested_count < current_count
+        && suggested_count.saturating_mul(4) <= current_count.saturating_mul(3)
+}
+
+pub(crate) fn narrowed_scope_is_accepted(narrowed: &CheckRecord) -> bool {
     // Acceptance means the q-scope suggestion graduated from evaluator claim
     // to verified reusable q-scope. Interrogation Policy requires the
-    // independent verification turn to produce a schema-valid answer under
-    // that proposed scope.
-    is_reusable_history_record(narrowed)
-        && verified_q_scope_answer_is_accepted(&narrowed.scope, proposed_scope)
-}
-
-pub(crate) fn verified_q_scope_answer_is_accepted(
-    answer_scope: &[String],
-    proposed_scope: &[String],
-) -> bool {
-    answer_scope == proposed_scope
+    // independent verification turn to produce a schema-valid answer.
+    narrowed.error.is_none()
 }
 
 pub(crate) fn write_scope_narrowing_event(
@@ -180,8 +178,6 @@ pub(crate) fn write_scope_narrowing_event(
     enforced_scope: &[String],
     record_scope: &[String],
     accepted: bool,
-    initial_record: &CheckRecord,
-    narrowed_record: &CheckRecord,
 ) -> Result<(), String> {
     let Some(writer) = diagnostic_log.as_deref_mut() else {
         return Ok(());
@@ -190,14 +186,17 @@ pub(crate) fn write_scope_narrowing_event(
         .write_event(
             "info",
             "scope.narrowing",
-            &scope_narrowing_log_fields(
-                id,
-                enforced_scope,
-                record_scope,
-                accepted,
-                initial_record,
-                narrowed_record,
-            ),
+            &scope_narrowing_log_fields(id, enforced_scope, record_scope, accepted),
         )
         .map_err(|err| err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::suggested_scope_is_at_least_25_percent_smaller;
+
+    #[test]
+    fn equal_zero_file_scope_is_not_smaller() {
+        assert!(!suggested_scope_is_at_least_25_percent_smaller(0, 0));
+    }
 }

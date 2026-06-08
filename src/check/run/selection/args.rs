@@ -25,7 +25,6 @@ pub(crate) fn add_check_option_args(command: Command) -> Command {
         .arg(
             Arg::new("keep_going")
                 .long("keep-going")
-                .alias("all")
                 .help("Continue after failures")
                 .action(ArgAction::SetTrue),
         )
@@ -33,6 +32,7 @@ pub(crate) fn add_check_option_args(command: Command) -> Command {
             Arg::new("ignore_cooldown")
                 .long("ignore-cooldown")
                 .help("Re-evaluate expectations in cooldown")
+                .hide(true)
                 .action(ArgAction::SetTrue),
         )
         .arg(
@@ -46,7 +46,8 @@ pub(crate) fn add_check_option_args(command: Command) -> Command {
         )
         .arg(
             Arg::new("selectors")
-                .help("Expectation selectors: ID prefixes or full expectation IDs")
+                .value_name("SELECTOR")
+                .help("Expectation selectors: <ID-PREFIX> or not:<ID-PREFIX>")
                 .num_args(0..)
                 .action(ArgAction::Append)
                 .value_parser(OsStringValueParser::new()),

@@ -77,7 +77,7 @@ pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommand
     }
     if query.is_some() && !options.is_empty() {
         return Err(
-            "canon check -q cannot be combined with expectation selectors, --keep-going, --all, or --ignore-cooldown"
+            "canon check -q cannot be combined with expectation selectors, --keep-going, or --ignore-cooldown"
                 .to_string(),
         );
     }
@@ -105,29 +105,39 @@ pub(crate) fn check_help_command() -> Command {
             check_value_arg("config")
                 .short('c')
                 .long("config")
+                .value_name("PATH")
                 .help("Read expectations from this config file [default: .canon/check.yml]"),
         )
-        .arg(check_value_arg("query").short('q').help("Ask one question"))
+        .arg(
+            check_value_arg("query")
+                .short('q')
+                .value_name("QUESTION")
+                .help("Ask one question"),
+        )
         .arg(
             check_value_arg("preset")
                 .long("preset")
+                .value_name("PRESET")
                 .help("Select a preset by name for the question [default: default]"),
         )
         .arg(
             check_value_arg("scope")
                 .short('s')
                 .long("scope")
+                .value_name("PATHSPEC")
                 .help("Set the visible scope for the question")
                 .action(ArgAction::Append),
         )
         .arg(
             check_value_arg("tree")
                 .long("tree")
+                .value_name("TREE")
                 .help("Check this Git tree [default: :staged]"),
         )
         .arg(
             check_value_arg("against_tree")
                 .long("against-tree")
+                .value_name("TREE")
                 .help("Compare against this Git tree [default: HEAD]"),
         )
         .arg(
@@ -137,7 +147,7 @@ pub(crate) fn check_help_command() -> Command {
                 .action(ArgAction::SetTrue),
         );
     add_check_option_args(command).after_help(
-            "Examples:\n  canon check\n      Check staged content against all canon expectations.\n\n  canon check a7F K9m\n      Check canon expectations selected by ID prefix.\n\n  canon check --tree HEAD --against-tree HEAD~1 a7F\n      Check one canon expectation on HEAD with comparison against the previous commit.\n\n  canon check -q \"Does the app expose Undo?\"\n      Ask a one-off question.\n\n  canon check -q \"Does the app expose Undo?\" -s src/app.rs\n      Ask a one-off question with a restricted visible scope.",
+            "Examples:\n  canon check\n      Check staged content against all canon expectations.\n\n  canon check a7F K9m\n      Check canon expectations selected by ID prefix.\n\n  canon check not:a7F not:K9m\n      Check all expectations except those whose IDs start with a7F or K9m.\n\n  canon check --tree HEAD --against-tree HEAD~1 a7F\n      Check one canon expectation on HEAD with comparison against the previous commit.\n\n  canon check -q \"Does the app expose Undo?\"\n      Ask a one-off question.\n\n  canon check -q \"Does the app expose Undo?\" -s src/app.rs\n      Ask a one-off question with a restricted visible scope.",
         )
 }
 

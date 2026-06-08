@@ -7,7 +7,7 @@ mod setup;
 mod tests;
 mod visible_tree;
 
-use crate::git::{GitBlobReader, StagedTrackedFile, TreeSource};
+use crate::git::{GitBlobReader, TreeSource};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -19,7 +19,6 @@ pub(crate) struct StagedWorktreeView {
     remove_materialization_root_on_drop: bool,
     lazy_tree_dir: PathBuf,
     trees_dir: PathBuf,
-    source_files: RefCell<Option<Vec<StagedTrackedFile>>>,
     unpacked_paths: RefCell<BTreeSet<Vec<u8>>>,
     blob_reader: RefCell<Option<GitBlobReader>>,
 }

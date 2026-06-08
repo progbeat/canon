@@ -1,7 +1,7 @@
 use super::expectation::{run_expectation, ExpectationRunContext};
 use super::report::{check_run_report, skipped_count, CheckRunReportCounts};
 use super::CheckRunSideEffects;
-use crate::check::command::output::write_and_flush_result_output;
+use crate::check::command::output::write_result_output_without_live_progress;
 use crate::check::core::{
     check_run_error, CachedExpectation, CheckOptions, CheckRecord, CheckRunError, CheckRunReport,
 };
@@ -24,8 +24,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     let CheckRunSideEffects {
         mut diagnostic_log,
         mut result_output,
-        progress_output,
-        started,
+        live_progress_output,
         caches,
     } = side_effects;
     let mut records = Vec::new();
@@ -77,7 +76,6 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         &mut records,
         &mut cached,
         &mut result_output,
-        started,
     )
     .map_err(|err| current_error!(err))?;
     if selection.cached_failure_seen && selection.selected.is_empty() && !options.selectors_provided
@@ -104,8 +102,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 runner,
                 diagnostic_log: &mut diagnostic_log,
                 result_output: &mut result_output,
-                progress_output: &progress_output,
-                started,
+                live_progress_output: &live_progress_output,
                 caches,
                 interrogation_run_state: &mut interrogation_run_state,
             },
@@ -138,12 +135,11 @@ fn write_cached_failures(
     records: &mut Vec<CheckRecord>,
     cached: &mut Vec<CachedExpectation>,
     result_output: &mut Option<&mut dyn std::io::Write>,
-    started: std::time::Instant,
 ) -> Result<(), String> {
     for CachedSelectionHit { expectation, hit } in cached_hits {
         let record = hit.record;
         if !record.passed() {
-            write_and_flush_result_output(result_output, &record, started.elapsed())?;
+            write_result_output_without_live_progress(result_output, &record)?;
             records.push(record.clone());
         }
         cached.push(CachedExpectation {

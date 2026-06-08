@@ -60,7 +60,11 @@ impl CheckRecord {
         self.result == CheckResult::Pass
     }
 
-    pub(crate) fn review_error_text(&self) -> Option<&str> {
+    pub(crate) fn requires_human_review(&self) -> bool {
+        self.human_review_reason().is_some()
+    }
+
+    pub(crate) fn human_review_reason(&self) -> Option<&str> {
         self.error.as_deref()
     }
 

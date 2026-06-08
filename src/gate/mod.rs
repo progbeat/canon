@@ -24,36 +24,56 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
             "canon gate does not accept arguments\n▷ Run `canon gate` without arguments.".into(),
         );
     }
+    let changed_paths = gate_result_or_failure(staged_changed_path_bytes(root))?;
     // `canon check` prints "Commit the staged changes NOW!" only when this
     // same HEAD-vs-staged regression count is zero. In that same-tree commit
     // case, remaining expectation failures are not gate failures; only a
     // staged regression from HEAD pass to staged fail blocks the hook.
+    let num_regressions = gate_regression_count(root)?;
+    match gate_decision(num_regressions, &changed_paths) {
+        GateDecision::Pass => Ok(()),
+        GateDecision::RegressionFailure => {
+            write_gate_regression_failure()?;
+            Err(CommandError::GateFailed)
+        }
+        GateDecision::MixedCanonChangeFailure => {
+            write_mixed_canon_change_failure()?;
+            Err(CommandError::GateFailed)
+        }
+    }
+}
+
+fn gate_regression_count(root: &Path) -> Result<usize, CommandError> {
     let mut repo_cache = RepoInspectionCache::new();
-    let config = gate_result_or_failure(repo_cache.load_check_config(
-        root,
-        Path::new(CHECK_PATH),
-        &TreeSource::Staged,
-    ))?;
+    let config =
+        match repo_cache.load_check_config(root, Path::new(CHECK_PATH), &TreeSource::Staged) {
+            Ok(config) => config,
+            Err(_) => return Ok(0),
+        };
     let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
     let mut history_cache = HistoryCache::default();
-    let num_regressions = gate_result_or_failure(gate_regression_count_with_config(
+    gate_result_or_failure(gate_regression_count_with_config(
         root,
         &config,
         &mut history_cache,
         &mut visible_tree_oid_cache,
-    ))?;
+    ))
+}
+
+enum GateDecision {
+    Pass,
+    RegressionFailure,
+    MixedCanonChangeFailure,
+}
+
+fn gate_decision(num_regressions: usize, changed_paths: &[Vec<u8>]) -> GateDecision {
     if num_regressions > 0 {
-        write_gate_regression_failure()?;
-        return Err(CommandError::GateFailed);
+        return GateDecision::RegressionFailure;
     }
-    if gate_result_or_failure(has_mixed_canon_and_non_canon_changes(root))? {
-        write_stderr_line(
-            "canon gate: .canon/** changes must not be mixed with non-.canon changes",
-        )?;
-        write_stderr_line("▷ Ask human to handle .canon/ changes.")?;
-        return Err(CommandError::GateFailed);
+    if has_mixed_canon_and_non_canon_changes(changed_paths) {
+        return GateDecision::MixedCanonChangeFailure;
     }
-    Ok(())
+    GateDecision::Pass
 }
 
 fn gate_result_or_failure<T>(result: Result<T, String>) -> Result<T, CommandError> {
@@ -67,12 +87,16 @@ fn gate_result_or_failure<T>(result: Result<T, String>) -> Result<T, CommandErro
     }
 }
 
-fn has_mixed_canon_and_non_canon_changes(root: &Path) -> Result<bool, String> {
-    let changed_paths = staged_changed_path_bytes(root)?;
+fn has_mixed_canon_and_non_canon_changes(changed_paths: &[Vec<u8>]) -> bool {
     let has_canon_change = changed_paths
         .iter()
         .any(|path| is_canon_project_path_bytes(path));
-    Ok(has_canon_change && !is_canon_only_staged_change_bytes(&changed_paths))
+    has_canon_change && !is_canon_only_staged_change_bytes(changed_paths)
+}
+
+fn write_mixed_canon_change_failure() -> Result<(), String> {
+    write_stderr_line("canon gate: .canon/** changes must not be mixed with non-.canon changes")?;
+    write_stderr_line("▷ Ask human to handle .canon/ changes.")
 }
 
 pub(crate) fn gate_regression_count_with_config(

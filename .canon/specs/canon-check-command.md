@@ -4,10 +4,10 @@
 $ canon check --help
 Check whether a Git tree meets project expectations written in the canon.
 
-Usage: canon check [OPTIONS] [EXPECTATION]...
+Usage: canon check [OPTIONS] [SELECTOR]...
 
 Arguments:
-  [EXPECTATION]...  Expectation selectors: ID prefixes or full expectation IDs
+  [SELECTOR]...  Expectation selectors: <ID-PREFIX> or not:<ID-PREFIX>
 
 Options:
   -c, --config <PATH>          Read expectations from this config file [default: .canon/check.yml]
@@ -26,6 +26,9 @@ Examples:
 
   canon check a7F K9m
       Check canon expectations selected by ID prefix.
+
+  canon check not:a7F not:K9m
+      Check all expectations except those whose IDs start with a7F or K9m.
 
   canon check --tree HEAD --against-tree HEAD~1 a7F
       Check one canon expectation on HEAD with comparison against the previous commit.
@@ -80,7 +83,7 @@ Error: <escaped error>
 Evidence: <escaped evidence>
 ```
 
-**progress dots** are `.` characters printed and flushed while an expectation is being evaluated: print one dot immediately, then one more dot every minute until the result is ready.
+**progress dots** are a non-empty sequence of `.` characters printed and flushed while an expectation is being evaluated: print one dot immediately, then one more dot every minute until the result is ready.
 
 Embedded control characters in the question, expected answer, observed answer,
 error, and evidence are escaped before writing to stdout. Escaping prevents
@@ -122,27 +125,36 @@ are used for both singular and plural counts; `error` is used for one error and
 
 ## Instructions to Agent
 
-Let:
-
-- `num_failed` be the number of expectations that failed in this run.
-- `num_errors` be the number of expectations that encountered errors in this run.
-- `num_regressions` be the number of expectations that changed from `pass` to any non-pass result compared to HEAD.
-- `num_fixes` be the number of expectations that changed from any non-pass result (including missing) to `pass` compared to HEAD.
-
 Assuming no Ctrl-C or other interruption, when `canon check` runs without expectation selectors, with the default config, on the `:staged` tree, and against `HEAD`, it may emit instructions for the agent that ran it like this:
 
-```text
-def print_agent_messages(num_failed, num_errors, num_fixes, num_regressions):
-    num_issues = num_failed + num_errors
-    if num_regressions > 0 or (num_issues > 0 and num_fixes == 0):
+```python
+def print_agent_messages(failed, errors, num_fixes, num_regressions):
+    """
+    :param failed: Short IDs of failed expectations.
+    :param errors: Short IDs of expectations that encountered errors in this run.
+    :param num_fixes: Number of expectations that changed from non-pass to pass compared to HEAD.
+    :param num_regressions: Number of expectations whose current result is non-pass and whose answer history contains at least one earlier `pass` result for the same expectation.
+    """
+    issues = failed + errors
+    if num_regressions > 0 or (len(issues) > 0 and num_fixes == 0):
+        _repair_instructions(issues)
         print(f"▷ Fix the issues and run `canon check` again!")
         return
-    if num_issues == 0 and num_fixes == 0:
+    if len(issues) == 0 and num_fixes == 0:
         print("✓ All checks passed. Commit is allowed.")
         return
     assert num_fixes > 0
     passes_msg = f'1 pass' if num_fixes == 1 else f'{num_fixes} passes'
     print(f"▷ +{passes_msg} compared to HEAD. Commit the staged changes NOW!")
-    if num_issues > 0:
+    if len(issues) > 0:
+        _repair_instructions(issues)
         print(f"▷ Then fix the remaining issues and run `canon check` again!")
+
+def _repair_instructions(issues):
+    assert len(issues) > 0
+    # These issues were already shown in `canon check` output, so don't show them again to save tokens.
+    selectors = ' '.join(f'not:{x}' for x in issues)
+    print("❕ Verify that the evidence supports the observed answer and answers the expectation question; treat unsupported evidence as a readability issue.")
+    print(f"❕ Plan the repair, then run `canon show {selectors} -- <PATHSPEC>...` for the planned edit paths to identify expectations that may be affected.")
+    print("❕ Use the matching expectations to avoid regressions while fixing the issues.")
 ```
