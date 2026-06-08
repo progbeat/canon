@@ -1,7 +1,7 @@
-use crate::check::command::output::{
-    render_check_agent_messages, summary_outcome_counts, write_stdout_record,
+use crate::check::command::output::{render_check_agent_messages, write_stdout_record};
+use crate::check::core::{
+    for_each_unique_report_record, CheckRecord, CheckRunReport, SelectedExpectation,
 };
-use crate::check::core::{CheckRecord, CheckRunReport, SelectedExpectation};
 use crate::check::interrogation::write_check_lifecycle_finish_event;
 use crate::check::CheckRunCaches;
 use crate::cli::CommandError;
@@ -188,15 +188,36 @@ pub(crate) fn check_agent_messages(
     )?;
     let num_regressions =
         current_non_passes_with_prior_pass_count(root, agent, report, history_cache)?;
-    let outcome_counts = summary_outcome_counts(report);
-    let num_failed = outcome_counts.failed;
-    let num_errors = outcome_counts.errors;
+    let issue_ids = report_issue_display_ids(report);
     Ok(render_check_agent_messages(
-        num_failed,
-        num_errors,
+        &issue_ids.failed,
+        &issue_ids.errors,
         num_fixes,
         num_regressions,
     ))
+}
+
+struct IssueDisplayIds {
+    failed: Vec<String>,
+    errors: Vec<String>,
+}
+
+fn report_issue_display_ids(report: &CheckRunReport) -> IssueDisplayIds {
+    let mut issue_ids = IssueDisplayIds {
+        failed: Vec::new(),
+        errors: Vec::new(),
+    };
+    for_each_unique_report_record(&report.records, &report.cached, |record| {
+        if record.passed() {
+            return;
+        }
+        if record.requires_human_review() {
+            issue_ids.errors.push(record.display_id.clone());
+        } else {
+            issue_ids.failed.push(record.display_id.clone());
+        }
+    });
+    issue_ids
 }
 
 fn selected_expectation_from_record(
@@ -350,7 +371,13 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(messages, render_check_agent_messages(1, 0, 0, 1));
+        assert_eq!(
+            messages,
+            render_check_agent_messages(&["1".to_string()], &[], 0, 1)
+        );
+        assert!(messages
+            .iter()
+            .any(|message| message.contains("run `canon show not:1 -- <PATHSPEC>...`")));
         let _ = fs::remove_dir_all(root);
     }
 

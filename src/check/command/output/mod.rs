@@ -85,7 +85,7 @@ mod tests {
     #[test]
     fn check_agent_messages_follow_spec_branch_order() {
         assert_eq!(
-            agent_message_kinds(render_check_agent_messages(1, 0, 0, 0)),
+            agent_message_kinds(render_check_agent_messages(&issues(&["a"]), &[], 0, 0)),
             vec![
                 AgentMessageKind::RepairInstruction,
                 AgentMessageKind::RepairInstruction,
@@ -94,15 +94,15 @@ mod tests {
             ]
         );
         assert_eq!(
-            agent_message_kinds(render_check_agent_messages(0, 0, 0, 0)),
+            agent_message_kinds(render_check_agent_messages(&[], &[], 0, 0)),
             vec![AgentMessageKind::AllClear]
         );
         assert_eq!(
-            agent_message_kinds(render_check_agent_messages(0, 0, 1, 0)),
+            agent_message_kinds(render_check_agent_messages(&[], &[], 1, 0)),
             vec![AgentMessageKind::CommitNotice]
         );
         assert_eq!(
-            agent_message_kinds(render_check_agent_messages(1, 0, 2, 0)),
+            agent_message_kinds(render_check_agent_messages(&issues(&["a"]), &[], 2, 0)),
             vec![
                 AgentMessageKind::CommitNotice,
                 AgentMessageKind::RepairInstruction,
@@ -112,7 +112,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            agent_message_kinds(render_check_agent_messages(0, 0, 1, 1)),
+            agent_message_kinds(render_check_agent_messages(&issues(&["a"]), &[], 1, 1)),
             vec![
                 AgentMessageKind::RepairInstruction,
                 AgentMessageKind::RepairInstruction,
@@ -120,6 +120,19 @@ mod tests {
                 AgentMessageKind::FixIssues,
             ]
         );
+    }
+
+    #[test]
+    fn repair_message_excludes_already_shown_issue_ids() {
+        let messages = render_check_agent_messages(&issues(&["a"]), &issues(&["b"]), 0, 0);
+
+        assert!(messages
+            .iter()
+            .any(|message| message.contains("run `canon show not:a not:b -- <PATHSPEC>...`")));
+    }
+
+    fn issues(ids: &[&str]) -> Vec<String> {
+        ids.iter().map(|id| (*id).to_string()).collect()
     }
 
     fn agent_message_kinds(messages: Vec<String>) -> Vec<AgentMessageKind> {

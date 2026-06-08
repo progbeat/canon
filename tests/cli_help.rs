@@ -27,6 +27,8 @@ fn check_help_lists_public_options() {
     assert!(stdout.contains("--ignore-cooldown"));
     assert!(stdout.contains("--keep-going"));
     assert!(stdout.contains("--preset"));
+    assert!(stdout.contains("not:<ID-PREFIX>"));
+    assert!(stdout.contains("canon check not:a7F not:K9m"));
 }
 
 #[test]
@@ -39,4 +41,5 @@ fn show_help_lists_public_options() {
     assert!(stdout.contains("[SELECTOR]"));
     assert!(stdout.contains("[PATHSPEC]"));
     assert!(stdout.contains("--tree"));
+    assert!(stdout.contains("not:<ID-PREFIX>"));
 }

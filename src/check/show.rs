@@ -51,7 +51,7 @@ pub(crate) fn show_help_command() -> Command {
         .arg(
             Arg::new("selectors")
                 .value_name("SELECTOR")
-                .help("Expectation selectors: ID prefixes or full expectation IDs")
+                .help("Expectation selectors: <ID-PREFIX> or not:<ID-PREFIX>")
                 .num_args(0..)
                 .action(ArgAction::Append)
                 .value_parser(OsStringValueParser::new()),
