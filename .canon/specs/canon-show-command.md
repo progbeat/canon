@@ -7,7 +7,7 @@ Show canon expectations.
 Usage: canon show [OPTIONS] [SELECTOR]... [-- <PATHSPEC>...]
 
 Arguments:
-  [SELECTOR]...  Expectation selectors: ID prefixes or full expectation IDs
+  [SELECTOR]...  Expectation selectors: <ID-PREFIX> or not:<ID-PREFIX>
   [PATHSPEC]...  Limit output to expectations affected by changes matching these pathspecs
 
 Options:
