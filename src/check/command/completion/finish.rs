@@ -7,7 +7,7 @@ use crate::check::CheckRunCaches;
 use crate::cli::CommandError;
 use crate::config_types::{AgentConfig, CheckConfig};
 use crate::gate::{gate_cached_result_for_tree, GateCacheResult, GateComparisonTree};
-use crate::git::VisibleTreeOidCache;
+use crate::git::{TreeSource, VisibleTreeOidCache, DEFAULT_AGAINST_TREE_ARG};
 use crate::history::HistoryCache;
 use std::collections::BTreeSet;
 use std::io::Write;
@@ -69,6 +69,9 @@ fn staged_passes_failed_at_head_count_with_cache(
     history_cache: &mut HistoryCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<usize, String> {
+    if staged_tree_matches_default_against_tree(root)? {
+        return Ok(0);
+    }
     let mut count = 0usize;
     for passing in report_passing_expectations(report, agent) {
         match gate_cached_result_for_tree(
@@ -94,6 +97,13 @@ fn staged_passes_failed_at_head_count_with_cache(
         }
     }
     Ok(count)
+}
+
+fn staged_tree_matches_default_against_tree(root: &Path) -> Result<bool, String> {
+    let staged_tree_oid = TreeSource::Staged.tree_oid_for_prompt_diff(root)?;
+    let against_tree =
+        TreeSource::resolve_default_against_tree(root, DEFAULT_AGAINST_TREE_ARG, false)?;
+    Ok(staged_tree_oid == against_tree.tree_oid_for_prompt_diff(root)?)
 }
 
 struct PassingExpectation {
@@ -269,7 +279,6 @@ fn selected_expectation_from_record(
 mod tests {
     use super::*;
     use crate::check::core::{CheckResult, CheckRunReport};
-    use crate::git::TreeSource;
     use crate::hash::full_scope;
     use crate::history::append_current_history_record_with_cache;
     use crate::time::format_record_timestamp;
