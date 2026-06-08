@@ -155,6 +155,6 @@ def _repair_instructions(issues):
     # These issues were already shown in `canon check` output, so don't show them again to save tokens.
     selectors = ' '.join(f'not:{x}' for x in issues)
     print("❕ Verify that the evidence supports the observed answer and answers the expectation question; treat unsupported evidence as a readability issue.")
-    print(f"❕ Plan the repair, then run `canon show {selectors} -- <PATHSPEC>...` for the planned edit paths to identify expectations that may be affected.")
+    print(f"❕ Plan the repair, then run `canon show {selectors} [not:<KNOWN_EXPECTATION>]... -- <PATHSPEC>...` for the planned edit paths to identify expectations that may be affected.")
     print("❕ Use the matching expectations to avoid regressions while fixing the issues.")
 ```
