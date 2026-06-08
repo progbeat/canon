@@ -128,7 +128,7 @@ mod tests {
 
         assert!(messages
             .iter()
-            .any(|message| message.contains("run `canon show not:a not:b -- <PATHSPEC>...`")));
+            .any(|message| message.contains("run `canon show not:a not:b [not:<ALREADY_IN_CONTEXT_EXPECTATION>]... -- <PATHSPEC>...`")));
     }
 
     fn issues(ids: &[&str]) -> Vec<String> {

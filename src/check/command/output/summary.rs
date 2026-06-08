@@ -92,7 +92,7 @@ fn plan_repair_message(failed: &[String], errors: &[String]) -> String {
         .collect::<Vec<_>>()
         .join(" ");
     format!(
-        "❕ Plan the repair, then run `canon show {selectors} -- <PATHSPEC>...` for the planned edit paths to identify expectations that may be affected."
+        "❕ Plan the repair, then run `canon show {selectors} [not:<ALREADY_IN_CONTEXT_EXPECTATION>]... -- <PATHSPEC>...` for the planned edit paths to identify expectations that may be affected."
     )
 }
 

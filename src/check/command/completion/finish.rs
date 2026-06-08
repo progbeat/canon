@@ -79,7 +79,17 @@ fn staged_passes_failed_at_head_count_with_cache(
             history_cache,
             visible_tree_oid_cache,
         )? {
-            GateCacheResult::Fail | GateCacheResult::Missing => count += 1,
+            GateCacheResult::Fail => count += 1,
+            GateCacheResult::Missing => {
+                if !head_visible_tree_matches_passing_record(
+                    root,
+                    agent,
+                    &passing,
+                    visible_tree_oid_cache,
+                )? {
+                    count += 1;
+                }
+            }
             GateCacheResult::Pass => {}
         }
     }
@@ -88,6 +98,19 @@ fn staged_passes_failed_at_head_count_with_cache(
 
 struct PassingExpectation {
     expectation: SelectedExpectation,
+    scope: Vec<String>,
+    visible_tree_oid: String,
+}
+
+fn head_visible_tree_matches_passing_record(
+    root: &Path,
+    agent: &AgentConfig,
+    passing: &PassingExpectation,
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
+) -> Result<bool, String> {
+    let head_visible_tree_oid =
+        visible_tree_oid_cache.gate_head_tree_fingerprint(root, agent, &passing.scope)?;
+    Ok(head_visible_tree_oid.as_deref() == Some(passing.visible_tree_oid.as_str()))
 }
 
 fn report_passing_expectations(
@@ -97,12 +120,18 @@ fn report_passing_expectations(
     let mut expectations = Vec::new();
     for record in report.records.iter().filter(|record| record.passed()) {
         if let Some(expectation) = selected_expectation_from_record(record, agent) {
-            expectations.push(PassingExpectation { expectation });
+            expectations.push(PassingExpectation {
+                expectation,
+                scope: record.scope.clone(),
+                visible_tree_oid: record.visible_tree_oid.clone(),
+            });
         }
     }
     for cached in report.cached.iter().filter(|cached| cached.record.passed()) {
         expectations.push(PassingExpectation {
             expectation: cached.expectation.clone(),
+            scope: cached.record.scope.clone(),
+            visible_tree_oid: cached.record.visible_tree_oid.clone(),
         });
     }
     expectations
@@ -252,8 +281,8 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn same_visible_tree_pass_with_missing_head_cache_is_an_improvement() {
-        let root = git_project("same-visible-tree-pass-improvement");
+    fn same_visible_tree_pass_with_missing_head_cache_is_not_an_improvement() {
+        let root = git_project("same-visible-tree-pass-no-improvement");
         let agent = AgentConfig::default();
         let scope = full_scope();
         let report = passing_report_for_staged_scope(&root, &agent, &scope);
@@ -269,7 +298,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(count, 1);
+        assert_eq!(count, 0);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -375,9 +404,9 @@ mod tests {
             messages,
             render_check_agent_messages(&["1".to_string()], &[], 0, 1)
         );
-        assert!(messages
-            .iter()
-            .any(|message| message.contains("run `canon show not:1 -- <PATHSPEC>...`")));
+        assert!(messages.iter().any(|message| message.contains(
+            "run `canon show not:1 [not:<ALREADY_IN_CONTEXT_EXPECTATION>]... -- <PATHSPEC>...`"
+        )));
         let _ = fs::remove_dir_all(root);
     }
 
