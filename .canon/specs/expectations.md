@@ -18,7 +18,7 @@ A generator item contains `include`:
 A generator item contains `path`, `q_template`, and `a`:
 
 ```yaml
-- path: "specs/*.md"
+- path: "specs/**.md"
   q_template: |
     {{content}}
     ---
