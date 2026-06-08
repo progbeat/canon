@@ -1,5 +1,5 @@
 use super::{AppServerRunner, AppServerTurnRequest};
-use crate::check::codex_reasoning_effort;
+use crate::check::{codex_reasoning_effort, evaluator_response_output_schema};
 use crate::config_types::AgentConfig;
 use crate::evaluator::{
     evaluator_thread_config_with_no_sandbox, EvaluatorError, EvaluatorRunner,
@@ -108,7 +108,8 @@ pub(crate) fn turn_start_request(
                 "type": "text",
                 "text": prompt
             }
-        ]
+        ],
+        "outputSchema": evaluator_response_output_schema()
     });
     if let Some(cwd) = cwd {
         request["cwd"] = Value::String(path_to_json_string(cwd, "turn/start cwd")?);
@@ -207,6 +208,32 @@ mod tests {
         assert_eq!(
             request["sandboxPolicy"],
             json!({ "type": "readOnly", "networkAccess": false })
+        );
+    }
+
+    #[test]
+    fn evaluator_turn_sets_output_schema() {
+        let request = turn_start_request(
+            "thread",
+            "question",
+            None,
+            "low",
+            Some(Path::new("/tmp/cwd")),
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            request["outputSchema"]["required"],
+            json!(["evidence", "qScopeSuggestion"])
+        );
+        assert_eq!(
+            request["outputSchema"]["properties"]["qScopeSuggestion"]["minItems"],
+            json!(1)
+        );
+        assert_eq!(
+            request["outputSchema"]["additionalProperties"],
+            json!(false)
         );
     }
 

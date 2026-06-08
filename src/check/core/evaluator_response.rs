@@ -1,5 +1,5 @@
 use serde::{de, Deserialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 pub(crate) const ERROR_INSUFFICIENT_EVIDENCE: &str = "insufficient-evidence";
 pub(crate) const ERROR_INVALID_QUESTION: &str = "invalid-question";
@@ -51,6 +51,51 @@ impl ParsedAnswer {
 pub(crate) fn parse_evaluator_response(text: &str) -> Result<ParsedAnswer, String> {
     let response = parse_evaluator_response_json(text)?;
     response.into_schema_valid_parsed_answer()
+}
+
+pub(crate) fn evaluator_response_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "answer": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[^\\r\\n]*$",
+            },
+            "error": {
+                "type": "string",
+                "enum": [
+                    ERROR_INSUFFICIENT_EVIDENCE,
+                    ERROR_INVALID_QUESTION,
+                    ERROR_UNPARSABLE,
+                ],
+            },
+            "evidence": {
+                "type": "string",
+            },
+            "qScopeSuggestion": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\r\\n]*$",
+                },
+            },
+        },
+        "required": ["evidence", "qScopeSuggestion"],
+        "oneOf": [
+            {
+                "required": ["answer"],
+                "not": { "required": ["error"] },
+            },
+            {
+                "required": ["error"],
+                "not": { "required": ["answer"] },
+            },
+        ],
+        "additionalProperties": false,
+    })
 }
 
 #[derive(Debug, Deserialize)]
