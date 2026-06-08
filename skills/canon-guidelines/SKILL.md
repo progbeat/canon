@@ -38,7 +38,7 @@ Canon intent comes from the human; these guidelines only describe what makes can
 - Do not treat underspecification or canon silence as a finding; report only written text that creates a concrete maintainability issue under these guidelines.
 - After drafting findings, spawn a subagent to re-check those findings against these guidelines using this exact prompt template:
   ```
-  $canon-guidelines Review these drafted findings against the canon guidelines:
+  Review these drafted findings against the $canon-guidelines:
 
   <findings>
 
