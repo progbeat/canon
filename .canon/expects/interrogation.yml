@@ -4,9 +4,6 @@
 - q: "Do the developer instructions explicitly prohibit proxy evidence?"
   a: yes
 
-- q: "Do your instructions require every response to be JSON and define the exact schema for that JSON?"
-  a: "yes"
-
 - q: "Do your instructions encourage you to make `qScopeSuggestion` as narrow as possible while still enough to justify the answer?"
   a: "yes"
 
