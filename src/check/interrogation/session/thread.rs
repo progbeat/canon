@@ -204,6 +204,7 @@ fn start_thread_session<R: EvaluatorRunner>(
         visible_scope: &visible_scope,
         checked_file_count: runtime.tree_context.checked_file_count,
         visible_file_count,
+        no_sandbox: runtime.no_sandbox(),
     })
     .map_err(EvaluatorError::message)?;
     let session_root = runtime

@@ -21,17 +21,6 @@ pub(crate) struct RawCheckOptions {
     pub(crate) selectors: Vec<OsString>,
 }
 
-impl RawCheckOptions {
-    // Query argument validation uses this to reject expectation-mode options
-    // when `canon check -q` is active.
-    pub(crate) fn is_empty(&self) -> bool {
-        !self.keep_going
-            && !self.ignore_cooldown
-            && self.break_after_tokens.is_none()
-            && self.selectors.is_empty()
-    }
-}
-
 pub(crate) struct CheckCommandArgs {
     pub(crate) config_path: PathBuf,
     pub(crate) tree: String,
