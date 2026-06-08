@@ -24,5 +24,8 @@
   a: "no"
   cooldown: 1d
 
+- q: "Is the evaluator's response schema enforced by `turn/start.params.outputSchema`, not merely requested in the prompt?"
+  a: "yes"
+
 # - q: "Do the dev instructions require knowing any specialized terms whose meaning is not available from the dev instructions themselves?"
 #   a: "no"
