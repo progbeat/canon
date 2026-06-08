@@ -264,10 +264,12 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process;
     use std::process::Command;
+    use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn developer_instructions_render_diff_and_visible_scope_context() {
+        let _lock = prompt_render_lock();
         let root = git_project("developer-instructions-template");
         fs::write(root.join("file.txt"), "changed\n").unwrap();
         git(&root, &["add", "file.txt"]);
@@ -294,6 +296,7 @@ mod tests {
 
     #[test]
     fn developer_instructions_render_disabled_sandbox_context() {
+        let _lock = prompt_render_lock();
         let root = git_project("developer-instructions-no-sandbox");
         fs::write(root.join("file.txt"), "changed\n").unwrap();
         git(&root, &["add", "file.txt"]);
@@ -378,6 +381,11 @@ mod tests {
         git(&root, &["config", "core.autocrlf", "false"]);
         git(&root, &["config", "core.eol", "lf"]);
         root
+    }
+
+    fn prompt_render_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
     }
 
     fn git(root: &Path, args: &[&str]) {

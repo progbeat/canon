@@ -225,7 +225,11 @@ mod tests {
 
         assert_eq!(
             request["outputSchema"]["required"],
-            json!(["evidence", "qScopeSuggestion"])
+            json!(["answer", "error", "evidence", "qScopeSuggestion"])
+        );
+        assert_eq!(
+            request["outputSchema"]["properties"]["answer"]["type"],
+            json!(["string", "null"])
         );
         assert_eq!(
             request["outputSchema"]["properties"]["qScopeSuggestion"]["minItems"],
