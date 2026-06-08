@@ -161,7 +161,8 @@ fn suggested_scope_is_at_least_25_percent_smaller(
     current_count: usize,
     suggested_count: usize,
 ) -> bool {
-    suggested_count.saturating_mul(4) <= current_count.saturating_mul(3)
+    suggested_count < current_count
+        && suggested_count.saturating_mul(4) <= current_count.saturating_mul(3)
 }
 
 pub(crate) fn narrowed_scope_is_accepted(narrowed: &CheckRecord) -> bool {
@@ -195,7 +196,7 @@ mod tests {
     use super::suggested_scope_is_at_least_25_percent_smaller;
 
     #[test]
-    fn zero_file_suggestion_can_be_verified_for_zero_file_scope() {
-        assert!(suggested_scope_is_at_least_25_percent_smaller(0, 0));
+    fn equal_zero_file_scope_is_not_smaller() {
+        assert!(!suggested_scope_is_at_least_25_percent_smaller(0, 0));
     }
 }

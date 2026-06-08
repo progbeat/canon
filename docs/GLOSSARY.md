@@ -185,6 +185,12 @@ unverified claims until an independent verification turn accepts them.
 `history::reuse` reads reusable answer history when seeding future q-scopes or
 same-tree cached results.
 
+`evaluator::protocol::prompt` renders the prompt templates stored under
+`resources/prompts/` with MiniJinja. The developer-instructions template is
+`resources/prompts/evaluator_developer_instructions.txt`; the renderer registers
+the `json`, `shq`, and `sh` filters and runs `sh` blocks from the repository
+root.
+
 `check::interrogation::ask_with_reused_thread` enforces evaluator-thread reuse.
 Its lookup key begins with evaluator model and `visibleTreeOid`, so a different
 model or visible tree cannot reuse an existing evaluator thread.

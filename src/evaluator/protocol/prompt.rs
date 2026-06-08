@@ -40,7 +40,7 @@ pub(crate) struct AgainstTreeAnswer {
 pub(crate) fn developer_instructions(
     context: DeveloperInstructionsContext<'_>,
 ) -> Result<String, String> {
-    render_resource_template(
+    render_minijinja_resource_template(
         context.root,
         DEVELOPER_INSTRUCTIONS_TEMPLATE.trim_end(),
         context! {
@@ -58,7 +58,7 @@ pub(crate) fn evaluator_turn_prompt(
     question: &str,
     against_tree_answer: Option<&AgainstTreeAnswer>,
 ) -> Result<String, String> {
-    render_resource_template(
+    render_minijinja_resource_template(
         root,
         EVALUATOR_TURN_PROMPT_TEMPLATE.trim_end(),
         context! {
@@ -68,7 +68,7 @@ pub(crate) fn evaluator_turn_prompt(
     )
 }
 
-fn render_resource_template(
+fn render_minijinja_resource_template(
     root: &Path,
     template: &str,
     context: minijinja::Value,
@@ -169,6 +169,19 @@ fn truncated_template_command_output(output: &str) -> Result<String, Error> {
 }
 
 fn template_output_head(output: &str) -> (String, usize) {
+    let mut head = String::new();
+    let mut head_lines = 0usize;
+    for line in output.split_inclusive('\n') {
+        if head.len().saturating_add(line.len()) > TEMPLATE_OUTPUT_HEAD_BYTES {
+            break;
+        }
+        head.push_str(line);
+        head_lines += 1;
+    }
+    if head_lines > 0 {
+        return (head, head_lines);
+    }
+
     let mut end = TEMPLATE_OUTPUT_HEAD_BYTES.min(output.len());
     while !output.is_char_boundary(end) {
         end -= 1;
@@ -281,6 +294,16 @@ mod tests {
 
         assert!(rendered.starts_with('x'));
         assert!(rendered.contains("[truncated: showing first 1 of 1 lines; full output: "));
+    }
+
+    #[test]
+    fn long_template_output_counts_only_complete_head_lines_when_possible() {
+        let output = format!("first line\n{}", "x".repeat(TEMPLATE_OUTPUT_HEAD_BYTES + 1));
+
+        let rendered = truncated_template_command_output(&output).unwrap();
+
+        assert!(rendered.starts_with("first line\n"));
+        assert!(rendered.contains("[truncated: showing first 1 of 2 lines; full output: "));
     }
 
     fn git_project(name: &str) -> PathBuf {
