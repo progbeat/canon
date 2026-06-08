@@ -24,11 +24,12 @@ fn check_help_lists_public_options() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("Usage: canon check"));
-    assert!(stdout.contains("--ignore-cooldown"));
     assert!(stdout.contains("--keep-going"));
     assert!(stdout.contains("--preset"));
     assert!(stdout.contains("not:<ID-PREFIX>"));
     assert!(stdout.contains("canon check not:a7F not:K9m"));
+    assert!(!stdout.contains("--ignore-cooldown"));
+    assert!(!stdout.contains("--all"));
 }
 
 #[test]

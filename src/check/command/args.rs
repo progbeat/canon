@@ -77,7 +77,7 @@ pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommand
     }
     if query.is_some() && !options.is_empty() {
         return Err(
-            "canon check -q cannot be combined with expectation selectors, --keep-going, --all, or --ignore-cooldown"
+            "canon check -q cannot be combined with expectation selectors, --keep-going, or --ignore-cooldown"
                 .to_string(),
         );
     }

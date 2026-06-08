@@ -25,7 +25,6 @@ pub(crate) fn add_check_option_args(command: Command) -> Command {
         .arg(
             Arg::new("keep_going")
                 .long("keep-going")
-                .alias("all")
                 .help("Continue after failures")
                 .action(ArgAction::SetTrue),
         )
@@ -33,6 +32,7 @@ pub(crate) fn add_check_option_args(command: Command) -> Command {
             Arg::new("ignore_cooldown")
                 .long("ignore-cooldown")
                 .help("Re-evaluate expectations in cooldown")
+                .hide(true)
                 .action(ArgAction::SetTrue),
         )
         .arg(
