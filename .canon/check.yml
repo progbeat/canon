@@ -45,7 +45,7 @@ expectations:
     a: "yes"
 
   # Specs
-  - path: "specs/*.md"
+  - path: "specs/**.md"
     q_template: |
       {{content}}
       ---
