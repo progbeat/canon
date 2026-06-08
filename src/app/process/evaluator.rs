@@ -235,6 +235,7 @@ mod tests {
             request["outputSchema"]["additionalProperties"],
             json!(false)
         );
+        assert!(request["outputSchema"].get("oneOf").is_none());
     }
 
     #[test]
