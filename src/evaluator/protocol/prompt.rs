@@ -268,7 +268,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn developer_instructions_render_diff_and_visible_scope_context() {
+    fn developer_instructions_render_required_diff_and_visible_scope_context() {
         let _lock = prompt_render_lock();
         let root = git_project("developer-instructions-template");
         fs::write(root.join("file.txt"), "changed\n").unwrap();
@@ -295,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn developer_instructions_render_disabled_sandbox_context() {
+    fn developer_instructions_render_required_disabled_sandbox_context() {
         let _lock = prompt_render_lock();
         let root = git_project("developer-instructions-no-sandbox");
         fs::write(root.join("file.txt"), "changed\n").unwrap();
@@ -324,7 +324,7 @@ mod tests {
     }
 
     #[test]
-    fn turn_prompt_includes_against_tree_answer_when_available() {
+    fn turn_prompt_renders_against_tree_answer_protocol_section() {
         let prompt = evaluator_turn_prompt(
             Path::new(env!("CARGO_MANIFEST_DIR")),
             "Does it pass?",
@@ -347,7 +347,7 @@ mod tests {
     }
 
     #[test]
-    fn long_template_output_first_line_keeps_output_head() {
+    fn long_template_output_renders_required_truncation_notice_after_head() {
         let output = "x".repeat(TEMPLATE_OUTPUT_HEAD_BYTES + 1);
 
         let rendered = truncated_template_command_output(&output).unwrap();
@@ -357,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn long_template_output_counts_only_complete_head_lines_when_possible() {
+    fn long_template_output_renders_required_complete_head_line_count() {
         let output = format!("first line\n{}", "x".repeat(TEMPLATE_OUTPUT_HEAD_BYTES + 1));
 
         let rendered = truncated_template_command_output(&output).unwrap();

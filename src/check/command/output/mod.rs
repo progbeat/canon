@@ -1,3 +1,6 @@
+// Command output is one component with a small facade. The leaf modules split
+// stable stdout/stderr surfaces by output kind while keeping callers away from
+// renderer internals.
 mod escape;
 mod query;
 mod record;
@@ -8,8 +11,8 @@ mod usage;
 pub(crate) use escape::escape_check_output_text;
 pub(crate) use query::write_query_output;
 pub(crate) use record::{
-    start_live_check_progress_output, write_result_output_without_live_progress,
-    LiveCheckProgressOutput,
+    start_live_check_progress_output, write_cached_non_pass_output,
+    write_result_output_without_live_progress, LiveCheckProgressOutput,
 };
 pub(crate) use shared::{write_stdout_record, SharedCheckOutput};
 pub(crate) use summary::{render_check_agent_messages, summary_outcome_counts, write_summary_line};
@@ -19,7 +22,7 @@ pub(crate) use usage::render_token_usage_summary;
 mod tests {
     use super::{
         render_check_agent_messages, start_live_check_progress_output,
-        write_result_output_without_live_progress, SharedCheckOutput,
+        write_cached_non_pass_output, write_result_output_without_live_progress, SharedCheckOutput,
     };
     use crate::check::core::{CheckRecord, CheckResult};
     use std::io::{self, Write};
@@ -51,7 +54,7 @@ mod tests {
     }
 
     #[test]
-    fn check_result_output_without_live_progress_writes_no_dot() {
+    fn documented_no_progress_result_output_has_no_progress_dot() {
         let mut bytes = Vec::new();
         let mut result_output = Some(&mut bytes as &mut dyn Write);
 
@@ -64,7 +67,18 @@ mod tests {
     }
 
     #[test]
-    fn live_progress_output_writes_prefix_before_completion() {
+    fn documented_cached_non_pass_output_has_progress_dot() {
+        let mut bytes = Vec::new();
+        let mut result_output = Some(&mut bytes as &mut dyn Write);
+
+        write_cached_non_pass_output(&mut result_output, &failed_record()).unwrap();
+
+        let rendered = String::from_utf8(bytes).unwrap();
+        assert!(rendered.starts_with("j. FAILED\n"));
+    }
+
+    #[test]
+    fn documented_live_progress_output_emits_prefix_before_completion() {
         let bytes = Arc::new(Mutex::new(Vec::new()));
         let output = SharedCheckOutput::new(Box::new(CapturedOutput {
             bytes: bytes.clone(),
@@ -161,13 +175,21 @@ mod tests {
     }
 
     fn passing_record() -> CheckRecord {
+        record_with_result(CheckResult::Pass, "yes")
+    }
+
+    fn failed_record() -> CheckRecord {
+        record_with_result(CheckResult::Fail, "no")
+    }
+
+    fn record_with_result(result: CheckResult, observed: &str) -> CheckRecord {
         CheckRecord {
             timestamp: "1970-01-01T00:00:00Z".to_string(),
             number: 1,
-            result: CheckResult::Pass,
+            result,
             question: Some("Does it pass?".to_string()),
             expected_answer: Some("yes".to_string()),
-            observed: "yes".to_string(),
+            observed: observed.to_string(),
             error: None,
             evidence: "test evidence".to_string(),
             scope: vec![".".to_string()],

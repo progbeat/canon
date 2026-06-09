@@ -1,3 +1,6 @@
+// Check execution is one workflow component. The leaf modules separate the
+// run queue, per-expectation execution, progress cancellation, and report
+// accounting phases behind this facade.
 mod expectation;
 mod progress;
 mod report;
