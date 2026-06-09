@@ -231,7 +231,8 @@ fn template_error(message: String) -> Error {
 mod tests {
     use super::{
         developer_instructions, evaluator_turn_prompt, truncated_template_command_output,
-        AgainstTreeAnswer, DeveloperInstructionsContext, TEMPLATE_OUTPUT_HEAD_BYTES,
+        AgainstTreeAnswer, DeveloperInstructionsContext, STATIC_DEVELOPER_INSTRUCTIONS,
+        TEMPLATE_OUTPUT_HEAD_BYTES,
     };
     use crate::git::{empty_tree_oid, staged_tree_oid};
     use serde_json::Value;
@@ -262,6 +263,9 @@ mod tests {
         .unwrap();
 
         assert!(instructions.contains("$ git diff --numstat --cached\n"));
+        assert!(instructions
+            .trim_start()
+            .starts_with(STATIC_DEVELOPER_INSTRUCTIONS.trim_end()));
         assert!(instructions.contains("$ sandbox --read-only --scope [\".\"]"));
         assert!(instructions.contains("Hidden files: 0."));
 
@@ -270,6 +274,7 @@ mod tests {
 
     #[test]
     fn turn_prompt_renders_against_tree_answer_protocol_section() {
+        let _lock = prompt_render_lock();
         let prompt = evaluator_turn_prompt(
             Path::new(env!("CARGO_MANIFEST_DIR")),
             "Does it pass?",
