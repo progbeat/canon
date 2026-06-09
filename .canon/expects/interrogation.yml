@@ -10,9 +10,6 @@
 - q: "Are all interrogation prompt and instruction texts/templates kept under `resources/prompts/`?"
   a: "yes"
 
-- q: "Can `canon check` report a change in expectation results when the compared Git trees are the same?"
-  a: "no"
-
 - q: "Can you find a concrete scenario where the pass-improvement count used for the final agent advice is positive even though the checked tree and against tree for the run resolve to the same Git tree?"
   a: "no"
   preset: smart
