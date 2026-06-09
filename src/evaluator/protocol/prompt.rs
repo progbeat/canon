@@ -29,7 +29,6 @@ pub(crate) struct DeveloperInstructionsContext<'a> {
     pub(crate) visible_scope: &'a [String],
     pub(crate) checked_file_count: usize,
     pub(crate) visible_file_count: usize,
-    pub(crate) no_sandbox: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -44,7 +43,7 @@ pub(crate) fn developer_instructions(
     let num_invisible_files = context
         .checked_file_count
         .saturating_sub(context.visible_file_count);
-    let rendered = render_minijinja_resource_template(
+    render_minijinja_resource_template(
         context.root,
         DEVELOPER_INSTRUCTIONS_TEMPLATE.trim_end(),
         context! {
@@ -54,15 +53,7 @@ pub(crate) fn developer_instructions(
             visible_scope => context.visible_scope,
             num_invisible_files => num_invisible_files,
         },
-    )?;
-    if context.no_sandbox {
-        return sandbox_disabled_developer_instructions(
-            rendered,
-            context.visible_scope,
-            num_invisible_files,
-        );
-    }
-    Ok(rendered)
+    )
 }
 
 pub(crate) fn evaluator_turn_prompt(
@@ -121,22 +112,6 @@ fn render_template_from_root<T>(root: &Path, render: impl FnOnce() -> T) -> Resu
         )
     })?;
     Ok(rendered)
-}
-
-fn sandbox_disabled_developer_instructions(
-    instructions: String,
-    visible_scope: &[String],
-    num_invisible_files: usize,
-) -> Result<String, String> {
-    let visible_scope = serde_json::to_string(visible_scope)
-        .map_err(|err| format!("failed to render visible scope JSON: {err}"))?;
-    let enabled = format!(
-        "$ sandbox --read-only --scope {visible_scope}\nSandbox is enabled. Hidden files: {num_invisible_files}."
-    );
-    let disabled = format!(
-        "$ sandbox --disabled\nSandbox is disabled; caller is responsible for isolation. Intended visible scope: {visible_scope}. Files outside intended scope: {num_invisible_files}."
-    );
-    Ok(instructions.replace(&enabled, &disabled))
 }
 
 fn json_filter(value: Value) -> Result<String, Error> {
@@ -283,42 +258,12 @@ mod tests {
             visible_scope: &[".".to_string()],
             checked_file_count: 1,
             visible_file_count: 1,
-            no_sandbox: false,
         })
         .unwrap();
 
         assert!(instructions.contains("$ git diff --numstat --cached\n"));
         assert!(instructions.contains("$ sandbox --read-only --scope [\".\"]"));
         assert!(instructions.contains("Hidden files: 0."));
-
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn developer_instructions_render_required_disabled_sandbox_context() {
-        let _lock = prompt_render_lock();
-        let root = git_project("developer-instructions-no-sandbox");
-        fs::write(root.join("file.txt"), "changed\n").unwrap();
-        git(&root, &["add", "file.txt"]);
-        let against_tree_oid = empty_tree_oid(&root).unwrap();
-        let checked_tree_oid = staged_tree_oid(&root).unwrap();
-
-        let instructions = developer_instructions(DeveloperInstructionsContext {
-            root: &root,
-            against_tree_oid: &against_tree_oid,
-            checked_tree_oid: &checked_tree_oid,
-            visible_scope: &["src".to_string()],
-            checked_file_count: 2,
-            visible_file_count: 1,
-            no_sandbox: true,
-        })
-        .unwrap();
-
-        assert!(instructions.contains("$ sandbox --disabled\n"));
-        assert!(instructions.contains("Sandbox is disabled; caller is responsible for isolation."));
-        assert!(instructions.contains("Intended visible scope: [\"src\"]."));
-        assert!(instructions.contains("Files outside intended scope: 1."));
-        assert!(!instructions.contains("Sandbox is enabled."));
 
         let _ = fs::remove_dir_all(root);
     }

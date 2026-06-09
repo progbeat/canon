@@ -82,14 +82,14 @@ impl LiveCheckProgressOutput {
     }
 }
 
-// Cached records and no-progress test callers do not represent an evaluator
-// currently running, so they write only the completed result record.
+// No-progress callers still write the documented minimum progress prefix. They
+// do not represent an evaluator currently running, so a single dot is enough.
 pub(crate) fn write_result_output_without_live_progress(
     result_output: &mut Option<&mut dyn Write>,
     record: &CheckRecord,
 ) -> Result<(), String> {
     if let Some(writer) = result_output.as_mut() {
-        let line = render_check_output_record(record);
+        let line = render_check_output_record_with_progress_dot(record);
         write_stdout_record(*writer, line.as_bytes(), "check result")?;
     }
     Ok(())
@@ -101,16 +101,15 @@ pub(crate) fn write_cached_non_pass_output(
 ) -> Result<(), String> {
     debug_assert!(!record.passed());
     if let Some(writer) = result_output.as_mut() {
-        let mut line = record.display_id.clone();
-        line.push('.');
-        line.push_str(&render_check_output_record_completion(record));
+        let line = render_check_output_record_with_progress_dot(record);
         write_stdout_record(*writer, line.as_bytes(), "cached check result")?;
     }
     Ok(())
 }
 
-fn render_check_output_record(record: &CheckRecord) -> String {
+fn render_check_output_record_with_progress_dot(record: &CheckRecord) -> String {
     let mut output = record.display_id.clone();
+    output.push('.');
     output.push_str(&render_check_output_record_completion(record));
     output
 }
