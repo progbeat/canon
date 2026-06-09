@@ -32,6 +32,7 @@ pub(super) fn finish_check_error_report(
             result_output: context.result_output,
             check_caches: context.check_caches,
             write_agent_message: false,
+            checked_tree_matches_against_tree: false,
         },
         context.report,
         Some(&error),

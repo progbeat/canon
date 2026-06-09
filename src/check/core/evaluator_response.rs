@@ -1,5 +1,5 @@
 use serde::{de, Deserialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 pub(crate) const ERROR_INSUFFICIENT_EVIDENCE: &str = "insufficient-evidence";
 pub(crate) const ERROR_INVALID_QUESTION: &str = "invalid-question";
@@ -51,6 +51,79 @@ impl ParsedAnswer {
 pub(crate) fn parse_evaluator_response(text: &str) -> Result<ParsedAnswer, String> {
     let response = parse_evaluator_response_json(text)?;
     response.into_schema_valid_parsed_answer()
+}
+
+pub(crate) fn evaluator_response_json_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "answer": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[^\\r\\n]*$",
+            },
+            "error": {
+                "type": "string",
+                "enum": [
+                    ERROR_INSUFFICIENT_EVIDENCE,
+                    ERROR_INVALID_QUESTION,
+                    ERROR_UNPARSABLE,
+                ],
+            },
+            "evidence": {
+                "type": "string",
+            },
+            "qScopeSuggestion": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\r\\n]*$",
+                },
+            },
+        },
+        "required": ["evidence", "qScopeSuggestion"],
+        "oneOf": [
+            {"required": ["answer"], "not": { "required": ["error"] }},
+            {"required": ["error"], "not": { "required": ["answer"] }},
+        ],
+        "additionalProperties": false,
+    })
+}
+
+pub(crate) fn evaluator_response_output_schema() -> Value {
+    // Codex app-server structured output requires every object property to be
+    // listed in `required` and represents optional fields as nullable types.
+    // Parsing removes those null placeholders; `validate_schema` then applies
+    // the Interrogation Policy's canonical exactly-one validation.
+    let mut schema = evaluator_response_json_schema();
+    let object = schema
+        .as_object_mut()
+        .expect("evaluator response schema is an object");
+    object.insert(
+        "required".to_string(),
+        json!(["answer", "error", "evidence", "qScopeSuggestion"]),
+    );
+    object.remove("oneOf");
+    let properties = object
+        .get_mut("properties")
+        .and_then(Value::as_object_mut)
+        .expect("evaluator response schema has properties");
+    properties
+        .get_mut("answer")
+        .expect("evaluator response schema has answer")["type"] = json!(["string", "null"]);
+    let error = properties
+        .get_mut("error")
+        .expect("evaluator response schema has error");
+    error["type"] = json!(["string", "null"]);
+    error["enum"] = json!([
+        ERROR_INSUFFICIENT_EVIDENCE,
+        ERROR_INVALID_QUESTION,
+        ERROR_UNPARSABLE,
+        null,
+    ]);
+    schema
 }
 
 #[derive(Debug, Deserialize)]
@@ -115,18 +188,9 @@ impl EvaluatorResponseJson {
                 return Err(format!("unsupported evaluator error: {}", error));
             }
         }
-        // Interrogation Policy keeps `qScopeSuggestion` schema validation to
-        // required non-empty single-line strings. Repository-relative scope
-        // syntax is not part of response-schema validity; syntax and semantic
-        // sufficiency are later narrowing policy checks, which accept a claim
-        // only after an independent answer-producing turn.
-        // Interrogation Policy's JSON Schema sets `minItems: 1` for
-        // `qScopeSuggestion`, so an empty array is a response-schema error.
         if self.question_scope_suggestion.is_empty() {
-            return Err("qScopeSuggestion must contain at least one path".to_string());
+            return Err("qScopeSuggestion must contain at least one item".to_string());
         }
-        // Each item follows the schema's `minLength: 1` and
-        // `pattern: "^[^\\r\\n]*$"` constraints.
         for item in &self.question_scope_suggestion {
             if item.is_empty() || contains_schema_single_line_violation(item) {
                 return Err(
@@ -140,20 +204,23 @@ impl EvaluatorResponseJson {
 
 pub(crate) fn parse_evaluator_response_json(text: &str) -> Result<EvaluatorResponseJson, String> {
     let payload = evaluator_response_json_payload(text)?;
-    let raw = serde_json::from_str::<Value>(payload)
+    let mut raw = serde_json::from_str::<Value>(payload)
         .map_err(|err| format!("failed to parse evaluator JSON response: {}", err))?;
-    reject_explicit_null_schema_fields(&raw)?;
+    normalize_output_schema_null_placeholders(&mut raw)?;
     serde_json::from_value::<EvaluatorResponseJson>(raw)
         .map_err(|err| format!("failed to parse evaluator JSON response: {}", err))
 }
 
-fn reject_explicit_null_schema_fields(raw: &Value) -> Result<(), String> {
-    let Some(object) = raw.as_object() else {
+fn normalize_output_schema_null_placeholders(raw: &mut Value) -> Result<(), String> {
+    let Some(object) = raw.as_object_mut() else {
         return Err("evaluator response must be a JSON object".to_string());
     };
-    for key in ["answer", "error", "qScopeSuggestion"] {
+    if object.get("qScopeSuggestion").is_some_and(Value::is_null) {
+        return Err("qScopeSuggestion must not be null".to_string());
+    }
+    for key in ["answer", "error"] {
         if object.get(key).is_some_and(Value::is_null) {
-            return Err(format!("{} must not be null", key));
+            object.remove(key);
         }
     }
     Ok(())
@@ -229,7 +296,42 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_evaluator_response_json, EvaluatorResponseJson};
+    use super::{
+        evaluator_response_json_schema, evaluator_response_output_schema,
+        parse_evaluator_response_json, EvaluatorResponseJson,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn evaluator_response_json_schema_matches_interrogation_policy() {
+        let schema = evaluator_response_json_schema();
+
+        assert_eq!(schema["required"], json!(["evidence", "qScopeSuggestion"]));
+        assert_eq!(schema["properties"]["answer"]["type"], json!("string"));
+        assert_eq!(schema["properties"]["error"]["type"], json!("string"));
+        assert_eq!(schema["oneOf"][0]["required"], json!(["answer"]));
+        assert_eq!(schema["oneOf"][1]["required"], json!(["error"]));
+        assert_eq!(schema["additionalProperties"], json!(false));
+    }
+
+    #[test]
+    fn evaluator_response_output_schema_uses_app_server_dialect() {
+        let schema = evaluator_response_output_schema();
+
+        assert_eq!(
+            schema["required"],
+            json!(["answer", "error", "evidence", "qScopeSuggestion"])
+        );
+        assert_eq!(
+            schema["properties"]["answer"]["type"],
+            json!(["string", "null"])
+        );
+        assert_eq!(
+            schema["properties"]["error"]["type"],
+            json!(["string", "null"])
+        );
+        assert!(schema.get("oneOf").is_none());
+    }
 
     #[test]
     fn evaluator_response_requires_question_scope_suggestion() {
@@ -274,6 +376,18 @@ mod tests {
 
         response.validate_schema().unwrap();
         assert_eq!(response.question_scope_suggestion, vec!["src/main.rs"]);
+    }
+
+    #[test]
+    fn evaluator_response_treats_output_schema_null_placeholders_as_absent() {
+        let response = parse_evaluator_response_json(
+            r#"{"answer":"yes","error":null,"evidence":"`src/main.rs`","qScopeSuggestion":["src/main.rs"]}"#,
+        )
+        .unwrap();
+
+        response.validate_schema().unwrap();
+        assert_eq!(response.answer.as_deref(), Some("yes"));
+        assert_eq!(response.error, None);
     }
 
     #[test]

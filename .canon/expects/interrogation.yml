@@ -4,17 +4,15 @@
 - q: "Do the developer instructions explicitly prohibit proxy evidence?"
   a: yes
 
-- q: "Do your instructions require every response to be JSON and define the exact schema for that JSON?"
-  a: "yes"
-
 - q: "Do your instructions encourage you to make `qScopeSuggestion` as narrow as possible while still enough to justify the answer?"
   a: "yes"
 
 - q: "Are all interrogation prompt and instruction texts/templates kept under `resources/prompts/`?"
   a: "yes"
 
-- q: "Can `canon check` report a change in expectation results when the compared Git trees are the same?"
+- q: "Can you find a concrete scenario where the pass-improvement count used for the final agent advice is positive even though the checked tree and against tree for the run resolve to the same Git tree?"
   a: "no"
+  preset: smart
 
 - q: "Do your developer instructions contain any answer directive whose condition depends on the topic of a substantive project claim? Treat answer directive as any instruction that affects the semantic value of the final `answer`."
   a: "no"
@@ -23,6 +21,9 @@
 - q: "Can you find any logic that depends on the content of the evidence provided by the evaluator agent?"
   a: "no"
   cooldown: 1d
+
+- q: "Is the evaluator's response schema enforced by `turn/start.params.outputSchema`, not merely requested in the prompt?"
+  a: "yes"
 
 # - q: "Do the dev instructions require knowing any specialized terms whose meaning is not available from the dev instructions themselves?"
 #   a: "no"

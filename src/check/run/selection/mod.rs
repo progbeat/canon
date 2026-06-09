@@ -12,6 +12,8 @@ pub(crate) use cache_select::{
     select_expectations_after_cache, CachedFailureMode, CachedSelectionContext, CachedSelectionHit,
 };
 pub(crate) use cooldown::parse_cooldown;
+// Selector parsing and matching, including `not:<ID-PREFIX>` exclusions, lives
+// in `identity`.
 pub(crate) use identity::{
     expectation_identities, select_expectations_with_identities, ExpectationIdentity,
 };

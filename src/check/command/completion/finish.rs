@@ -29,6 +29,7 @@ pub(crate) struct CheckReportFinishContext<'a, 'b> {
     pub(crate) result_output: &'b mut dyn Write,
     pub(crate) check_caches: &'b mut CheckRunCaches,
     pub(crate) write_agent_message: bool,
+    pub(crate) checked_tree_matches_against_tree: bool,
 }
 
 pub(crate) fn finish_check_report(
@@ -50,6 +51,7 @@ pub(crate) fn finish_check_report(
             report,
             context.result_output,
             context.check_caches,
+            context.checked_tree_matches_against_tree,
         ) {
             finish_error.get_or_insert_with(|| err.to_string());
             post_finish_error.get_or_insert(err);
@@ -64,11 +66,15 @@ pub(crate) fn finish_check_report(
 
 fn staged_passes_failed_at_head_count_with_cache(
     root: &Path,
+    checked_tree_matches_against_tree: bool,
     agent: &AgentConfig,
     report: &CheckRunReport,
     history_cache: &mut HistoryCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<usize, String> {
+    if checked_tree_matches_against_tree {
+        return Ok(0);
+    }
     let mut count = 0usize;
     for passing in report_passing_expectations(report, agent) {
         match gate_cached_result_for_tree(
@@ -79,7 +85,17 @@ fn staged_passes_failed_at_head_count_with_cache(
             history_cache,
             visible_tree_oid_cache,
         )? {
-            GateCacheResult::Fail | GateCacheResult::Missing => count += 1,
+            GateCacheResult::Fail => count += 1,
+            GateCacheResult::Missing => {
+                if !head_visible_tree_matches_passing_record(
+                    root,
+                    agent,
+                    &passing,
+                    visible_tree_oid_cache,
+                )? {
+                    count += 1;
+                }
+            }
             GateCacheResult::Pass => {}
         }
     }
@@ -88,6 +104,19 @@ fn staged_passes_failed_at_head_count_with_cache(
 
 struct PassingExpectation {
     expectation: SelectedExpectation,
+    scope: Vec<String>,
+    visible_tree_oid: String,
+}
+
+fn head_visible_tree_matches_passing_record(
+    root: &Path,
+    agent: &AgentConfig,
+    passing: &PassingExpectation,
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
+) -> Result<bool, String> {
+    let head_visible_tree_oid =
+        visible_tree_oid_cache.gate_head_tree_fingerprint(root, agent, &passing.scope)?;
+    Ok(head_visible_tree_oid.as_deref() == Some(passing.visible_tree_oid.as_str()))
 }
 
 fn report_passing_expectations(
@@ -97,12 +126,18 @@ fn report_passing_expectations(
     let mut expectations = Vec::new();
     for record in report.records.iter().filter(|record| record.passed()) {
         if let Some(expectation) = selected_expectation_from_record(record, agent) {
-            expectations.push(PassingExpectation { expectation });
+            expectations.push(PassingExpectation {
+                expectation,
+                scope: record.scope.clone(),
+                visible_tree_oid: record.visible_tree_oid.clone(),
+            });
         }
     }
     for cached in report.cached.iter().filter(|cached| cached.record.passed()) {
         expectations.push(PassingExpectation {
             expectation: cached.expectation.clone(),
+            scope: cached.record.scope.clone(),
+            visible_tree_oid: cached.record.visible_tree_oid.clone(),
         });
     }
     expectations
@@ -155,11 +190,13 @@ fn write_check_agent_message(
     report: &CheckRunReport,
     output: &mut dyn Write,
     caches: &mut CheckRunCaches,
+    checked_tree_matches_against_tree: bool,
 ) -> Result<(), CommandError> {
     let messages = check_agent_messages(
         root,
         config,
         report,
+        checked_tree_matches_against_tree,
         &mut caches.history,
         &mut caches.visible_tree_oid,
     )?;
@@ -175,12 +212,14 @@ pub(crate) fn check_agent_messages(
     root: &Path,
     config: &CheckConfig,
     report: &CheckRunReport,
+    checked_tree_matches_against_tree: bool,
     history_cache: &mut HistoryCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<Vec<String>, String> {
     let agent = &config.agent;
     let num_fixes = staged_passes_failed_at_head_count_with_cache(
         root,
+        checked_tree_matches_against_tree,
         agent,
         report,
         history_cache,
@@ -252,8 +291,8 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn same_visible_tree_pass_with_missing_head_cache_is_an_improvement() {
-        let root = git_project("same-visible-tree-pass-improvement");
+    fn same_visible_tree_pass_with_missing_head_cache_is_not_an_improvement() {
+        let root = git_project("same-visible-tree-pass-no-improvement");
         let agent = AgentConfig::default();
         let scope = full_scope();
         let report = passing_report_for_staged_scope(&root, &agent, &scope);
@@ -262,6 +301,7 @@ mod tests {
 
         let count = staged_passes_failed_at_head_count_with_cache(
             &root,
+            false,
             &agent,
             &report,
             &mut history_cache,
@@ -269,7 +309,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(count, 1);
+        assert_eq!(count, 0);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -286,6 +326,7 @@ mod tests {
 
         let count = staged_passes_failed_at_head_count_with_cache(
             &root,
+            false,
             &agent,
             &report,
             &mut history_cache,
@@ -294,6 +335,31 @@ mod tests {
         .unwrap();
 
         assert_eq!(count, 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn matching_run_trees_ignore_late_staged_pass_improvement() {
+        let root = git_project("matching-run-trees-late-staged-pass");
+        let agent = AgentConfig::default();
+        let scope = full_scope();
+        fs::write(root.join("README.md"), "changed after preparation\n").unwrap();
+        git(&root, &["add", "README.md"]);
+        let report = passing_report_for_staged_scope(&root, &agent, &scope);
+        let mut history_cache = HistoryCache::default();
+        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
+
+        let count = staged_passes_failed_at_head_count_with_cache(
+            &root,
+            true,
+            &agent,
+            &report,
+            &mut history_cache,
+            &mut visible_tree_oid_cache,
+        )
+        .unwrap();
+
+        assert_eq!(count, 0);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -366,6 +432,7 @@ mod tests {
             &root,
             &config,
             &report,
+            false,
             &mut history_cache,
             &mut visible_tree_oid_cache,
         )
@@ -375,9 +442,9 @@ mod tests {
             messages,
             render_check_agent_messages(&["1".to_string()], &[], 0, 1)
         );
-        assert!(messages
-            .iter()
-            .any(|message| message.contains("run `canon show not:1 -- <PATHSPEC>...`")));
+        assert!(messages.iter().any(|message| message.contains(
+            "run `canon show not:1 [not:<ALREADY_IN_CONTEXT_EXPECTATION>]... -- <PATHSPEC>...`"
+        )));
         let _ = fs::remove_dir_all(root);
     }
 

@@ -4,6 +4,10 @@ use crate::check::core::CheckRecord;
 use crate::json_util::compact_json_string_array;
 use std::io::Write;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -12,6 +16,7 @@ const PROGRESS_DOT_INTERVAL: Duration = Duration::from_secs(60);
 pub(crate) struct LiveCheckProgressOutput {
     output: SharedCheckOutput,
     stop: Sender<()>,
+    active: Arc<AtomicBool>,
     worker: Option<JoinHandle<Result<(), String>>>,
 }
 
@@ -30,11 +35,16 @@ pub(crate) fn start_live_check_progress_output(
     )?;
 
     let (stop, stop_requested) = mpsc::channel();
+    let active = Arc::new(AtomicBool::new(true));
+    let worker_active = active.clone();
     let mut progress_output = output.clone();
     let worker = thread::spawn(move || loop {
         match stop_requested.recv_timeout(PROGRESS_DOT_INTERVAL) {
             Ok(()) | Err(RecvTimeoutError::Disconnected) => return Ok(()),
             Err(RecvTimeoutError::Timeout) => {
+                if !worker_active.load(Ordering::Acquire) {
+                    return Ok(());
+                }
                 write_stdout_record(&mut progress_output, b".", "check progress dot")?;
             }
         }
@@ -43,6 +53,7 @@ pub(crate) fn start_live_check_progress_output(
     Ok(LiveCheckProgressOutput {
         output,
         stop,
+        active,
         worker: Some(worker),
     })
 }
@@ -60,6 +71,7 @@ impl LiveCheckProgressOutput {
     }
 
     fn stop_progress_worker(&mut self) -> Result<(), String> {
+        self.active.store(false, Ordering::Release);
         let _ = self.stop.send(());
         let Some(worker) = self.worker.take() else {
             return Ok(());
@@ -70,21 +82,34 @@ impl LiveCheckProgressOutput {
     }
 }
 
-// Cached records and no-progress test callers do not represent an evaluator
-// currently running, so they write only the completed result record.
+// No-progress callers still write the documented minimum progress prefix. They
+// do not represent an evaluator currently running, so a single dot is enough.
 pub(crate) fn write_result_output_without_live_progress(
     result_output: &mut Option<&mut dyn Write>,
     record: &CheckRecord,
 ) -> Result<(), String> {
     if let Some(writer) = result_output.as_mut() {
-        let line = render_check_output_record(record);
+        let line = render_check_output_record_with_progress_dot(record);
         write_stdout_record(*writer, line.as_bytes(), "check result")?;
     }
     Ok(())
 }
 
-fn render_check_output_record(record: &CheckRecord) -> String {
+pub(crate) fn write_cached_non_pass_output(
+    result_output: &mut Option<&mut dyn Write>,
+    record: &CheckRecord,
+) -> Result<(), String> {
+    debug_assert!(!record.passed());
+    if let Some(writer) = result_output.as_mut() {
+        let line = render_check_output_record_with_progress_dot(record);
+        write_stdout_record(*writer, line.as_bytes(), "cached check result")?;
+    }
+    Ok(())
+}
+
+fn render_check_output_record_with_progress_dot(record: &CheckRecord) -> String {
     let mut output = record.display_id.clone();
+    output.push('.');
     output.push_str(&render_check_output_record_completion(record));
     output
 }

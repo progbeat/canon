@@ -40,6 +40,9 @@ pub(crate) struct AgainstTreeAnswer {
 pub(crate) fn developer_instructions(
     context: DeveloperInstructionsContext<'_>,
 ) -> Result<String, String> {
+    let num_invisible_files = context
+        .checked_file_count
+        .saturating_sub(context.visible_file_count);
     render_minijinja_resource_template(
         context.root,
         DEVELOPER_INSTRUCTIONS_TEMPLATE.trim_end(),
@@ -48,7 +51,7 @@ pub(crate) fn developer_instructions(
             against_tree_oid => context.against_tree_oid,
             checked_tree_oid => context.checked_tree_oid,
             visible_scope => context.visible_scope,
-            num_invisible_files => context.checked_file_count.saturating_sub(context.visible_file_count),
+            num_invisible_files => num_invisible_files,
         },
     )
 }
@@ -228,7 +231,8 @@ fn template_error(message: String) -> Error {
 mod tests {
     use super::{
         developer_instructions, evaluator_turn_prompt, truncated_template_command_output,
-        AgainstTreeAnswer, DeveloperInstructionsContext, TEMPLATE_OUTPUT_HEAD_BYTES,
+        AgainstTreeAnswer, DeveloperInstructionsContext, STATIC_DEVELOPER_INSTRUCTIONS,
+        TEMPLATE_OUTPUT_HEAD_BYTES,
     };
     use crate::git::{empty_tree_oid, staged_tree_oid};
     use serde_json::Value;
@@ -236,10 +240,12 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process;
     use std::process::Command;
+    use std::sync::{Mutex, OnceLock};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn developer_instructions_render_diff_and_visible_scope_context() {
+    fn developer_instructions_render_required_diff_and_visible_scope_context() {
+        let _lock = prompt_render_lock();
         let root = git_project("developer-instructions-template");
         fs::write(root.join("file.txt"), "changed\n").unwrap();
         git(&root, &["add", "file.txt"]);
@@ -257,6 +263,9 @@ mod tests {
         .unwrap();
 
         assert!(instructions.contains("$ git diff --numstat --cached\n"));
+        assert!(instructions
+            .trim_start()
+            .starts_with(STATIC_DEVELOPER_INSTRUCTIONS.trim_end()));
         assert!(instructions.contains("$ sandbox --read-only --scope [\".\"]"));
         assert!(instructions.contains("Hidden files: 0."));
 
@@ -264,7 +273,8 @@ mod tests {
     }
 
     #[test]
-    fn turn_prompt_includes_against_tree_answer_when_available() {
+    fn turn_prompt_renders_against_tree_answer_protocol_section() {
+        let _lock = prompt_render_lock();
         let prompt = evaluator_turn_prompt(
             Path::new(env!("CARGO_MANIFEST_DIR")),
             "Does it pass?",
@@ -287,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn long_template_output_first_line_keeps_output_head() {
+    fn long_template_output_renders_required_truncation_notice_after_head() {
         let output = "x".repeat(TEMPLATE_OUTPUT_HEAD_BYTES + 1);
 
         let rendered = truncated_template_command_output(&output).unwrap();
@@ -297,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn long_template_output_counts_only_complete_head_lines_when_possible() {
+    fn long_template_output_renders_required_complete_head_line_count() {
         let output = format!("first line\n{}", "x".repeat(TEMPLATE_OUTPUT_HEAD_BYTES + 1));
 
         let rendered = truncated_template_command_output(&output).unwrap();
@@ -321,6 +331,11 @@ mod tests {
         git(&root, &["config", "core.autocrlf", "false"]);
         git(&root, &["config", "core.eol", "lf"]);
         root
+    }
+
+    fn prompt_render_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(())).lock().unwrap()
     }
 
     fn git(root: &Path, args: &[&str]) {

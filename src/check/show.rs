@@ -1,4 +1,5 @@
 use crate::check::command::output::{escape_check_output_text, write_stdout_record};
+use crate::check::interrogation::state::initial_visible_scope_for_expectation;
 use crate::check::run::selection::{
     expectation_identities, order_by_latest_non_pass, select_expectations_with_identities,
 };
@@ -6,13 +7,12 @@ use crate::check::CHECK_PATH;
 use crate::check::{CheckRunCaches, SelectedExpectation};
 use crate::cli::CommandError;
 use crate::git::{validate_tree_arg, TreeSource, STAGED_TREE_ARG};
-use crate::hash::full_scope;
-use crate::history::latest_stored_q_scope_with_cache;
 use crate::notes::arg_to_string;
 use crate::repo_inspection::RepoInspectionCache;
 use crate::scope::visible_scope;
 use clap::builder::OsStringValueParser;
 use clap::{Arg, ArgAction, Command};
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::io;
 use std::path::Path;
@@ -23,6 +23,8 @@ pub(crate) fn run_show_command(root: &Path, args: &[OsString]) -> Result<(), Com
     let mut repo_cache = RepoInspectionCache::new();
     let config = repo_cache.load_check_config(root, Path::new(CHECK_PATH), &tree_source)?;
     let identities = expectation_identities(&config)?;
+    // Shared with `canon check`; this handles include selectors and
+    // `not:<ID-PREFIX>` exclusions before pathspec filtering.
     let selected = select_expectations_with_identities(&config, &identities, &command.selectors)?;
     let mut caches = CheckRunCaches::new();
     let filtered = filter_expectations_by_pathspecs(
@@ -155,24 +157,15 @@ fn show_q_scope(
     expectation: &SelectedExpectation,
     caches: &mut CheckRunCaches,
 ) -> Result<Vec<String>, String> {
-    let Some(scope) = latest_stored_q_scope_with_cache(
+    let active_lazy_full_scope_reset_ids = BTreeSet::new();
+    initial_visible_scope_for_expectation(
         root,
-        &expectation.agent,
+        tree_source,
         expectation,
         &mut caches.history,
-    )?
-    else {
-        return Ok(full_scope());
-    };
-    if caches
-        .visible_tree_oid
-        .visible_tree_oid_for_reuse(root, tree_source, &expectation.agent, &scope)?
-        .is_some()
-    {
-        Ok(scope)
-    } else {
-        Ok(full_scope())
-    }
+        &mut caches.visible_tree_oid,
+        &active_lazy_full_scope_reset_ids,
+    )
 }
 
 fn write_show_output(expectations: &[SelectedExpectation]) -> Result<(), String> {
@@ -236,6 +229,14 @@ mod tests {
     }
 
     #[test]
+    fn parse_show_accepts_separator_without_pathspecs() {
+        let parsed = parse_show_command_args(&[OsString::from("--")]).unwrap();
+
+        assert!(parsed.selectors.is_empty());
+        assert!(parsed.pathspecs.is_empty());
+    }
+
+    #[test]
     fn show_output_escapes_question_and_expected_answer() {
         let expectation = SelectedExpectation {
             number: 1,
@@ -252,6 +253,38 @@ mod tests {
             render_show_expectation(&expectation),
             "1.\nLine one\\nLine two\nExpected: yes\\tplease\n"
         );
+    }
+
+    #[test]
+    fn show_selector_supports_not_prefix() {
+        let root = git_project("canon-show-not-selector");
+        fs::create_dir_all(root.join(".canon")).unwrap();
+        fs::write(
+            root.join(".canon/check.yml"),
+            r#"version: 1
+presets:
+  default: {}
+expectations:
+  - q: Does alpha pass?
+    a: yes
+  - q: Does beta pass?
+    a: yes
+"#,
+        )
+        .unwrap();
+        git(&root, &["add", ".canon/check.yml"]);
+        let alpha_id = crate::hash::expectation_id("Does alpha pass?");
+        let selector = format!("not:{}", alpha_id);
+
+        let mut output = Vec::new();
+        let result = run_show_for_test(&root, &[selector.as_str()], &mut output);
+
+        let _ = fs::remove_dir_all(root);
+
+        result.unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(!output.contains("Does alpha pass?"));
+        assert!(output.contains("Does beta pass?"));
     }
 
     #[test]

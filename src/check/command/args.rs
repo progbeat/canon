@@ -1,4 +1,4 @@
-use crate::check::core::CheckCommandArgs;
+use crate::check::core::{CheckCommandArgs, RawCheckOptions};
 use crate::check::run::selection::{
     add_check_option_args, matched_os_values, raw_check_options_from_matches,
 };
@@ -75,11 +75,8 @@ pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommand
     if query.is_none() && query_preset.is_some() {
         return Err("canon check --preset requires -q".to_string());
     }
-    if query.is_some() && !options.is_empty() {
-        return Err(
-            "canon check -q cannot be combined with expectation selectors, --keep-going, or --ignore-cooldown"
-                .to_string(),
-        );
+    if query.is_some() {
+        validate_query_mode_options(&options)?;
     }
     if query.is_some() && query_scope.is_empty() {
         query_scope = full_scope();
@@ -146,6 +143,8 @@ pub(crate) fn check_help_command() -> Command {
                 .help("Disable canon-managed sandboxing; caller is responsible for isolation")
                 .action(ArgAction::SetTrue),
         );
+    // `add_check_option_args` supplies the selector argument used by the
+    // examples below, including `not:<ID-PREFIX>` exclusions.
     add_check_option_args(command).after_help(
             "Examples:\n  canon check\n      Check staged content against all canon expectations.\n\n  canon check a7F K9m\n      Check canon expectations selected by ID prefix.\n\n  canon check not:a7F not:K9m\n      Check all expectations except those whose IDs start with a7F or K9m.\n\n  canon check --tree HEAD --against-tree HEAD~1 a7F\n      Check one canon expectation on HEAD with comparison against the previous commit.\n\n  canon check -q \"Does the app expose Undo?\"\n      Ask a one-off question.\n\n  canon check -q \"Does the app expose Undo?\" -s src/app.rs\n      Ask a one-off question with a restricted visible scope.",
         )
@@ -178,6 +177,26 @@ fn normalize_query_scope_path(option: &str, value: &str) -> Result<String, Strin
     normalize_repo_path(value).map_err(|err| format!("{} path: {}", option, err))
 }
 
+fn validate_query_mode_options(options: &RawCheckOptions) -> Result<(), String> {
+    let mut invalid = Vec::new();
+    if !options.selectors.is_empty() {
+        invalid.push("expectation selectors");
+    }
+    if options.keep_going {
+        invalid.push("--keep-going");
+    }
+    if options.ignore_cooldown {
+        invalid.push("--ignore-cooldown");
+    }
+    if invalid.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "canon check -q cannot be combined with {}",
+        invalid.join(", ")
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,6 +219,46 @@ mod tests {
         let command = parse(&["-q", "Can this pass?"]).unwrap();
 
         assert_eq!(command.query_scope, vec![".".to_string()]);
+    }
+
+    #[test]
+    fn query_preserves_no_sandbox_flag() {
+        let command = parse(&["-q", "Can this pass?", "--no-sandbox"]).unwrap();
+
+        assert!(command.no_sandbox);
+    }
+
+    #[test]
+    fn query_accepts_break_after_tokens() {
+        let command = parse(&["-q", "Can this pass?", "--break-after-tokens", "1"]).unwrap();
+
+        assert_eq!(command.options.break_after_tokens, Some(1));
+    }
+
+    #[test]
+    fn query_rejects_expectation_selectors() {
+        let err = match parse(&["-q", "Can this pass?", "abc"]) {
+            Ok(_) => panic!("expected query selector combination to fail"),
+            Err(err) => err,
+        };
+
+        assert_eq!(
+            err,
+            "canon check -q cannot be combined with expectation selectors"
+        );
+    }
+
+    #[test]
+    fn query_rejects_ignored_check_run_options() {
+        let err = match parse(&["-q", "Can this pass?", "--keep-going", "--ignore-cooldown"]) {
+            Ok(_) => panic!("expected query check-run options to fail"),
+            Err(err) => err,
+        };
+
+        assert_eq!(
+            err,
+            "canon check -q cannot be combined with --keep-going, --ignore-cooldown"
+        );
     }
 
     #[test]
