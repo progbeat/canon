@@ -148,9 +148,10 @@ evaluator after the visible scope is applied.
 
 The scope applied to a staged tracked tree for an evaluator interrogation. It is
 formed from the latest verified q-scope for the expectation, or full project
-scope when no verified q-scope is stored. Configured ignore patterns are
-normalized as project-relative pathspec items, converted to excluding pathspec
-items, and applied last.
+scope when no verified q-scope is stored or the stored q-scope cannot be reused
+for the current visible tree. Configured ignore patterns are normalized as
+project-relative pathspec items, converted to excluding pathspec items, and
+applied last.
 
 ## Visible tree
 
@@ -175,8 +176,9 @@ materializing evaluator-visible trees.
 
 `check::interrogation::state::initial_visible_scope_for_expectation` forms the
 base q-scope from the latest verified q-scope, or full project scope when none
-is available. `staged::worktree::StagedWorktreeView::materialize_visible_scope`
-then applies the visible scope before creating the evaluator working tree.
+is available or the stored q-scope cannot be reused for the current visible
+tree. `staged::worktree::StagedWorktreeView::materialize_visible_scope` then
+applies the visible scope before creating the evaluator working tree.
 
 `check::core::EvaluatorResponseJson` parses evaluator evidence and the required
 `qScopeSuggestion` value. `check::interrogation::policy` treats suggestions as

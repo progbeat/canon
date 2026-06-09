@@ -139,6 +139,8 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         &config,
         command.no_sandbox,
     );
+    let checked_tree_matches_against_tree =
+        execution.tree_context.checked_tree_oid == execution.tree_context.against_tree_oid;
     let records_result = run_check_with_runner_and_caches(
         runtime,
         &options,
@@ -172,6 +174,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         started,
         &active_reset_ids,
         write_agent_message,
+        checked_tree_matches_against_tree,
     )
 }
 
@@ -251,6 +254,7 @@ fn finish_completed_check(
     started: Instant,
     active_reset_ids: &std::collections::BTreeSet<String>,
     write_agent_message: bool,
+    checked_tree_matches_against_tree: bool,
 ) -> Result<(), CommandError> {
     if let Err(err) = result_output.flush() {
         let err = format!("failed to flush check result to stdout: {}", err);
@@ -305,6 +309,7 @@ fn finish_completed_check(
             result_output,
             check_caches,
             write_agent_message,
+            checked_tree_matches_against_tree,
         },
         &completed.report,
         completed_error.as_deref(),
