@@ -68,9 +68,10 @@ impl LiveCheckProgressOutput {
         if let Err(stdout_err) =
             write_stdout_record(&mut output, completion.as_bytes(), "check result")
         {
-            // Best-effort fallback only: the in-memory run record must still
-            // be returned so summary accounting and diagnostic logs can still
-            // report this expectation.
+            // Human byte sinks can reject all writes; no CLI can force bytes
+            // into closed stdout/stderr. The report invariant here is that
+            // output failure cannot erase the CheckRecord from summary
+            // accounting or diagnostic logs.
             let _ = write_live_completion_fallback_to_stderr(record, &completion, &stdout_err);
         }
         Ok(())
