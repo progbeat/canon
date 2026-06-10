@@ -15,10 +15,10 @@ static TEMPLATE_OUTPUT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 // the turn prompt template.
 const DEVELOPER_INSTRUCTIONS_TEMPLATE: &str =
     include_str!("../../../resources/prompts/evaluator_developer_instructions.txt");
+// Runtime value for the developer template's `static_developer_instructions`
+// variable; it is rendered by this module but is not a separate template.
 const STATIC_DEVELOPER_INSTRUCTIONS: &str =
     include_str!("../../../resources/prompts/evaluator_static_developer_instructions.txt");
-pub(crate) const EVALUATOR_BASE_INSTRUCTIONS: &str =
-    include_str!("../../../resources/prompts/evaluator_base_instructions.txt");
 const EVALUATOR_TURN_PROMPT_TEMPLATE: &str =
     include_str!("../../../resources/prompts/evaluator_turn_prompt.txt");
 
