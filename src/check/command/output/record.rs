@@ -65,7 +65,13 @@ impl LiveCheckProgressOutput {
         let _ = self.stop_progress_worker();
         let completion = render_check_output_record_completion(record);
         let mut output = self.output.clone();
-        write_stdout_record(&mut output, completion.as_bytes(), "check result")
+        match write_stdout_record(&mut output, completion.as_bytes(), "check result") {
+            Ok(()) => Ok(()),
+            Err(stdout_err) => {
+                write_live_completion_fallback_to_stderr(record, &completion, &stdout_err)?;
+                Err(stdout_err)
+            }
+        }
     }
 
     fn stop_progress_worker(&mut self) -> Result<(), String> {
@@ -78,6 +84,24 @@ impl LiveCheckProgressOutput {
             .join()
             .map_err(|_| "check progress thread panicked".to_string())?
     }
+}
+
+fn write_live_completion_fallback_to_stderr(
+    record: &CheckRecord,
+    completion: &str,
+    stdout_err: &str,
+) -> Result<(), String> {
+    let fallback = format!("{}{}", record.display_id, completion);
+    let mut stderr = std::io::stderr();
+    stderr
+        .write_all(fallback.as_bytes())
+        .and_then(|_| stderr.flush())
+        .map_err(|stderr_err| {
+            format!(
+                "{}; failed to write fallback check result to stderr: {}",
+                stdout_err, stderr_err
+            )
+        })
 }
 
 // No-progress callers still write the documented minimum progress prefix. They
