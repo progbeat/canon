@@ -99,6 +99,9 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         ))),
         None => None,
     };
+    // There is intentionally no cancel-only path after the live prefix is
+    // printed. Any fallible step before the normal completion must finish the
+    // started line with an ERROR record.
     macro_rules! run_after_progress_try {
         ($expr:expr) => {
             match $expr {
