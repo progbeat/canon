@@ -1,5 +1,6 @@
 use crate::check::core::{
-    contains_line_break, ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION, ERROR_UNPARSABLE,
+    contains_line_break, matches_answer_pattern, ANSWER_PATTERN, ERROR_INSUFFICIENT_EVIDENCE,
+    ERROR_INVALID_QUESTION, ERROR_UNPARSABLE,
 };
 use crate::check::run::selection::parse_cooldown;
 use crate::config_types::{AgentConfig, CheckConfig};
@@ -27,16 +28,10 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
                 number
             ));
         }
-        if contains_line_break(&expectation.a) {
+        if !matches_answer_pattern(&expectation.a) {
             return Err(format!(
-                "expectation {} expected answer must be single-line",
-                number
-            ));
-        }
-        if !contains_visible_config_text(&expectation.a) {
-            return Err(format!(
-                "expectation {} expected answer must contain visible text",
-                number
+                "expectation {} expected answer must match answer pattern {}",
+                number, ANSWER_PATTERN
             ));
         }
         if matches!(

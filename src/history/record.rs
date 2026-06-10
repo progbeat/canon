@@ -1,4 +1,4 @@
-use crate::check::{CheckRecord, CheckResult, EvaluatorResponseJson};
+use crate::check::{matches_answer_pattern, CheckRecord, CheckResult, EvaluatorResponseJson};
 use crate::config_types::AgentConfig;
 use crate::fs_util::for_each_nonempty_line;
 use crate::git::{git_object_oid_has_hex_len, git_object_oid_has_known_shape, VisibleTreeOidCache};
@@ -27,12 +27,15 @@ pub(super) fn read_repository_history_records_from_path(
         VisibleTreeOidCache::new().repository_native_object_oid_hex_len(root)?;
     let mut records = Vec::new();
     for_each_nonempty_line(path, |line_number, line| {
-        let record = parse_history_record_line_for_expected(
+        let Some(record) = parse_repository_history_record_line_for_expected(
             path,
             line_number,
             &line,
-            Some(expected_answer),
-        )?;
+            expected_answer,
+        )?
+        else {
+            return Ok(());
+        };
         if !git_object_oid_has_hex_len(&record.visible_tree_oid, native_oid_hex_len) {
             return Err(format!(
                 "invalid answer history record in {} line {}: visibleTreeOid must match this repository's Git object hash algorithm",
@@ -59,7 +62,34 @@ pub(super) fn parse_history_record_line(
     parse_history_record_line_for_expected(path, line_number, line, None)
 }
 
+fn parse_repository_history_record_line_for_expected(
+    path: &Path,
+    line_number: usize,
+    line: &str,
+    expected_answer: &str,
+) -> Result<Option<CheckRecord>, String> {
+    let record = read_history_record_json(path, line_number, line, Some(expected_answer))?;
+    if !matches_answer_pattern(&record.observed) {
+        return Ok(None);
+    }
+    validate_schema_valid_answer_history_record(&record)
+        .map_err(|message| invalid_answer_history_record_message(path, line_number, message))?;
+    Ok(Some(record))
+}
+
 fn parse_history_record_line_for_expected(
+    path: &Path,
+    line_number: usize,
+    line: &str,
+    expected_answer: Option<&str>,
+) -> Result<CheckRecord, String> {
+    let record = read_history_record_json(path, line_number, line, expected_answer)?;
+    validate_schema_valid_answer_history_record(&record)
+        .map_err(|message| invalid_answer_history_record_message(path, line_number, message))?;
+    Ok(record)
+}
+
+fn read_history_record_json(
     path: &Path,
     line_number: usize,
     line: &str,
@@ -73,16 +103,20 @@ fn parse_history_record_line_for_expected(
             err
         )
     })?;
-    let record = record.into_check_record(expected_answer);
-    validate_schema_valid_answer_history_record(&record).map_err(|message| {
-        format!(
-            "invalid answer history record in {} line {}: records must be schema-valid responses with answer: {}",
-            path.display(),
-            line_number,
-            message
-        )
-    })?;
-    Ok(record)
+    Ok(record.into_check_record(expected_answer))
+}
+
+fn invalid_answer_history_record_message(
+    path: &Path,
+    line_number: usize,
+    message: String,
+) -> String {
+    format!(
+        "invalid answer history record in {} line {}: records must be schema-valid responses with answer: {}",
+        path.display(),
+        line_number,
+        message
+    )
 }
 
 #[derive(Deserialize)]
@@ -302,6 +336,25 @@ mod tests {
         let err = read_repository_history_records_from_path(repo_root(), &path, "yes").unwrap_err();
 
         assert!(err.contains("invalid history JSON"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn repository_history_read_skips_legacy_answer_values() {
+        let path = temp_history_path("legacy-answer");
+        fs::write(
+            &path,
+            concat!(
+                "{\"timestamp\":\"1970-01-01T00:00:00Z\",\"observed\":\"No - legacy prose\",\"evidence\":\"old\",\"visibleScope\":[\".\"],\"visibleTreeOid\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}\n",
+                "{\"timestamp\":\"1970-01-01T00:00:01Z\",\"observed\":\"yes\",\"evidence\":\"new\",\"visibleScope\":[\".\"],\"visibleTreeOid\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}\n",
+            ),
+        )
+        .unwrap();
+
+        let records = read_repository_history_records_from_path(repo_root(), &path, "yes").unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].observed, "yes");
         let _ = fs::remove_file(path);
     }
 

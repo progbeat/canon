@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 pub(crate) const ERROR_INSUFFICIENT_EVIDENCE: &str = "insufficient-evidence";
 pub(crate) const ERROR_INVALID_QUESTION: &str = "invalid-question";
 pub(crate) const ERROR_UNPARSABLE: &str = "unparsable";
+pub(crate) const ANSWER_PATTERN: &str = "^[-_a-z0-9]+$";
 
 #[derive(Debug, Clone)]
 pub(crate) struct ParsedAnswer {
@@ -59,8 +60,7 @@ pub(crate) fn evaluator_response_json_schema() -> Value {
         "properties": {
             "answer": {
                 "type": "string",
-                "minLength": 1,
-                "pattern": "^[^\\r\\n]*$",
+                "pattern": ANSWER_PATTERN,
             },
             "error": {
                 "type": "string",
@@ -176,8 +176,8 @@ impl EvaluatorResponseJson {
             );
         }
         if let Some(answer) = self.answer.as_deref() {
-            if answer.is_empty() || contains_schema_single_line_violation(answer) {
-                return Err("answer must be a non-empty single-line string".to_string());
+            if !matches_answer_pattern(answer) {
+                return Err(format!("answer must match pattern {}", ANSWER_PATTERN));
             }
         }
         if let Some(error) = self.error.as_deref() {
@@ -250,6 +250,13 @@ fn contains_schema_single_line_violation(value: &str) -> bool {
     value.chars().any(|char| matches!(char, '\r' | '\n'))
 }
 
+pub(crate) fn matches_answer_pattern(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'-' | b'_' | b'0'..=b'9' | b'a'..=b'z'))
+}
+
 fn deserialize_optional_answer<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: de::Deserializer<'de>,
@@ -298,7 +305,7 @@ where
 mod tests {
     use super::{
         evaluator_response_json_schema, evaluator_response_output_schema,
-        parse_evaluator_response_json, EvaluatorResponseJson,
+        parse_evaluator_response_json, EvaluatorResponseJson, ANSWER_PATTERN,
     };
     use serde_json::json;
 
@@ -308,6 +315,10 @@ mod tests {
 
         assert_eq!(schema["required"], json!(["evidence", "qScopeSuggestion"]));
         assert_eq!(schema["properties"]["answer"]["type"], json!("string"));
+        assert_eq!(
+            schema["properties"]["answer"]["pattern"],
+            json!(ANSWER_PATTERN)
+        );
         assert_eq!(schema["properties"]["error"]["type"], json!("string"));
         assert_eq!(schema["oneOf"][0]["required"], json!(["answer"]));
         assert_eq!(schema["oneOf"][1]["required"], json!(["error"]));
@@ -391,13 +402,27 @@ mod tests {
     }
 
     #[test]
-    fn evaluator_response_schema_allows_non_crlf_control_chars() {
+    fn evaluator_response_schema_allows_non_crlf_question_scope_chars() {
         let response = parse_evaluator_response_json(
-            "{\"answer\":\"yes\\t\",\"evidence\":\"`src/main.rs`\",\"qScopeSuggestion\":[\"src/main.rs\\u0008\"]}",
+            "{\"answer\":\"yes\",\"evidence\":\"`src/main.rs`\",\"qScopeSuggestion\":[\"src/main.rs\\u0008\"]}",
         )
         .unwrap();
 
         response.validate_schema().unwrap();
+    }
+
+    #[test]
+    fn evaluator_response_schema_rejects_answers_outside_answer_pattern() {
+        for invalid_answer in ["Rust", "yes\t", "yes\n", "yes\u{2028}still", ""] {
+            let response = EvaluatorResponseJson {
+                answer: Some(invalid_answer.to_string()),
+                error: None,
+                evidence: "ok".to_string(),
+                question_scope_suggestion: vec![".".to_string()],
+            };
+
+            assert!(response.validate_schema().unwrap_err().contains("answer"));
+        }
     }
 
     #[test]
@@ -419,20 +444,20 @@ mod tests {
     }
 
     #[test]
-    fn evaluator_response_schema_rejects_only_crlf_line_breaks() {
+    fn evaluator_response_schema_rejects_only_crlf_q_scope_line_breaks() {
         let schema_valid_unicode_separator = EvaluatorResponseJson {
-            answer: Some("yes\u{2028}still schema text".to_string()),
+            answer: Some("yes".to_string()),
             error: None,
             evidence: "ok".to_string(),
-            question_scope_suggestion: vec![".".to_string()],
+            question_scope_suggestion: vec!["src\u{2028}main.rs".to_string()],
         };
         assert!(schema_valid_unicode_separator.validate_schema().is_ok());
 
         let schema_invalid_crlf = EvaluatorResponseJson {
-            answer: Some("yes\nno".to_string()),
+            answer: Some("yes".to_string()),
             error: None,
             evidence: "ok".to_string(),
-            question_scope_suggestion: vec![".".to_string()],
+            question_scope_suggestion: vec!["src\nmain.rs".to_string()],
         };
         assert!(schema_invalid_crlf.validate_schema().is_err());
     }
