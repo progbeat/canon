@@ -79,7 +79,7 @@ mod tests {
         assert!(started.ends_with('.'));
         assert!(!started.contains('\n'));
 
-        progress.finish_with_record(&passing_record()).unwrap();
+        progress.finish_with_record(&passing_record());
         let completed = captured_string(&bytes);
         assert!(completed.starts_with(&started));
         assert_result_entry(&completed, "OK");
