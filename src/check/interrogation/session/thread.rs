@@ -6,11 +6,11 @@ use crate::check::interrogation::state::{
 };
 use crate::config_types::AgentConfig;
 use crate::evaluator::{
-    ask_once, developer_instructions, effective_thinking, evaluator_turn_prompt,
-    is_context_window_failure, session_failure_invalidates_thread, write_thread_lifecycle_event,
-    write_thread_restart_event, DeveloperInstructionsContext, EvaluatorError,
-    EvaluatorResponseParseCache, EvaluatorRunner, EvaluatorTurnContext, ParsedTurnResponse,
-    ThreadLifecycleLog,
+    ask_once as ask_evaluator_once, developer_instructions, effective_thinking,
+    evaluator_turn_prompt, is_context_window_failure, session_failure_invalidates_thread,
+    write_thread_lifecycle_event, write_thread_restart_event, DeveloperInstructionsContext,
+    EvaluatorError, EvaluatorResponseParseCache, EvaluatorRunner, EvaluatorTurnContext,
+    ParsedTurnResponse, ThreadLifecycleLog,
 };
 use crate::history::{against_tree_answer_with_cache, HistoryCache};
 use crate::logs::DiagnosticLogWriter;
@@ -169,7 +169,9 @@ fn ask_in_thread<R: EvaluatorRunner>(
     };
     let visible_scope =
         visible_scope(agent, request.enforced_scope).map_err(EvaluatorError::message)?;
-    ask_once(
+    // The evaluator turn boundary owns agent.request/agent.response runtime
+    // log events for the initial turn and any repair turn.
+    ask_evaluator_once(
         runner,
         &turn,
         request.prompt,

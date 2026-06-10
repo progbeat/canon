@@ -16,7 +16,8 @@ static TEMPLATE_OUTPUT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 const DEVELOPER_INSTRUCTIONS_TEMPLATE: &str =
     include_str!("../../../resources/prompts/evaluator_developer_instructions.txt");
 // Runtime value for the developer template's `static_developer_instructions`
-// variable; it is rendered by this module but is not a separate template.
+// variable. This text is evaluator protocol and evidence-sufficiency guidance,
+// not a table of topic-specific answer-value overrides.
 const STATIC_DEVELOPER_INSTRUCTIONS: &str =
     include_str!("../../../resources/prompts/evaluator_static_developer_instructions.txt");
 const EVALUATOR_TURN_PROMPT_TEMPLATE: &str =

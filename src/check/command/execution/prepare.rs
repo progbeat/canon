@@ -26,6 +26,10 @@ pub(crate) fn prepare_check_execution(
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<PreparedCheckExecution, String> {
     let staged_view = StagedWorktreeView::apply_for_tree_source(root, options.tree_source.clone())?;
+    // Prompt rendering loads `checked_tree_oid` into a temporary index before
+    // running the fixed `git diff --numstat --cached` transcript against
+    // `against_tree_oid`, so non-staged `--tree` checks still show the
+    // selected checked-vs-against diff.
     let tree_context = CheckTreeContext {
         checked_tree_oid: options.tree_source.tree_oid_for_prompt_diff(root)?,
         against_tree_oid: options.against_tree.tree_oid_for_prompt_diff(root)?,
