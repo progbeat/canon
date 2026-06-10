@@ -65,13 +65,14 @@ impl LiveCheckProgressOutput {
         let _ = self.stop_progress_worker();
         let completion = render_check_output_record_completion(record);
         let mut output = self.output.clone();
-        match write_stdout_record(&mut output, completion.as_bytes(), "check result") {
-            Ok(()) => Ok(()),
-            Err(stdout_err) => {
-                write_live_completion_fallback_to_stderr(record, &completion, &stdout_err)?;
-                Err(stdout_err)
-            }
+        if let Err(stdout_err) =
+            write_stdout_record(&mut output, completion.as_bytes(), "check result")
+        {
+            // Best-effort fallback only: the in-memory run record must still
+            // be returned so the expectation remains reported by the run.
+            let _ = write_live_completion_fallback_to_stderr(record, &completion, &stdout_err);
         }
+        Ok(())
     }
 
     fn stop_progress_worker(&mut self) -> Result<(), String> {
