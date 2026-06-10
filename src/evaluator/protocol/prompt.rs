@@ -44,13 +44,17 @@ pub(crate) fn developer_instructions(
         .checked_file_count
         .checked_sub(context.visible_file_count)
         .ok_or("visible file count exceeds checked file count")?;
-    render_minijinja_resource_template(
+    // The canon template displays this transcript as `git diff --numstat --cached`;
+    // back that with a temporary index containing the checked tree.
+    let prompt_diff_index = PromptDiffIndex::from_tree(context.root, context.checked_tree_oid)?;
+    render_minijinja_resource_template_with_git_index(
         context.root,
         DEVELOPER_INSTRUCTIONS_TEMPLATE.trim_end(),
+        Some(prompt_diff_index.path()),
         context! {
             static_developer_instructions => STATIC_DEVELOPER_INSTRUCTIONS.trim_end(),
-            against_tree_oid => context.against_tree_oid,
-            checked_tree_oid => context.checked_tree_oid,
+            against_tree_oid => "--cached",
+            checked_tree_oid => context.against_tree_oid,
             visible_scope => context.visible_scope,
             num_invisible_files => num_invisible_files,
         },
@@ -77,14 +81,29 @@ fn render_minijinja_resource_template(
     template: &str,
     context: minijinja::Value,
 ) -> Result<String, String> {
+    render_minijinja_resource_template_with_git_index(root, template, None, context)
+}
+
+fn render_minijinja_resource_template_with_git_index(
+    root: &Path,
+    template: &str,
+    git_index_file: Option<&Path>,
+    context: minijinja::Value,
+) -> Result<String, String> {
     let mut environment = Environment::new();
     environment.add_filter("json", json_filter);
     environment.add_filter("shq", shell_quote_filter);
     let command_root = root.to_path_buf();
+    let command_git_index_file = git_index_file.map(Path::to_path_buf);
     environment.add_filter(
         "sh",
         move |command: String, kwargs: Kwargs| -> Result<String, Error> {
-            shell_transcript_filter(&command_root, command, kwargs)
+            shell_transcript_filter(
+                &command_root,
+                command_git_index_file.as_deref(),
+                command,
+                kwargs,
+            )
         },
     );
     let template = environment
@@ -123,7 +142,12 @@ fn shell_quote_filter(value: String) -> String {
     shell_quote(&value)
 }
 
-fn shell_transcript_filter(root: &Path, command: String, kwargs: Kwargs) -> Result<String, Error> {
+fn shell_transcript_filter(
+    root: &Path,
+    git_index_file: Option<&Path>,
+    command: String,
+    kwargs: Kwargs,
+) -> Result<String, Error> {
     let display = kwargs
         .get::<Option<String>>("display")
         .map_err(|err| template_error(err.to_string()))?
@@ -131,10 +155,12 @@ fn shell_transcript_filter(root: &Path, command: String, kwargs: Kwargs) -> Resu
     kwargs
         .assert_all_used()
         .map_err(|err| template_error(err.to_string()))?;
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(&command)
-        .current_dir(root)
+    let mut process = Command::new("sh");
+    process.arg("-c").arg(&command).current_dir(root);
+    if let Some(git_index_file) = git_index_file {
+        process.env("GIT_INDEX_FILE", git_index_file);
+    }
+    let output = process
         .output()
         .map_err(|err| template_error(format!("failed to run prompt template command: {err}")))?;
     if !output.status.success() {
@@ -151,6 +177,46 @@ fn shell_transcript_filter(root: &Path, command: String, kwargs: Kwargs) -> Resu
     transcript.push('\n');
     transcript.push_str(&truncated_template_command_output(&stdout)?);
     Ok(transcript)
+}
+
+struct PromptDiffIndex {
+    path: PathBuf,
+}
+
+impl PromptDiffIndex {
+    fn from_tree(root: &Path, checked_tree_oid: &str) -> Result<PromptDiffIndex, String> {
+        let sequence = TEMPLATE_OUTPUT_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "canon-prompt-index-{}-{}",
+            std::process::id(),
+            sequence
+        ));
+        let output = Command::new("git")
+            .arg("read-tree")
+            .arg(checked_tree_oid)
+            .env("GIT_INDEX_FILE", &path)
+            .current_dir(root)
+            .output()
+            .map_err(|err| format!("failed to prepare prompt diff index: {err}"))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "failed to prepare prompt diff index: {}",
+                stderr.trim()
+            ));
+        }
+        Ok(PromptDiffIndex { path })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for PromptDiffIndex {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
 }
 
 fn truncated_template_command_output(output: &str) -> Result<String, Error> {
@@ -269,6 +335,36 @@ mod tests {
             .starts_with(STATIC_DEVELOPER_INSTRUCTIONS.trim_end()));
         assert!(instructions.contains("$ sandbox --read-only --scope [\".\"]"));
         assert!(instructions.contains("Hidden files: 0."));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn developer_instructions_prompt_diff_uses_checked_tree_not_real_index() {
+        let _lock = prompt_render_lock();
+        let root = git_project("developer-instructions-prompt-diff-index");
+        fs::write(root.join("tracked.txt"), "base\n").unwrap();
+        git(&root, &["add", "tracked.txt"]);
+        let against_tree_oid = staged_tree_oid(&root).unwrap();
+        fs::write(root.join("tracked.txt"), "checked\n").unwrap();
+        git(&root, &["add", "tracked.txt"]);
+        let checked_tree_oid = staged_tree_oid(&root).unwrap();
+        fs::write(root.join("other.txt"), "real index only\n").unwrap();
+        git(&root, &["add", "other.txt"]);
+
+        let instructions = developer_instructions(DeveloperInstructionsContext {
+            root: &root,
+            against_tree_oid: &against_tree_oid,
+            checked_tree_oid: &checked_tree_oid,
+            visible_scope: &[".".to_string()],
+            checked_file_count: 1,
+            visible_file_count: 1,
+        })
+        .unwrap();
+
+        assert!(instructions.contains("$ git diff --numstat --cached\n"));
+        assert!(instructions.contains("1\t1\ttracked.txt\n"));
+        assert!(!instructions.contains("other.txt"));
 
         let _ = fs::remove_dir_all(root);
     }
