@@ -118,10 +118,10 @@ Outcome labels follow pytest pluralization: `failed`, `passed`, and `skipped`
 are used for both singular and plural counts; `error` is used for one error and
 `errors` for every other error count.
 
-`passed` is the number of collected expectations whose result is pass.
-`failed` is the number of collected expectations whose result is fail.
-`errors` is the number of collected expectations whose result requires human review.
-`skipped` is the number of collected expectations that do not yet have an evaluated or cached result.
+`passed` is the number of expectations whose result is pass.
+`failed` is the number of expectations whose result is fail.
+`errors` is the number of expectations that encountered errors during evaluation in this run.
+`skipped` is the number of expectations that do not yet have an evaluated or cached result.
 
 Each collected expectation is counted exactly once in passed, failed, errors, or skipped.
 

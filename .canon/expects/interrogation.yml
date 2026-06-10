@@ -25,5 +25,8 @@
 - q: "Is the evaluator's response schema enforced by `turn/start.params.outputSchema`, not merely requested in the prompt?"
   a: "yes"
 
+- q: "When `canon check` prints <short ID>, can you find an abnormal scenario in which it does not report anything for this expectation?"
+  a: "no"
+
 # - q: "Do the dev instructions require knowing any specialized terms whose meaning is not available from the dev instructions themselves?"
 #   a: "no"
