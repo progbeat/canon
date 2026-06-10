@@ -144,14 +144,24 @@ pub(crate) fn question_scope_suggestion_scope_for_independent_verification(
     let Some(suggestion) = suggestion else {
         return Ok(None);
     };
+    let suggested_scope = match sanitize_scope(suggestion) {
+        Ok(scope) => scope,
+        Err(_) => return Ok(None),
+    };
+    if runtime
+        .visible_tree_oid(visible_tree_oid_cache, agent, &suggested_scope)
+        .is_err()
+    {
+        return Ok(None);
+    }
     let current_count = runtime.visible_file_count(visible_tree_oid_cache, agent, current_scope)?;
     let suggested_count =
-        match runtime.visible_file_count(visible_tree_oid_cache, agent, suggestion) {
+        match runtime.visible_file_count(visible_tree_oid_cache, agent, &suggested_scope) {
             Ok(count) => count,
             Err(_) => return Ok(None),
         };
     if suggested_scope_is_at_least_25_percent_smaller(current_count, suggested_count) {
-        Ok(sanitize_scope(suggestion).ok())
+        Ok(Some(suggested_scope))
     } else {
         Ok(None)
     }
@@ -193,10 +203,97 @@ pub(crate) fn write_scope_narrowing_event(
 
 #[cfg(test)]
 mod tests {
-    use super::suggested_scope_is_at_least_25_percent_smaller;
+    use super::{
+        question_scope_suggestion_scope_for_independent_verification,
+        suggested_scope_is_at_least_25_percent_smaller,
+    };
+    use crate::check::interrogation::state::{CheckRuntime, CheckTreeContext};
+    use crate::config_types::{AgentConfig, CheckConfig};
+    use crate::git::{TreeSource, VisibleTreeOidCache};
+    use crate::staged::StagedWorktreeView;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::process;
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn equal_zero_file_scope_is_not_smaller() {
         assert!(!suggested_scope_is_at_least_25_percent_smaller(0, 0));
+    }
+
+    #[test]
+    fn absent_suggestion_path_is_not_verified_for_narrowing() {
+        let root = git_project("absent-q-scope-suggestion");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/present.rs"), "present\n").unwrap();
+        fs::write(root.join("src/other.rs"), "other\n").unwrap();
+        git(&root, &["add", "src/present.rs", "src/other.rs"]);
+        let source = TreeSource::Staged;
+        let agent = AgentConfig::default();
+        let config = CheckConfig {
+            version: 1,
+            presets: Default::default(),
+            agent: agent.clone(),
+            expectations: Vec::new(),
+        };
+        let staged_view = StagedWorktreeView::apply_for_tree_source(&root, source.clone()).unwrap();
+        let mut cache = VisibleTreeOidCache::new();
+        let tree_context = CheckTreeContext {
+            checked_tree_oid: source.tree_oid_for_prompt_diff(&root).unwrap(),
+            against_tree_oid: source.tree_oid_for_prompt_diff(&root).unwrap(),
+            against_tree: source.clone(),
+            checked_file_count: cache.checked_file_count(&root, &source).unwrap(),
+        };
+        let runtime =
+            CheckRuntime::materialized(&root, &staged_view, &source, tree_context, &config, false);
+        let current_scope = vec![".".to_string()];
+        let suggestion = vec!["src/present.rs".to_string(), "src/missing.rs".to_string()];
+
+        let proposed = question_scope_suggestion_scope_for_independent_verification(
+            &runtime,
+            &agent,
+            Some(&suggestion),
+            &current_scope,
+            &mut cache,
+        )
+        .unwrap();
+
+        assert!(proposed.is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn git_project(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-tmp")
+            .join(format!(
+                "canon-policy-{}-{}-{}",
+                name,
+                process::id(),
+                unique
+            ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        git(&root, &["init", "--quiet"]);
+        root
+    }
+
+    fn git(root: &std::path::Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

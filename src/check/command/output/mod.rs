@@ -11,8 +11,8 @@ mod usage;
 pub(crate) use escape::escape_check_output_text;
 pub(crate) use query::write_query_output;
 pub(crate) use record::{
-    start_live_check_progress_output, write_cached_non_pass_output,
-    write_result_output_without_live_progress, LiveCheckProgressOutput,
+    start_expectation_report_output, write_cached_non_pass_output,
+    write_result_output_without_started_report, StartedExpectationReportOutput,
 };
 pub(crate) use shared::{write_stdout_record, SharedCheckOutput};
 pub(crate) use summary::{render_check_agent_messages, summary_outcome_counts, write_summary_line};
@@ -21,8 +21,8 @@ pub(crate) use usage::render_token_usage_summary;
 #[cfg(test)]
 mod tests {
     use super::{
-        render_check_agent_messages, start_live_check_progress_output,
-        write_cached_non_pass_output, write_result_output_without_live_progress, SharedCheckOutput,
+        render_check_agent_messages, start_expectation_report_output, write_cached_non_pass_output,
+        write_result_output_without_started_report, SharedCheckOutput,
     };
     use crate::check::core::{CheckRecord, CheckResult};
     use std::io::{self, Write};
@@ -67,11 +67,11 @@ mod tests {
     }
 
     #[test]
-    fn no_progress_result_output_matches_documented_record_shape() {
+    fn non_live_report_result_output_matches_documented_record_shape() {
         let mut bytes = Vec::new();
         let mut result_output = Some(&mut bytes as &mut dyn Write);
 
-        write_result_output_without_live_progress(&mut result_output, &passing_record()).unwrap();
+        write_result_output_without_started_report(&mut result_output, &passing_record()).unwrap();
 
         let rendered = String::from_utf8(bytes).unwrap();
         assert_result_entry(&rendered, "OK");
@@ -89,37 +89,37 @@ mod tests {
     }
 
     #[test]
-    fn live_progress_output_completes_the_started_result_entry() {
+    fn started_expectation_report_completes_the_started_result_entry() {
         let bytes = Arc::new(Mutex::new(Vec::new()));
         let output = SharedCheckOutput::new(Box::new(CapturedOutput {
             bytes: bytes.clone(),
         }));
 
-        let progress = start_live_check_progress_output(output, "j");
+        let report = start_expectation_report_output(output, "j");
         let started = captured_string(&bytes);
         assert!(started.starts_with('j'));
         assert!(started.ends_with('.'));
         assert!(!started.contains('\n'));
 
-        progress.finish_with_record(&passing_record());
+        report.finish_with_record(&passing_record());
         let completed = captured_string(&bytes);
         assert!(completed.starts_with(&started));
         assert_result_entry(&completed, "OK");
     }
 
     #[test]
-    fn live_progress_output_renders_full_result_after_unconfirmed_prefix() {
+    fn started_expectation_report_renders_full_result_after_unconfirmed_prefix() {
         let bytes = Arc::new(Mutex::new(Vec::new()));
         let output = SharedCheckOutput::new(Box::new(FirstFlushFailsOutput {
             bytes: bytes.clone(),
             fail_next_flush: Arc::new(Mutex::new(true)),
         }));
 
-        let progress = start_live_check_progress_output(output, "j");
+        let report = start_expectation_report_output(output, "j");
         let started = captured_string(&bytes);
         assert_eq!(started, "j.");
 
-        progress.finish_with_record(&passing_record());
+        report.finish_with_record(&passing_record());
         let completed = captured_string(&bytes);
         assert!(completed.ends_with("j. OK\n"));
     }
@@ -170,11 +170,11 @@ mod tests {
 
     fn assert_result_entry(rendered: &str, status: &str) {
         let first_line = rendered.lines().next().expect("result entry line");
-        let (progress, observed_status) = first_line
+        let (id_and_dots, observed_status) = first_line
             .split_once(' ')
-            .expect("result entry separates progress from status");
-        assert_eq!(progress.trim_end_matches('.'), "j");
-        assert!(progress.ends_with('.'));
+            .expect("result entry separates id/dots from status");
+        assert_eq!(id_and_dots.trim_end_matches('.'), "j");
+        assert!(id_and_dots.ends_with('.'));
         assert_eq!(observed_status, status);
     }
 

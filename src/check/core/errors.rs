@@ -1,9 +1,8 @@
-use crate::check::core::{
-    CheckRecord, CheckRecordOutcome, CheckResult, SelectedExpectation, ERROR_UNPARSABLE,
-};
+use crate::check::core::{CheckRecord, CheckResult, SelectedExpectation, ERROR_UNPARSABLE};
 use crate::check::interrogation::state::CheckRuntime;
 use crate::config_types::AgentConfig;
 use crate::git::VisibleTreeOidCache;
+use crate::time::{format_record_timestamp, unix_timestamp};
 
 pub(crate) fn error_record_from_interrogation_error(
     runtime: &CheckRuntime<'_>,
@@ -23,16 +22,36 @@ pub(crate) fn error_record_from_visible_tree_oid(
     error: &str,
     visible_tree_oid: String,
 ) -> Result<CheckRecord, String> {
-    CheckRecord::current_from_expectation(
+    let timestamp = format_record_timestamp(unix_timestamp()?);
+    Ok(error_record_from_visible_tree_oid_at(
         expectation,
-        CheckRecordOutcome {
-            result: CheckResult::Fail,
-            observed: ERROR_UNPARSABLE.to_string(),
-            error: Some(ERROR_UNPARSABLE.to_string()),
-            evidence: error.to_string(),
-            scope: scope.to_vec(),
-            question_scope_suggestion: None,
-            visible_tree_oid,
-        },
-    )
+        scope,
+        error,
+        visible_tree_oid,
+        timestamp,
+    ))
+}
+
+pub(crate) fn error_record_from_visible_tree_oid_at(
+    expectation: &SelectedExpectation,
+    scope: &[String],
+    error: &str,
+    visible_tree_oid: String,
+    timestamp: String,
+) -> CheckRecord {
+    CheckRecord {
+        timestamp,
+        number: expectation.number,
+        result: CheckResult::Fail,
+        question: Some(expectation.question.clone()),
+        expected_answer: Some(expectation.expected_answer.clone()),
+        observed: ERROR_UNPARSABLE.to_string(),
+        error: Some(ERROR_UNPARSABLE.to_string()),
+        evidence: error.to_string(),
+        scope: scope.to_vec(),
+        question_scope_suggestion: None,
+        visible_tree_oid,
+        id: expectation.id.clone(),
+        display_id: expectation.display_id.clone(),
+    }
 }
