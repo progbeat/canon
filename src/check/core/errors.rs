@@ -14,6 +14,15 @@ pub(crate) fn error_record_from_interrogation_error(
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<CheckRecord, String> {
     let visible_tree_oid = runtime.visible_tree_oid(visible_tree_oid_cache, agent, scope)?;
+    error_record_from_visible_tree_oid(expectation, scope, error, visible_tree_oid)
+}
+
+pub(crate) fn error_record_from_visible_tree_oid(
+    expectation: &SelectedExpectation,
+    scope: &[String],
+    error: &str,
+    visible_tree_oid: String,
+) -> Result<CheckRecord, String> {
     CheckRecord::current_from_expectation(
         expectation,
         CheckRecordOutcome {

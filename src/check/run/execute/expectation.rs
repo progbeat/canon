@@ -3,7 +3,7 @@ use crate::check::command::output::{
     start_live_check_progress_output, write_result_output_without_live_progress,
     LiveCheckProgressOutput, SharedCheckOutput,
 };
-use crate::check::core::errors::error_record_from_interrogation_error;
+use crate::check::core::errors::error_record_from_visible_tree_oid;
 use crate::check::core::{CheckOptions, CheckRecord, SelectedExpectation};
 use crate::check::interrogation::policy::{
     interrogate_with_full_scope_retry, narrowed_scope_is_accepted,
@@ -82,6 +82,14 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         &mut context.caches.visible_tree_oid,
         context.active_lazy_full_scope_reset_ids,
     ));
+    // Prepare the metadata needed to finish an errored expectation before
+    // printing the live progress prefix. After `<short ID>.` is visible, later
+    // fallible steps can always complete that line with an ERROR record.
+    let progress_error_visible_tree_oid = run_expectation_try!(context.runtime.visible_tree_oid(
+        &mut context.caches.visible_tree_oid,
+        &expectation.agent,
+        &verified_q_scope,
+    ));
     // Start live progress before the evaluator turn so the first dot is
     // visible while the expectation is still being evaluated.
     let mut progress = match context.live_progress_output.as_ref() {
@@ -100,6 +108,7 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
                         context,
                         expectation,
                         &verified_q_scope,
+                        &progress_error_visible_tree_oid,
                         &mut progress,
                         error.to_string(),
                     );
@@ -222,16 +231,15 @@ fn finish_expectation_error<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
     expectation: &SelectedExpectation,
     scope: &[String],
+    visible_tree_oid: &str,
     progress: &mut Option<LiveCheckProgressOutput>,
     error: String,
 ) -> Result<ExpectationRunOutcome, String> {
-    let record = error_record_from_interrogation_error(
-        context.runtime,
-        &expectation.agent,
+    let record = error_record_from_visible_tree_oid(
         expectation,
         scope,
         &error,
-        &mut context.caches.visible_tree_oid,
+        visible_tree_oid.to_string(),
     )?;
     if let Some(progress) = progress.take() {
         progress.finish_with_record(&record)?;
