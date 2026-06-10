@@ -1,8 +1,9 @@
-use super::progress::cancel_progress_on_error;
 use super::CheckRunCaches;
 use crate::check::command::output::{
-    start_live_check_progress_output, write_result_output_without_live_progress, SharedCheckOutput,
+    start_live_check_progress_output, write_result_output_without_live_progress,
+    LiveCheckProgressOutput, SharedCheckOutput,
 };
+use crate::check::core::errors::error_record_from_interrogation_error;
 use crate::check::core::{CheckOptions, CheckRecord, SelectedExpectation};
 use crate::check::interrogation::policy::{
     interrogate_with_full_scope_retry, narrowed_scope_is_accepted,
@@ -90,21 +91,35 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         ))),
         None => None,
     };
-    let mut interrogation = run_expectation_try!(cancel_progress_on_error(
-        interrogate_with_full_scope_retry(
-            ScopedInterrogation {
-                runtime: context.runtime,
-                expectation,
-                enforced_scope: &mut verified_q_scope,
-            },
-            context.runner,
-            context.diagnostic_log,
-            context.interrogation_run_state,
-            &mut context.caches.history,
-            &mut context.caches.visible_tree_oid,
-            context.options.break_after_tokens,
-        ),
-        &mut progress,
+    macro_rules! run_after_progress_try {
+        ($expr:expr) => {
+            match $expr {
+                Ok(value) => value,
+                Err(error) => {
+                    return finish_expectation_error(
+                        context,
+                        expectation,
+                        &verified_q_scope,
+                        &mut progress,
+                        error.to_string(),
+                    );
+                }
+            }
+        };
+    }
+
+    let mut interrogation = run_after_progress_try!(interrogate_with_full_scope_retry(
+        ScopedInterrogation {
+            runtime: context.runtime,
+            expectation,
+            enforced_scope: &mut verified_q_scope,
+        },
+        context.runner,
+        context.diagnostic_log,
+        context.interrogation_run_state,
+        &mut context.caches.history,
+        &mut context.caches.visible_tree_oid,
+        context.options.break_after_tokens,
     ));
     let mut break_after_tokens_hit =
         turn_exceeds_break_after_tokens(&interrogation, context.options.break_after_tokens);
@@ -116,49 +131,42 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     let proposed_q_scope = if interrogation.record.requires_human_review() {
         None
     } else {
-        run_expectation_try!(cancel_progress_on_error(
+        run_after_progress_try!(
             question_scope_suggestion_scope_for_independent_verification(
                 context.runtime,
                 &expectation.agent,
                 interrogation.record.question_scope_suggestion.as_deref(),
                 &verified_q_scope,
                 &mut context.caches.visible_tree_oid,
-            ),
-            &mut progress,
-        ))
+            )
+        )
     };
     if let Some(proposed_scope) = proposed_q_scope {
         let mut verification_scope = proposed_scope.clone();
-        let narrowed = run_expectation_try!(cancel_progress_on_error(
-            interrogate_with_full_scope_retry(
-                ScopedInterrogation {
-                    runtime: context.runtime,
-                    expectation,
-                    enforced_scope: &mut verification_scope,
-                },
-                context.runner,
-                context.diagnostic_log,
-                context.interrogation_run_state,
-                &mut context.caches.history,
-                &mut context.caches.visible_tree_oid,
-                context.options.break_after_tokens,
-            ),
-            &mut progress,
+        let narrowed = run_after_progress_try!(interrogate_with_full_scope_retry(
+            ScopedInterrogation {
+                runtime: context.runtime,
+                expectation,
+                enforced_scope: &mut verification_scope,
+            },
+            context.runner,
+            context.diagnostic_log,
+            context.interrogation_run_state,
+            &mut context.caches.history,
+            &mut context.caches.visible_tree_oid,
+            context.options.break_after_tokens,
         ));
         break_after_tokens_hit |=
             turn_exceeds_break_after_tokens(&narrowed, context.options.break_after_tokens);
         context_compaction_hit |= turn_has_context_compaction(&narrowed);
         stop_after_current_expectation |= narrowed.stop_after_current_expectation;
         let accepted = narrowed_scope_is_accepted(&narrowed.record);
-        run_expectation_try!(cancel_progress_on_error(
-            write_scope_narrowing_event(
-                context.diagnostic_log,
-                &expectation.id,
-                &verified_q_scope,
-                &proposed_scope,
-                accepted,
-            ),
-            &mut progress,
+        run_after_progress_try!(write_scope_narrowing_event(
+            context.diagnostic_log,
+            &expectation.id,
+            &verified_q_scope,
+            &proposed_scope,
+            accepted,
         ));
         if accepted {
             interrogation = narrowed;
@@ -207,5 +215,43 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     Ok(ExpectationRunOutcome {
         record: interrogation.record,
         stop_run,
+    })
+}
+
+fn finish_expectation_error<R: EvaluatorRunner>(
+    context: &mut ExpectationRunContext<'_, '_, '_, R>,
+    expectation: &SelectedExpectation,
+    scope: &[String],
+    progress: &mut Option<LiveCheckProgressOutput>,
+    error: String,
+) -> Result<ExpectationRunOutcome, String> {
+    let record = error_record_from_interrogation_error(
+        context.runtime,
+        &expectation.agent,
+        expectation,
+        scope,
+        &error,
+        &mut context.caches.visible_tree_oid,
+    )?;
+    if let Some(progress) = progress.take() {
+        progress.finish_with_record(&record)?;
+    } else {
+        write_result_output_without_live_progress(context.result_output, &record)?;
+    }
+    write_latest_non_pass_record_with_cache(
+        context.runtime.root,
+        expectation,
+        &record,
+        &mut context.caches.history,
+    )?;
+    if let Some(writer) = context.diagnostic_log.as_deref_mut() {
+        writer
+            .write_record_event(DiagnosticRecordEvent::Expectation, &record)
+            .map_err(|err| err.to_string())?;
+    }
+    context.interrogation_run_state.clear_thread_sessions();
+    Ok(ExpectationRunOutcome {
+        record,
+        stop_run: !context.options.keep_going,
     })
 }

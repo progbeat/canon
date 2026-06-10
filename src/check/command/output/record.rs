@@ -66,10 +66,6 @@ impl LiveCheckProgressOutput {
         write_stdout_record(&mut output, completion.as_bytes(), "check result")
     }
 
-    pub(crate) fn cancel(mut self) -> Result<(), String> {
-        self.stop_progress_worker()
-    }
-
     fn stop_progress_worker(&mut self) -> Result<(), String> {
         self.active.store(false, Ordering::Release);
         let _ = self.stop.send(());
