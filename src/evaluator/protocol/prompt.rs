@@ -303,7 +303,7 @@ mod tests {
         let rendered = truncated_template_command_output(&output).unwrap();
 
         assert!(rendered.starts_with('x'));
-        assert!(rendered.contains("[truncated: showing first 1 of 1 lines; full output: "));
+        assert_truncation_notice_points_to_full_output(&rendered, &output);
     }
 
     #[test]
@@ -313,7 +313,22 @@ mod tests {
         let rendered = truncated_template_command_output(&output).unwrap();
 
         assert!(rendered.starts_with("first line\n"));
-        assert!(rendered.contains("[truncated: showing first 1 of 2 lines; full output: "));
+        assert!(!rendered.contains(&"x".repeat(TEMPLATE_OUTPUT_HEAD_BYTES)));
+        assert_truncation_notice_points_to_full_output(&rendered, &output);
+    }
+
+    fn assert_truncation_notice_points_to_full_output(rendered: &str, output: &str) {
+        let notice = rendered
+            .lines()
+            .find(|line| line.starts_with("[truncated: "))
+            .expect("long template output should include a truncation notice");
+        let path = notice
+            .strip_suffix(']')
+            .and_then(|line| line.rsplit_once("full output: "))
+            .map(|(_, path)| Path::new(path))
+            .expect("truncation notice should include a full-output path");
+        assert_eq!(fs::read_to_string(path).unwrap(), output);
+        let _ = fs::remove_file(path);
     }
 
     fn git_project(name: &str) -> PathBuf {

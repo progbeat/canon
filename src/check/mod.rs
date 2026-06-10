@@ -1,5 +1,8 @@
 pub(crate) const CHECK_PATH: &str = ".canon/check.yml";
 
+// The check component is split by lifecycle phase: command handling, config
+// loading, shared records, evaluator interrogation, run orchestration, and show
+// rendering. This root exposes the small surface other components need.
 mod command;
 mod config;
 mod core;

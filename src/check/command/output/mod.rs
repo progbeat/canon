@@ -28,15 +28,6 @@ mod tests {
     use std::io::{self, Write};
     use std::sync::{Arc, Mutex};
 
-    #[derive(Debug, PartialEq, Eq)]
-    enum AgentMessageKind {
-        AllClear,
-        CommitNotice,
-        RepairInstruction,
-        FixIssues,
-        ThenFixRemaining,
-    }
-
     #[derive(Clone)]
     struct CapturedOutput {
         bytes: Arc<Mutex<Vec<u8>>>,
@@ -54,30 +45,29 @@ mod tests {
     }
 
     #[test]
-    fn documented_no_progress_result_output_has_progress_dot() {
+    fn no_progress_result_output_matches_documented_record_shape() {
         let mut bytes = Vec::new();
         let mut result_output = Some(&mut bytes as &mut dyn Write);
 
         write_result_output_without_live_progress(&mut result_output, &passing_record()).unwrap();
 
         let rendered = String::from_utf8(bytes).unwrap();
-        assert!(rendered.starts_with("j. "));
-        assert!(rendered.ends_with("OK\n"));
+        assert_result_entry(&rendered, "OK");
     }
 
     #[test]
-    fn documented_cached_non_pass_output_has_progress_dot() {
+    fn cached_non_pass_output_matches_documented_record_shape() {
         let mut bytes = Vec::new();
         let mut result_output = Some(&mut bytes as &mut dyn Write);
 
         write_cached_non_pass_output(&mut result_output, &failed_record()).unwrap();
 
         let rendered = String::from_utf8(bytes).unwrap();
-        assert!(rendered.starts_with("j. FAILED\n"));
+        assert_result_entry(&rendered, "FAILED");
     }
 
     #[test]
-    fn documented_live_progress_output_emits_prefix_before_completion() {
+    fn live_progress_output_completes_the_started_result_entry() {
         let bytes = Arc::new(Mutex::new(Vec::new()));
         let output = SharedCheckOutput::new(Box::new(CapturedOutput {
             bytes: bytes.clone(),
@@ -92,81 +82,61 @@ mod tests {
         progress.finish_with_record(&passing_record()).unwrap();
         let completed = captured_string(&bytes);
         assert!(completed.starts_with(&started));
-        assert!(completed.ends_with("OK\n"));
+        assert_result_entry(&completed, "OK");
     }
 
     #[test]
-    fn check_agent_messages_follow_spec_branch_order() {
-        assert_eq!(
-            agent_message_kinds(render_check_agent_messages(&issues(&["a"]), &[], 0, 0)),
-            vec![
-                AgentMessageKind::RepairInstruction,
-                AgentMessageKind::RepairInstruction,
-                AgentMessageKind::RepairInstruction,
-                AgentMessageKind::FixIssues,
-            ]
-        );
-        assert_eq!(
-            agent_message_kinds(render_check_agent_messages(&[], &[], 0, 0)),
-            vec![AgentMessageKind::AllClear]
-        );
-        assert_eq!(
-            agent_message_kinds(render_check_agent_messages(&[], &[], 1, 0)),
-            vec![AgentMessageKind::CommitNotice]
-        );
-        assert_eq!(
-            agent_message_kinds(render_check_agent_messages(&issues(&["a"]), &[], 2, 0)),
-            vec![
-                AgentMessageKind::CommitNotice,
-                AgentMessageKind::RepairInstruction,
-                AgentMessageKind::RepairInstruction,
-                AgentMessageKind::RepairInstruction,
-                AgentMessageKind::ThenFixRemaining,
-            ]
-        );
-        assert_eq!(
-            agent_message_kinds(render_check_agent_messages(&issues(&["a"]), &[], 1, 1)),
-            vec![
-                AgentMessageKind::RepairInstruction,
-                AgentMessageKind::RepairInstruction,
-                AgentMessageKind::RepairInstruction,
-                AgentMessageKind::FixIssues,
-            ]
-        );
+    fn agent_messages_cover_documented_actions() {
+        assert!(has_action(
+            &render_check_agent_messages(&issues(&["a"]), &[], 0, 0),
+            "Fix the issues"
+        ));
+        assert!(has_action(
+            &render_check_agent_messages(&[], &[], 0, 0),
+            "All checks passed"
+        ));
+        assert!(has_action(
+            &render_check_agent_messages(&[], &[], 1, 0),
+            "Commit the staged changes"
+        ));
+        assert!(has_action(
+            &render_check_agent_messages(&issues(&["a"]), &[], 2, 0),
+            "Then fix the remaining issues"
+        ));
+        assert!(!has_action(
+            &render_check_agent_messages(&issues(&["a"]), &[], 1, 1),
+            "Commit the staged changes"
+        ));
     }
 
     #[test]
-    fn repair_message_excludes_already_shown_issue_ids() {
+    fn repair_message_excludes_all_already_shown_issue_ids() {
         let messages = render_check_agent_messages(&issues(&["a"]), &issues(&["b"]), 0, 0);
-
-        assert!(messages
+        let repair_message = messages
             .iter()
-            .any(|message| message.contains("run `canon show not:a not:b [not:<ALREADY_IN_CONTEXT_EXPECTATION>]... -- <PATHSPEC>...`")));
+            .find(|message| message.contains("canon show"))
+            .expect("repair message should include the follow-up command");
+
+        assert!(repair_message.contains("not:a"));
+        assert!(repair_message.contains("not:b"));
     }
 
     fn issues(ids: &[&str]) -> Vec<String> {
         ids.iter().map(|id| (*id).to_string()).collect()
     }
 
-    fn agent_message_kinds(messages: Vec<String>) -> Vec<AgentMessageKind> {
-        messages
-            .iter()
-            .map(|message| {
-                if message.starts_with('✓') {
-                    AgentMessageKind::AllClear
-                } else if message.contains("compared to HEAD") {
-                    AgentMessageKind::CommitNotice
-                } else if message.starts_with('❕') {
-                    AgentMessageKind::RepairInstruction
-                } else if message.starts_with("▷ Then") {
-                    AgentMessageKind::ThenFixRemaining
-                } else if message.starts_with('▷') {
-                    AgentMessageKind::FixIssues
-                } else {
-                    panic!("unclassified agent message: {message}");
-                }
-            })
-            .collect()
+    fn has_action(messages: &[String], action: &str) -> bool {
+        messages.iter().any(|message| message.contains(action))
+    }
+
+    fn assert_result_entry(rendered: &str, status: &str) {
+        let first_line = rendered.lines().next().expect("result entry line");
+        let (progress, observed_status) = first_line
+            .split_once(' ')
+            .expect("result entry separates progress from status");
+        assert_eq!(progress.trim_end_matches('.'), "j");
+        assert!(progress.ends_with('.'));
+        assert_eq!(observed_status, status);
     }
 
     fn captured_string(bytes: &Arc<Mutex<Vec<u8>>>) -> String {

@@ -1,3 +1,5 @@
+// The check command owns CLI-facing flow. Args, preflight, execution,
+// completion, and output are the sequential phases of that command boundary.
 pub(super) mod args;
 mod completion;
 mod execution;

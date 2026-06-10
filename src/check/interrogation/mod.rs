@@ -1,3 +1,5 @@
+// Interrogation owns evaluator interaction and response normalization. Policy,
+// query, result, session, and state model separate stages of that lifecycle.
 pub(super) mod policy;
 pub(super) mod query;
 mod result;
