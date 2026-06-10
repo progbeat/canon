@@ -69,7 +69,8 @@ impl LiveCheckProgressOutput {
             write_stdout_record(&mut output, completion.as_bytes(), "check result")
         {
             // Best-effort fallback only: the in-memory run record must still
-            // be returned so the expectation remains reported by the run.
+            // be returned so summary accounting and diagnostic logs can still
+            // report this expectation.
             let _ = write_live_completion_fallback_to_stderr(record, &completion, &stdout_err);
         }
         Ok(())

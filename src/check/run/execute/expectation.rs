@@ -188,6 +188,8 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         }
     }
     if let Some(progress) = progress.take() {
+        // Human-output stream failures are best-effort here; the CheckRecord
+        // is still returned below for report accounting and diagnostic logs.
         run_expectation_try!(progress.finish_with_record(&interrogation.record));
     } else {
         run_expectation_try!(write_result_output_without_live_progress(
