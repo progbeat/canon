@@ -5,11 +5,11 @@ use crate::check::core::{
 use crate::check::interrogation::write_check_lifecycle_finish_event;
 use crate::check::CheckRunCaches;
 use crate::cli::CommandError;
-use crate::config_types::{AgentConfig, CheckConfig};
+use crate::config_types::CheckConfig;
 use crate::gate::{gate_cached_result_for_tree, GateCacheResult, GateComparisonTree};
 use crate::git::VisibleTreeOidCache;
 use crate::history::HistoryCache;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::Path;
 
@@ -67,7 +67,7 @@ pub(crate) fn finish_check_report(
 fn staged_passes_failed_at_head_count_with_cache(
     root: &Path,
     checked_tree_matches_against_tree: bool,
-    agent: &AgentConfig,
+    expectations_by_id: &BTreeMap<String, SelectedExpectation>,
     report: &CheckRunReport,
     history_cache: &mut HistoryCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
@@ -76,10 +76,10 @@ fn staged_passes_failed_at_head_count_with_cache(
         return Ok(0);
     }
     let mut count = 0usize;
-    for passing in report_passing_expectations(report, agent) {
+    for passing in passing_expectations_for_pass_improvement_count(report, expectations_by_id) {
         match gate_cached_result_for_tree(
             root,
-            agent,
+            &passing.agent,
             &passing,
             GateComparisonTree::Head,
             history_cache,
@@ -92,13 +92,19 @@ fn staged_passes_failed_at_head_count_with_cache(
     Ok(count)
 }
 
-fn report_passing_expectations(
+// These helpers do not render or write per-expectation result output. The
+// public report records have already been emitted before this module runs; this
+// code rebuilds enough expectation metadata only for post-summary history
+// lookups used by agent advice.
+fn passing_expectations_for_pass_improvement_count(
     report: &CheckRunReport,
-    agent: &AgentConfig,
+    expectations_by_id: &BTreeMap<String, SelectedExpectation>,
 ) -> Vec<SelectedExpectation> {
     let mut expectations = Vec::new();
     for record in report.records.iter().filter(|record| record.passed()) {
-        if let Some(expectation) = selected_expectation_from_record(record, agent) {
+        if let Some(expectation) =
+            selected_expectation_for_history_lookup(record, expectations_by_id)
+        {
             expectations.push(expectation);
         }
     }
@@ -110,12 +116,12 @@ fn report_passing_expectations(
 
 fn current_non_passes_with_prior_pass_count(
     root: &Path,
-    agent: &AgentConfig,
+    expectations_by_id: &BTreeMap<String, SelectedExpectation>,
     report: &CheckRunReport,
     history_cache: &mut HistoryCache,
 ) -> Result<usize, String> {
     let mut count = 0usize;
-    for expectation in report_non_passing_expectations(report, agent) {
+    for expectation in non_passing_expectations_for_regression_count(report, expectations_by_id) {
         let records = history_cache.read_records(root, &expectation)?;
         if records.iter().any(CheckRecord::passed) {
             count += 1;
@@ -124,14 +130,16 @@ fn current_non_passes_with_prior_pass_count(
     Ok(count)
 }
 
-fn report_non_passing_expectations(
+fn non_passing_expectations_for_regression_count(
     report: &CheckRunReport,
-    agent: &AgentConfig,
+    expectations_by_id: &BTreeMap<String, SelectedExpectation>,
 ) -> Vec<SelectedExpectation> {
     let mut seen = BTreeSet::new();
     let mut expectations = Vec::new();
     for record in report.records.iter().filter(|record| !record.passed()) {
-        if let Some(expectation) = selected_expectation_from_record(record, agent) {
+        if let Some(expectation) =
+            selected_expectation_for_history_lookup(record, expectations_by_id)
+        {
             if seen.insert(expectation.id.clone()) {
                 expectations.push(expectation);
             }
@@ -181,23 +189,24 @@ pub(crate) fn check_agent_messages(
     history_cache: &mut HistoryCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<Vec<String>, String> {
-    let agent = &config.agent;
+    let expectations_by_id = selected_expectations_by_id(config)?;
     let num_fixes = staged_passes_failed_at_head_count_with_cache(
         root,
         checked_tree_matches_against_tree,
-        agent,
+        &expectations_by_id,
         report,
         history_cache,
         visible_tree_oid_cache,
     )?;
     let num_regressions =
-        current_non_passes_with_prior_pass_count(root, agent, report, history_cache)?;
+        current_non_passes_with_prior_pass_count(root, &expectations_by_id, report, history_cache)?;
     let issue_ids = report_issue_display_ids(report);
     Ok(render_check_agent_messages(
         &issue_ids.failed,
         &issue_ids.errors,
         num_fixes,
         num_regressions,
+        report.skipped,
     ))
 }
 
@@ -224,26 +233,29 @@ fn report_issue_display_ids(report: &CheckRunReport) -> IssueDisplayIds {
     issue_ids
 }
 
-fn selected_expectation_from_record(
+fn selected_expectation_for_history_lookup(
     record: &CheckRecord,
-    agent: &AgentConfig,
+    expectations_by_id: &BTreeMap<String, SelectedExpectation>,
 ) -> Option<SelectedExpectation> {
-    Some(SelectedExpectation {
-        number: record.number,
-        id: record.id.clone(),
-        display_id: record.display_id.clone(),
-        question: record.question.clone()?,
-        expected_answer: record.expected_answer.clone()?,
-        question_answer_only: false,
-        agent: agent.clone(),
-        cooldown: None,
-    })
+    expectations_by_id.get(&record.id).cloned()
+}
+
+fn selected_expectations_by_id(
+    config: &CheckConfig,
+) -> Result<BTreeMap<String, SelectedExpectation>, String> {
+    let identities = crate::check::expectation_identities(config)?;
+    let expectations = crate::check::select_expectations_with_identities(config, &identities, &[])?;
+    Ok(expectations
+        .into_iter()
+        .map(|expectation| (expectation.id.clone(), expectation))
+        .collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::check::core::{CheckResult, CheckRunReport};
+    use crate::config_types::AgentConfig;
     use crate::git::TreeSource;
     use crate::hash::full_scope;
     use crate::history::append_current_history_record_with_cache;
@@ -261,13 +273,14 @@ mod tests {
         let agent = AgentConfig::default();
         let scope = full_scope();
         let report = passing_report_for_staged_scope(&root, &agent, &scope);
+        let expectations_by_id = test_expectations_by_id(&report.records, &agent);
         let mut history_cache = HistoryCache::default();
         let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
 
         let count = staged_passes_failed_at_head_count_with_cache(
             &root,
             false,
-            &agent,
+            &expectations_by_id,
             &report,
             &mut history_cache,
             &mut visible_tree_oid_cache,
@@ -286,13 +299,14 @@ mod tests {
         let agent = AgentConfig::default();
         let scope = full_scope();
         let report = passing_report_for_staged_scope(&root, &agent, &scope);
+        let expectations_by_id = test_expectations_by_id(&report.records, &agent);
         let mut history_cache = HistoryCache::default();
         let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
 
         let count = staged_passes_failed_at_head_count_with_cache(
             &root,
             false,
-            &agent,
+            &expectations_by_id,
             &report,
             &mut history_cache,
             &mut visible_tree_oid_cache,
@@ -309,7 +323,7 @@ mod tests {
         let agent = AgentConfig::default();
         let scope = full_scope();
         let fail_record = staged_scope_record(&root, &agent, &scope, "no");
-        let expectation = selected_expectation_from_record(&fail_record, &agent).unwrap();
+        let expectation = test_expectation_from_record(&fail_record, &agent);
         let mut history_cache = HistoryCache::default();
         let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
         append_current_history_record_with_cache(
@@ -324,11 +338,12 @@ mod tests {
         fs::write(root.join("README.md"), "changed\n").unwrap();
         git(&root, &["add", "README.md"]);
         let report = passing_report_for_staged_scope(&root, &agent, &scope);
+        let expectations_by_id = test_expectations_by_id(&report.records, &agent);
 
         let count = staged_passes_failed_at_head_count_with_cache(
             &root,
             false,
-            &agent,
+            &expectations_by_id,
             &report,
             &mut history_cache,
             &mut visible_tree_oid_cache,
@@ -347,13 +362,14 @@ mod tests {
         fs::write(root.join("README.md"), "changed after preparation\n").unwrap();
         git(&root, &["add", "README.md"]);
         let report = passing_report_for_staged_scope(&root, &agent, &scope);
+        let expectations_by_id = test_expectations_by_id(&report.records, &agent);
         let mut history_cache = HistoryCache::default();
         let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
 
         let count = staged_passes_failed_at_head_count_with_cache(
             &root,
             true,
-            &agent,
+            &expectations_by_id,
             &report,
             &mut history_cache,
             &mut visible_tree_oid_cache,
@@ -370,7 +386,7 @@ mod tests {
         let agent = AgentConfig::default();
         let scope = full_scope();
         let pass_record = staged_scope_record(&root, &agent, &scope, "yes");
-        let expectation = selected_expectation_from_record(&pass_record, &agent).unwrap();
+        let expectation = test_expectation_from_record(&pass_record, &agent);
         let mut history_cache = HistoryCache::default();
         let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
         append_current_history_record_with_cache(
@@ -389,10 +405,15 @@ mod tests {
             evaluated: 1,
             skipped: 0,
         };
+        let expectations_by_id = test_expectations_by_id(&report.records, &agent);
 
-        let count =
-            current_non_passes_with_prior_pass_count(&root, &agent, &report, &mut history_cache)
-                .unwrap();
+        let count = current_non_passes_with_prior_pass_count(
+            &root,
+            &expectations_by_id,
+            &report,
+            &mut history_cache,
+        )
+        .unwrap();
 
         assert_eq!(count, 1);
         let _ = fs::remove_dir_all(root);
@@ -404,7 +425,7 @@ mod tests {
         let agent = AgentConfig::default();
         let scope = full_scope();
         let pass_record = staged_scope_record(&root, &agent, &scope, "yes");
-        let expectation = selected_expectation_from_record(&pass_record, &agent).unwrap();
+        let expectation = test_expectation_from_record(&pass_record, &agent);
         let mut history_cache = HistoryCache::default();
         let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
         append_current_history_record_with_cache(
@@ -441,7 +462,7 @@ mod tests {
 
         assert_eq!(
             messages,
-            render_check_agent_messages(&["1".to_string()], &[], 0, 1)
+            render_check_agent_messages(&["1".to_string()], &[], 0, 1, 0)
         );
         assert!(messages.iter().any(|message| message.contains(
             "run `canon show not:1 [not:<ALREADY_IN_CONTEXT_EXPECTATION>]... -- <PATHSPEC>...`"
@@ -486,6 +507,35 @@ mod tests {
             visible_tree_oid,
             id: "11111111111111111111".to_string(),
             display_id: "1".to_string(),
+        }
+    }
+
+    fn test_expectations_by_id(
+        records: &[CheckRecord],
+        agent: &AgentConfig,
+    ) -> BTreeMap<String, SelectedExpectation> {
+        records
+            .iter()
+            .map(|record| {
+                let expectation = test_expectation_from_record(record, agent);
+                (expectation.id.clone(), expectation)
+            })
+            .collect()
+    }
+
+    fn test_expectation_from_record(
+        record: &CheckRecord,
+        agent: &AgentConfig,
+    ) -> SelectedExpectation {
+        SelectedExpectation {
+            number: record.number,
+            id: record.id.clone(),
+            display_id: record.display_id.clone(),
+            question: record.question.clone().unwrap(),
+            expected_answer: record.expected_answer.clone().unwrap(),
+            question_answer_only: false,
+            agent: agent.clone(),
+            cooldown: None,
         }
     }
 

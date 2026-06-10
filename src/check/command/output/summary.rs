@@ -57,6 +57,7 @@ pub(crate) fn render_check_agent_messages(
     errors: &[String],
     num_fixes: usize,
     num_regressions: usize,
+    num_skipped: usize,
 ) -> Vec<String> {
     let num_issues = failed.len() + errors.len();
     if num_regressions > 0 || (num_issues > 0 && num_fixes == 0) {
@@ -65,6 +66,10 @@ pub(crate) fn render_check_agent_messages(
         return messages;
     }
     if num_issues == 0 && num_fixes == 0 {
+        assert_eq!(
+            num_skipped, 0,
+            "all-passed agent message requires no skipped expectations"
+        );
         return vec![ALL_CHECKS_PASSED_MESSAGE.to_string()];
     }
 
@@ -72,6 +77,11 @@ pub(crate) fn render_check_agent_messages(
     if num_issues > 0 {
         messages.extend(repair_instruction_messages(failed, errors));
         messages.push(THEN_FIX_REMAINING_MESSAGE.to_string());
+    } else {
+        assert_eq!(
+            num_skipped, 0,
+            "pass-improvement agent message without remaining issues requires no skipped expectations"
+        );
     }
     messages
 }

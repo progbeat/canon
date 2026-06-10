@@ -7,8 +7,8 @@ use crate::check::core::{
 };
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::run::selection::{
-    order_by_latest_non_pass, select_expectations_after_cache, CachedFailureMode,
-    CachedSelectionContext, CachedSelectionHit,
+    order_by_latest_non_pass, select_expectations_after_cache, CacheFilterContext,
+    CachedExpectationHit, CachedFailureMode,
 };
 use crate::evaluator::EvaluatorRunner;
 use crate::time::unix_timestamp;
@@ -54,8 +54,8 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     }
 
     let mut interrogation_run_state = run_try!(InterrogationRunState::new(runtime.no_sandbox()));
-    let selection = run_try!(select_expectations_after_cache(
-        CachedSelectionContext {
+    let check_work = run_try!(select_expectations_after_cache(
+        CacheFilterContext {
             root,
             source: runtime.tree_source,
             history_cache: &mut caches.history,
@@ -72,13 +72,15 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         },
     ));
     write_cached_failures(
-        selection.cached,
+        check_work.cached_hits,
         &mut records,
         &mut cached,
         &mut result_output,
     )
     .map_err(|err| current_error!(err))?;
-    if selection.cached_failure_seen && selection.selected.is_empty() && !options.selectors_provided
+    if check_work.cached_failure_seen
+        && check_work.to_evaluate.is_empty()
+        && !options.selectors_provided
     {
         return Ok(current_report(
             records,
@@ -89,7 +91,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     }
     let check_work_queue = run_try!(order_by_latest_non_pass(
         root,
-        selection.selected,
+        check_work.to_evaluate,
         &mut caches.history,
         |expectation| expectation
     ));
@@ -131,14 +133,19 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
 }
 
 fn write_cached_failures(
-    cached_hits: Vec<CachedSelectionHit>,
+    cached_hits: Vec<CachedExpectationHit>,
     records: &mut Vec<CheckRecord>,
     cached: &mut Vec<CachedExpectation>,
     result_output: &mut Option<&mut dyn std::io::Write>,
 ) -> Result<(), String> {
-    for CachedSelectionHit { expectation, hit } in cached_hits {
+    for CachedExpectationHit { expectation, hit } in cached_hits {
         let record = hit.record;
-        if !record.passed() {
+        // Cached passes are summary-only results; they do not start a displayed
+        // expectation report because no `<short ID>.` prefix is printed for
+        // them. The only cached results with a printed short ID are
+        // non-passes, and this branch writes their complete public block.
+        let cached_result_prints_short_id = !record.passed();
+        if cached_result_prints_short_id {
             write_cached_non_pass_output(result_output, &record)?;
             records.push(record.clone());
         }

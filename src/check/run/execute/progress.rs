@@ -1,0 +1,106 @@
+use crate::check::command::output::{
+    start_expectation_report_output, SharedCheckOutput, StartedExpectationReportOutput,
+};
+use crate::check::core::{CheckRecord, SelectedExpectation};
+use crate::fs_util::{ensure_dir_without_symlinks, reject_symlink};
+use crate::git::resolve_git_path;
+use crate::state_paths::CANON_LIVE_REPORT_DIR_GIT_PATH;
+use crate::time::{format_record_timestamp, unix_timestamp};
+use serde_json::{json, Value};
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+// State-backed live expectation reports have only start and finish operations.
+// The state file is written before the public short-ID prefix, so even a later
+// interruption or public-output failure has already reported the expectation.
+// There is intentionally no cancel operation.
+pub(super) struct StateBackedLiveExpectationReport {
+    output: StartedExpectationReportOutput,
+    state_path: PathBuf,
+}
+
+pub(super) fn start_live_expectation_report(
+    root: &Path,
+    output: &Option<SharedCheckOutput>,
+    expectation: &SelectedExpectation,
+) -> Result<Option<StateBackedLiveExpectationReport>, String> {
+    let Some(output) = output.as_ref() else {
+        return Ok(None);
+    };
+    let state_path = live_report_state_path(root, expectation)?;
+    // Write and flush a canon-owned report marker before the public short-ID
+    // prefix. If public output later fails or the process is interrupted after
+    // the prefix, this state file is still a report for the expectation.
+    write_live_report_state(
+        &state_path,
+        json!({
+            "timestamp": format_record_timestamp(unix_timestamp()?),
+            "status": "started",
+            "id": expectation.id,
+            "displayId": expectation.display_id,
+            "question": expectation.question,
+        }),
+    )?;
+    Ok(Some(StateBackedLiveExpectationReport {
+        output: start_expectation_report_output(output.clone(), &expectation.display_id),
+        state_path,
+    }))
+}
+
+impl StateBackedLiveExpectationReport {
+    pub(super) fn finish_public_output_or_keep_state_report(self, record: &CheckRecord) {
+        let _ = write_live_report_state(
+            &self.state_path,
+            json!({
+                "timestamp": record.timestamp,
+                "status": "completed",
+                "id": record.id,
+                "displayId": record.display_id,
+                "result": record.result,
+                "question": record.question_text(),
+                "expected": record.expected_answer_text(),
+                "observed": record.observed,
+                "error": record.error,
+                "evidence": record.evidence,
+                "visibleScope": record.scope,
+                "visibleTreeOid": record.visible_tree_oid,
+            }),
+        );
+        if self.output.finish_with_record(record) {
+            // Public output already contains the report; keep the state file
+            // only for interrupted or public-output-failure cases.
+            let _ = fs::remove_file(&self.state_path);
+        } else {
+            // Both public sinks refused the completion. The completed state
+            // report above remains under CANON_STATE_DIR/live-reports.
+        }
+    }
+}
+
+fn live_report_state_path(
+    root: &Path,
+    expectation: &SelectedExpectation,
+) -> Result<PathBuf, String> {
+    let dir = resolve_git_path(root, CANON_LIVE_REPORT_DIR_GIT_PATH)?;
+    Ok(dir.join(format!("{}.json", expectation.id)))
+}
+
+fn write_live_report_state(path: &Path, value: Value) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        ensure_dir_without_symlinks(parent)?;
+    }
+    reject_symlink(path)?;
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
+        .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
+    let line = value.to_string();
+    file.write_all(line.as_bytes())
+        .and_then(|_| file.write_all(b"\n"))
+        .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
+    file.flush()
+        .map_err(|err| format!("failed to flush {}: {}", path.display(), err))
+}

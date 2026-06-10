@@ -8,7 +8,7 @@ pub(super) mod state;
 
 pub(crate) use result::{
     finalize_interrogation_response, finalize_query_answer, scope_narrowing_log_fields,
-    write_query_result_event, write_query_review_required_event,
+    write_expectation_result_event, write_query_result_event, write_query_review_required_event,
 };
 pub(crate) use session::{
     ask_with_reused_thread, interrogate_expectation_with_model,

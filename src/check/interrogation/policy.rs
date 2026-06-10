@@ -59,9 +59,13 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
     if should_retry_full_scope_after_error(
         interrogation.record.error.as_deref(),
         call.enforced_scope,
+    ) || restricted_non_pass_needs_full_scope_confirmation(
+        &interrogation.record,
+        call.enforced_scope,
     ) {
-        // Restricted insufficient-evidence is not final. Retry once with full
-        // project scope and let that response become the record.
+        // Restricted insufficient-evidence is not final. A restricted non-pass
+        // answer is also confirmed once at full scope so a stale q-scope cannot
+        // be the sole basis for reporting a project violation.
         *call.enforced_scope = full_scope();
         interrogation = interrogate_or_error_record(
             call.call(),
@@ -126,6 +130,13 @@ pub(crate) fn turn_has_context_compaction(interrogation: &InterrogationResult) -
     interrogation.context_compacted
 }
 
+pub(crate) fn restricted_non_pass_needs_full_scope_confirmation(
+    record: &CheckRecord,
+    scope: &[String],
+) -> bool {
+    scope != full_scope() && record.error.is_none() && !record.passed()
+}
+
 pub(crate) fn question_scope_suggestion_scope_for_independent_verification(
     runtime: &CheckRuntime<'_>,
     agent: &AgentConfig,
@@ -175,11 +186,13 @@ fn suggested_scope_is_at_least_25_percent_smaller(
         && suggested_count.saturating_mul(4) <= current_count.saturating_mul(3)
 }
 
-pub(crate) fn narrowed_scope_is_accepted(narrowed: &CheckRecord) -> bool {
+pub(crate) fn narrowed_scope_is_accepted(original: &CheckRecord, narrowed: &CheckRecord) -> bool {
     // Acceptance means the q-scope suggestion graduated from evaluator claim
     // to verified reusable q-scope. Interrogation Policy requires the
-    // independent verification turn to produce a schema-valid answer.
-    narrowed.error.is_none()
+    // independent verification turn to produce a schema-valid answer. A
+    // different answer means the suggested scope did not preserve the answer it
+    // was meant to support for this tree.
+    narrowed.error.is_none() && narrowed.observed == original.observed
 }
 
 pub(crate) fn write_scope_narrowing_event(
@@ -204,12 +217,15 @@ pub(crate) fn write_scope_narrowing_event(
 #[cfg(test)]
 mod tests {
     use super::{
-        question_scope_suggestion_scope_for_independent_verification,
+        narrowed_scope_is_accepted, question_scope_suggestion_scope_for_independent_verification,
+        restricted_non_pass_needs_full_scope_confirmation,
         suggested_scope_is_at_least_25_percent_smaller,
     };
+    use crate::check::core::{CheckRecord, CheckResult};
     use crate::check::interrogation::state::{CheckRuntime, CheckTreeContext};
     use crate::config_types::{AgentConfig, CheckConfig};
     use crate::git::{TreeSource, VisibleTreeOidCache};
+    use crate::hash::full_scope;
     use crate::staged::StagedWorktreeView;
     use std::fs;
     use std::path::PathBuf;
@@ -220,6 +236,51 @@ mod tests {
     #[test]
     fn equal_zero_file_scope_is_not_smaller() {
         assert!(!suggested_scope_is_at_least_25_percent_smaller(0, 0));
+    }
+
+    #[test]
+    fn restricted_non_pass_answer_needs_full_scope_confirmation() {
+        let restricted_scope = vec!["src".to_string()];
+        let non_pass = test_record("no", CheckResult::Fail, None);
+        let pass = test_record("yes", CheckResult::Pass, None);
+        let error = test_record(
+            "insufficient-evidence",
+            CheckResult::Fail,
+            Some("insufficient-evidence"),
+        );
+
+        assert!(restricted_non_pass_needs_full_scope_confirmation(
+            &non_pass,
+            &restricted_scope
+        ));
+        assert!(!restricted_non_pass_needs_full_scope_confirmation(
+            &non_pass,
+            &full_scope()
+        ));
+        assert!(!restricted_non_pass_needs_full_scope_confirmation(
+            &pass,
+            &restricted_scope
+        ));
+        assert!(!restricted_non_pass_needs_full_scope_confirmation(
+            &error,
+            &restricted_scope
+        ));
+    }
+
+    #[test]
+    fn narrowed_scope_acceptance_requires_same_answer() {
+        let original = test_record("yes", CheckResult::Pass, None);
+        let matching = test_record("yes", CheckResult::Pass, None);
+        let conflicting = test_record("no", CheckResult::Fail, None);
+        let error = test_record(
+            "insufficient-evidence",
+            CheckResult::Fail,
+            Some("insufficient-evidence"),
+        );
+
+        assert!(narrowed_scope_is_accepted(&original, &matching));
+        assert!(!narrowed_scope_is_accepted(&original, &conflicting));
+        assert!(!narrowed_scope_is_accepted(&original, &error));
     }
 
     #[test]
@@ -295,5 +356,23 @@ mod tests {
             args,
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    fn test_record(observed: &str, result: CheckResult, error: Option<&str>) -> CheckRecord {
+        CheckRecord {
+            timestamp: "1970-01-01T00:00:00Z".to_string(),
+            number: 0,
+            result,
+            question: Some("question".to_string()),
+            expected_answer: Some("yes".to_string()),
+            observed: observed.to_string(),
+            error: error.map(str::to_string),
+            evidence: "evidence".to_string(),
+            scope: full_scope(),
+            question_scope_suggestion: None,
+            visible_tree_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            id: "expectation".to_string(),
+            display_id: "e".to_string(),
+        }
     }
 }

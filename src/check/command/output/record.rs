@@ -62,7 +62,7 @@ pub(crate) fn start_expectation_report_output(
 }
 
 impl StartedExpectationReportOutput {
-    pub(crate) fn finish_with_record(mut self, record: &CheckRecord) {
+    pub(crate) fn finish_with_record(mut self, record: &CheckRecord) -> bool {
         // Once the report prefix is visible, final result output has priority
         // over delayed dot-worker cleanup errors.
         let _ = self.stop_dot_worker();
@@ -77,8 +77,13 @@ impl StartedExpectationReportOutput {
             // into closed stdout/stderr. The report invariant here is that
             // human-output failure cannot erase the CheckRecord returned for
             // summary accounting, answer history, or diagnostic logs.
-            write_live_completion_fallback_to_stderr(record, &completion, self.prefix_completed);
+            return write_live_completion_fallback_to_stderr(
+                record,
+                &completion,
+                self.prefix_completed,
+            );
         }
+        true
     }
 
     fn stop_dot_worker(&mut self) -> Result<(), String> {
@@ -97,7 +102,7 @@ fn write_live_completion_fallback_to_stderr(
     record: &CheckRecord,
     completion: &str,
     prefix_completed: bool,
-) {
+) -> bool {
     let fallback = if prefix_completed {
         format!("{}{}", record.display_id, completion)
     } else {
@@ -106,9 +111,10 @@ fn write_live_completion_fallback_to_stderr(
     // Best-effort human-output fallback only. A closed stderr must not panic
     // before the caller can return the CheckRecord for report accounting.
     let mut stderr = std::io::stderr();
-    let _ = stderr
+    stderr
         .write_all(fallback.as_bytes())
-        .and_then(|_| stderr.flush());
+        .and_then(|_| stderr.flush())
+        .is_ok()
 }
 
 // Callers without a started report still write the documented minimum prefix.
@@ -128,6 +134,8 @@ pub(crate) fn write_cached_non_pass_output(
     result_output: &mut Option<&mut dyn Write>,
     record: &CheckRecord,
 ) -> Result<(), String> {
+    // Cached non-passes are displayed issue reports. This helper writes the
+    // `<short ID>.` prefix and the full non-pass block together.
     debug_assert!(!record.passed());
     if let Some(writer) = result_output.as_mut() {
         let line = render_check_output_record_with_initial_dot(record);

@@ -127,30 +127,44 @@ mod tests {
     #[test]
     fn agent_messages_cover_documented_actions() {
         assert!(has_action(
-            &render_check_agent_messages(&issues(&["a"]), &[], 0, 0),
+            &render_check_agent_messages(&issues(&["a"]), &[], 0, 0, 0),
             "Fix the issues"
         ));
         assert!(has_action(
-            &render_check_agent_messages(&[], &[], 0, 0),
+            &render_check_agent_messages(&[], &[], 0, 0, 0),
             "All checks passed"
         ));
         assert!(has_action(
-            &render_check_agent_messages(&[], &[], 1, 0),
+            &render_check_agent_messages(&[], &[], 1, 0, 0),
             "Commit the staged changes"
         ));
         assert!(has_action(
-            &render_check_agent_messages(&issues(&["a"]), &[], 2, 0),
+            &render_check_agent_messages(&issues(&["a"]), &[], 2, 0, 1),
             "Then fix the remaining issues"
         ));
         assert!(!has_action(
-            &render_check_agent_messages(&issues(&["a"]), &[], 1, 1),
+            &render_check_agent_messages(&issues(&["a"]), &[], 1, 1, 0),
             "Commit the staged changes"
         ));
     }
 
     #[test]
+    #[should_panic(expected = "all-passed agent message requires no skipped expectations")]
+    fn all_passed_agent_message_requires_no_skipped_expectations() {
+        let _ = render_check_agent_messages(&[], &[], 0, 0, 1);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "pass-improvement agent message without remaining issues requires no skipped expectations"
+    )]
+    fn pass_improvement_commit_message_requires_no_skipped_expectations() {
+        let _ = render_check_agent_messages(&[], &[], 1, 0, 1);
+    }
+
+    #[test]
     fn repair_message_excludes_all_already_shown_issue_ids() {
-        let messages = render_check_agent_messages(&issues(&["a"]), &issues(&["b"]), 0, 0);
+        let messages = render_check_agent_messages(&issues(&["a"]), &issues(&["b"]), 0, 0, 0);
         let repair_message = messages
             .iter()
             .find(|message| message.contains("canon show"))

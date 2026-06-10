@@ -2,6 +2,7 @@
 // run queue, per-expectation execution, and report accounting phases behind
 // this facade.
 mod expectation;
+mod progress;
 mod report;
 mod run;
 

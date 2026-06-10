@@ -1,11 +1,12 @@
 use crate::check::core::{CheckRecord, SelectedExpectation};
+use crate::check::interrogation::write_expectation_result_event;
 use crate::config_types::AgentConfig;
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::history::{
     cached_history_record, cooldown_history_record, same_tree_history_record_with_cache,
     CachedHistoryRecord, HistoryCache,
 };
-use crate::logs::{DiagnosticLogWriter, DiagnosticRecordEvent};
+use crate::logs::DiagnosticLogWriter;
 use serde_json::json;
 use std::path::Path;
 
@@ -82,7 +83,6 @@ pub(crate) fn write_cache_hit(
             ],
         )
         .map_err(|err| err.to_string())?;
-    writer
-        .write_record_event(DiagnosticRecordEvent::Expectation, &hit.record)
-        .map_err(|err| err.to_string())
+    let mut diagnostic_log = Some(writer);
+    write_expectation_result_event(&mut diagnostic_log, &hit.record)
 }

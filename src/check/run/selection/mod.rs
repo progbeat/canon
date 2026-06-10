@@ -9,7 +9,7 @@ pub(crate) use args::{
     resolve_check_options_with_identities,
 };
 pub(crate) use cache_select::{
-    select_expectations_after_cache, CachedFailureMode, CachedSelectionContext, CachedSelectionHit,
+    select_expectations_after_cache, CacheFilterContext, CachedExpectationHit, CachedFailureMode,
 };
 pub(crate) use cooldown::parse_cooldown;
 // Selector parsing and matching, including `not:<ID-PREFIX>` exclusions, lives
@@ -117,8 +117,8 @@ mod tests {
         .unwrap();
         let mut diagnostic_log = None;
 
-        let selection = select_expectations_after_cache(
-            CachedSelectionContext {
+        let check_work = select_expectations_after_cache(
+            CacheFilterContext {
                 root: &root,
                 source: &source,
                 history_cache: &mut history_cache,
@@ -134,9 +134,9 @@ mod tests {
 
         let _ = fs::remove_dir_all(&root);
 
-        assert!(selection.selected.is_empty());
-        assert_eq!(selection.cached.len(), 1);
-        assert_eq!(selection.cached[0].expectation.id, expectation.id);
-        assert!(!selection.cached_failure_seen);
+        assert!(check_work.to_evaluate.is_empty());
+        assert_eq!(check_work.cached_hits.len(), 1);
+        assert_eq!(check_work.cached_hits[0].expectation.id, expectation.id);
+        assert!(!check_work.cached_failure_seen);
     }
 }

@@ -1,4 +1,6 @@
-use crate::check::core::{InterrogationResult, ParsedAnswer, QueryResult, SelectedExpectation};
+use crate::check::core::{
+    CheckRecord, InterrogationResult, ParsedAnswer, QueryResult, SelectedExpectation,
+};
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::evaluator::{record_from_response, EvaluatorError, ParsedTurnResponse};
 use crate::logs::{DiagnosticLogWriter, DiagnosticRecordEvent};
@@ -75,6 +77,22 @@ pub(crate) fn write_query_result_event(
                 ),
             ],
         )?;
+    }
+    Ok(())
+}
+
+// Result records are only one runtime-log family. Evaluator boundary events
+// such as thread creation/reuse, restart, agent request/response/failure, and
+// per-turn token usage are emitted by `check::interrogation::session` through
+// the same `DiagnosticLogWriter`.
+pub(crate) fn write_expectation_result_event(
+    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    record: &CheckRecord,
+) -> Result<(), String> {
+    if let Some(writer) = diagnostic_log.as_deref_mut() {
+        writer
+            .write_record_event(DiagnosticRecordEvent::Expectation, record)
+            .map_err(|err| err.to_string())?;
     }
     Ok(())
 }

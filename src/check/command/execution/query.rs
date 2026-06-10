@@ -136,8 +136,8 @@ fn write_successful_query_output(
 }
 
 fn print_query_token_usage(runner: &mut LazyAppServerRunner) -> Result<(), String> {
-    let usage = collect_check_token_usage(runner)?;
-    print_token_usage_summary(Some(usage))
+    let usage = collect_check_token_usage(runner);
+    print_token_usage_summary(usage)
 }
 
 fn query_enforced_scope(query_scope: &[String]) -> Result<Vec<String>, String> {

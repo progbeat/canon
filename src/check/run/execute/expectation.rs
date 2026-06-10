@@ -1,7 +1,7 @@
+use super::progress::{start_live_expectation_report, StateBackedLiveExpectationReport};
 use super::CheckRunCaches;
 use crate::check::command::output::{
-    start_expectation_report_output, write_result_output_without_started_report, SharedCheckOutput,
-    StartedExpectationReportOutput,
+    write_result_output_without_started_report, SharedCheckOutput,
 };
 use crate::check::core::errors::error_record_from_visible_tree_oid_at;
 use crate::check::core::{CheckOptions, CheckRecord, SelectedExpectation};
@@ -13,12 +13,13 @@ use crate::check::interrogation::policy::{
 use crate::check::interrogation::state::{
     initial_visible_scope_for_expectation, CheckRuntime, InterrogationRunState,
 };
+use crate::check::interrogation::write_expectation_result_event;
 use crate::check::run::order_state::{
     write_latest_non_pass_error_with_cache, write_latest_non_pass_record_with_cache,
 };
 use crate::evaluator::EvaluatorRunner;
 use crate::history::{append_current_history_record_with_cache, is_reusable_history_record};
-use crate::logs::{DiagnosticLogWriter, DiagnosticRecordEvent};
+use crate::logs::DiagnosticLogWriter;
 use crate::platform::check_interrupted;
 use crate::scope::scope_is_within;
 use crate::time::{format_record_timestamp, unix_timestamp};
@@ -46,6 +47,10 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
     expectation: &SelectedExpectation,
 ) -> Result<ExpectationRunOutcome, String> {
+    // Cache hits are resolved before this function is called. This path only
+    // handles expectations that still need evaluator work, so every report
+    // prefix started here belongs to an evaluated expectation and is followed
+    // by a completed CheckRecord path; cache hits never enter this live path.
     macro_rules! return_expectation_error {
         ($error:expr) => {{
             let error = $error.to_string();
@@ -71,6 +76,8 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         };
     }
 
+    // Interrupts are checked before any live report prefix is started, so this
+    // branch cannot leave a printed `<short ID>.` without a completed record.
     if check_interrupted() {
         return_expectation_error!("interrupted");
     }
@@ -83,9 +90,10 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         &mut context.caches.visible_tree_oid,
         context.active_lazy_full_scope_reset_ids,
     ));
-    // Prepare the metadata needed to finish an errored expectation before
+    // Prepare the metadata needed to render an errored expectation before
     // printing the live report prefix. After `<short ID>.` is visible, later
-    // fallible steps can always complete that line with an ERROR record.
+    // fallible steps can build an ERROR record without doing more fallible
+    // tree inspection.
     let started_report_error_visible_tree_oid =
         run_expectation_try!(context.runtime.visible_tree_oid(
             &mut context.caches.visible_tree_oid,
@@ -96,17 +104,16 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         run_expectation_try!(unix_timestamp().map(format_record_timestamp));
     // Start the live report entry before the evaluator turn so the first dot
     // is visible while the expectation is still being evaluated.
-    let mut started_report = match context.live_report_output.as_ref() {
-        Some(output) => Some(start_expectation_report_output(
-            output.clone(),
-            &expectation.display_id,
-        )),
-        None => None,
-    };
-    // Do not reintroduce a cancel-only helper here. Older report-start code
-    // could leave `<short ID>.` without a result when a later error only stopped
-    // the dot worker. This boundary must route every post-start error through
-    // `finish_started_expectation_with_error_record`.
+    let mut started_report = run_expectation_try!(start_live_expectation_report(
+        context.runtime.root,
+        context.live_report_output,
+        expectation,
+    ));
+    // Every fallible evaluator step after the report prefix is written is
+    // inside `run_started_expectation_interrogation`. Do not route those
+    // failures through a cancel-only progress helper: this match converts any
+    // post-prefix error into the same public ERROR block shape as a normal
+    // result.
     let completed_interrogation =
         match run_started_expectation_interrogation(context, expectation, &mut verified_q_scope) {
             Ok(completed) => completed,
@@ -124,45 +131,60 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         };
     let record = completed_interrogation.record;
     if let Some(report) = started_report.take() {
-        // Human-output stream failures are best-effort here; the CheckRecord
-        // continues into summary accounting, answer history, and diagnostic
-        // logs below.
-        report.finish_with_record(&record);
+        // Live output is best-effort after the prefix; completion does not
+        // create a return path that can drop the completed CheckRecord.
+        report.finish_public_output_or_keep_state_report(&record);
     } else {
         run_expectation_try!(write_result_output_without_started_report(
             context.result_output,
             &record
         ));
     }
-    if is_reusable_history_record(&record) {
-        run_expectation_try!(append_current_history_record_with_cache(
-            context.runtime.root,
-            context.runtime.tree_source,
-            expectation,
-            &record,
-            &mut context.caches.history,
-            &mut context.caches.visible_tree_oid,
-        ));
-    }
-    run_expectation_try!(write_latest_non_pass_record_with_cache(
-        context.runtime.root,
-        expectation,
-        &record,
-        &mut context.caches.history
-    ));
-    if let Some(writer) = context.diagnostic_log.as_deref_mut() {
-        run_expectation_try!(writer.write_record_event(DiagnosticRecordEvent::Expectation, &record));
-    }
+    // From this point on, the public per-expectation result has already been
+    // written. Later history/cache/logging errors can fail the command, but
+    // they occur after the visible result block.
+    run_expectation_try!(record_finished_expectation(context, expectation, &record));
     let human_review_required = record.requires_human_review();
     let run_stop_signal_hit = completed_interrogation.break_after_tokens_hit
         || completed_interrogation.context_compaction_hit
         || completed_interrogation.stop_after_current_expectation;
-    let stop_run = !context.options.keep_going
-        && (!record.passed() || human_review_required || run_stop_signal_hit);
+    // Default check order stops after the first evaluated non-pass. Token or
+    // context stop signals clear evaluator sessions below, but a passing
+    // expectation must not stop the run and turn the remaining expectations
+    // into skipped issue-free results.
+    let stop_run = !context.options.keep_going && (!record.passed() || human_review_required);
     if run_stop_signal_hit {
         context.interrogation_run_state.clear_thread_sessions();
     }
     Ok(ExpectationRunOutcome { record, stop_run })
+}
+
+fn record_finished_expectation<R: EvaluatorRunner>(
+    context: &mut ExpectationRunContext<'_, '_, '_, R>,
+    expectation: &SelectedExpectation,
+    record: &CheckRecord,
+) -> Result<(), String> {
+    // This is the durable result-reporting path used after a CheckRecord is
+    // formed. Live output has already attempted its human-facing completion;
+    // this path keeps the completed result available for later inspection and
+    // cache decisions.
+    if is_reusable_history_record(record) {
+        append_current_history_record_with_cache(
+            context.runtime.root,
+            context.runtime.tree_source,
+            expectation,
+            record,
+            &mut context.caches.history,
+            &mut context.caches.visible_tree_oid,
+        )?;
+    }
+    write_latest_non_pass_record_with_cache(
+        context.runtime.root,
+        expectation,
+        record,
+        &mut context.caches.history,
+    )?;
+    write_expectation_result_event(context.diagnostic_log, record)
 }
 
 struct CompletedInterrogation {
@@ -229,7 +251,7 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
             turn_exceeds_break_after_tokens(&narrowed, context.options.break_after_tokens);
         context_compaction_hit |= turn_has_context_compaction(&narrowed);
         stop_after_current_expectation |= narrowed.stop_after_current_expectation;
-        let accepted = narrowed_scope_is_accepted(&narrowed.record);
+        let accepted = narrowed_scope_is_accepted(&interrogation.record, &narrowed.record);
         write_scope_narrowing_event(
             context.diagnostic_log,
             &expectation.id,
@@ -261,7 +283,7 @@ fn finish_started_expectation_with_error_record<R: EvaluatorRunner>(
     scope: &[String],
     visible_tree_oid: &str,
     timestamp: &str,
-    started_report: &mut Option<StartedExpectationReportOutput>,
+    started_report: &mut Option<StateBackedLiveExpectationReport>,
     error: String,
 ) -> Result<ExpectationRunOutcome, String> {
     let record = error_record_from_visible_tree_oid_at(
@@ -272,9 +294,7 @@ fn finish_started_expectation_with_error_record<R: EvaluatorRunner>(
         timestamp.to_string(),
     );
     if let Some(report) = started_report.take() {
-        // Human-output failure here must not prevent the ERROR record from
-        // being recorded below.
-        report.finish_with_record(&record);
+        report.finish_public_output_or_keep_state_report(&record);
     } else {
         write_result_output_without_started_report(context.result_output, &record)?;
     }
@@ -284,11 +304,7 @@ fn finish_started_expectation_with_error_record<R: EvaluatorRunner>(
         &record,
         &mut context.caches.history,
     )?;
-    if let Some(writer) = context.diagnostic_log.as_deref_mut() {
-        writer
-            .write_record_event(DiagnosticRecordEvent::Expectation, &record)
-            .map_err(|err| err.to_string())?;
-    }
+    write_expectation_result_event(context.diagnostic_log, &record)?;
     context.interrogation_run_state.clear_thread_sessions();
     Ok(ExpectationRunOutcome {
         record,

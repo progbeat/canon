@@ -36,7 +36,7 @@ pub(super) fn write_check_trailer(
     report: &CheckRunReport,
     started: Instant,
 ) -> Result<(), String> {
-    let usage = collect_check_token_usage(runner)?;
-    print_token_usage_summary(Some(usage))?;
+    let usage = collect_check_token_usage(runner);
+    print_token_usage_summary(usage)?;
     write_summary_line(result_output, report, started.elapsed())
 }
