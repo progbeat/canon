@@ -4,6 +4,9 @@
 - q: "Do the developer instructions explicitly prohibit proxy evidence?"
   a: yes
 
+- q: "Are you instructed to use the minimum evidence sufficient to answer correctly, cite it precisely, then stop?"
+  a: "yes"
+
 - q: "Do your instructions encourage you to make `qScopeSuggestion` as narrow as possible while still enough to justify the answer?"
   a: "yes"
 
