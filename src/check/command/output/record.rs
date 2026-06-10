@@ -60,7 +60,9 @@ pub(crate) fn start_live_check_progress_output(
 
 impl LiveCheckProgressOutput {
     pub(crate) fn finish_with_record(mut self, record: &CheckRecord) -> Result<(), String> {
-        self.stop_progress_worker()?;
+        // Once the progress prefix is visible, final result output has
+        // priority over delayed progress-dot cleanup errors.
+        let _ = self.stop_progress_worker();
         let completion = render_check_output_record_completion(record);
         let mut output = self.output.clone();
         write_stdout_record(&mut output, completion.as_bytes(), "check result")
