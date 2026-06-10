@@ -42,7 +42,8 @@ pub(crate) fn developer_instructions(
 ) -> Result<String, String> {
     let num_invisible_files = context
         .checked_file_count
-        .saturating_sub(context.visible_file_count);
+        .checked_sub(context.visible_file_count)
+        .ok_or("visible file count exceeds checked file count")?;
     render_minijinja_resource_template(
         context.root,
         DEVELOPER_INSTRUCTIONS_TEMPLATE.trim_end(),
