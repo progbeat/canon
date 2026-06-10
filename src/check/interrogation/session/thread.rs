@@ -12,7 +12,7 @@ use crate::evaluator::{
     EvaluatorError, EvaluatorResponseParseCache, EvaluatorRunner, EvaluatorTurnContext,
     ParsedTurnResponse, ThreadLifecycleLog,
 };
-use crate::history::{against_tree_answer_with_cache, HistoryCache};
+use crate::history::{prev_answer_with_cache, HistoryCache};
 use crate::logs::DiagnosticLogWriter;
 use crate::scope::{sanitize_scope, visible_scope};
 use std::collections::BTreeSet;
@@ -323,10 +323,11 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
     // developer instructions and the turn prompt are rendered from
     // `resources/prompts/` plus runtime data.
     let enforced_scope = sanitize_scope(enforced_scope)?;
-    let against_tree_answer = if expectation.question_answer_only {
+    let git_diff = runtime.tree_context.checked_tree_oid != runtime.tree_context.against_tree_oid;
+    let prev_answer = if expectation.question_answer_only || !git_diff {
         None
     } else {
-        against_tree_answer_with_cache(
+        prev_answer_with_cache(
             runtime.root,
             &runtime.tree_context.against_tree,
             &expectation.agent,
@@ -340,7 +341,8 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
     let prompt = evaluator_turn_prompt(
         runtime.root,
         &expectation.question,
-        against_tree_answer.as_ref(),
+        git_diff,
+        prev_answer.as_ref(),
     )
     .map_err(EvaluatorError::message)?;
     let thinking = effective_thinking(&expectation.agent, expectation);

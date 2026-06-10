@@ -2,10 +2,10 @@
 // plus current visibleTreeOid matching.
 use crate::check::{CheckRecord, CheckResult, SelectedExpectation};
 use crate::config_types::AgentConfig;
-use crate::evaluator::AgainstTreeAnswer;
+use crate::evaluator::PrevAnswer;
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::history::HistoryCache;
-use crate::scope::{q_scope_from_visible_scope, visible_scope};
+use crate::scope::{q_scope_from_visible_scope, scope_is_within};
 use crate::time::parse_record_timestamp;
 use std::path::Path;
 
@@ -90,7 +90,7 @@ pub(crate) fn cooldown_history_record(
     Ok(record.map(|record| cooldown_record_with_current_expectation(record, expectation)))
 }
 
-pub(crate) fn against_tree_answer_with_cache(
+pub(crate) fn prev_answer_with_cache(
     root: &Path,
     source: &TreeSource,
     agent: &AgentConfig,
@@ -98,26 +98,11 @@ pub(crate) fn against_tree_answer_with_cache(
     current_scope: &[String],
     history_cache: &mut HistoryCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
-) -> Result<Option<AgainstTreeAnswer>, String> {
-    let current_visible_scope = visible_scope(agent, current_scope)?;
-    let Some(against_tree_oid) = visible_tree_oid_cache.visible_tree_oid_for_visible_scope(
-        root,
-        source,
-        &current_visible_scope,
-    )?
-    else {
-        return Ok(None);
-    };
+) -> Result<Option<PrevAnswer>, String> {
     let records = history_cache.read_records(root, expectation)?;
-    for record in records.into_iter().rev() {
-        if record.scope == current_visible_scope && record.visible_tree_oid == against_tree_oid {
-            return Ok(Some(AgainstTreeAnswer {
-                answer: record.observed,
-                evidence: record.evidence,
-            }));
-        }
-    }
-    Ok(None)
+    previous_answer_from_records(agent, current_scope, records, |scope| {
+        visible_tree_oid_cache.visible_tree_oid_for_reuse(root, source, agent, scope)
+    })
 }
 
 pub(crate) enum CachedHistoryRecord {
@@ -184,6 +169,37 @@ fn sanitized_answer_history_q_scope(
     record: &CheckRecord,
 ) -> Option<Vec<String>> {
     q_scope_from_visible_scope(agent, &record.scope).ok()
+}
+
+fn previous_answer_from_records(
+    agent: &AgentConfig,
+    current_scope: &[String],
+    records: Vec<CheckRecord>,
+    mut against_tree_oid_for_scope: impl FnMut(&[String]) -> Result<Option<String>, String>,
+) -> Result<Option<PrevAnswer>, String> {
+    let mut newest_eligible = None;
+    for record in records.into_iter().rev() {
+        let Some(scope) = sanitized_answer_history_q_scope(agent, &record) else {
+            continue;
+        };
+        if !scope_is_within(&scope, current_scope) {
+            continue;
+        }
+        if newest_eligible.is_none() {
+            newest_eligible = Some(prev_answer_from_record(&record));
+        }
+        if against_tree_oid_for_scope(&scope)?.as_deref() == Some(&record.visible_tree_oid) {
+            return Ok(Some(prev_answer_from_record(&record)));
+        }
+    }
+    Ok(newest_eligible)
+}
+
+fn prev_answer_from_record(record: &CheckRecord) -> PrevAnswer {
+    PrevAnswer {
+        answer: record.observed.clone(),
+        evidence: record.evidence.clone(),
+    }
 }
 
 fn record_with_current_expectation(
@@ -267,6 +283,19 @@ mod tests {
             visible_tree_oid: "tree".to_string(),
             id: "11111111111111111111".to_string(),
             display_id: "1".to_string(),
+        }
+    }
+
+    fn record_with_scope_and_tree(
+        timestamp: &str,
+        evidence: &str,
+        scope: &str,
+        visible_tree_oid: &str,
+    ) -> CheckRecord {
+        CheckRecord {
+            scope: vec![scope.to_string()],
+            visible_tree_oid: visible_tree_oid.to_string(),
+            ..record(timestamp, evidence)
         }
     }
 
@@ -415,6 +444,74 @@ mod tests {
         assert_eq!(hit.evidence, "stored visible scope");
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn previous_answer_prefers_most_recent_eligible_record_at_against_tree() {
+        let expectation = expectation_with_cooldown();
+        let records = vec![
+            record_with_scope_and_tree(
+                "1970-01-01T00:00:10Z",
+                "older at against",
+                "src/a.rs",
+                "against",
+            ),
+            record_with_scope_and_tree(
+                "1970-01-01T00:00:20Z",
+                "newer fallback",
+                "src/b.rs",
+                "other",
+            ),
+            record_with_scope_and_tree(
+                "1970-01-01T00:00:30Z",
+                "outside current scope",
+                "docs",
+                "against",
+            ),
+        ];
+
+        let answer =
+            previous_answer_from_records(&expectation.agent, &["src".to_string()], records, |_| {
+                Ok(Some("against".to_string()))
+            })
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(answer.evidence, "older at against");
+    }
+
+    #[test]
+    fn previous_answer_falls_back_to_most_recent_eligible_record() {
+        let expectation = expectation_with_cooldown();
+        let records = vec![
+            record_with_scope_and_tree(
+                "1970-01-01T00:00:10Z",
+                "older fallback",
+                "src/a.rs",
+                "older",
+            ),
+            record_with_scope_and_tree(
+                "1970-01-01T00:00:20Z",
+                "newer fallback",
+                "src/b.rs",
+                "newer",
+            ),
+            record_with_scope_and_tree(
+                "1970-01-01T00:00:30Z",
+                "outside current scope",
+                "docs",
+                "against",
+            ),
+        ];
+
+        let answer =
+            previous_answer_from_records(&expectation.agent, &["src".to_string()], records, |_| {
+                Ok(Some("against".to_string()))
+            })
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(answer.evidence, "newer fallback");
     }
 
     fn expectation_with_cooldown() -> SelectedExpectation {

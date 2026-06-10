@@ -1,5 +1,5 @@
-{{ question }}{% if against_tree_answer %}
+{{ question }}{% if git_diff and prev_answer %}
 
-Your previous answer at HEAD:
-{{ against_tree_answer|json }}
+Reuse the following previous answer if the Git diff does not change the correct answer or invalidate its evidence:
+{{ prev_answer|json }}
 {% endif %}

@@ -78,23 +78,6 @@ impl VisibleTreeOidCache {
         self.visible_tree_oid_for_source_scope(root, source, agent, scope)
     }
 
-    pub(crate) fn visible_tree_oid_for_visible_scope(
-        &mut self,
-        root: &Path,
-        source: &TreeSource,
-        visible_scope: &[String],
-    ) -> Result<Option<String>, String> {
-        let files = match source {
-            TreeSource::Staged => self.staged_files(root)?,
-            TreeSource::Git { .. } => self.tree_source_files(root, source)?,
-        };
-        visible_tree_oid_from_files_if_scope_present(
-            &files,
-            visible_scope,
-            self.object_hash_algorithm(root)?,
-        )
-    }
-
     pub(crate) fn checked_file_count(
         &mut self,
         root: &Path,

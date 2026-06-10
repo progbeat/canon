@@ -8,8 +8,8 @@ mod store;
 pub(crate) use append::append_current_history_record_with_cache;
 pub(crate) use cleanup::{active_expectation_ids_from_identities, cleanup_stale_cache_dirs};
 pub(crate) use reuse::{
-    against_tree_answer_with_cache, cached_history_record, cooldown_history_record,
-    is_reusable_history_record, latest_history_record_matching_visible_tree_oid,
-    latest_stored_q_scope_with_cache, same_tree_history_record_with_cache, CachedHistoryRecord,
+    cached_history_record, cooldown_history_record, is_reusable_history_record,
+    latest_history_record_matching_visible_tree_oid, latest_stored_q_scope_with_cache,
+    prev_answer_with_cache, same_tree_history_record_with_cache, CachedHistoryRecord,
 };
 pub(crate) use store::HistoryCache;

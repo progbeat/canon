@@ -15,11 +15,6 @@ static TEMPLATE_OUTPUT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 // the turn prompt template.
 const DEVELOPER_INSTRUCTIONS_TEMPLATE: &str =
     include_str!("../../../resources/prompts/evaluator_developer_instructions.txt");
-// Runtime value for the developer template's `static_developer_instructions`
-// variable. This text is evaluator protocol and evidence-sufficiency guidance,
-// not a table of topic-specific answer-value overrides.
-const STATIC_DEVELOPER_INSTRUCTIONS: &str =
-    include_str!("../../../resources/prompts/evaluator_static_developer_instructions.txt");
 const EVALUATOR_TURN_PROMPT_TEMPLATE: &str =
     include_str!("../../../resources/prompts/evaluator_turn_prompt.txt");
 
@@ -33,7 +28,7 @@ pub(crate) struct DeveloperInstructionsContext<'a> {
 }
 
 #[derive(Clone, Debug, Serialize)]
-pub(crate) struct AgainstTreeAnswer {
+pub(crate) struct PrevAnswer {
     pub(crate) answer: String,
     pub(crate) evidence: String,
 }
@@ -53,7 +48,6 @@ pub(crate) fn developer_instructions(
         DEVELOPER_INSTRUCTIONS_TEMPLATE.trim_end(),
         Some(prompt_diff_index.path()),
         context! {
-            static_developer_instructions => STATIC_DEVELOPER_INSTRUCTIONS.trim_end(),
             against_tree_oid => "--cached",
             checked_tree_oid => context.against_tree_oid,
             visible_scope => context.visible_scope,
@@ -65,14 +59,16 @@ pub(crate) fn developer_instructions(
 pub(crate) fn evaluator_turn_prompt(
     root: &Path,
     question: &str,
-    against_tree_answer: Option<&AgainstTreeAnswer>,
+    git_diff: bool,
+    prev_answer: Option<&PrevAnswer>,
 ) -> Result<String, String> {
     render_minijinja_resource_template(
         root,
         EVALUATOR_TURN_PROMPT_TEMPLATE.trim_end(),
         context! {
             question => question,
-            against_tree_answer => against_tree_answer,
+            git_diff => git_diff,
+            prev_answer => prev_answer,
         },
     )
 }
@@ -94,6 +90,7 @@ fn render_minijinja_resource_template_with_git_index(
     let mut environment = Environment::new();
     environment.add_filter("json", json_filter);
     environment.add_filter("shq", shell_quote_filter);
+    environment.add_filter("shargs", shell_args_filter);
     let command_root = root.to_path_buf();
     let command_git_index_file = git_index_file.map(Path::to_path_buf);
     environment.add_filter(
@@ -141,6 +138,20 @@ fn json_filter(value: Value) -> Result<String, Error> {
 
 fn shell_quote_filter(value: String) -> String {
     shell_quote(&value)
+}
+
+fn shell_args_filter(value: Value) -> Result<String, Error> {
+    value
+        .try_iter()
+        .map_err(|err| template_error(format!("shargs requires an iterable: {err}")))?
+        .map(|arg| {
+            let arg = arg
+                .as_str()
+                .ok_or_else(|| template_error("shargs requires string arguments".to_string()))?;
+            Ok(shell_quote(arg))
+        })
+        .collect::<Result<Vec<_>, Error>>()
+        .map(|args| args.join(" "))
 }
 
 fn shell_transcript_filter(
@@ -299,8 +310,7 @@ fn template_error(message: String) -> Error {
 mod tests {
     use super::{
         developer_instructions, evaluator_turn_prompt, truncated_template_command_output,
-        AgainstTreeAnswer, DeveloperInstructionsContext, STATIC_DEVELOPER_INSTRUCTIONS,
-        TEMPLATE_OUTPUT_HEAD_BYTES,
+        DeveloperInstructionsContext, PrevAnswer, TEMPLATE_OUTPUT_HEAD_BYTES,
     };
     use crate::git::{empty_tree_oid, staged_tree_oid};
     use serde_json::Value;
@@ -324,18 +334,21 @@ mod tests {
             root: &root,
             against_tree_oid: &against_tree_oid,
             checked_tree_oid: &checked_tree_oid,
-            visible_scope: &[".".to_string()],
+            visible_scope: &["file.txt".to_string()],
             checked_file_count: 1,
             visible_file_count: 1,
         })
         .unwrap();
 
         assert!(instructions.contains("$ git diff --numstat --cached\n"));
+        assert!(instructions.contains("$ git diff --cached -- 'file.txt'\n"));
+        assert!(instructions.contains("diff --git a/file.txt b/file.txt\n"));
+        assert!(instructions.contains("$ enter-sandbox\n"));
         assert!(instructions
-            .trim_start()
-            .starts_with(STATIC_DEVELOPER_INSTRUCTIONS.trim_end()));
-        assert!(instructions.contains("$ sandbox --read-only --scope [\".\"]"));
-        assert!(instructions.contains("Hidden files: 0."));
+            .contains("You are now in the read-only sandbox. Git commands are unavailable.\n"));
+        assert!(instructions.contains(
+            "0 project files are hidden because they are likely unnecessary to answer the question."
+        ));
 
         let _ = fs::remove_dir_all(root);
     }
@@ -371,12 +384,13 @@ mod tests {
     }
 
     #[test]
-    fn turn_prompt_renders_against_tree_answer_protocol_section() {
+    fn turn_prompt_renders_previous_answer_protocol_section_when_git_diff_exists() {
         let _lock = prompt_render_lock();
         let prompt = evaluator_turn_prompt(
             Path::new(env!("CARGO_MANIFEST_DIR")),
             "Does it pass?",
-            Some(&AgainstTreeAnswer {
+            true,
+            Some(&PrevAnswer {
                 answer: "yes".to_string(),
                 evidence: "`src/main.rs` proves it".to_string(),
             }),
@@ -384,14 +398,31 @@ mod tests {
         .unwrap();
 
         let answer_json = prompt
-            .split_once("Your previous answer at HEAD:")
+            .split_once("Reuse the following previous answer if the Git diff does not change the correct answer or invalidate its evidence:")
             .map(|(_, answer)| answer.trim())
-            .expect("prompt should include the against-tree answer section");
+            .expect("prompt should include the previous-answer section");
         let answer: Value = serde_json::from_str(answer_json).unwrap();
 
         assert_eq!(prompt.lines().next(), Some("Does it pass?"));
         assert_eq!(answer["answer"], "yes");
         assert_eq!(answer["evidence"], "`src/main.rs` proves it");
+    }
+
+    #[test]
+    fn turn_prompt_omits_previous_answer_without_git_diff() {
+        let _lock = prompt_render_lock();
+        let prompt = evaluator_turn_prompt(
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            "Does it pass?",
+            false,
+            Some(&PrevAnswer {
+                answer: "yes".to_string(),
+                evidence: "`src/main.rs` proves it".to_string(),
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(prompt, "Does it pass?");
     }
 
     #[test]
