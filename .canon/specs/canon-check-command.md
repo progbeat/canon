@@ -118,22 +118,26 @@ Outcome labels follow pytest pluralization: `failed`, `passed`, and `skipped`
 are used for both singular and plural counts; `error` is used for one error and
 `errors` for every other error count.
 
-`passed` is the number of selected expectations whose result is `pass`.
-`failed` is the number of expectations whose cached or evaluated result is `fail`.
-`errors` is the number of selected expectations whose result requires human review.
-`skipped` is the number of expectations not included in any category above (i.e. without output).
+`passed` is the number of collected expectations whose result is pass.
+`failed` is the number of collected expectations whose result is fail.
+`errors` is the number of collected expectations whose result requires human review.
+`skipped` is the number of collected expectations that do not yet have an evaluated or cached result.
+
+Each collected expectation is counted exactly once in passed, failed, errors, or skipped.
 
 ## Instructions to Agent
 
 Assuming no Ctrl-C or other interruption, when `canon check` runs without expectation selectors, with the default config, on the `:staged` tree, and against `HEAD`, it may emit instructions for the agent that ran it like this:
 
 ```python
-def print_agent_messages(failed, errors, num_fixes, num_regressions):
+def print_agent_messages(failed, errors, num_fixes, num_regressions, num_skipped):
     """
     :param failed: Short IDs of failed expectations.
     :param errors: Short IDs of expectations that encountered errors in this run.
     :param num_fixes: Number of expectations that changed from non-pass to pass compared to HEAD.
     :param num_regressions: Number of expectations whose current result is non-pass and whose answer history contains at least one earlier `pass` result for the same expectation.
+    :param num_skipped: Number of expectations not included in any category above.
+
     """
     issues = failed + errors
     if num_regressions > 0 or (len(issues) > 0 and num_fixes == 0):
@@ -141,6 +145,7 @@ def print_agent_messages(failed, errors, num_fixes, num_regressions):
         print(f"▷ Fix the issues and run `canon check` again!")
         return
     if len(issues) == 0 and num_fixes == 0:
+        assert num_skipped == 0
         print("✓ All checks passed. Commit is allowed.")
         return
     assert num_fixes > 0
@@ -149,6 +154,8 @@ def print_agent_messages(failed, errors, num_fixes, num_regressions):
     if len(issues) > 0:
         _repair_instructions(issues)
         print(f"▷ Then fix the remaining issues and run `canon check` again!")
+    else:
+        assert num_skipped == 0
 
 def _repair_instructions(issues):
     assert len(issues) > 0
