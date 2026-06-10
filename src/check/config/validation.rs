@@ -1,9 +1,11 @@
 use crate::check::core::{
-    contains_line_break, matches_answer_pattern, ANSWER_PATTERN, ERROR_INSUFFICIENT_EVIDENCE,
-    ERROR_INVALID_QUESTION, ERROR_UNPARSABLE,
+    contains_line_break, is_line_break_char, matches_answer_pattern, ANSWER_PATTERN,
+    ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION, ERROR_UNPARSABLE,
 };
 use crate::check::run::selection::parse_cooldown;
 use crate::config_types::{AgentConfig, CheckConfig};
+use crate::hash::expectation_id;
+use crate::logs::push_json_control_escape;
 use crate::scope::normalize_repo_path;
 
 pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> {
@@ -20,6 +22,7 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
     if config.expectations.is_empty() {
         return Err("check.yml expectations must not be empty".to_string());
     }
+    let display_ids = expectation_display_ids(config);
     for (index, expectation) in config.expectations.iter().enumerate() {
         let number = index + 1;
         if !contains_visible_config_text(&expectation.q) {
@@ -29,18 +32,29 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
             ));
         }
         if !matches_answer_pattern(&expectation.a) {
-            return Err(format!(
-                "expectation {} expected answer must match answer pattern {}",
-                number, ANSWER_PATTERN
+            return Err(render_expectation_validation_error(
+                &display_ids[index],
+                &expectation.q,
+                "invalid-expected-answer",
+                &format!(
+                    "configured expected answer `{}` does not match answer pattern {}",
+                    escape_config_error_block_text(&expectation.a),
+                    ANSWER_PATTERN
+                ),
             ));
         }
         if matches!(
             expectation.a.as_str(),
             ERROR_INSUFFICIENT_EVIDENCE | ERROR_INVALID_QUESTION | ERROR_UNPARSABLE
         ) {
-            return Err(format!(
-                "expectation {} expected answer must not be an evaluator error token",
-                number
+            return Err(render_expectation_validation_error(
+                &display_ids[index],
+                &expectation.q,
+                "expected answer must not be an evaluator error token",
+                &format!(
+                    "configured expected answer is `{}`",
+                    escape_config_error_block_text(&expectation.a)
+                ),
             ));
         }
         if let Some(cooldown) = expectation.cooldown.as_ref() {
@@ -50,6 +64,67 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
         validate_agent_config(&expectation.agent, &format!("expectation {}", number))?;
     }
     Ok(())
+}
+
+fn render_expectation_validation_error(
+    display_id: &str,
+    question: &str,
+    error: &str,
+    evidence: &str,
+) -> String {
+    format!(
+        "{}. ERROR\n{}\nError: {}\nEvidence: {}",
+        display_id,
+        escape_config_error_block_text(question),
+        error,
+        evidence
+    )
+}
+
+fn expectation_display_ids(config: &CheckConfig) -> Vec<String> {
+    let ids = config
+        .expectations
+        .iter()
+        .map(|expectation| expectation_id(&expectation.q))
+        .collect::<Vec<_>>();
+    ids.iter()
+        .map(|id| minimal_unique_expectation_prefix(id, &ids).unwrap_or_else(|| id.clone()))
+        .collect()
+}
+
+fn minimal_unique_expectation_prefix(id: &str, ids: &[String]) -> Option<String> {
+    (1..=id.len()).find_map(|end| {
+        let prefix = &id[..end];
+        let matches = ids
+            .iter()
+            .filter(|candidate| candidate.starts_with(prefix))
+            .count();
+        (matches == 1).then(|| prefix.to_string())
+    })
+}
+
+fn escape_config_error_block_text(value: &str) -> String {
+    let mut output = String::new();
+    for ch in value.chars() {
+        match ch {
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            '\t' => output.push_str("\\t"),
+            ch if is_line_break_char(ch) || ch.is_control() => {
+                push_config_error_unicode_escape(&mut output, ch);
+            }
+            ch => output.push(ch),
+        }
+    }
+    output
+}
+
+fn push_config_error_unicode_escape(output: &mut String, ch: char) {
+    if (ch as u32) <= 0xff {
+        push_json_control_escape(output, ch as u8);
+    } else {
+        output.push_str(&format!("\\u{:04x}", ch as u32));
+    }
 }
 
 fn validate_agent_config(agent: &AgentConfig, label: &str) -> Result<(), String> {
@@ -232,4 +307,43 @@ pub(crate) fn normalize_agent_ignore_pattern_for_config(value: &str) -> Result<S
         return Err("agent ignore pattern: path must not be empty".to_string());
     }
     normalize_repo_path(value).map_err(|err| format!("agent ignore pattern: {}", err))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_check_config;
+    use crate::config_types::{AgentConfig, CheckConfig, Expectation};
+    use crate::hash::expectation_id;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn invalid_expected_answer_error_uses_expectation_block_format() {
+        let question = "What is this project implemented in?";
+        let agent = AgentConfig::default();
+        let mut presets = BTreeMap::new();
+        presets.insert("default".to_string(), agent.clone());
+        let config = CheckConfig {
+            version: 1,
+            presets,
+            agent: agent.clone(),
+            expectations: vec![Expectation {
+                q: question.to_string(),
+                a: "Rust".to_string(),
+                question_answer_only: false,
+                agent,
+                cooldown: None,
+            }],
+        };
+
+        let error = validate_check_config(&config).unwrap_err();
+
+        assert_eq!(
+            error,
+            format!(
+                "{}. ERROR\n{}\nError: invalid-expected-answer\nEvidence: configured expected answer `Rust` does not match answer pattern ^[-_a-z0-9]+$",
+                &expectation_id(question)[..1],
+                question
+            )
+        );
+    }
 }

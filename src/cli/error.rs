@@ -67,9 +67,51 @@ fn command_error_has_public_diagnostic(err: &CommandError) -> bool {
 fn write_command_error_line(err: &CommandError) -> Result<(), String> {
     let stderr = io::stderr();
     let mut stderr = stderr.lock();
-    writeln!(stderr, "Error: {}", err)
+    stderr
+        .write_all(render_command_error(err).as_bytes())
         .map_err(|source| format!("failed to write command error to stderr: {}", source))?;
     stderr
         .flush()
         .map_err(|source| format!("failed to flush command error to stderr: {}", source))
+}
+
+fn render_command_error(err: &CommandError) -> String {
+    let message = err.to_string();
+    if is_expectation_diagnostic_block(&message) {
+        let mut output = message;
+        output.push('\n');
+        return output;
+    }
+    format!("Error: {}\n", message)
+}
+
+fn is_expectation_diagnostic_block(message: &str) -> bool {
+    message
+        .lines()
+        .next()
+        .is_some_and(|line| line.ends_with(" ERROR") || line.ends_with(" FAILED"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{render_command_error, CommandError};
+
+    #[test]
+    fn expectation_diagnostic_block_is_not_prefixed_with_generic_error() {
+        let rendered = render_command_error(&CommandError::from(
+            "x. ERROR\nQuestion?\nError: detail\nEvidence: value".to_string(),
+        ));
+
+        assert_eq!(
+            rendered,
+            "x. ERROR\nQuestion?\nError: detail\nEvidence: value\n"
+        );
+    }
+
+    #[test]
+    fn ordinary_error_keeps_generic_error_prefix() {
+        let rendered = render_command_error(&CommandError::from("ordinary failure".to_string()));
+
+        assert_eq!(rendered, "Error: ordinary failure\n");
+    }
 }
