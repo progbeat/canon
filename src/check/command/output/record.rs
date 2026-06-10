@@ -65,14 +65,12 @@ impl LiveCheckProgressOutput {
         let _ = self.stop_progress_worker();
         let completion = render_check_output_record_completion(record);
         let mut output = self.output.clone();
-        if let Err(stdout_err) =
-            write_stdout_record(&mut output, completion.as_bytes(), "check result")
-        {
+        if write_stdout_record(&mut output, completion.as_bytes(), "check result").is_err() {
             // Human byte sinks can reject all writes; no CLI can force bytes
             // into closed stdout/stderr. The report invariant here is that
             // output failure cannot erase the CheckRecord from summary
             // accounting or diagnostic logs.
-            let _ = write_live_completion_fallback_to_stderr(record, &completion, &stdout_err);
+            write_live_completion_fallback_to_stderr(record, &completion);
         }
         Ok(())
     }
@@ -89,22 +87,9 @@ impl LiveCheckProgressOutput {
     }
 }
 
-fn write_live_completion_fallback_to_stderr(
-    record: &CheckRecord,
-    completion: &str,
-    stdout_err: &str,
-) -> Result<(), String> {
+fn write_live_completion_fallback_to_stderr(record: &CheckRecord, completion: &str) {
     let fallback = format!("{}{}", record.display_id, completion);
-    let mut stderr = std::io::stderr();
-    stderr
-        .write_all(fallback.as_bytes())
-        .and_then(|_| stderr.flush())
-        .map_err(|stderr_err| {
-            format!(
-                "{}; failed to write fallback check result to stderr: {}",
-                stdout_err, stderr_err
-            )
-        })
+    eprint!("{}", fallback);
 }
 
 // No-progress callers still write the documented minimum progress prefix. They
