@@ -114,3 +114,6 @@ expectations:
 
   - q: "Does generator path `specs/**.md` match Markdown files in nested `specs/` subdirectories?"
     a: "yes"
+
+  - q: "Does canon validate each expectation's expected answer using the `answer` pattern defined by the interrogation response schema?"
+    a: "yes"

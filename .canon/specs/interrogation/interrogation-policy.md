@@ -12,8 +12,7 @@ An evaluator response must be a single JSON object matching this JSON Schema:
   "properties": {
     "answer": {
       "type": "string",
-      "minLength": 1,
-      "pattern": "^[^\\r\\n]*$"
+      "pattern": "^[-_a-z0-9]+$"
     },
     "error": {
       "type": "string",
