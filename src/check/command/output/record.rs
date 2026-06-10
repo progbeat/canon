@@ -18,21 +18,23 @@ pub(crate) struct LiveCheckProgressOutput {
     stop: Sender<()>,
     active: Arc<AtomicBool>,
     worker: Option<JoinHandle<Result<(), String>>>,
+    prefix_completed: bool,
 }
 
 pub(crate) fn start_live_check_progress_output(
     output: SharedCheckOutput,
     display_id: &str,
-) -> Result<LiveCheckProgressOutput, String> {
+) -> LiveCheckProgressOutput {
     // Evaluated expectations call this before evaluator work starts. The first
     // dot is written and flushed immediately; the worker appends later dots
     // while the evaluator is still running.
     let mut immediate_output = output.clone();
-    write_stdout_record(
+    let prefix_completed = write_stdout_record(
         &mut immediate_output,
         format!("{}.", display_id).as_bytes(),
         "check progress prefix",
-    )?;
+    )
+    .is_ok();
 
     let (stop, stop_requested) = mpsc::channel();
     let active = Arc::new(AtomicBool::new(true));
@@ -50,12 +52,13 @@ pub(crate) fn start_live_check_progress_output(
         }
     });
 
-    Ok(LiveCheckProgressOutput {
+    LiveCheckProgressOutput {
         output,
         stop,
         active,
         worker: Some(worker),
-    })
+        prefix_completed,
+    }
 }
 
 impl LiveCheckProgressOutput {
@@ -63,14 +66,18 @@ impl LiveCheckProgressOutput {
         // Once the progress prefix is visible, final result output has
         // priority over delayed progress-dot cleanup errors.
         let _ = self.stop_progress_worker();
-        let completion = render_check_output_record_completion(record);
+        let completion = if self.prefix_completed {
+            render_check_output_record_completion(record)
+        } else {
+            render_check_output_record_with_progress_dot(record)
+        };
         let mut output = self.output.clone();
         if write_stdout_record(&mut output, completion.as_bytes(), "check result").is_err() {
             // Human byte sinks can reject all writes; no CLI can force bytes
             // into closed stdout/stderr. The report invariant here is that
             // output failure cannot erase the CheckRecord from summary
             // accounting or diagnostic logs.
-            write_live_completion_fallback_to_stderr(record, &completion);
+            write_live_completion_fallback_to_stderr(record, &completion, self.prefix_completed);
         }
     }
 
@@ -86,8 +93,16 @@ impl LiveCheckProgressOutput {
     }
 }
 
-fn write_live_completion_fallback_to_stderr(record: &CheckRecord, completion: &str) {
-    let fallback = format!("{}{}", record.display_id, completion);
+fn write_live_completion_fallback_to_stderr(
+    record: &CheckRecord,
+    completion: &str,
+    prefix_completed: bool,
+) {
+    let fallback = if prefix_completed {
+        format!("{}{}", record.display_id, completion)
+    } else {
+        completion.to_string()
+    };
     eprint!("{}", fallback);
 }
 

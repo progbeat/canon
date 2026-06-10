@@ -93,10 +93,10 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     // Start live progress before the evaluator turn so the first dot is
     // visible while the expectation is still being evaluated.
     let mut progress = match context.live_progress_output.as_ref() {
-        Some(output) => Some(run_expectation_try!(start_live_check_progress_output(
+        Some(output) => Some(start_live_check_progress_output(
             output.clone(),
             &expectation.display_id,
-        ))),
+        )),
         None => None,
     };
     // There is intentionally no cancel-only path after the live prefix is

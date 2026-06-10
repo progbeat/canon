@@ -44,6 +44,28 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct FirstFlushFailsOutput {
+        bytes: Arc<Mutex<Vec<u8>>>,
+        fail_next_flush: Arc<Mutex<bool>>,
+    }
+
+    impl Write for FirstFlushFailsOutput {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.bytes.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            let mut fail_next_flush = self.fail_next_flush.lock().unwrap();
+            if *fail_next_flush {
+                *fail_next_flush = false;
+                return Err(io::Error::other("first flush failed"));
+            }
+            Ok(())
+        }
+    }
+
     #[test]
     fn no_progress_result_output_matches_documented_record_shape() {
         let mut bytes = Vec::new();
@@ -73,7 +95,7 @@ mod tests {
             bytes: bytes.clone(),
         }));
 
-        let progress = start_live_check_progress_output(output, "j").unwrap();
+        let progress = start_live_check_progress_output(output, "j");
         let started = captured_string(&bytes);
         assert!(started.starts_with('j'));
         assert!(started.ends_with('.'));
@@ -83,6 +105,23 @@ mod tests {
         let completed = captured_string(&bytes);
         assert!(completed.starts_with(&started));
         assert_result_entry(&completed, "OK");
+    }
+
+    #[test]
+    fn live_progress_output_renders_full_result_after_unconfirmed_prefix() {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let output = SharedCheckOutput::new(Box::new(FirstFlushFailsOutput {
+            bytes: bytes.clone(),
+            fail_next_flush: Arc::new(Mutex::new(true)),
+        }));
+
+        let progress = start_live_check_progress_output(output, "j");
+        let started = captured_string(&bytes);
+        assert_eq!(started, "j.");
+
+        progress.finish_with_record(&passing_record());
+        let completed = captured_string(&bytes);
+        assert!(completed.ends_with("j. OK\n"));
     }
 
     #[test]
