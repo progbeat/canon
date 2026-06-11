@@ -1,7 +1,7 @@
 - q: "Are you instructed to format evidence references as project-relative refs enclosed in backticks?"
   a: yes
 
-- q: "Do the developer instructions explicitly prohibit proxy evidence?"
+- q: "Do your instructions before this question explicitly prohibit proxy evidence?"
   a: yes
 
 - q: "Are you instructed to use the minimum evidence sufficient to answer correctly, cite it precisely, then stop?"
