@@ -134,7 +134,7 @@ def print_agent_messages(failed, errors, num_fixes, num_regressions, num_skipped
     """
     :param failed: Short IDs of failed expectations.
     :param errors: Short IDs of expectations that encountered errors in this run.
-    :param num_fixes: Number of expectations that changed from non-pass to pass compared to HEAD.
+    :param num_fixes: Number of expectations that pass for the checked tree while HEAD lacks a pass for the same expectation.
     :param num_regressions: Number of expectations whose current result is non-pass and whose answer history contains at least one earlier `pass` result for the same expectation.
     :param num_skipped: Number of expectations not included in any category above.
 
