@@ -39,6 +39,7 @@
 - q: "Can you find any avoidable violations of commonly accepted idiomatic Rust practices that materially reduce this project's maintainability, correctness, readability, type safety, or future extensibility, excluding purely stylistic alternatives unless they create a concrete demonstrated risk?"
   a: "no"
   target: diff
+  cooldown: {pass: 20m, fail: 20m}
 
 - q: "Are writes under CANON_STATE_DIR amortized O(N) over N newly persisted bytes?"
   a: "yes"
@@ -89,13 +90,13 @@
   a: "no"
   preset: smart
   target: diff
-  cooldown: {pass: 7d, fail: 20m}
+  cooldown: {pass: 20m, fail: 20m}
 
 - q: "Can you find any high-confidence, practically exploitable security vulnerability?"
   a: "no"
   preset: smart
   target: diff
-  cooldown: {pass: 7d, fail: 20m}
+  cooldown: {pass: 20m, fail: 20m}
 
 - q: "Can you find code structure that is overly flat?"
   a: "no"
