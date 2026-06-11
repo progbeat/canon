@@ -3,6 +3,10 @@
 This is a prompt template for the developer instructions:
 
 ```jinja
+{% if expectation.instructions|trim -%}
+{{ expectation.instructions|trim }}
+
+{% endif -%}
 {% filter sh(display="git diff --numstat --cached") %}
 git diff --numstat {{ against_tree_oid|shq }} {{ checked_tree_oid|shq }}
 {% endfilter %}

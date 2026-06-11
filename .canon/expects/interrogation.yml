@@ -10,7 +10,7 @@
 - q: "Do your instructions encourage you to make `qScopeSuggestion` as narrow as possible while still enough to justify the answer?"
   a: "yes"
 
-- q: "Are all interrogation prompt and instruction texts/templates kept under `resources/prompts/`?"
+- q: "Are all built-in interrogation prompt and instruction templates kept under `resources/prompts/`?"
   a: "yes"
 
 - q: "Can you find a concrete scenario where the pass-improvement count used for the final agent advice is positive even though the checked tree and against tree for the run resolve to the same Git tree?"
@@ -23,13 +23,16 @@
 
 - q: "Can you find any logic that depends on the content of the evidence provided by the evaluator agent?"
   a: "no"
-  cooldown: 1d
+  target: diff
 
 - q: "Is the evaluator's response schema enforced by `turn/start.params.outputSchema`, not merely requested in the prompt?"
   a: "yes"
 
 - q: "When `canon check` prints <short ID>, can you find an abnormal scenario in which it does not report anything for this expectation?"
   a: "no"
+
+- q: "Does evaluator prompt template rendering trim leading and trailing whitespace from the rendered output?"
+  a: "yes"
 
 # - q: "Do the dev instructions require knowing any specialized terms whose meaning is not available from the dev instructions themselves?"
 #   a: "no"

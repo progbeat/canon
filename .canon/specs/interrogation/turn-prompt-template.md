@@ -3,11 +3,16 @@
 This is a prompt template for the turn prompt used for evaluator interrogations:
 
 ````jinja
-{{ question }}{% if git_diff and prev_answer %}
+{{ question }}
+{%- if git_diff and prev_answer %}
 
-Reuse the following previous answer if the Git diff does not change the correct answer or invalidate its evidence:
+Before answering, check whether the Git diff invalidates the previous answer:
 {{ prev_answer|json }}
-{% endif %}
+If not, reuse it and stop.
+{%- elif git_diff and expectation.target == "diff" %}
+
+This question targets the Git diff. Inspect touched files and only the necessary context. If they do not prove otherwise, answer: {{ expectation.a|json }}.
+{%- endif %}
 ````
 
 `git_diff` is present when the checked tree differs from the against tree.

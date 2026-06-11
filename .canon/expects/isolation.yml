@@ -1,7 +1,6 @@
 - q: "Are paths in the visible tree selected solely by applying the visible scope pathspec to the checked Git tree?"
   a: "yes"
-  cooldown: 1d
 
 - q: "Can you find any hardcoded file-path filters that affect which paths are included in the visible tree?"
   a: "no"
-  cooldown: 1d
+  target: diff
