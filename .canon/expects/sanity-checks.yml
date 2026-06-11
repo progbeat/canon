@@ -1,6 +1,6 @@
 - q: "What is this project implemented in?"
   a: "rust"
-  cooldown: {pass: 20d, fail: 1m}
+  cooldown: 20d
 
 - q: "Does any of your input before this message, including dev instructions, mention the apply_patch tool?"
   a: "no"
