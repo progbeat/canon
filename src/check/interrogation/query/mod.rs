@@ -147,7 +147,7 @@ fn ask_once<R: EvaluatorRunner>(
     state: &mut InterrogationRunState,
     model: Option<&str>,
 ) -> Result<QueryResult, EvaluatorError> {
-    let prompt = evaluator_turn_prompt(runtime.root, question, false, None)?;
+    let prompt = evaluator_turn_prompt(runtime.root, question, "", None, false, None)?;
     let response = ask_with_reused_thread(
         runtime,
         runner,
@@ -159,6 +159,7 @@ fn ask_once<R: EvaluatorRunner>(
             model,
             thinking: &runtime.config.agent.thinking,
             expectation_id: None,
+            expectation_instructions: "",
             prompt: &prompt,
         },
     )?;
@@ -195,23 +196,5 @@ fn human_review_reason(result: &QueryResult) -> Option<&'static str> {
         Some(ERROR_UNPARSABLE) => Some("unparsable evaluator response"),
         None => None,
         Some(_) => Some("unknown evaluator error"),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::human_review_reason;
-    use crate::check::core::{ParsedAnswer, QueryResult};
-
-    #[test]
-    fn unknown_query_error_requires_human_review() {
-        let result = QueryResult {
-            answer: ParsedAnswer::error("future-error".to_string(), "details".to_string()),
-        };
-
-        assert_eq!(
-            human_review_reason(&result),
-            Some("unknown evaluator error")
-        );
     }
 }

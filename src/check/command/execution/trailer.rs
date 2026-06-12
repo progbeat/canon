@@ -1,7 +1,7 @@
 use crate::app::LazyAppServerRunner;
 use crate::check::command::output::{summary_outcome_counts, write_summary_line};
 use crate::check::command::{collect_check_token_usage, print_token_usage_summary};
-use crate::check::core::CheckRunReport;
+use crate::check::core::{CheckRunReport, RawCheckOptions};
 use crate::check::CHECK_PATH;
 use crate::git::TreeSource;
 use std::io::Write;
@@ -22,9 +22,14 @@ pub(super) fn check_command_writes_agent_message(
     config_path: &Path,
     checked_tree: &TreeSource,
     against_tree: &TreeSource,
-    selectors_provided: bool,
+    options: &RawCheckOptions,
+    no_sandbox: bool,
 ) -> bool {
-    !selectors_provided
+    options.selectors.is_empty()
+        && !options.keep_going
+        && !options.ignore_cooldown
+        && options.break_after_tokens.is_none()
+        && !no_sandbox
         && config_path == Path::new(CHECK_PATH)
         && checked_tree.is_default_checked_tree()
         && against_tree.is_default_against_tree()

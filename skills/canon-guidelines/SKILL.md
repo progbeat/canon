@@ -26,6 +26,7 @@ Canon intent comes from the human; these guidelines only describe what makes can
 - Has unclear scope or applies more broadly than intended.
 - Duplicates the same assertion in multiple expectations.
 - Introduces near-synonyms for the same concept.
+- References external context (e.g., past behavior, chats or change history).
 
 ## Term Discipline
 

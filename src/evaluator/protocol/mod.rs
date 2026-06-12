@@ -2,6 +2,7 @@ pub(crate) mod response_cache;
 
 mod base;
 mod prompt;
+mod prompt_shell;
 mod types;
 
 pub(crate) use base::EVALUATOR_BASE_INSTRUCTIONS;

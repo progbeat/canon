@@ -10,11 +10,13 @@ use crate::evaluator::{
     evaluator_turn_prompt, is_context_window_failure, session_failure_invalidates_thread,
     write_thread_lifecycle_event, write_thread_restart_event, DeveloperInstructionsContext,
     EvaluatorError, EvaluatorResponseParseCache, EvaluatorRunner, EvaluatorTurnContext,
-    ParsedTurnResponse, ThreadLifecycleLog,
+    ParsedTurnResponse, PrevAnswer, ThreadLifecycleLog,
 };
+use crate::hash::full_scope;
 use crate::history::{prev_answer_with_cache, HistoryCache};
 use crate::logs::DiagnosticLogWriter;
 use crate::scope::{sanitize_scope, visible_scope};
+use crate::token_usage_types::TokenUsage;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -25,6 +27,7 @@ pub(crate) struct ThreadTurnRequest<'a> {
     pub(crate) model: Option<&'a str>,
     pub(crate) thinking: &'a str,
     pub(crate) expectation_id: Option<&'a str>,
+    pub(crate) expectation_instructions: &'a str,
     pub(crate) prompt: &'a str,
 }
 
@@ -49,11 +52,13 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         request.enforced_scope,
         request.model,
         &visible_tree_oid,
+        request.expectation_instructions,
     )
     .map_err(EvaluatorError::message)?;
-    // The lookup key begins with the evaluator model and visibleTreeOid. A
-    // restricted retry or q-scope verification with a different visible tree
-    // therefore misses this pool and starts a separate evaluator thread.
+    // The lookup key begins with evaluator model, visibleTreeOid, and
+    // expectation instructions. A restricted retry or q-scope verification with
+    // a different visible tree therefore misses this pool and starts a separate
+    // evaluator thread.
     let existing_session = state
         .thread_sessions_by_reuse_key
         .get(&session_key)
@@ -203,6 +208,7 @@ fn start_thread_session<R: EvaluatorRunner>(
         root: runtime.root,
         against_tree_oid: &runtime.tree_context.against_tree_oid,
         checked_tree_oid: &runtime.tree_context.checked_tree_oid,
+        expectation_instructions: request.expectation_instructions,
         visible_scope: &visible_scope,
         checked_file_count: runtime.tree_context.checked_file_count,
         visible_file_count,
@@ -327,7 +333,7 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
     let prev_answer = if expectation.question_answer_only || !git_diff {
         None
     } else {
-        prev_answer_with_cache(
+        let prev_answer = prev_answer_with_cache(
             runtime.root,
             &runtime.tree_context.against_tree,
             &expectation.agent,
@@ -336,13 +342,74 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
             history_cache,
             &mut state.visible_tree_oid_cache,
         )
-        .map_err(EvaluatorError::message)?
+        .map_err(EvaluatorError::message)?;
+        // A non-default answer for a diff-targeted expectation describes a
+        // previous diff, not the default for this one.
+        if expectation
+            .target
+            .as_ref()
+            .is_some_and(|target| target.as_str() == "diff")
+            && prev_answer
+                .as_ref()
+                .is_some_and(|prev_answer| prev_answer.answer != expectation.expected_answer)
+        {
+            None
+        } else {
+            prev_answer
+        }
     };
+    let fallback_prev_answer_requires_confirmation = prev_answer
+        .as_ref()
+        .is_some_and(|prev_answer| !prev_answer.from_against_tree);
+    let mut result = ask_expectation_turn(
+        runtime,
+        expectation,
+        runner,
+        diagnostic_log,
+        state,
+        &enforced_scope,
+        model,
+        git_diff,
+        prev_answer.as_ref(),
+    )?;
+
+    if fallback_prev_answer_requires_confirmation {
+        let confirmation_scope = full_scope();
+        let confirmation = ask_expectation_turn(
+            runtime,
+            expectation,
+            runner,
+            diagnostic_log,
+            state,
+            &confirmation_scope,
+            model,
+            git_diff,
+            None,
+        )?;
+        result = confirmed_interrogation_result(result, confirmation);
+    }
+    Ok(result)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ask_expectation_turn<R: EvaluatorRunner>(
+    runtime: &CheckRuntime<'_>,
+    expectation: &SelectedExpectation,
+    runner: &mut R,
+    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    state: &mut InterrogationRunState,
+    enforced_scope: &[String],
+    model: Option<&str>,
+    git_diff: bool,
+    prev_answer: Option<&PrevAnswer>,
+) -> Result<InterrogationResult, EvaluatorError> {
     let prompt = evaluator_turn_prompt(
         runtime.root,
         &expectation.question,
+        &expectation.expected_answer,
+        expectation.target.as_ref().map(|target| target.as_str()),
         git_diff,
-        prev_answer.as_ref(),
+        prev_answer,
     )
     .map_err(EvaluatorError::message)?;
     let thinking = effective_thinking(&expectation.agent, expectation);
@@ -353,10 +420,11 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
         state,
         ThreadTurnRequest {
             agent: &expectation.agent,
-            enforced_scope: &enforced_scope,
+            enforced_scope,
             model,
             thinking,
             expectation_id: Some(&expectation.id),
+            expectation_instructions: &expectation.instructions,
             prompt: &prompt,
         },
     )?;
@@ -365,7 +433,28 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
         expectation,
         diagnostic_log,
         state,
-        &enforced_scope,
+        enforced_scope,
         response,
     )
+}
+
+fn confirmed_interrogation_result(
+    first: InterrogationResult,
+    mut confirmation: InterrogationResult,
+) -> InterrogationResult {
+    confirmation.turn_usage = combined_turn_usage(first.turn_usage, confirmation.turn_usage);
+    confirmation.context_compacted |= first.context_compacted;
+    confirmation.stop_after_current_expectation |= first.stop_after_current_expectation;
+    confirmation
+}
+
+fn combined_turn_usage(
+    first: Option<TokenUsage>,
+    second: Option<TokenUsage>,
+) -> Option<TokenUsage> {
+    match (first, second) {
+        (Some(first), Some(second)) => Some(first.add(second)),
+        (Some(usage), None) | (None, Some(usage)) => Some(usage),
+        (None, None) => None,
+    }
 }

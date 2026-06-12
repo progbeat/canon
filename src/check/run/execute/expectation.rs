@@ -88,6 +88,8 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         expectation,
         &mut context.caches.history,
         &mut context.caches.visible_tree_oid,
+        context.runtime.tree_context.checked_tree_oid
+            != context.runtime.tree_context.against_tree_oid,
         context.active_lazy_full_scope_reset_ids,
     ));
     // Prepare the metadata needed to render an errored expectation before
@@ -148,11 +150,11 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     let run_stop_signal_hit = completed_interrogation.break_after_tokens_hit
         || completed_interrogation.context_compaction_hit
         || completed_interrogation.stop_after_current_expectation;
-    // Default check order stops after the first evaluated non-pass. Token or
-    // context stop signals clear evaluator sessions below, but a passing
-    // expectation must not stop the run and turn the remaining expectations
-    // into skipped issue-free results.
-    let stop_run = !context.options.keep_going && (!record.passed() || human_review_required);
+    // Default check order stops after the first evaluated non-pass. Evaluator
+    // stop signals are resource/control limits, so they stop after the current
+    // result even when the result itself passed.
+    let stop_run = run_stop_signal_hit
+        || (!context.options.keep_going && (!record.passed() || human_review_required));
     if run_stop_signal_hit {
         context.interrogation_run_state.clear_thread_sessions();
     }
@@ -220,6 +222,9 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
     let mut stop_after_current_expectation = interrogation.stop_after_current_expectation;
 
     let record_scope = interrogation.record.scope.clone();
+    if !scope_is_within(&record_scope, verified_q_scope) {
+        *verified_q_scope = record_scope.clone();
+    }
     debug_assert!(scope_is_within(&record_scope, verified_q_scope));
     let proposed_q_scope = if interrogation.record.requires_human_review() {
         None

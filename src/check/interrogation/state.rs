@@ -28,6 +28,7 @@ pub(crate) fn initial_visible_scope_for_expectation(
     expectation: &SelectedExpectation,
     history_cache: &mut HistoryCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
+    force_full_scope_for_diff_target: bool,
     active_lazy_full_scope_reset_ids: &BTreeSet<String>,
 ) -> Result<Vec<String>, String> {
     // Glossary visible-scope selection starts from the latest verified q-scope
@@ -46,6 +47,14 @@ pub(crate) fn initial_visible_scope_for_expectation(
     // scope for this fresh interrogation without writing synthetic answer
     // history. After the full-scope answer, ordinary qScopeSuggestion
     // verification can still store a newly verified narrower scope.
+    if force_full_scope_for_diff_target
+        && expectation
+            .target
+            .as_ref()
+            .is_some_and(|target| target.as_str() == "diff")
+    {
+        return Ok(full_scope());
+    }
     if active_lazy_full_scope_reset_ids.contains(&expectation.id) {
         return Ok(full_scope());
     }
@@ -69,16 +78,21 @@ pub(crate) fn evaluator_thread_reuse_key(
     scope: &[String],
     model: Option<&str>,
     visible_tree_oid: &str,
+    expectation_instructions: &str,
 ) -> Result<String, String> {
     // The glossary's thread invariant is one-way: a reused thread must keep
-    // the same evaluator model and visible tree, and different model/tree
-    // inputs must not share a thread. Extra key parts below are stricter
-    // developer-instruction inputs that prevent unsafe reuse without allowing
-    // cross-model or cross-visible-tree reuse.
+    // the same evaluator model, visible tree, and expectation instructions.
+    // Extra key parts below are stricter developer-instruction inputs that
+    // prevent unsafe reuse without allowing cross-model, cross-visible-tree, or
+    // cross-instruction reuse.
     let mut key = String::new();
     app_server_model_key(model).push_cache_key_part(&mut key);
     key.push('\0');
     key.push_str(visible_tree_oid);
+    key.push('\0');
+    key.push_str(&expectation_instructions.len().to_string());
+    key.push('\0');
+    key.push_str(expectation_instructions);
     key.push('\0');
     for plugin in &agent.plugins {
         key.push_str(&plugin.len().to_string());
@@ -167,10 +181,10 @@ impl<'a> CheckRuntime<'a> {
         scope: &[String],
         visible_tree_oid: &str,
     ) -> Result<PathBuf, String> {
-        // Configured ignore patterns shape the evaluator-visible Git tree
-        // before the lazy hardlink materialization step. From here down,
-        // materialization applies only this visible scope pathspec to checked
-        // Git entries.
+        // `visible_scope` returns the complete visible-scope pathspec,
+        // including configured ignore exclusions. From here down,
+        // materialization selects paths solely by applying that pathspec to
+        // checked Git entries.
         let visible_scope = visible_scope(agent, scope)?;
         self.staged_view
             .materialize_visible_scope(&visible_scope, visible_tree_oid)
@@ -180,8 +194,8 @@ impl<'a> CheckRuntime<'a> {
 pub(crate) struct InterrogationRunState {
     pub(crate) session_isolations: BTreeMap<String, NaiveIsolationGuard>,
     // This is a run-level pool of evaluator threads, not one thread. The
-    // reuse key starts with evaluator model and visibleTreeOid, so a changed
-    // visible tree cannot look up an existing session from another tree.
+    // reuse key enforces the glossary's model/visible-tree/instructions
+    // invariant and also splits on stricter developer-instruction inputs.
     pub(crate) thread_sessions_by_reuse_key: BTreeMap<String, String>,
     pub(crate) session_instructions: BTreeMap<String, String>,
     pub(crate) session_roots_by_id: BTreeMap<String, PathBuf>,

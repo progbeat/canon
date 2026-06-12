@@ -24,6 +24,7 @@ pub(crate) struct CachedExpectation {
 
 #[derive(Debug, Clone)]
 pub(crate) struct CheckRunReport {
+    // Result records produced by evaluator work in this run.
     pub(crate) records: Vec<CheckRecord>,
     pub(crate) cached: Vec<CachedExpectation>,
     // Freshly evaluated expectations in this run.

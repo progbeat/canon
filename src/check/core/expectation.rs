@@ -1,5 +1,5 @@
 use super::answer::CheckResult;
-use crate::config_types::AgentConfig;
+use crate::config_types::{AgentConfig, ExpectationTarget};
 
 #[derive(Debug, Clone)]
 pub(crate) struct SelectedExpectation {
@@ -8,6 +8,8 @@ pub(crate) struct SelectedExpectation {
     pub(crate) display_id: String,
     pub(crate) question: String,
     pub(crate) expected_answer: String,
+    pub(crate) instructions: String,
+    pub(crate) target: Option<ExpectationTarget>,
     pub(crate) question_answer_only: bool,
     pub(crate) agent: AgentConfig,
     pub(crate) cooldown: Option<Cooldown>,

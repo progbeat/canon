@@ -53,6 +53,17 @@ timestamp is still inside that window.
 The evaluator's explanation for an observed answer, usually citing the files or
 code that support it.
 
+## Expectation Instructions
+
+Additional per-expectation developer instructions resolved from an
+expectation's `instructions` field, or empty text when none is configured.
+
+## Expectation ID
+
+A 20-character base62 hash derived from two separate inputs: the rendered
+expectation question and a deterministic hash of the resolved expectation
+instructions.
+
 ## Expected answer
 
 The answer written in an expectation's `a` field. `canon` compares this value
@@ -61,7 +72,16 @@ to the observed answer using exact string equality.
 ## Expectation
 
 A question and expected answer that the project should satisfy. In
-`.canon/check.yml`, a basic expectation has a `q` field and an `a` field.
+`.canon/check.yml`, a basic expectation has a `q` field and an `a` field. An
+expectation may also provide per-expectation instructions.
+
+## Evaluator thread
+
+An ephemeral evaluator interaction context reused within one `canon check` run
+only if the evaluator model, visible tree, and expectation instructions all
+match. The implementation may split reuse further for other developer
+instruction inputs such as plugins, effective ignore patterns, and enforced
+scope.
 
 ## Generator item
 
@@ -160,7 +180,8 @@ The scoped tree induced by a visible scope.
 ## Implementation Map
 
 `config_types::Expectation` and `check::core::SelectedExpectation` carry
-expectation questions and expected answers from config loading into check runs.
+expectation questions, expected answers, expectation instructions, and target
+metadata from config loading into check runs.
 
 `scope` keeps scopes as Git pathspec lists: it normalizes repository paths,
 forms visible scopes by appending configured ignore patterns as excluding
@@ -190,9 +211,12 @@ same-tree cached results.
 `evaluator::protocol::prompt` renders the prompt templates stored under
 `resources/prompts/` with MiniJinja. The developer-instructions template is
 `resources/prompts/evaluator_developer_instructions.txt`; the renderer registers
-the `json`, `shq`, and `sh` filters and runs `sh` blocks from the repository
-root.
+the `json`, `shq`, `shargs`, and `sh` filters and runs `sh` blocks from the
+repository root.
 
 `check::interrogation::ask_with_reused_thread` enforces evaluator-thread reuse.
-Its lookup key begins with evaluator model and `visibleTreeOid`, so a different
-model or visible tree cannot reuse an existing evaluator thread.
+Its lookup key includes evaluator model, `visibleTreeOid`, and expectation
+instructions, so a different model, visible tree, or expectation instructions
+cannot reuse an existing evaluator thread. It also includes stricter
+developer-instruction inputs such as plugins, effective ignore patterns, and the
+enforced scope.

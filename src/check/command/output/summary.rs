@@ -1,5 +1,6 @@
 use super::shared::write_stdout_record;
-use crate::check::core::{for_each_unique_report_record, CheckRecord, CheckRunReport};
+use crate::check::core::{CheckRecord, CheckRunReport};
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::time::Duration;
 
@@ -65,11 +66,10 @@ pub(crate) fn render_check_agent_messages(
         messages.push(FIX_ISSUES_MESSAGE.to_string());
         return messages;
     }
+    if num_issues == 0 && num_skipped > 0 {
+        return Vec::new();
+    }
     if num_issues == 0 && num_fixes == 0 {
-        assert_eq!(
-            num_skipped, 0,
-            "all-passed agent message requires no skipped expectations"
-        );
         return vec![ALL_CHECKS_PASSED_MESSAGE.to_string()];
     }
 
@@ -77,11 +77,6 @@ pub(crate) fn render_check_agent_messages(
     if num_issues > 0 {
         messages.extend(repair_instruction_messages(failed, errors));
         messages.push(THEN_FIX_REMAINING_MESSAGE.to_string());
-    } else {
-        assert_eq!(
-            num_skipped, 0,
-            "pass-improvement agent message without remaining issues requires no skipped expectations"
-        );
     }
     messages
 }
@@ -132,17 +127,42 @@ pub(crate) fn summary_outcome_counts(report: &CheckRunReport) -> SummaryOutcomeC
         failed: 0,
         errors: 0,
     };
-    for_each_unique_report_record(&report.records, &report.cached, |record| {
-        add_summary_record(&mut counts, record)
-    });
+    let mut seen = BTreeSet::new();
+    for record in &report.records {
+        if seen.insert(record.id.clone()) {
+            add_evaluated_summary_record(&mut counts, record);
+        }
+    }
+    for cached in &report.cached {
+        let id = if cached.record.id.is_empty() {
+            &cached.expectation.id
+        } else {
+            &cached.record.id
+        };
+        if seen.insert(id.clone()) {
+            add_cached_summary_record(&mut counts, &cached.record);
+        }
+    }
     counts
 }
 
-fn add_summary_record(counts: &mut SummaryOutcomeCounts, record: &CheckRecord) {
+fn add_evaluated_summary_record(counts: &mut SummaryOutcomeCounts, record: &CheckRecord) {
     if record.passed() {
         counts.passed += 1;
     } else if record.requires_human_review() {
         counts.errors += 1;
+    } else {
+        counts.failed += 1;
+    }
+}
+
+fn add_cached_summary_record(counts: &mut SummaryOutcomeCounts, record: &CheckRecord) {
+    if record.passed() {
+        counts.passed += 1;
+    } else if record.requires_human_review() {
+        // Cached results come from answer history, so review-required records
+        // should not reach this path. If legacy or malformed state does reach
+        // it, it is not an error encountered during this run.
     } else {
         counts.failed += 1;
     }

@@ -71,13 +71,8 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             CachedFailureMode::StopDefaultSelection
         },
     ));
-    write_cached_failures(
-        check_work.cached_hits,
-        &mut records,
-        &mut cached,
-        &mut result_output,
-    )
-    .map_err(|err| current_error!(err))?;
+    write_cached_failures(check_work.cached_hits, &mut cached, &mut result_output)
+        .map_err(|err| current_error!(err))?;
     if check_work.cached_failure_seen
         && check_work.to_evaluate.is_empty()
         && !options.selectors_provided
@@ -134,7 +129,6 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
 
 fn write_cached_failures(
     cached_hits: Vec<CachedExpectationHit>,
-    records: &mut Vec<CheckRecord>,
     cached: &mut Vec<CachedExpectation>,
     result_output: &mut Option<&mut dyn std::io::Write>,
 ) -> Result<(), String> {
@@ -147,7 +141,6 @@ fn write_cached_failures(
         let cached_result_prints_short_id = !record.passed();
         if cached_result_prints_short_id {
             write_cached_non_pass_output(result_output, &record)?;
-            records.push(record.clone());
         }
         cached.push(CachedExpectation {
             expectation,

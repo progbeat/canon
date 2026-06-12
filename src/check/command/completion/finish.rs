@@ -255,7 +255,7 @@ fn selected_expectations_by_id(
 mod tests {
     use super::*;
     use crate::check::core::{CheckResult, CheckRunReport};
-    use crate::config_types::AgentConfig;
+    use crate::config_types::{AgentConfig, Expectation};
     use crate::git::TreeSource;
     use crate::hash::full_scope;
     use crate::history::append_current_history_record_with_cache;
@@ -268,62 +268,13 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn same_visible_tree_pass_with_missing_head_cache_is_not_an_improvement() {
-        let root = git_project("same-visible-tree-pass-no-improvement");
-        let agent = AgentConfig::default();
-        let scope = full_scope();
-        let report = passing_report_for_staged_scope(&root, &agent, &scope);
-        let expectations_by_id = test_expectations_by_id(&report.records, &agent);
-        let mut history_cache = HistoryCache::default();
-        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
-
-        let count = staged_passes_failed_at_head_count_with_cache(
-            &root,
-            false,
-            &expectations_by_id,
-            &report,
-            &mut history_cache,
-            &mut visible_tree_oid_cache,
-        )
-        .unwrap();
-
-        assert_eq!(count, 0);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn changed_visible_tree_pass_with_missing_head_cache_is_not_an_improvement() {
-        let root = git_project("changed-visible-tree-pass-no-improvement");
-        fs::write(root.join("README.md"), "changed\n").unwrap();
-        git(&root, &["add", "README.md"]);
-        let agent = AgentConfig::default();
-        let scope = full_scope();
-        let report = passing_report_for_staged_scope(&root, &agent, &scope);
-        let expectations_by_id = test_expectations_by_id(&report.records, &agent);
-        let mut history_cache = HistoryCache::default();
-        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
-
-        let count = staged_passes_failed_at_head_count_with_cache(
-            &root,
-            false,
-            &expectations_by_id,
-            &report,
-            &mut history_cache,
-            &mut visible_tree_oid_cache,
-        )
-        .unwrap();
-
-        assert_eq!(count, 0);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
     fn staged_pass_with_head_failure_is_an_improvement() {
         let root = git_project("staged-pass-head-failure-improvement");
         let agent = AgentConfig::default();
+        let config = test_config(&agent);
+        let expectation = test_expectation_from_config(&config);
         let scope = full_scope();
-        let fail_record = staged_scope_record(&root, &agent, &scope, "no");
-        let expectation = test_expectation_from_record(&fail_record, &agent);
+        let fail_record = staged_scope_record(&root, &expectation, &scope, "no");
         let mut history_cache = HistoryCache::default();
         let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
         append_current_history_record_with_cache(
@@ -337,20 +288,22 @@ mod tests {
         .unwrap();
         fs::write(root.join("README.md"), "changed\n").unwrap();
         git(&root, &["add", "README.md"]);
-        let report = passing_report_for_staged_scope(&root, &agent, &scope);
-        let expectations_by_id = test_expectations_by_id(&report.records, &agent);
+        let report = passing_report_for_staged_scope(&root, &expectation, &scope);
 
-        let count = staged_passes_failed_at_head_count_with_cache(
+        let messages = check_agent_messages(
             &root,
-            false,
-            &expectations_by_id,
+            &config,
             &report,
+            false,
             &mut history_cache,
             &mut visible_tree_oid_cache,
         )
         .unwrap();
 
-        assert_eq!(count, 1);
+        assert!(messages
+            .iter()
+            .any(|message| message.contains("Commit the staged changes")));
+        assert!(!messages.iter().any(|message| message.contains("Fix the issues")));
         let _ = fs::remove_dir_all(root);
     }
 
@@ -358,64 +311,57 @@ mod tests {
     fn matching_run_trees_ignore_late_staged_pass_improvement() {
         let root = git_project("matching-run-trees-late-staged-pass");
         let agent = AgentConfig::default();
+        let config = test_config(&agent);
+        let expectation = test_expectation_from_config(&config);
         let scope = full_scope();
         fs::write(root.join("README.md"), "changed after preparation\n").unwrap();
         git(&root, &["add", "README.md"]);
-        let report = passing_report_for_staged_scope(&root, &agent, &scope);
-        let expectations_by_id = test_expectations_by_id(&report.records, &agent);
+        let report = passing_report_for_staged_scope(&root, &expectation, &scope);
         let mut history_cache = HistoryCache::default();
         let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
 
-        let count = staged_passes_failed_at_head_count_with_cache(
+        let messages = check_agent_messages(
             &root,
-            true,
-            &expectations_by_id,
+            &config,
             &report,
+            true,
             &mut history_cache,
             &mut visible_tree_oid_cache,
         )
         .unwrap();
 
-        assert_eq!(count, 0);
+        assert!(messages
+            .iter()
+            .any(|message| message.contains("All checks passed")));
+        assert!(!messages
+            .iter()
+            .any(|message| message.contains("Commit the staged changes")));
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
-    fn current_non_pass_with_any_prior_pass_is_a_regression() {
-        let root = git_project("current-non-pass-prior-pass-regression");
+    fn pending_expectations_without_issues_do_not_emit_agent_messages() {
+        let root = git_project("pending-without-issues-no-agent-message");
         let agent = AgentConfig::default();
+        let config = test_config(&agent);
+        let expectation = test_expectation_from_config(&config);
         let scope = full_scope();
-        let pass_record = staged_scope_record(&root, &agent, &scope, "yes");
-        let expectation = test_expectation_from_record(&pass_record, &agent);
+        let mut report = passing_report_for_staged_scope(&root, &expectation, &scope);
+        report.skipped = 1;
         let mut history_cache = HistoryCache::default();
         let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
-        append_current_history_record_with_cache(
+
+        let messages = check_agent_messages(
             &root,
-            &TreeSource::Staged,
-            &expectation,
-            &pass_record,
+            &config,
+            &report,
+            true,
             &mut history_cache,
             &mut visible_tree_oid_cache,
         )
         .unwrap();
-        let fail_record = staged_scope_record(&root, &agent, &scope, "no");
-        let report = CheckRunReport {
-            records: vec![fail_record],
-            cached: Vec::new(),
-            evaluated: 1,
-            skipped: 0,
-        };
-        let expectations_by_id = test_expectations_by_id(&report.records, &agent);
 
-        let count = current_non_passes_with_prior_pass_count(
-            &root,
-            &expectations_by_id,
-            &report,
-            &mut history_cache,
-        )
-        .unwrap();
-
-        assert_eq!(count, 1);
+        assert!(messages.is_empty());
         let _ = fs::remove_dir_all(root);
     }
 
@@ -423,9 +369,10 @@ mod tests {
     fn prior_pass_regression_agent_message_repairs_instead_of_commits() {
         let root = git_project("prior-pass-regression-agent-message");
         let agent = AgentConfig::default();
+        let config = test_config(&agent);
+        let expectation = test_expectation_from_config(&config);
         let scope = full_scope();
-        let pass_record = staged_scope_record(&root, &agent, &scope, "yes");
-        let expectation = test_expectation_from_record(&pass_record, &agent);
+        let pass_record = staged_scope_record(&root, &expectation, &scope, "yes");
         let mut history_cache = HistoryCache::default();
         let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
         append_current_history_record_with_cache(
@@ -438,16 +385,10 @@ mod tests {
         )
         .unwrap();
         let report = CheckRunReport {
-            records: vec![staged_scope_record(&root, &agent, &scope, "no")],
+            records: vec![staged_scope_record(&root, &expectation, &scope, "no")],
             cached: Vec::new(),
             evaluated: 1,
             skipped: 0,
-        };
-        let config = CheckConfig {
-            version: 1,
-            presets: BTreeMap::new(),
-            agent: agent.clone(),
-            expectations: Vec::new(),
         };
 
         let messages = check_agent_messages(
@@ -460,23 +401,20 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            messages,
-            render_check_agent_messages(&["1".to_string()], &[], 0, 1, 0)
-        );
-        assert!(messages.iter().any(|message| message.contains(
-            "run `canon show not:1 [not:<ALREADY_IN_CONTEXT_EXPECTATION>]... -- <PATHSPEC>...`"
-        )));
+        assert!(messages.iter().any(|message| message.contains("Fix the issues")));
+        assert!(!messages
+            .iter()
+            .any(|message| message.contains("Commit the staged changes")));
         let _ = fs::remove_dir_all(root);
     }
 
     fn passing_report_for_staged_scope(
         root: &std::path::Path,
-        agent: &AgentConfig,
+        expectation: &SelectedExpectation,
         scope: &[String],
     ) -> CheckRunReport {
         CheckRunReport {
-            records: vec![staged_scope_record(root, agent, scope, "yes")],
+            records: vec![staged_scope_record(root, expectation, scope, "yes")],
             cached: Vec::new(),
             evaluated: 1,
             skipped: 0,
@@ -485,58 +423,53 @@ mod tests {
 
     fn staged_scope_record(
         root: &std::path::Path,
-        agent: &AgentConfig,
+        expectation: &SelectedExpectation,
         scope: &[String],
         observed: &str,
     ) -> CheckRecord {
         let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
         let visible_tree_oid = visible_tree_oid_cache
-            .visible_tree_oid(root, &TreeSource::Staged, agent, scope)
+            .visible_tree_oid(root, &TreeSource::Staged, &expectation.agent, scope)
             .unwrap();
         CheckRecord {
             timestamp: format_record_timestamp(0),
-            number: 1,
-            result: CheckResult::from_expected_answer("yes", observed),
-            question: Some("Does it pass?".to_string()),
-            expected_answer: Some("yes".to_string()),
+            number: expectation.number,
+            result: CheckResult::from_expected_answer(&expectation.expected_answer, observed),
+            question: Some(expectation.question.clone()),
+            expected_answer: Some(expectation.expected_answer.clone()),
             observed: observed.to_string(),
             error: None,
             evidence: "test evidence".to_string(),
             scope: scope.to_vec(),
             question_scope_suggestion: None,
             visible_tree_oid,
-            id: "11111111111111111111".to_string(),
-            display_id: "1".to_string(),
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
         }
     }
 
-    fn test_expectations_by_id(
-        records: &[CheckRecord],
-        agent: &AgentConfig,
-    ) -> BTreeMap<String, SelectedExpectation> {
-        records
-            .iter()
-            .map(|record| {
-                let expectation = test_expectation_from_record(record, agent);
-                (expectation.id.clone(), expectation)
-            })
-            .collect()
-    }
-
-    fn test_expectation_from_record(
-        record: &CheckRecord,
-        agent: &AgentConfig,
-    ) -> SelectedExpectation {
-        SelectedExpectation {
-            number: record.number,
-            id: record.id.clone(),
-            display_id: record.display_id.clone(),
-            question: record.question.clone().unwrap(),
-            expected_answer: record.expected_answer.clone().unwrap(),
-            question_answer_only: false,
+    fn test_config(agent: &AgentConfig) -> CheckConfig {
+        CheckConfig {
+            version: 1,
+            presets: BTreeMap::new(),
             agent: agent.clone(),
-            cooldown: None,
+            expectations: vec![Expectation {
+                q: "Does it pass?".to_string(),
+                a: "yes".to_string(),
+                instructions: String::new(),
+                target: None,
+                question_answer_only: false,
+                agent: agent.clone(),
+                cooldown: None,
+            }],
         }
+    }
+
+    fn test_expectation_from_config(config: &CheckConfig) -> SelectedExpectation {
+        let identities = crate::check::expectation_identities(config).unwrap();
+        crate::check::select_expectations_with_identities(config, &identities, &[])
+            .unwrap()
+            .remove(0)
     }
 
     fn git_project(name: &str) -> PathBuf {

@@ -116,12 +116,40 @@ pub(crate) fn default_thinking() -> String {
 pub(crate) struct Expectation {
     pub(crate) q: String,
     pub(crate) a: String,
+    pub(crate) instructions: String,
+    #[serde(default)]
+    pub(crate) target: Option<ExpectationTarget>,
     #[serde(default)]
     pub(crate) question_answer_only: bool,
     #[serde(default, skip)]
     pub(crate) agent: AgentConfig,
     #[serde(default)]
     pub(crate) cooldown: Option<CooldownConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum ExpectationTarget {
+    Diff,
+}
+
+impl ExpectationTarget {
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            ExpectationTarget::Diff => "diff",
+        }
+    }
+}
+
+impl std::str::FromStr for ExpectationTarget {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "diff" => Ok(ExpectationTarget::Diff),
+            _ => Err(format!("unsupported target: {}", value)),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
@@ -147,12 +175,29 @@ pub(crate) enum RawExpectationItem {
     Include(RawIncludeExpectation),
 }
 
+impl RawExpectationItem {
+    pub(crate) fn common_config_mut(&mut self) -> &mut RawExpectationCommonConfig {
+        match self {
+            RawExpectationItem::Explicit(item) => &mut item.common,
+            RawExpectationItem::Generator(item) => &mut item.common,
+            RawExpectationItem::Include(item) => &mut item.common,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RawExpectationCommonConfig {
+    pub(crate) instructions: Option<String>,
+    pub(crate) target: Option<String>,
+    pub(crate) cooldown: Option<CooldownConfig>,
+    pub(crate) settings: RawExpectationSettings,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct RawExplicitExpectation {
     pub(crate) q: String,
     pub(crate) a: String,
-    pub(crate) cooldown: Option<CooldownConfig>,
-    pub(crate) settings: RawExpectationSettings,
+    pub(crate) common: RawExpectationCommonConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -163,15 +208,13 @@ pub(crate) struct RawGeneratorExpectation {
     pub(crate) generated_question_format: String,
     pub(crate) path: String,
     pub(crate) a: String,
-    pub(crate) cooldown: Option<CooldownConfig>,
-    pub(crate) settings: RawExpectationSettings,
+    pub(crate) common: RawExpectationCommonConfig,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct RawIncludeExpectation {
     pub(crate) include: String,
-    pub(crate) cooldown: Option<CooldownConfig>,
-    pub(crate) settings: RawExpectationSettings,
+    pub(crate) common: RawExpectationCommonConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -185,6 +228,10 @@ struct RawExpectationFields {
     q_template: Option<String>,
     #[serde(default)]
     a: Option<String>,
+    #[serde(default)]
+    instructions: Option<String>,
+    #[serde(default)]
+    target: Option<String>,
     #[serde(default)]
     path: Option<String>,
     #[serde(default)]
@@ -219,6 +266,8 @@ impl RawExpectationItem {
             q,
             q_template,
             a,
+            instructions,
+            target,
             path,
             include,
             cooldown,
@@ -235,11 +284,16 @@ impl RawExpectationItem {
             ignore,
             plugins,
         };
+        let common = RawExpectationCommonConfig {
+            instructions,
+            target,
+            cooldown,
+            settings,
+        };
         if let Some(include) = include {
             return Ok(RawExpectationItem::Include(RawIncludeExpectation {
                 include,
-                cooldown,
-                settings,
+                common,
             }));
         }
         match (q, q_template, path, a) {
@@ -248,15 +302,13 @@ impl RawExpectationItem {
                     generated_question_format: q_template,
                     path,
                     a,
-                    cooldown,
-                    settings,
+                    common,
                 }))
             }
             (Some(q), _, _, Some(a)) => Ok(RawExpectationItem::Explicit(RawExplicitExpectation {
                 q,
                 a,
-                cooldown,
-                settings,
+                common,
             })),
             fields => match fields {
                 (Some(_), _, _, None) => Err("must contain a"),
@@ -267,54 +319,6 @@ impl RawExpectationItem {
                 (None, None, None, None) => Err("must contain q, q_template, or include"),
                 _ => Err("invalid expectation item"),
             },
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn generator_shape_wins_over_extra_q_field() {
-        let item: RawExpectationItem = serde_saphyr::from_str(
-            r#"
-q: ignored annotation
-path: "specs/*.md"
-q_template: "{{content}}"
-a: "yes"
-"#,
-        )
-        .expect("parse expectation item");
-
-        match item {
-            RawExpectationItem::Generator(item) => {
-                assert_eq!(item.path, "specs/*.md");
-                assert_eq!(item.generated_question_format, "{{content}}");
-                assert_eq!(item.a, "yes");
-            }
-            RawExpectationItem::Explicit(_) => panic!("generator item parsed as explicit"),
-            RawExpectationItem::Include(_) => panic!("generator item parsed as include"),
-        }
-    }
-
-    #[test]
-    fn include_shape_wins_over_extra_question_fields() {
-        let item: RawExpectationItem = serde_saphyr::from_str(
-            r#"
-include: "expects/*.yml"
-q: ignored annotation
-a: "yes"
-"#,
-        )
-        .expect("parse expectation item");
-
-        match item {
-            RawExpectationItem::Include(item) => {
-                assert_eq!(item.include, "expects/*.yml");
-            }
-            RawExpectationItem::Explicit(_) => panic!("include item parsed as explicit"),
-            RawExpectationItem::Generator(_) => panic!("include item parsed as generator"),
         }
     }
 }

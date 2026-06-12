@@ -17,12 +17,13 @@ pub(crate) fn same_tree_history_record_with_cache(
     history_cache: &mut HistoryCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<Option<CheckRecord>, String> {
+    let resolver = visible_tree_oid_cache.reuse_resolver(root, source, agent)?;
     latest_history_record_matching_visible_tree_oid(
         root,
         agent,
         expectation,
         history_cache,
-        |scope| visible_tree_oid_cache.visible_tree_oid_for_reuse(root, source, agent, scope),
+        |scope| resolver.visible_tree_oid_for_scope(scope),
     )
 }
 
@@ -100,8 +101,9 @@ pub(crate) fn prev_answer_with_cache(
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<Option<PrevAnswer>, String> {
     let records = history_cache.read_records(root, expectation)?;
+    let resolver = visible_tree_oid_cache.reuse_resolver(root, source, agent)?;
     previous_answer_from_records(agent, current_scope, records, |scope| {
-        visible_tree_oid_cache.visible_tree_oid_for_reuse(root, source, agent, scope)
+        resolver.visible_tree_oid_for_scope(scope)
     })
 }
 
@@ -186,19 +188,20 @@ fn previous_answer_from_records(
             continue;
         }
         if newest_eligible.is_none() {
-            newest_eligible = Some(prev_answer_from_record(&record));
+            newest_eligible = Some(prev_answer_from_record(&record, false));
         }
         if against_tree_oid_for_scope(&scope)?.as_deref() == Some(&record.visible_tree_oid) {
-            return Ok(Some(prev_answer_from_record(&record)));
+            return Ok(Some(prev_answer_from_record(&record, true)));
         }
     }
     Ok(newest_eligible)
 }
 
-fn prev_answer_from_record(record: &CheckRecord) -> PrevAnswer {
+fn prev_answer_from_record(record: &CheckRecord, from_against_tree: bool) -> PrevAnswer {
     PrevAnswer {
         answer: record.observed.clone(),
         evidence: record.evidence.clone(),
+        from_against_tree,
     }
 }
 
@@ -247,7 +250,7 @@ fn current_result_for_history_record(
 mod tests {
     use super::*;
     use crate::check::{expectation_identities, select_expectations_with_identities};
-    use crate::config_types::{CheckConfig, CooldownConfig, Expectation};
+    use crate::config_types::{AgentConfig, CheckConfig, CooldownConfig, Expectation};
     use crate::time::format_record_timestamp;
     use std::fs;
     use std::path::PathBuf;
@@ -434,8 +437,11 @@ mod tests {
             &expectation,
             &mut history_cache,
             |scope| {
-                assert_eq!(scope, ["src".to_string()]);
-                Ok(Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()))
+                if scope.len() == 1 && scope[0] == "src" {
+                    Ok(Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()))
+                } else {
+                    Ok(None)
+                }
             },
         )
         .unwrap()
@@ -478,6 +484,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(answer.evidence, "older at against");
+        assert!(answer.from_against_tree);
     }
 
     #[test]
@@ -512,6 +519,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(answer.evidence, "newer fallback");
+        assert!(!answer.from_against_tree);
     }
 
     fn expectation_with_cooldown() -> SelectedExpectation {
@@ -522,6 +530,8 @@ mod tests {
             expectations: vec![Expectation {
                 q: "Does it pass?".to_string(),
                 a: "yes".to_string(),
+                instructions: String::new(),
+                target: None,
                 question_answer_only: false,
                 agent: AgentConfig {
                     models: Vec::new(),

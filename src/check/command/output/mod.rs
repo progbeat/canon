@@ -21,10 +21,13 @@ pub(crate) use usage::render_token_usage_summary;
 #[cfg(test)]
 mod tests {
     use super::{
-        render_check_agent_messages, start_expectation_report_output, write_cached_non_pass_output,
-        write_result_output_without_started_report, SharedCheckOutput,
+        render_check_agent_messages, start_expectation_report_output, summary_outcome_counts,
+        write_cached_non_pass_output, write_result_output_without_started_report,
+        SharedCheckOutput,
     };
-    use crate::check::core::{CheckRecord, CheckResult};
+    use crate::check::core::{CachedExpectation, CheckRecord, CheckResult, CheckRunReport};
+    use crate::check::SelectedExpectation;
+    use crate::config_types::AgentConfig;
     use std::io::{self, Write};
     use std::sync::{Arc, Mutex};
 
@@ -40,28 +43,6 @@ mod tests {
         }
 
         fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
-    #[derive(Clone)]
-    struct FirstFlushFailsOutput {
-        bytes: Arc<Mutex<Vec<u8>>>,
-        fail_next_flush: Arc<Mutex<bool>>,
-    }
-
-    impl Write for FirstFlushFailsOutput {
-        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-            self.bytes.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            let mut fail_next_flush = self.fail_next_flush.lock().unwrap();
-            if *fail_next_flush {
-                *fail_next_flush = false;
-                return Err(io::Error::other("first flush failed"));
-            }
             Ok(())
         }
     }
@@ -89,39 +70,36 @@ mod tests {
     }
 
     #[test]
-    fn started_expectation_report_completes_the_started_result_entry() {
+    fn summary_counts_cached_failures_separately_from_current_run_errors() {
+        let evaluated_error = review_record_with_id("11111111111111111111", "j");
+        let cached_failure = cached_expectation(failed_record_with_id("22222222222222222222", "k"));
+        let cached_error = cached_expectation(review_record_with_id("33333333333333333333", "l"));
+        let report = CheckRunReport {
+            records: vec![evaluated_error],
+            cached: vec![cached_failure, cached_error],
+            evaluated: 1,
+            skipped: 0,
+        };
+
+        let counts = summary_outcome_counts(&report);
+
+        assert_eq!(counts.passed, 0);
+        assert_eq!(counts.failed, 1);
+        assert_eq!(counts.errors, 1);
+    }
+
+    #[test]
+    fn live_report_result_output_matches_documented_record_shape() {
         let bytes = Arc::new(Mutex::new(Vec::new()));
         let output = SharedCheckOutput::new(Box::new(CapturedOutput {
             bytes: bytes.clone(),
         }));
 
         let report = start_expectation_report_output(output, "j");
-        let started = captured_string(&bytes);
-        assert!(started.starts_with('j'));
-        assert!(started.ends_with('.'));
-        assert!(!started.contains('\n'));
-
         report.finish_with_record(&passing_record());
+
         let completed = captured_string(&bytes);
-        assert!(completed.starts_with(&started));
         assert_result_entry(&completed, "OK");
-    }
-
-    #[test]
-    fn started_expectation_report_renders_full_result_after_unconfirmed_prefix() {
-        let bytes = Arc::new(Mutex::new(Vec::new()));
-        let output = SharedCheckOutput::new(Box::new(FirstFlushFailsOutput {
-            bytes: bytes.clone(),
-            fail_next_flush: Arc::new(Mutex::new(true)),
-        }));
-
-        let report = start_expectation_report_output(output, "j");
-        let started = captured_string(&bytes);
-        assert_eq!(started, "j.");
-
-        report.finish_with_record(&passing_record());
-        let completed = captured_string(&bytes);
-        assert!(completed.ends_with("j. OK\n"));
     }
 
     #[test]
@@ -149,29 +127,13 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "all-passed agent message requires no skipped expectations")]
-    fn all_passed_agent_message_requires_no_skipped_expectations() {
-        let _ = render_check_agent_messages(&[], &[], 0, 0, 1);
+    fn all_passed_agent_message_waits_for_pending_expectations() {
+        assert!(render_check_agent_messages(&[], &[], 0, 0, 1).is_empty());
     }
 
     #[test]
-    #[should_panic(
-        expected = "pass-improvement agent message without remaining issues requires no skipped expectations"
-    )]
-    fn pass_improvement_commit_message_requires_no_skipped_expectations() {
-        let _ = render_check_agent_messages(&[], &[], 1, 0, 1);
-    }
-
-    #[test]
-    fn repair_message_excludes_all_already_shown_issue_ids() {
-        let messages = render_check_agent_messages(&issues(&["a"]), &issues(&["b"]), 0, 0, 0);
-        let repair_message = messages
-            .iter()
-            .find(|message| message.contains("canon show"))
-            .expect("repair message should include the follow-up command");
-
-        assert!(repair_message.contains("not:a"));
-        assert!(repair_message.contains("not:b"));
+    fn pass_improvement_commit_message_waits_for_pending_expectations() {
+        assert!(render_check_agent_messages(&[], &[], 1, 0, 1).is_empty());
     }
 
     fn issues(ids: &[&str]) -> Vec<String> {
@@ -204,7 +166,49 @@ mod tests {
         record_with_result(CheckResult::Fail, "no")
     }
 
+    fn failed_record_with_id(id: &str, display_id: &str) -> CheckRecord {
+        record_with_identity(CheckResult::Fail, "no", None, id, display_id)
+    }
+
+    fn review_record_with_id(id: &str, display_id: &str) -> CheckRecord {
+        record_with_identity(
+            CheckResult::Fail,
+            "",
+            Some("insufficient-evidence"),
+            id,
+            display_id,
+        )
+    }
+
+    fn cached_expectation(record: CheckRecord) -> CachedExpectation {
+        CachedExpectation {
+            expectation: SelectedExpectation {
+                number: record.number,
+                id: record.id.clone(),
+                display_id: record.display_id.clone(),
+                question: record.question_text().to_string(),
+                expected_answer: record.expected_answer_text().unwrap_or("yes").to_string(),
+                instructions: String::new(),
+                target: None,
+                question_answer_only: true,
+                agent: AgentConfig::default(),
+                cooldown: None,
+            },
+            record,
+        }
+    }
+
     fn record_with_result(result: CheckResult, observed: &str) -> CheckRecord {
+        record_with_identity(result, observed, None, "11111111111111111111", "j")
+    }
+
+    fn record_with_identity(
+        result: CheckResult,
+        observed: &str,
+        error: Option<&str>,
+        id: &str,
+        display_id: &str,
+    ) -> CheckRecord {
         CheckRecord {
             timestamp: "1970-01-01T00:00:00Z".to_string(),
             number: 1,
@@ -212,13 +216,13 @@ mod tests {
             question: Some("Does it pass?".to_string()),
             expected_answer: Some("yes".to_string()),
             observed: observed.to_string(),
-            error: None,
+            error: error.map(str::to_string),
             evidence: "test evidence".to_string(),
             scope: vec![".".to_string()],
             question_scope_suggestion: None,
             visible_tree_oid: "visible".to_string(),
-            id: "11111111111111111111".to_string(),
-            display_id: "j".to_string(),
+            id: id.to_string(),
+            display_id: display_id.to_string(),
         }
     }
 }

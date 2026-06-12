@@ -53,18 +53,16 @@ pub(crate) fn cached_result_for_expectation(
     } else {
         None
     };
-    Ok(
-        cached_history_record(same_tree, cooldown).map(|hit| match hit {
-            CachedHistoryRecord::SameTree(record) => CheckCacheHit {
-                record,
-                kind: CachedResultKind::SameTree,
-            },
-            CachedHistoryRecord::Cooldown(record) => CheckCacheHit {
-                record,
-                kind: CachedResultKind::Cooldown,
-            },
-        }),
-    )
+    Ok(cached_history_record(same_tree, cooldown).and_then(|hit| {
+        let (record, kind) = match hit {
+            CachedHistoryRecord::SameTree(record) => (record, CachedResultKind::SameTree),
+            CachedHistoryRecord::Cooldown(record) => (record, CachedResultKind::Cooldown),
+        };
+        if record.requires_human_review() {
+            return None;
+        }
+        Some(CheckCacheHit { record, kind })
+    }))
 }
 
 pub(crate) fn write_cache_hit(

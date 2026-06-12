@@ -51,6 +51,12 @@ pub(crate) struct VisibleTreeOidCache {
     object_hash_algorithms: BTreeMap<PathBuf, GitObjectHashAlgorithm>,
 }
 
+pub(crate) struct VisibleTreeOidReuseResolver {
+    agent: AgentConfig,
+    files: Vec<StagedTrackedFile>,
+    object_hash_algorithm: GitObjectHashAlgorithm,
+}
+
 impl VisibleTreeOidCache {
     pub(crate) fn new() -> VisibleTreeOidCache {
         VisibleTreeOidCache::default()
@@ -76,6 +82,23 @@ impl VisibleTreeOidCache {
     ) -> Result<Option<String>, String> {
         let scope = visible_scope(agent, scope)?;
         self.visible_tree_oid_for_source_scope(root, source, agent, scope)
+    }
+
+    pub(crate) fn reuse_resolver(
+        &mut self,
+        root: &Path,
+        source: &TreeSource,
+        agent: &AgentConfig,
+    ) -> Result<VisibleTreeOidReuseResolver, String> {
+        // History reuse can scan many records with many stored scopes. Snapshot
+        // the source file list and hash algorithm once; each per-record scope
+        // is filtered and hashed in-process, so distinct history scopes do not
+        // start additional Git subprocesses.
+        Ok(VisibleTreeOidReuseResolver {
+            agent: agent.clone(),
+            files: self.files_for_source(root, source)?,
+            object_hash_algorithm: self.object_hash_algorithm(root)?,
+        })
     }
 
     pub(crate) fn checked_file_count(
@@ -257,6 +280,20 @@ impl VisibleTreeOidCache {
             |value| Ok(value),
             git_object_hash_algorithm(root)?,
             |value| Ok(value)
+        )
+    }
+}
+
+impl VisibleTreeOidReuseResolver {
+    pub(crate) fn visible_tree_oid_for_scope(
+        &self,
+        scope: &[String],
+    ) -> Result<Option<String>, String> {
+        let scope = visible_scope(&self.agent, scope)?;
+        visible_tree_oid_from_files_if_scope_present(
+            &self.files,
+            &scope,
+            self.object_hash_algorithm,
         )
     }
 }

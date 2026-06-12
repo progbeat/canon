@@ -164,6 +164,10 @@ fn show_q_scope(
         expectation,
         &mut caches.history,
         &mut caches.visible_tree_oid,
+        // `canon show` has no against-tree input. Use full scope for
+        // diff-targeted expectations so path filtering cannot miss a planned
+        // edit that `canon check` would need to inspect.
+        true,
         &active_lazy_full_scope_reset_ids,
     )
 }
@@ -244,6 +248,8 @@ mod tests {
             display_id: "1".to_string(),
             question: "Line one\nLine two".to_string(),
             expected_answer: "yes\tplease".to_string(),
+            instructions: String::new(),
+            target: None,
             question_answer_only: false,
             agent: Default::default(),
             cooldown: None,
@@ -273,7 +279,7 @@ expectations:
         )
         .unwrap();
         git(&root, &["add", ".canon/check.yml"]);
-        let alpha_id = crate::hash::expectation_id("Does alpha pass?");
+        let alpha_id = crate::hash::expectation_id("Does alpha pass?", "");
         let selector = format!("not:{}", alpha_id);
 
         let mut output = Vec::new();

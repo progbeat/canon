@@ -1,5 +1,10 @@
-{{ question }}{% if git_diff and prev_answer %}
+{{ question }}
+{%- if expectation.target == "diff" %}
 
-Reuse the following previous answer if the Git diff does not change the correct answer or invalidate its evidence:
+This question targets the Git diff. If the Git diff doesn't prove otherwise, answer `{{ expectation.a|json }}` with empty evidence.
+{%- elif prev_answer %}
+
+Before answering, check whether the Git diff invalidates the previous answer:
 {{ prev_answer|json }}
-{% endif %}
+Reuse the previous answer if it's still valid.
+{%- endif %}

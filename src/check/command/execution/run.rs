@@ -46,7 +46,8 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         &command.config_path,
         &checked_tree,
         &against_tree,
-        !command.options.selectors.is_empty(),
+        &command.options,
+        command.no_sandbox,
     );
     let mut repo_cache = RepoInspectionCache::new();
     let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;

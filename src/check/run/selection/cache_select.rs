@@ -48,6 +48,10 @@ pub(crate) fn select_expectations_after_cache(
         let active_lazy_full_scope_reset = context
             .active_lazy_full_scope_reset_ids
             .contains(&expectation.id);
+        let diff_target = expectation
+            .target
+            .as_ref()
+            .is_some_and(|target| target.as_str() == "diff");
         match cached_result_for_expectation(
             context.root,
             context.source,
@@ -57,8 +61,13 @@ pub(crate) fn select_expectations_after_cache(
             &mut *context.visible_tree_oid_cache,
             CachedResultLookup {
                 now,
-                include_same_tree: !active_lazy_full_scope_reset,
-                include_cooldown: !options.ignore_cooldown && !active_lazy_full_scope_reset,
+                // Diff-target answers depend on the against tree as well as
+                // the checked visible tree. Answer history does not store the
+                // against tree, so visibleTreeOid-only cache reuse is unsafe.
+                include_same_tree: !active_lazy_full_scope_reset && !diff_target,
+                include_cooldown: !options.ignore_cooldown
+                    && !active_lazy_full_scope_reset
+                    && !diff_target,
             },
         )? {
             Some(hit) => {
