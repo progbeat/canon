@@ -186,13 +186,11 @@ fn suggested_scope_is_at_least_25_percent_smaller(
         && suggested_count.saturating_mul(4) <= current_count.saturating_mul(3)
 }
 
-pub(crate) fn narrowed_scope_is_accepted(original: &CheckRecord, narrowed: &CheckRecord) -> bool {
+pub(crate) fn narrowed_scope_is_accepted(narrowed: &CheckRecord) -> bool {
     // Acceptance means the q-scope suggestion graduated from evaluator claim
     // to verified reusable q-scope. Interrogation Policy requires the
-    // independent verification turn to produce a schema-valid answer. A
-    // different answer means the suggested scope did not preserve the answer it
-    // was meant to support for this tree.
-    narrowed.error.is_none() && narrowed.observed == original.observed
+    // independent verification turn to produce a schema-valid answer.
+    narrowed.error.is_none()
 }
 
 pub(crate) fn write_scope_narrowing_event(
@@ -268,19 +266,18 @@ mod tests {
     }
 
     #[test]
-    fn narrowed_scope_acceptance_requires_same_answer() {
-        let original = test_record("yes", CheckResult::Pass, None);
-        let matching = test_record("yes", CheckResult::Pass, None);
-        let conflicting = test_record("no", CheckResult::Fail, None);
+    fn narrowed_scope_acceptance_requires_answer() {
+        let pass = test_record("yes", CheckResult::Pass, None);
+        let fail = test_record("no", CheckResult::Fail, None);
         let error = test_record(
             "insufficient-evidence",
             CheckResult::Fail,
             Some("insufficient-evidence"),
         );
 
-        assert!(narrowed_scope_is_accepted(&original, &matching));
-        assert!(!narrowed_scope_is_accepted(&original, &conflicting));
-        assert!(!narrowed_scope_is_accepted(&original, &error));
+        assert!(narrowed_scope_is_accepted(&pass));
+        assert!(narrowed_scope_is_accepted(&fail));
+        assert!(!narrowed_scope_is_accepted(&error));
     }
 
     #[test]

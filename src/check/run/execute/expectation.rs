@@ -232,7 +232,7 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
             turn_exceeds_break_after_tokens(&narrowed, context.options.break_after_tokens);
         context_compaction_hit |= turn_has_context_compaction(&narrowed);
         stop_after_current_expectation |= narrowed.stop_after_current_expectation;
-        let accepted = narrowed_scope_is_accepted(&interrogation.record, &narrowed.record);
+        let accepted = narrowed_scope_is_accepted(&narrowed.record);
         write_scope_narrowing_event(
             context.diagnostic_log,
             &expectation.id,
