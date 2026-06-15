@@ -44,7 +44,7 @@ fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -> String {
         outcomes.push(format!("{} passed", passed));
     }
     if report.skipped > 0 {
-        outcomes.push(format!("{} skipped", report.skipped));
+        outcomes.push(format!("{} pending", report.skipped));
     }
     if outcomes.is_empty() {
         outcomes.push("0 passed".to_string());
@@ -56,24 +56,25 @@ fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -> String {
 pub(crate) fn render_check_agent_messages(
     failed: &[String],
     errors: &[String],
-    num_fixes: usize,
+    num_new_passes: usize,
     num_regressions: usize,
-    num_skipped: usize,
+    num_pending: usize,
 ) -> Vec<String> {
     let num_issues = failed.len() + errors.len();
-    if num_regressions > 0 || (num_issues > 0 && num_fixes == 0) {
+    if num_regressions > 0 || (num_issues > 0 && num_new_passes == 0) {
         let mut messages = repair_instruction_messages(failed, errors);
         messages.push(FIX_ISSUES_MESSAGE.to_string());
         return messages;
     }
-    if num_issues == 0 && num_skipped > 0 {
+    if num_issues == 0 && num_pending > 0 {
         return Vec::new();
     }
-    if num_issues == 0 && num_fixes == 0 {
+    if num_issues == 0 && num_new_passes == 0 {
         return vec![ALL_CHECKS_PASSED_MESSAGE.to_string()];
     }
 
-    let mut messages = vec![pass_improvement_notice(num_fixes).expect("positive fix count")];
+    let mut messages =
+        vec![pass_improvement_notice(num_new_passes).expect("positive new-pass count")];
     if num_issues > 0 {
         messages.extend(repair_instruction_messages(failed, errors));
         messages.push(THEN_FIX_REMAINING_MESSAGE.to_string());
@@ -104,12 +105,9 @@ fn plan_repair_message(failed: &[String], errors: &[String]) -> String {
 fn pass_improvement_notice(count: usize) -> Option<String> {
     match count {
         0 => None,
-        1 => Some(format!(
-            "▷ +1 pass compared to HEAD. {}",
-            PASS_IMPROVEMENT_COMMIT_SUFFIX
-        )),
+        1 => Some(format!("▷ +1 pass. {}", PASS_IMPROVEMENT_COMMIT_SUFFIX)),
         count => Some(format!(
-            "▷ +{} passes compared to HEAD. {}",
+            "▷ +{} passes. {}",
             count, PASS_IMPROVEMENT_COMMIT_SUFFIX
         )),
     }
@@ -160,7 +158,7 @@ fn add_cached_summary_record(counts: &mut SummaryOutcomeCounts, record: &CheckRe
     if record.passed() {
         counts.passed += 1;
     } else if record.requires_human_review() {
-        // Cached results come from answer history, so review-required records
+        // Cached results come from last-result state, so review-required records
         // should not reach this path. If legacy or malformed state does reach
         // it, it is not an error encountered during this run.
     } else {

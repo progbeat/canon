@@ -1,17 +1,10 @@
 use crate::check::command::output::{render_check_agent_messages, write_stdout_record};
-use crate::check::core::{
-    for_each_unique_report_record, CheckRecord, CheckRunReport, SelectedExpectation,
-};
+use crate::check::core::{for_each_unique_report_record, CheckRunReport};
 use crate::check::interrogation::write_check_lifecycle_finish_event;
 use crate::check::CheckRunCaches;
 use crate::cli::CommandError;
-use crate::config_types::CheckConfig;
-use crate::gate::{gate_cached_result_for_tree, GateCacheResult, GateComparisonTree};
-use crate::git::VisibleTreeOidCache;
-use crate::history::HistoryCache;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::io::Write;
-use std::path::Path;
 
 // This module is deliberately not the public check-output renderer. The
 // per-expectation stdout records and summary line live in `command::output`,
@@ -22,18 +15,15 @@ use std::path::Path;
 // error reports share finish logging and the post-summary message to the agent
 // when allowed by the command form. The optional error only changes the finish
 // log payload and final command result.
-pub(crate) struct CheckReportFinishContext<'a, 'b> {
-    pub(crate) root: &'a Path,
-    pub(crate) config: &'a CheckConfig,
+pub(crate) struct CheckReportFinishContext<'b> {
     pub(crate) diagnostic_log: &'b mut crate::logs::DiagnosticLogWriter,
     pub(crate) result_output: &'b mut dyn Write,
     pub(crate) check_caches: &'b mut CheckRunCaches,
     pub(crate) write_agent_message: bool,
-    pub(crate) checked_tree_matches_against_tree: bool,
 }
 
 pub(crate) fn finish_check_report(
-    context: CheckReportFinishContext<'_, '_>,
+    context: CheckReportFinishContext<'_>,
     report: &CheckRunReport,
     error: Option<&str>,
 ) -> Result<(), CommandError> {
@@ -45,14 +35,9 @@ pub(crate) fn finish_check_report(
     let mut post_finish_error = None;
     let mut finish_error = error.map(str::to_string);
     if context.write_agent_message {
-        if let Err(err) = write_check_agent_message(
-            context.root,
-            context.config,
-            report,
-            context.result_output,
-            context.check_caches,
-            context.checked_tree_matches_against_tree,
-        ) {
+        if let Err(err) =
+            write_check_agent_message(report, context.result_output, context.check_caches)
+        {
             finish_error.get_or_insert_with(|| err.to_string());
             post_finish_error.get_or_insert(err);
         }
@@ -64,115 +49,12 @@ pub(crate) fn finish_check_report(
     Ok(())
 }
 
-fn staged_passes_failed_at_head_count_with_cache(
-    root: &Path,
-    checked_tree_matches_against_tree: bool,
-    expectations_by_id: &BTreeMap<String, SelectedExpectation>,
-    report: &CheckRunReport,
-    history_cache: &mut HistoryCache,
-    visible_tree_oid_cache: &mut VisibleTreeOidCache,
-) -> Result<usize, String> {
-    if checked_tree_matches_against_tree {
-        return Ok(0);
-    }
-    let mut count = 0usize;
-    for passing in passing_expectations_for_pass_improvement_count(report, expectations_by_id) {
-        match gate_cached_result_for_tree(
-            root,
-            &passing.agent,
-            &passing,
-            GateComparisonTree::Head,
-            history_cache,
-            visible_tree_oid_cache,
-        )? {
-            GateCacheResult::Fail => count += 1,
-            GateCacheResult::Pass | GateCacheResult::Missing => {}
-        }
-    }
-    Ok(count)
-}
-
-// These helpers do not render or write per-expectation result output. The
-// public report records have already been emitted before this module runs; this
-// code rebuilds enough expectation metadata only for post-summary history
-// lookups used by agent advice.
-fn passing_expectations_for_pass_improvement_count(
-    report: &CheckRunReport,
-    expectations_by_id: &BTreeMap<String, SelectedExpectation>,
-) -> Vec<SelectedExpectation> {
-    let mut expectations = Vec::new();
-    for record in report.records.iter().filter(|record| record.passed()) {
-        if let Some(expectation) =
-            selected_expectation_for_history_lookup(record, expectations_by_id)
-        {
-            expectations.push(expectation);
-        }
-    }
-    for cached in report.cached.iter().filter(|cached| cached.record.passed()) {
-        expectations.push(cached.expectation.clone());
-    }
-    expectations
-}
-
-fn current_non_passes_with_prior_pass_count(
-    root: &Path,
-    expectations_by_id: &BTreeMap<String, SelectedExpectation>,
-    report: &CheckRunReport,
-    history_cache: &mut HistoryCache,
-) -> Result<usize, String> {
-    let mut count = 0usize;
-    for expectation in non_passing_expectations_for_regression_count(report, expectations_by_id) {
-        let records = history_cache.read_records(root, &expectation)?;
-        if records.iter().any(CheckRecord::passed) {
-            count += 1;
-        }
-    }
-    Ok(count)
-}
-
-fn non_passing_expectations_for_regression_count(
-    report: &CheckRunReport,
-    expectations_by_id: &BTreeMap<String, SelectedExpectation>,
-) -> Vec<SelectedExpectation> {
-    let mut seen = BTreeSet::new();
-    let mut expectations = Vec::new();
-    for record in report.records.iter().filter(|record| !record.passed()) {
-        if let Some(expectation) =
-            selected_expectation_for_history_lookup(record, expectations_by_id)
-        {
-            if seen.insert(expectation.id.clone()) {
-                expectations.push(expectation);
-            }
-        }
-    }
-    for cached in report
-        .cached
-        .iter()
-        .filter(|cached| !cached.record.passed())
-    {
-        if seen.insert(cached.expectation.id.clone()) {
-            expectations.push(cached.expectation.clone());
-        }
-    }
-    expectations
-}
-
 fn write_check_agent_message(
-    root: &Path,
-    config: &CheckConfig,
     report: &CheckRunReport,
     output: &mut dyn Write,
     caches: &mut CheckRunCaches,
-    checked_tree_matches_against_tree: bool,
 ) -> Result<(), CommandError> {
-    let messages = check_agent_messages(
-        root,
-        config,
-        report,
-        checked_tree_matches_against_tree,
-        &mut caches.history,
-        &mut caches.visible_tree_oid,
-    )?;
+    let messages = check_agent_messages(report, &caches.run_start_pass_ids);
     for message in messages {
         let mut line = message;
         line.push('\n');
@@ -182,32 +64,19 @@ fn write_check_agent_message(
 }
 
 pub(crate) fn check_agent_messages(
-    root: &Path,
-    config: &CheckConfig,
     report: &CheckRunReport,
-    checked_tree_matches_against_tree: bool,
-    history_cache: &mut HistoryCache,
-    visible_tree_oid_cache: &mut VisibleTreeOidCache,
-) -> Result<Vec<String>, String> {
-    let expectations_by_id = selected_expectations_by_id(config)?;
-    let num_fixes = staged_passes_failed_at_head_count_with_cache(
-        root,
-        checked_tree_matches_against_tree,
-        &expectations_by_id,
-        report,
-        history_cache,
-        visible_tree_oid_cache,
-    )?;
-    let num_regressions =
-        current_non_passes_with_prior_pass_count(root, &expectations_by_id, report, history_cache)?;
+    run_start_pass_ids: &BTreeSet<String>,
+) -> Vec<String> {
+    let num_new_passes = current_passes_without_prior_pass_count(report, run_start_pass_ids);
+    let num_regressions = current_failures_with_prior_pass_count(report, run_start_pass_ids);
     let issue_ids = report_issue_display_ids(report);
-    Ok(render_check_agent_messages(
+    render_check_agent_messages(
         &issue_ids.failed,
         &issue_ids.errors,
-        num_fixes,
+        num_new_passes,
         num_regressions,
         report.skipped,
-    ))
+    )
 }
 
 struct IssueDisplayIds {
@@ -233,32 +102,42 @@ fn report_issue_display_ids(report: &CheckRunReport) -> IssueDisplayIds {
     issue_ids
 }
 
-fn selected_expectation_for_history_lookup(
-    record: &CheckRecord,
-    expectations_by_id: &BTreeMap<String, SelectedExpectation>,
-) -> Option<SelectedExpectation> {
-    expectations_by_id.get(&record.id).cloned()
+fn current_passes_without_prior_pass_count(
+    report: &CheckRunReport,
+    run_start_pass_ids: &BTreeSet<String>,
+) -> usize {
+    let mut count = 0usize;
+    for_each_unique_report_record(&report.records, &report.cached, |record| {
+        if record.passed() && !run_start_pass_ids.contains(&record.id) {
+            count += 1;
+        }
+    });
+    count
 }
 
-fn selected_expectations_by_id(
-    config: &CheckConfig,
-) -> Result<BTreeMap<String, SelectedExpectation>, String> {
-    let identities = crate::check::expectation_identities(config)?;
-    let expectations = crate::check::select_expectations_with_identities(config, &identities, &[])?;
-    Ok(expectations
-        .into_iter()
-        .map(|expectation| (expectation.id.clone(), expectation))
-        .collect())
+fn current_failures_with_prior_pass_count(
+    report: &CheckRunReport,
+    run_start_pass_ids: &BTreeSet<String>,
+) -> usize {
+    let mut count = 0usize;
+    for_each_unique_report_record(&report.records, &report.cached, |record| {
+        if !record.passed()
+            && !record.requires_human_review()
+            && run_start_pass_ids.contains(&record.id)
+        {
+            count += 1;
+        }
+    });
+    count
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::check::core::{CheckResult, CheckRunReport};
-    use crate::config_types::{AgentConfig, Expectation};
-    use crate::git::TreeSource;
+    use crate::check::core::{CheckRecord, CheckResult, CheckRunReport, SelectedExpectation};
+    use crate::config_types::{AgentConfig, CheckConfig, Expectation};
+    use crate::git::{TreeSource, VisibleTreeOidCache};
     use crate::hash::full_scope;
-    use crate::history::append_current_history_record_with_cache;
     use crate::time::format_record_timestamp;
     use std::collections::BTreeMap;
     use std::fs;
@@ -268,67 +147,36 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn staged_pass_with_head_failure_is_an_improvement() {
-        let root = git_project("staged-pass-head-failure-improvement");
+    fn new_pass_emits_commit_message() {
+        let root = git_project("new-pass-emits-commit-message");
         let agent = AgentConfig::default();
         let config = test_config(&agent);
         let expectation = test_expectation_from_config(&config);
         let scope = full_scope();
-        let fail_record = staged_scope_record(&root, &expectation, &scope, "no");
-        let mut history_cache = HistoryCache::default();
-        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
-        append_current_history_record_with_cache(
-            &root,
-            &TreeSource::Staged,
-            &expectation,
-            &fail_record,
-            &mut history_cache,
-            &mut visible_tree_oid_cache,
-        )
-        .unwrap();
-        fs::write(root.join("README.md"), "changed\n").unwrap();
-        git(&root, &["add", "README.md"]);
         let report = passing_report_for_staged_scope(&root, &expectation, &scope);
 
-        let messages = check_agent_messages(
-            &root,
-            &config,
-            &report,
-            false,
-            &mut history_cache,
-            &mut visible_tree_oid_cache,
-        )
-        .unwrap();
+        let messages = check_agent_messages(&report, &BTreeSet::new());
 
         assert!(messages
             .iter()
             .any(|message| message.contains("Commit the staged changes")));
-        assert!(!messages.iter().any(|message| message.contains("Fix the issues")));
+        assert!(!messages
+            .iter()
+            .any(|message| message.contains("Fix the issues")));
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
-    fn matching_run_trees_ignore_late_staged_pass_improvement() {
-        let root = git_project("matching-run-trees-late-staged-pass");
+    fn prior_pass_is_not_a_new_pass() {
+        let root = git_project("prior-pass-is-not-a-new-pass");
         let agent = AgentConfig::default();
         let config = test_config(&agent);
         let expectation = test_expectation_from_config(&config);
         let scope = full_scope();
-        fs::write(root.join("README.md"), "changed after preparation\n").unwrap();
-        git(&root, &["add", "README.md"]);
         let report = passing_report_for_staged_scope(&root, &expectation, &scope);
-        let mut history_cache = HistoryCache::default();
-        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
+        let run_start_pass_ids = BTreeSet::from([expectation.id.clone()]);
 
-        let messages = check_agent_messages(
-            &root,
-            &config,
-            &report,
-            true,
-            &mut history_cache,
-            &mut visible_tree_oid_cache,
-        )
-        .unwrap();
+        let messages = check_agent_messages(&report, &run_start_pass_ids);
 
         assert!(messages
             .iter()
@@ -348,18 +196,9 @@ mod tests {
         let scope = full_scope();
         let mut report = passing_report_for_staged_scope(&root, &expectation, &scope);
         report.skipped = 1;
-        let mut history_cache = HistoryCache::default();
-        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
+        let run_start_pass_ids = BTreeSet::from([expectation.id.clone()]);
 
-        let messages = check_agent_messages(
-            &root,
-            &config,
-            &report,
-            true,
-            &mut history_cache,
-            &mut visible_tree_oid_cache,
-        )
-        .unwrap();
+        let messages = check_agent_messages(&report, &run_start_pass_ids);
 
         assert!(messages.is_empty());
         let _ = fs::remove_dir_all(root);
@@ -372,36 +211,19 @@ mod tests {
         let config = test_config(&agent);
         let expectation = test_expectation_from_config(&config);
         let scope = full_scope();
-        let pass_record = staged_scope_record(&root, &expectation, &scope, "yes");
-        let mut history_cache = HistoryCache::default();
-        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
-        append_current_history_record_with_cache(
-            &root,
-            &TreeSource::Staged,
-            &expectation,
-            &pass_record,
-            &mut history_cache,
-            &mut visible_tree_oid_cache,
-        )
-        .unwrap();
         let report = CheckRunReport {
             records: vec![staged_scope_record(&root, &expectation, &scope, "no")],
             cached: Vec::new(),
             evaluated: 1,
             skipped: 0,
         };
+        let run_start_pass_ids = BTreeSet::from([expectation.id.clone()]);
 
-        let messages = check_agent_messages(
-            &root,
-            &config,
-            &report,
-            false,
-            &mut history_cache,
-            &mut visible_tree_oid_cache,
-        )
-        .unwrap();
+        let messages = check_agent_messages(&report, &run_start_pass_ids);
 
-        assert!(messages.iter().any(|message| message.contains("Fix the issues")));
+        assert!(messages
+            .iter()
+            .any(|message| message.contains("Fix the issues")));
         assert!(!messages
             .iter()
             .any(|message| message.contains("Commit the staged changes")));

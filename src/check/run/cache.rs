@@ -2,11 +2,11 @@ use crate::check::core::{CheckRecord, SelectedExpectation};
 use crate::check::interrogation::write_expectation_result_event;
 use crate::config_types::AgentConfig;
 use crate::git::{TreeSource, VisibleTreeOidCache};
-use crate::history::{
-    cached_history_record, cooldown_history_record, same_tree_history_record_with_cache,
-    CachedHistoryRecord, HistoryCache,
-};
 use crate::logs::DiagnosticLogWriter;
+use crate::xpec_state::{
+    cached_last_result_for_expectation, check_record_from_cached_result, CachedLastResultKind,
+    XpecStateCache,
+};
 use serde_json::json;
 use std::path::Path;
 
@@ -30,39 +30,34 @@ pub(crate) struct CachedResultLookup {
 pub(crate) fn cached_result_for_expectation(
     root: &Path,
     source: &TreeSource,
-    agent: &AgentConfig,
+    _agent: &AgentConfig,
     expectation: &SelectedExpectation,
-    history_cache: &mut HistoryCache,
+    xpec_state: &mut XpecStateCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
     lookup: CachedResultLookup,
 ) -> Result<Option<CheckCacheHit>, String> {
-    let same_tree = if lookup.include_same_tree {
-        same_tree_history_record_with_cache(
-            root,
-            source,
-            agent,
-            expectation,
-            history_cache,
-            visible_tree_oid_cache,
-        )?
-    } else {
-        None
+    if !lookup.include_same_tree && !lookup.include_cooldown {
+        return Ok(None);
+    }
+    let Some(hit) = cached_last_result_for_expectation(
+        root,
+        source,
+        expectation,
+        xpec_state,
+        visible_tree_oid_cache,
+        lookup.now,
+        lookup.include_same_tree,
+        lookup.include_cooldown,
+    )?
+    else {
+        return Ok(None);
     };
-    let cooldown = if lookup.include_cooldown {
-        cooldown_history_record(root, agent, expectation, history_cache, lookup.now)?
-    } else {
-        None
+    let record = check_record_from_cached_result(expectation, &hit);
+    let kind = match hit.kind {
+        CachedLastResultKind::SameTree => CachedResultKind::SameTree,
+        CachedLastResultKind::Cooldown => CachedResultKind::Cooldown,
     };
-    Ok(cached_history_record(same_tree, cooldown).and_then(|hit| {
-        let (record, kind) = match hit {
-            CachedHistoryRecord::SameTree(record) => (record, CachedResultKind::SameTree),
-            CachedHistoryRecord::Cooldown(record) => (record, CachedResultKind::Cooldown),
-        };
-        if record.requires_human_review() {
-            return None;
-        }
-        Some(CheckCacheHit { record, kind })
-    }))
+    Ok(Some(CheckCacheHit { record, kind }))
 }
 
 pub(crate) fn write_cache_hit(

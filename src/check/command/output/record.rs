@@ -76,7 +76,7 @@ impl StartedExpectationReportOutput {
             // Human byte sinks can reject all writes; no CLI can force bytes
             // into closed stdout/stderr. The report invariant here is that
             // human-output failure cannot erase the CheckRecord returned for
-            // summary accounting, answer history, or diagnostic logs.
+            // summary accounting, last-result state, or diagnostic logs.
             return write_live_completion_fallback_to_stderr(
                 record,
                 &completion,

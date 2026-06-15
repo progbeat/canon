@@ -12,6 +12,4 @@ pub(crate) use program::{
 pub(crate) use tree_source::{
     validate_tree_arg, TreeSource, DEFAULT_AGAINST_TREE_ARG, STAGED_TREE_ARG,
 };
-pub(crate) use visible_tree_oid::{
-    git_object_oid_has_hex_len, git_object_oid_has_known_shape, VisibleTreeOidCache,
-};
+pub(crate) use visible_tree_oid::{git_object_oid_has_known_shape, VisibleTreeOidCache};

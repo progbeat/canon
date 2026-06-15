@@ -34,9 +34,10 @@ pub(crate) fn run_show_command(root: &Path, args: &[OsString]) -> Result<(), Com
         &command.pathspecs,
         &mut caches,
     )?;
-    let ordered = order_by_latest_non_pass(root, filtered, &mut caches.history, |expectation| {
-        expectation
-    })?;
+    let ordered =
+        order_by_latest_non_pass(root, filtered, &mut caches.xpec_state, |expectation| {
+            expectation
+        })?;
     write_show_output(&ordered).map_err(CommandError::from)
 }
 
@@ -162,7 +163,7 @@ fn show_q_scope(
         root,
         tree_source,
         expectation,
-        &mut caches.history,
+        &mut caches.xpec_state,
         &mut caches.visible_tree_oid,
         // `canon show` has no against-tree input. Use full scope for
         // diff-targeted expectations so path filtering cannot miss a planned
@@ -348,7 +349,7 @@ expectations:
             &mut caches,
         )?;
         let ordered =
-            order_by_latest_non_pass(root, filtered, &mut caches.history, |expectation| {
+            order_by_latest_non_pass(root, filtered, &mut caches.xpec_state, |expectation| {
                 expectation
             })?;
         for expectation in ordered {

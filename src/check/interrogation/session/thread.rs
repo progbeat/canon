@@ -10,13 +10,11 @@ use crate::evaluator::{
     evaluator_turn_prompt, is_context_window_failure, session_failure_invalidates_thread,
     write_thread_lifecycle_event, write_thread_restart_event, DeveloperInstructionsContext,
     EvaluatorError, EvaluatorResponseParseCache, EvaluatorRunner, EvaluatorTurnContext,
-    ParsedTurnResponse, PrevAnswer, ThreadLifecycleLog,
+    ParsedTurnResponse, ThreadLifecycleLog,
 };
-use crate::hash::full_scope;
-use crate::history::{prev_answer_with_cache, HistoryCache};
 use crate::logs::DiagnosticLogWriter;
 use crate::scope::{sanitize_scope, visible_scope};
-use crate::token_usage_types::TokenUsage;
+use crate::xpec_state::{LastResult, XpecStateCache};
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -29,6 +27,7 @@ pub(crate) struct ThreadTurnRequest<'a> {
     pub(crate) expectation_id: Option<&'a str>,
     pub(crate) expectation_instructions: &'a str,
     pub(crate) prompt: &'a str,
+    pub(crate) last_pass: Option<&'a LastResult>,
 }
 
 pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
@@ -38,7 +37,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
     state: &mut InterrogationRunState,
     request: ThreadTurnRequest<'_>,
 ) -> Result<ParsedTurnResponse, EvaluatorError> {
-    let visible_tree_oid = state
+    let current_visible_tree_oid = state
         .visible_tree_oid_cache
         .visible_tree_oid(
             runtime.root,
@@ -47,11 +46,15 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
             request.enforced_scope,
         )
         .map_err(EvaluatorError::message)?;
+    let reuse_visible_tree_oid = request
+        .last_pass
+        .and_then(|last_pass| last_pass.visible_tree_oid.as_deref())
+        .unwrap_or("");
     let session_key = evaluator_thread_reuse_key(
         request.agent,
         request.enforced_scope,
         request.model,
-        &visible_tree_oid,
+        reuse_visible_tree_oid,
         request.expectation_instructions,
     )
     .map_err(EvaluatorError::message)?;
@@ -71,7 +74,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
             runner,
             state,
             &session_key,
-            &visible_tree_oid,
+            &current_visible_tree_oid,
             request,
         )?,
     };
@@ -108,7 +111,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
                 runner,
                 state,
                 &session_key,
-                &visible_tree_oid,
+                &current_visible_tree_oid,
                 request,
             )?;
             session_id = lifecycle_log.session_id.clone();
@@ -212,6 +215,7 @@ fn start_thread_session<R: EvaluatorRunner>(
         visible_scope: &visible_scope,
         checked_file_count: runtime.tree_context.checked_file_count,
         visible_file_count,
+        last_pass: request.last_pass,
     })
     .map_err(EvaluatorError::message)?;
     let session_root = runtime
@@ -320,48 +324,19 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     state: &mut InterrogationRunState,
-    history_cache: &mut HistoryCache,
+    xpec_state: &mut XpecStateCache,
     enforced_scope: &[String],
     model: Option<&str>,
 ) -> Result<InterrogationResult, EvaluatorError> {
-    // Expectation mode may start from a history-derived restricted scope, but
+    // Expectation mode may start from a last-pass restricted scope, but
     // after sanitization this path shares query mode's first-turn construction:
     // developer instructions and the turn prompt are rendered from
     // `resources/prompts/` plus runtime data.
     let enforced_scope = sanitize_scope(enforced_scope)?;
-    let git_diff = runtime.tree_context.checked_tree_oid != runtime.tree_context.against_tree_oid;
-    let prev_answer = if expectation.question_answer_only || !git_diff {
-        None
-    } else {
-        let prev_answer = prev_answer_with_cache(
-            runtime.root,
-            &runtime.tree_context.against_tree,
-            &expectation.agent,
-            expectation,
-            &enforced_scope,
-            history_cache,
-            &mut state.visible_tree_oid_cache,
-        )
+    let last_pass = xpec_state
+        .read_last_pass(runtime.root, expectation)
         .map_err(EvaluatorError::message)?;
-        // A non-default answer for a diff-targeted expectation describes a
-        // previous diff, not the default for this one.
-        if expectation
-            .target
-            .as_ref()
-            .is_some_and(|target| target.as_str() == "diff")
-            && prev_answer
-                .as_ref()
-                .is_some_and(|prev_answer| prev_answer.answer != expectation.expected_answer)
-        {
-            None
-        } else {
-            prev_answer
-        }
-    };
-    let fallback_prev_answer_requires_confirmation = prev_answer
-        .as_ref()
-        .is_some_and(|prev_answer| !prev_answer.from_against_tree);
-    let mut result = ask_expectation_turn(
+    ask_expectation_turn(
         runtime,
         expectation,
         runner,
@@ -369,26 +344,8 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
         state,
         &enforced_scope,
         model,
-        git_diff,
-        prev_answer.as_ref(),
-    )?;
-
-    if fallback_prev_answer_requires_confirmation {
-        let confirmation_scope = full_scope();
-        let confirmation = ask_expectation_turn(
-            runtime,
-            expectation,
-            runner,
-            diagnostic_log,
-            state,
-            &confirmation_scope,
-            model,
-            git_diff,
-            None,
-        )?;
-        result = confirmed_interrogation_result(result, confirmation);
-    }
-    Ok(result)
+        last_pass.as_ref(),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -400,16 +357,14 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
     state: &mut InterrogationRunState,
     enforced_scope: &[String],
     model: Option<&str>,
-    git_diff: bool,
-    prev_answer: Option<&PrevAnswer>,
+    last_pass: Option<&LastResult>,
 ) -> Result<InterrogationResult, EvaluatorError> {
     let prompt = evaluator_turn_prompt(
         runtime.root,
         &expectation.question,
         &expectation.expected_answer,
         expectation.target.as_ref().map(|target| target.as_str()),
-        git_diff,
-        prev_answer,
+        last_pass,
     )
     .map_err(EvaluatorError::message)?;
     let thinking = effective_thinking(&expectation.agent, expectation);
@@ -426,6 +381,7 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
             expectation_id: Some(&expectation.id),
             expectation_instructions: &expectation.instructions,
             prompt: &prompt,
+            last_pass,
         },
     )?;
     finalize_interrogation_response(
@@ -436,25 +392,4 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
         enforced_scope,
         response,
     )
-}
-
-fn confirmed_interrogation_result(
-    first: InterrogationResult,
-    mut confirmation: InterrogationResult,
-) -> InterrogationResult {
-    confirmation.turn_usage = combined_turn_usage(first.turn_usage, confirmation.turn_usage);
-    confirmation.context_compacted |= first.context_compacted;
-    confirmation.stop_after_current_expectation |= first.stop_after_current_expectation;
-    confirmation
-}
-
-fn combined_turn_usage(
-    first: Option<TokenUsage>,
-    second: Option<TokenUsage>,
-) -> Option<TokenUsage> {
-    match (first, second) {
-        (Some(first), Some(second)) => Some(first.add(second)),
-        (Some(usage), None) | (None, Some(usage)) => Some(usage),
-        (None, None) => None,
-    }
 }

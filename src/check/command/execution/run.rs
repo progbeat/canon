@@ -21,11 +21,12 @@ use crate::check::run::selection::{expectation_identities, resolve_check_options
 use crate::check::{run_check_with_runner_and_caches, CheckRunCaches, CheckRunSideEffects};
 use crate::cli::CommandError;
 use crate::git::TreeSource;
-use crate::history::{active_expectation_ids_from_identities, cleanup_stale_cache_dirs};
 use crate::logs::{write_cache_cleanup_event, DiagnosticLogWriter};
 use crate::platform::{install_check_signal_handlers, reset_check_interrupted};
 use crate::repo_inspection::RepoInspectionCache;
-use crate::state_paths::CANON_CACHE_DIR_GIT_PATH;
+use crate::xpec_state::{
+    active_expectation_ids_from_identities, cleanup_stale_xpec_dirs, XpecStateCache,
+};
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::Path;
@@ -129,7 +130,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         Ok(execution) => execution,
         Err(err) => return fail_check_after_start(&mut diagnostic_log, false, err),
     };
-    cleanup_cache_dirs(root, &mut repo_cache, &identities, &mut diagnostic_log)?;
+    cleanup_cache_dirs(root, &identities, &mut diagnostic_log)?;
     let shared_output = SharedCheckOutput::stdout();
     let mut result_output = shared_output.clone();
     let runtime = CheckRuntime::materialized(
@@ -140,8 +141,6 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         &config,
         command.no_sandbox,
     );
-    let checked_tree_matches_against_tree =
-        execution.tree_context.checked_tree_oid == execution.tree_context.against_tree_oid;
     let records_result = run_check_with_runner_and_caches(
         runtime,
         &options,
@@ -175,7 +174,6 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         started,
         &active_reset_ids,
         write_agent_message,
-        checked_tree_matches_against_tree,
     )
 }
 
@@ -227,15 +225,14 @@ fn run_query_mode(
 
 fn cleanup_cache_dirs(
     root: &Path,
-    repo_cache: &mut RepoInspectionCache,
     identities: &[crate::check::ExpectationIdentity],
     diagnostic_log: &mut DiagnosticLogWriter,
 ) -> Result<(), CommandError> {
-    let cache_dir = repo_cache
-        .git_path(root, CANON_CACHE_DIR_GIT_PATH)
+    let xpecs_dir = XpecStateCache::default()
+        .xpecs_dir(root)
         .map_err(CommandError::from)?;
     let active_ids = active_expectation_ids_from_identities(identities);
-    let cleanup = match cleanup_stale_cache_dirs(&cache_dir, &active_ids) {
+    let cleanup = match cleanup_stale_xpec_dirs(&xpecs_dir, &active_ids) {
         Ok(cleanup) => cleanup,
         Err(err) => return fail_check_after_start(diagnostic_log, false, err),
     };
@@ -255,13 +252,10 @@ fn finish_completed_check(
     started: Instant,
     active_reset_ids: &std::collections::BTreeSet<String>,
     write_agent_message: bool,
-    checked_tree_matches_against_tree: bool,
 ) -> Result<(), CommandError> {
     if let Err(err) = result_output.flush() {
         let err = format!("failed to flush check result to stdout: {}", err);
         return finish_check_error_report(CheckErrorReportFinish {
-            root,
-            config,
             diagnostic_log,
             result_output,
             check_caches,
@@ -271,8 +265,6 @@ fn finish_completed_check(
     }
     if let Err(err) = write_check_trailer(runner, result_output, &completed.report, started) {
         return finish_check_error_report(CheckErrorReportFinish {
-            root,
-            config,
             diagnostic_log,
             result_output,
             check_caches,
@@ -304,13 +296,10 @@ fn finish_completed_check(
     }
     finish_check_report(
         CheckReportFinishContext {
-            root,
-            config,
             diagnostic_log,
             result_output,
             check_caches,
             write_agent_message,
-            checked_tree_matches_against_tree,
         },
         &completed.report,
         completed_error.as_deref(),

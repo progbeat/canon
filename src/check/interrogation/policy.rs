@@ -10,9 +10,9 @@ use crate::config_types::AgentConfig;
 use crate::evaluator::EvaluatorRunner;
 use crate::git::VisibleTreeOidCache;
 use crate::hash::full_scope;
-use crate::history::HistoryCache;
 use crate::logs::DiagnosticLogWriter;
 use crate::scope::sanitize_scope;
+use crate::xpec_state::XpecStateCache;
 
 pub(crate) struct InterrogationCall<'a> {
     pub(crate) runtime: &'a CheckRuntime<'a>,
@@ -41,7 +41,7 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     interrogation_run_state: &mut InterrogationRunState,
-    history_cache: &mut HistoryCache,
+    xpec_state: &mut XpecStateCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
     break_after_tokens: Option<u64>,
 ) -> Result<InterrogationResult, String> {
@@ -50,7 +50,7 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
         runner,
         diagnostic_log,
         interrogation_run_state,
-        history_cache,
+        xpec_state,
         visible_tree_oid_cache,
     )?;
     let should_stop_after_current_expectation =
@@ -72,7 +72,7 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
             runner,
             diagnostic_log,
             interrogation_run_state,
-            history_cache,
+            xpec_state,
             visible_tree_oid_cache,
         )?;
         interrogation.stop_after_current_expectation |= should_stop_after_current_expectation;
@@ -87,7 +87,7 @@ pub(crate) fn interrogate_or_error_record<R: EvaluatorRunner>(
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     interrogation_run_state: &mut InterrogationRunState,
-    history_cache: &mut HistoryCache,
+    xpec_state: &mut XpecStateCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<InterrogationResult, String> {
     match interrogate_expectation_with_model_fallbacks(
@@ -96,7 +96,7 @@ pub(crate) fn interrogate_or_error_record<R: EvaluatorRunner>(
         runner,
         diagnostic_log,
         interrogation_run_state,
-        history_cache,
+        xpec_state,
         call.scope,
     ) {
         Ok(interrogation) => Ok(interrogation),
@@ -303,7 +303,6 @@ mod tests {
         let tree_context = CheckTreeContext {
             checked_tree_oid: source.tree_oid_for_prompt_diff(&root).unwrap(),
             against_tree_oid: source.tree_oid_for_prompt_diff(&root).unwrap(),
-            against_tree: source.clone(),
             checked_file_count: cache.checked_file_count(&root, &source).unwrap(),
         };
         let runtime =

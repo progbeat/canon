@@ -4,8 +4,8 @@ use crate::check::run::cache::{
     cached_result_for_expectation, write_cache_hit, CachedResultLookup, CheckCacheHit,
 };
 use crate::git::{TreeSource, VisibleTreeOidCache};
-use crate::history::HistoryCache;
 use crate::logs::DiagnosticLogWriter;
+use crate::xpec_state::XpecStateCache;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -29,7 +29,7 @@ pub(crate) enum CachedFailureMode {
 pub(crate) struct CacheFilterContext<'a, 'log> {
     pub(crate) root: &'a Path,
     pub(crate) source: &'a TreeSource,
-    pub(crate) history_cache: &'a mut HistoryCache,
+    pub(crate) xpec_state: &'a mut XpecStateCache,
     pub(crate) visible_tree_oid_cache: &'a mut VisibleTreeOidCache,
     pub(crate) active_lazy_full_scope_reset_ids: &'a BTreeSet<String>,
     pub(crate) diagnostic_log: &'a mut Option<&'log mut DiagnosticLogWriter>,
@@ -48,26 +48,17 @@ pub(crate) fn select_expectations_after_cache(
         let active_lazy_full_scope_reset = context
             .active_lazy_full_scope_reset_ids
             .contains(&expectation.id);
-        let diff_target = expectation
-            .target
-            .as_ref()
-            .is_some_and(|target| target.as_str() == "diff");
         match cached_result_for_expectation(
             context.root,
             context.source,
             &expectation.agent,
             &expectation,
-            &mut *context.history_cache,
+            &mut *context.xpec_state,
             &mut *context.visible_tree_oid_cache,
             CachedResultLookup {
                 now,
-                // Diff-target answers depend on the against tree as well as
-                // the checked visible tree. Answer history does not store the
-                // against tree, so visibleTreeOid-only cache reuse is unsafe.
-                include_same_tree: !active_lazy_full_scope_reset && !diff_target,
-                include_cooldown: !options.ignore_cooldown
-                    && !active_lazy_full_scope_reset
-                    && !diff_target,
+                include_same_tree: !active_lazy_full_scope_reset,
+                include_cooldown: !options.ignore_cooldown && !active_lazy_full_scope_reset,
             },
         )? {
             Some(hit) => {
@@ -83,7 +74,7 @@ pub(crate) fn select_expectations_after_cache(
     if cached_failure_seen && cached_failure_mode == CachedFailureMode::StopDefaultSelection {
         to_evaluate.clear();
         cached_hits =
-            order_by_latest_non_pass(context.root, cached_hits, context.history_cache, |hit| {
+            order_by_latest_non_pass(context.root, cached_hits, context.xpec_state, |hit| {
                 &hit.expectation
             })?;
     }

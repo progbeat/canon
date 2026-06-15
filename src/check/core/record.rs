@@ -3,20 +3,20 @@ use super::expectation::SelectedExpectation;
 use crate::time::{format_record_timestamp, unix_timestamp};
 use serde::Deserialize;
 
-// In-memory check record used by history reuse, runtime logs, gate diagnostics,
+// In-memory check record used by cache reuse, runtime logs, gate diagnostics,
 // and check output. Runtime records created from evaluator responses receive a
-// repository-native `visibleTreeOid` before they reach answer-history append.
+// repository-native `visibleTreeOid` before they reach last-result storage.
 // The type deliberately does not implement `Serialize`; persisted history and
 // runtime-log records must go through dedicated render structs, which write the
 // full expectation ID and never the human display/selector prefix.
 // Deserialization keeps result/question/expected-answer metadata optional so
-// spec-minimal history records that contain only the cache-required prefix do
-// not get confused with real empty strings. Cache readers recompute current
-// result from observed vs the current expected answer.
+// compact persisted or diagnostic records do not get confused with real empty
+// strings.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct CheckRecord {
     pub(crate) timestamp: String,
     #[serde(default)]
+    #[allow(dead_code)]
     pub(crate) number: usize,
     #[serde(default = "default_check_result")]
     pub(crate) result: CheckResult,

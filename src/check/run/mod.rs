@@ -3,7 +3,6 @@
 pub(super) mod cache;
 mod execute;
 pub(super) mod lazy_reset;
-pub(super) mod order_state;
 pub(super) mod selection;
 
 pub(crate) use execute::{run_check_with_runner_and_caches, CheckRunCaches, CheckRunSideEffects};

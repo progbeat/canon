@@ -1,10 +1,15 @@
 {{ question }}
-{%- if expectation.target == "diff" %}
+{%- if expectation.target == "diff" or last_pass %}
 
-This question targets the Git diff. If the Git diff doesn't prove otherwise, answer `{{ expectation.a|json }}` with empty evidence.
-{%- elif prev_answer %}
-
-Before answering, check whether the Git diff invalidates the previous answer:
-{{ prev_answer|json }}
-Reuse the previous answer if it's still valid.
+This question targets the Git diff. If the Git diff doesn't prove otherwise, return the previous valid response:
+```
+{%- if last_pass %}
+{
+  "answer": {{ last_pass.response.answer|json }},
+  "evidence": {{ last_pass.response.evidence|json }}
+}
+{%- else %}
+{"answer": {{ expectation.a|json }}, "evidence": ""}
+{%- endif %}
+```
 {%- endif %}

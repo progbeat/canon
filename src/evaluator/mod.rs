@@ -8,7 +8,7 @@ pub(crate) use config::{
 };
 pub(crate) use protocol::{
     developer_instructions, evaluator_turn_prompt, DeveloperInstructionsContext, EvaluatorError,
-    EvaluatorResponseParseCache, EvaluatorRunner, PrevAnswer, EVALUATOR_BASE_INSTRUCTIONS,
+    EvaluatorResponseParseCache, EvaluatorRunner, EVALUATOR_BASE_INSTRUCTIONS,
 };
 pub(crate) use turn::{
     ask_once, effective_thinking, evaluator_models, is_context_window_failure,

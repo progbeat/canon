@@ -10,6 +10,7 @@ pub(crate) struct SelectedExpectation {
     pub(crate) expected_answer: String,
     pub(crate) instructions: String,
     pub(crate) target: Option<ExpectationTarget>,
+    #[allow(dead_code)]
     pub(crate) question_answer_only: bool,
     pub(crate) agent: AgentConfig,
     pub(crate) cooldown: Option<Cooldown>,

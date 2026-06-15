@@ -12,6 +12,7 @@ use crate::check::run::selection::{
 };
 use crate::evaluator::EvaluatorRunner;
 use crate::time::unix_timestamp;
+use crate::xpec_state::snapshot_pass_ids;
 use std::collections::BTreeSet;
 
 pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
@@ -54,11 +55,16 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     }
 
     let mut interrogation_run_state = run_try!(InterrogationRunState::new(runtime.no_sandbox()));
+    caches.run_start_pass_ids = run_try!(snapshot_pass_ids(
+        root,
+        &options.selected,
+        &mut caches.xpec_state,
+    ));
     let check_work = run_try!(select_expectations_after_cache(
         CacheFilterContext {
             root,
             source: runtime.tree_source,
-            history_cache: &mut caches.history,
+            xpec_state: &mut caches.xpec_state,
             visible_tree_oid_cache: &mut caches.visible_tree_oid,
             active_lazy_full_scope_reset_ids,
             diagnostic_log: &mut diagnostic_log,
@@ -87,7 +93,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     let check_work_queue = run_try!(order_by_latest_non_pass(
         root,
         check_work.to_evaluate,
-        &mut caches.history,
+        &mut caches.xpec_state,
         |expectation| expectation
     ));
     for expectation in &check_work_queue {

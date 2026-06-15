@@ -5,10 +5,10 @@ use crate::evaluator::{
 };
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::hash::full_scope;
-use crate::history::{latest_stored_q_scope_with_cache, HistoryCache};
 use crate::isolation::{NaiveIsolationGuard, NaiveIsolationPolicy};
 use crate::scope::{effective_ignore_patterns, visible_scope};
 use crate::staged::StagedWorktreeView;
+use crate::xpec_state::XpecStateCache;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -26,13 +26,13 @@ pub(crate) fn initial_visible_scope_for_expectation(
     root: &Path,
     tree_source: &TreeSource,
     expectation: &SelectedExpectation,
-    history_cache: &mut HistoryCache,
+    xpec_state: &mut XpecStateCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
     force_full_scope_for_diff_target: bool,
     active_lazy_full_scope_reset_ids: &BTreeSet<String>,
 ) -> Result<Vec<String>, String> {
-    // Glossary visible-scope selection starts from the latest verified q-scope
-    // stored in answer history. If no q-scope is stored, fresh interrogation
+    // Glossary visible-scope selection starts from the q-scope stored in
+    // last-pass state. If no q-scope is stored, fresh interrogation
     // starts from full project scope. The actual visible scope is formed later
     // by appending the expectation agent's configured ignore patterns as
     // excluding pathspec items.
@@ -44,8 +44,8 @@ pub(crate) fn initial_visible_scope_for_expectation(
     //
     // An active lazy full-scope reset is the reset policy's invocation-start
     // state transition: it makes the effective stored q-scope full project
-    // scope for this fresh interrogation without writing synthetic answer
-    // history. After the full-scope answer, ordinary qScopeSuggestion
+    // scope for this fresh interrogation without writing synthetic last-pass
+    // state. After the full-scope answer, ordinary qScopeSuggestion
     // verification can still store a newly verified narrower scope.
     if force_full_scope_for_diff_target
         && expectation
@@ -58,11 +58,10 @@ pub(crate) fn initial_visible_scope_for_expectation(
     if active_lazy_full_scope_reset_ids.contains(&expectation.id) {
         return Ok(full_scope());
     }
-    let Some(scope) =
-        latest_stored_q_scope_with_cache(root, &expectation.agent, expectation, history_cache)?
-    else {
+    let Some(last_pass) = xpec_state.read_last_pass(root, expectation)? else {
         return Ok(full_scope());
     };
+    let scope = last_pass.q_scope;
     if visible_tree_oid_cache
         .visible_tree_oid_for_reuse(root, tree_source, &expectation.agent, &scope)?
         .is_some()
@@ -130,7 +129,6 @@ pub(crate) struct CheckRuntime<'a> {
 pub(crate) struct CheckTreeContext {
     pub(crate) checked_tree_oid: String,
     pub(crate) against_tree_oid: String,
-    pub(crate) against_tree: TreeSource,
     pub(crate) checked_file_count: usize,
 }
 

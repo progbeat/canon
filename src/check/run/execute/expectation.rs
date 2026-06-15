@@ -14,11 +14,7 @@ use crate::check::interrogation::state::{
     initial_visible_scope_for_expectation, CheckRuntime, InterrogationRunState,
 };
 use crate::check::interrogation::write_expectation_result_event;
-use crate::check::run::order_state::{
-    write_latest_non_pass_error_with_cache, write_latest_non_pass_record_with_cache,
-};
 use crate::evaluator::EvaluatorRunner;
-use crate::history::{append_current_history_record_with_cache, is_reusable_history_record};
 use crate::logs::DiagnosticLogWriter;
 use crate::platform::check_interrupted;
 use crate::scope::scope_is_within;
@@ -54,16 +50,6 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     macro_rules! return_expectation_error {
         ($error:expr) => {{
             let error = $error.to_string();
-            if let Err(marker_error) = write_latest_non_pass_error_with_cache(
-                context.runtime.root,
-                expectation,
-                &mut context.caches.history,
-            ) {
-                return Err(format!(
-                    "{}; failed to record latest non-pass error: {}",
-                    error, marker_error
-                ));
-            }
             return Err(error);
         }};
     }
@@ -86,7 +72,7 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         context.runtime.root,
         context.runtime.tree_source,
         expectation,
-        &mut context.caches.history,
+        &mut context.caches.xpec_state,
         &mut context.caches.visible_tree_oid,
         context.runtime.tree_context.checked_tree_oid
             != context.runtime.tree_context.against_tree_oid,
@@ -143,8 +129,8 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         ));
     }
     // From this point on, the public per-expectation result has already been
-    // written. Later history/cache/logging errors can fail the command, but
-    // they occur after the visible result block.
+    // written. Later state/cache/logging errors can fail the command, but they
+    // occur after the visible result block.
     run_expectation_try!(record_finished_expectation(context, expectation, &record));
     let human_review_required = record.requires_human_review();
     let run_stop_signal_hit = completed_interrogation.break_after_tokens_hit
@@ -170,21 +156,11 @@ fn record_finished_expectation<R: EvaluatorRunner>(
     // formed. Live output has already attempted its human-facing completion;
     // this path keeps the completed result available for later inspection and
     // cache decisions.
-    if is_reusable_history_record(record) {
-        append_current_history_record_with_cache(
-            context.runtime.root,
-            context.runtime.tree_source,
-            expectation,
-            record,
-            &mut context.caches.history,
-            &mut context.caches.visible_tree_oid,
-        )?;
-    }
-    write_latest_non_pass_record_with_cache(
+    context.caches.xpec_state.write_last_result_for_record(
         context.runtime.root,
+        &context.runtime.tree_context.checked_tree_oid,
         expectation,
         record,
-        &mut context.caches.history,
     )?;
     write_expectation_result_event(context.diagnostic_log, record)
 }
@@ -212,7 +188,7 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
         context.runner,
         context.diagnostic_log,
         context.interrogation_run_state,
-        &mut context.caches.history,
+        &mut context.caches.xpec_state,
         &mut context.caches.visible_tree_oid,
         context.options.break_after_tokens,
     )?;
@@ -248,7 +224,7 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
             context.runner,
             context.diagnostic_log,
             context.interrogation_run_state,
-            &mut context.caches.history,
+            &mut context.caches.xpec_state,
             &mut context.caches.visible_tree_oid,
             context.options.break_after_tokens,
         )?;
@@ -303,11 +279,11 @@ fn finish_started_expectation_with_error_record<R: EvaluatorRunner>(
     } else {
         write_result_output_without_started_report(context.result_output, &record)?;
     }
-    write_latest_non_pass_record_with_cache(
+    context.caches.xpec_state.write_last_result_for_record(
         context.runtime.root,
+        &context.runtime.tree_context.checked_tree_oid,
         expectation,
         &record,
-        &mut context.caches.history,
     )?;
     write_expectation_result_event(context.diagnostic_log, &record)?;
     context.interrogation_run_state.clear_thread_sessions();

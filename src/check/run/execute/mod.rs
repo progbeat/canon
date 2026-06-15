@@ -8,23 +8,26 @@ mod run;
 
 use crate::check::run::lazy_reset::LazyFullScopeResetCache;
 use crate::git::VisibleTreeOidCache;
-use crate::history::HistoryCache;
 use crate::logs::DiagnosticLogWriter;
+use crate::xpec_state::XpecStateCache;
+use std::collections::BTreeSet;
 use std::io::Write;
 
 pub(crate) use run::run_check_with_runner_and_caches;
 
 pub(crate) struct CheckRunCaches {
-    pub(crate) history: HistoryCache,
+    pub(crate) xpec_state: XpecStateCache,
     pub(crate) lazy_reset: LazyFullScopeResetCache,
+    pub(crate) run_start_pass_ids: BTreeSet<String>,
     pub(crate) visible_tree_oid: VisibleTreeOidCache,
 }
 
 impl CheckRunCaches {
     pub(crate) fn new() -> CheckRunCaches {
         CheckRunCaches {
-            history: HistoryCache::default(),
+            xpec_state: XpecStateCache::default(),
             lazy_reset: LazyFullScopeResetCache::default(),
+            run_start_pass_ids: BTreeSet::new(),
             visible_tree_oid: VisibleTreeOidCache::new(),
         }
     }

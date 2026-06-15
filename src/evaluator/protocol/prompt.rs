@@ -1,7 +1,7 @@
 use super::prompt_shell::{quote_prompt_template_shell_arg, run_prompt_template_shell_command};
+use crate::xpec_state::LastResult;
 use minijinja::value::{Kwargs, Value};
 use minijinja::{context, Environment, Error, ErrorKind};
-use serde::Serialize;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -26,14 +26,7 @@ pub(crate) struct DeveloperInstructionsContext<'a> {
     pub(crate) visible_scope: &'a [String],
     pub(crate) checked_file_count: usize,
     pub(crate) visible_file_count: usize,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub(crate) struct PrevAnswer {
-    pub(crate) answer: String,
-    pub(crate) evidence: String,
-    #[serde(skip)]
-    pub(crate) from_against_tree: bool,
+    pub(crate) last_pass: Option<&'a LastResult>,
 }
 
 pub(crate) fn developer_instructions(
@@ -52,6 +45,7 @@ pub(crate) fn developer_instructions(
             },
             against_tree_oid => context.against_tree_oid,
             checked_tree_oid => context.checked_tree_oid,
+            last_pass => context.last_pass,
             visible_scope => context.visible_scope,
             num_invisible_files => num_invisible_files,
         },
@@ -63,8 +57,7 @@ pub(crate) fn evaluator_turn_prompt(
     question: &str,
     expected_answer: &str,
     target: Option<&str>,
-    git_diff: bool,
-    prev_answer: Option<&PrevAnswer>,
+    last_pass: Option<&LastResult>,
 ) -> Result<String, String> {
     render_minijinja_resource_template(
         root,
@@ -75,8 +68,7 @@ pub(crate) fn evaluator_turn_prompt(
                 a => expected_answer,
                 target => target.unwrap_or(""),
             },
-            git_diff => git_diff,
-            prev_answer => prev_answer,
+            last_pass => last_pass,
         },
     )
 }
@@ -309,6 +301,7 @@ mod tests {
             visible_scope: &visible_scope,
             checked_file_count: 1,
             visible_file_count: 1,
+            last_pass: None,
         })
         .unwrap();
 

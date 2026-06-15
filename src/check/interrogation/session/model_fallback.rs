@@ -3,9 +3,9 @@ use crate::check::interrogation::interrogate_expectation_with_model;
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::config_types::AgentConfig;
 use crate::evaluator::{is_model_technical_failure, model_label, EvaluatorError, EvaluatorRunner};
-use crate::history::HistoryCache;
 use crate::logs::DiagnosticLogWriter;
 use crate::platform::check_interrupted;
+use crate::xpec_state::XpecStateCache;
 use serde_json::json;
 
 pub(crate) fn interrogate_expectation_with_model_fallbacks<R: EvaluatorRunner>(
@@ -14,7 +14,7 @@ pub(crate) fn interrogate_expectation_with_model_fallbacks<R: EvaluatorRunner>(
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     state: &mut InterrogationRunState,
-    history_cache: &mut HistoryCache,
+    xpec_state: &mut XpecStateCache,
     enforced_scope: &[String],
 ) -> Result<InterrogationResult, String> {
     run_with_model_fallbacks(
@@ -29,7 +29,7 @@ pub(crate) fn interrogate_expectation_with_model_fallbacks<R: EvaluatorRunner>(
                 runner,
                 diagnostic_log,
                 state,
-                history_cache,
+                xpec_state,
                 enforced_scope,
                 model,
             )
