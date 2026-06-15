@@ -272,84 +272,17 @@ fn template_error(message: String) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process;
-    use std::process::Command;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn developer_instructions_renders_truncation_marker_for_large_command_output() {
-        let root = git_project("prompt-template-truncation");
-        fs::write(root.join("large.txt"), "base\n").unwrap();
-        git(&root, &["add", "large.txt"]);
-        git(&root, &["commit", "-m", "initial"]);
-        let long_content = (0..6000)
+    fn template_command_output_truncates_large_output() {
+        let output = (0..6000)
             .map(|index| format!("line {index}\n"))
             .collect::<String>();
-        fs::write(root.join("large.txt"), long_content).unwrap();
-        git(&root, &["add", "large.txt"]);
-        let against_tree_oid = git_stdout(&root, &["rev-parse", "HEAD"]);
-        let checked_tree_oid = git_stdout(&root, &["write-tree"]);
-        let visible_scope = vec![".".to_string()];
-
-        let rendered = developer_instructions(DeveloperInstructionsContext {
-            root: &root,
-            against_tree_oid: &against_tree_oid,
-            checked_tree_oid: &checked_tree_oid,
-            expectation_instructions: "",
-            visible_scope: &visible_scope,
-            checked_file_count: 1,
-            visible_file_count: 1,
-            last_pass: None,
-        })
-        .unwrap();
+        let rendered = truncated_template_command_output(&output).unwrap();
 
         assert!(rendered.contains("[truncated: showing first "));
         assert!(rendered.contains("; full output: "));
         assert!(!rendered.contains("[begin untrusted command output"));
         assert!(!rendered.contains("[end untrusted command output"));
-
-        let _ = fs::remove_dir_all(root);
-    }
-
-    fn git_project(name: &str) -> PathBuf {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join("test-tmp")
-            .join(format!("canon-test-{}-{}-{}", name, process::id(), unique));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        git(&root, &["init"]);
-        git(&root, &["config", "core.autocrlf", "false"]);
-        git(&root, &["config", "core.eol", "lf"]);
-        git(&root, &["config", "user.name", "Canon Test"]);
-        git(&root, &["config", "user.email", "canon-test@example.com"]);
-        root
-    }
-
-    fn git_stdout(root: &Path, args: &[&str]) -> String {
-        let output = git_output(root, args);
-        String::from_utf8(output.stdout).unwrap().trim().to_string()
-    }
-
-    fn git(root: &Path, args: &[&str]) {
-        let output = git_output(root, args);
-        assert!(
-            output.status.success(),
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    fn git_output(root: &Path, args: &[&str]) -> std::process::Output {
-        Command::new("git")
-            .args(args)
-            .current_dir(root)
-            .output()
-            .unwrap()
     }
 }
