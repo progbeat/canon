@@ -16,7 +16,7 @@ An evaluator response must be a single JSON object matching this JSON Schema:
     },
     "error": {
       "type": "string",
-      "enum": ["insufficient-evidence", "invalid-question", "unparsable"]
+      "enum": ["InsufficientEvidence", "InvalidQuestion"]
     },
     "evidence": {
       "type": "string"
@@ -40,11 +40,10 @@ An evaluator response must be a single JSON object matching this JSON Schema:
 }
 ```
 
-An unparsable evaluator response is invalid JSON or does not match the evaluator response schema. The contents of schema-valid fields do not make a response unparsable. `canon check` treats an unparsable evaluator response as `{"error":"unparsable","evidence":"<parse-error>"}`.
-
 A fresh interrogation uses the stored q-scope for that expectation, or full project scope if no q-scope is stored.
 
-When an interrogation that does not use full project scope returns `error: "insufficient-evidence"`, `canon check` retries with full project scope. The restricted `insufficient-evidence` is not final.
+When an interrogation that does not use full project scope returns `error: "InsufficientEvidence"`, `canon check` retries with full project scope.
+The restricted `InsufficientEvidence` is not final.
 
 When the final evaluator response has `error`, human review is required.
 
@@ -57,4 +56,3 @@ The expectation's `models` setting configures evaluator models in retry order.
 `canon check` starts with the first model and tries later models in order only after technical evaluator failures.
 
 The expectation's `thinking` setting configures evaluator thinking effort and is applied to each evaluator interrogation.
-`thinking` does not affect evaluator thread reuse.
