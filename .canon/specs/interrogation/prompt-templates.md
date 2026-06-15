@@ -26,8 +26,8 @@ The rendered transcript shows only the output head, followed by exactly one trun
 Template:
 
 ```jinja
-{% filter sh(display="git diff --name-status --cached") %}
-git diff --name-status {{ against_tree_oid|shq }} {{ checked_tree_oid|shq }}
+{% filter sh(display="git diff --name-status") %}
+echo "A	foo.txt\nM	Cargo.toml"
 {% endfilter %}
 {% filter sh %}
 echo "Hello, world!"
@@ -37,7 +37,7 @@ echo "Hello, world!"
 Rendered:
 
 ```sh
-$ git diff --name-status --cached
+$ git diff --name-status
 A	foo.txt
 M	Cargo.toml
 $ echo "Hello, world!"

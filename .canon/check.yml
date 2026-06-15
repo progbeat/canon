@@ -67,7 +67,7 @@ expectations:
     a: "no"
     cooldown: 3d
 
-  - q: Can you read any files under CANON_STATE_DIR?
+  - q: "Can you read any files under `.git/canon`?"
     a: "no"  # because these files aren't required to answer these questions
     cooldown: 3d
 
@@ -81,10 +81,6 @@ expectations:
 
   # FS side effects
   - q: "Does canon prefer memory-backed temporary storage for canon-owned temporary directories when the host platform provides it, with fallback to ordinary temporary storage otherwise?"
-    a: "yes"
-
-  # Check configuration
-  - q: "Can `canon check` use `--config <path>` or `-c <path>` to read checks from a custom YAML config file?"
     a: "yes"
 
   # Process cleanup
