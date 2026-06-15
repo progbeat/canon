@@ -4,19 +4,21 @@ This is a prompt template for the turn prompt used for evaluator interrogations:
 
 ````jinja
 {{ question }}
-{%- if expectation.target == "diff" %}
+{%- if expectation.target == "diff" or last_pass %}
 
-This question targets the Git diff. If the Git diff doesn't prove otherwise, answer `{{ expectation.a|json }}` with empty evidence.
-{%- elif prev_answer %}
-
-Before answering, check whether the Git diff invalidates the previous answer:
-{{ prev_answer|json }}
-Reuse the previous answer if it's still valid.
+This question targets the Git diff. If the Git diff doesn't prove otherwise, return the previous valid response:
+```
+{%- if last_pass %}
+{
+  "answer": {{ last_pass.response.answer|json }},
+  "evidence": {{ last_pass.response.evidence|json }}
+}
+{%- else %}
+{"answer": {{ expectation.a|json }}, "evidence": ""}
+{%- endif %}
+```
 {%- endif %}
 ````
 
-`prev_answer` contains the `answer` and `evidence` fields from a previous answer history record for the same expectation. Use the most recent eligible record at the against tree when one exists, otherwise use the most recent eligible record.
-
-Only answer history records whose visible tree does not extend beyond the current visible tree are eligible for `prev_answer`.
-
-The `answer` field corresponds to the history record's `observed` field.
+*When `last_pass` exists, the prompt intentionally targets the Git diff so the evaluator checks only whether the diff invalidates the previous pass.
+For `target: diff` without `last_pass`, the expected-answer response is intentionally rendered as the previous valid response so evidence stays limited to the diff.*

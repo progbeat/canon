@@ -131,26 +131,26 @@ Each collected expectation is counted exactly once in passed, failed, errors, or
 Assuming no Ctrl-C or other interruption, when `canon check` runs without expectation selectors, with the default config, on the `:staged` tree, and against `HEAD`, it may emit instructions for the agent that ran it like this:
 
 ```python
-def print_agent_messages(failed, errors, num_fixes, num_regressions, num_pending):
+def print_agent_messages(failed, errors, num_new_passes, num_regressions, num_pending):
     """
     :param failed: Short IDs of failed expectations.
     :param errors: Short IDs of expectations that encountered errors in this run.
-    :param num_fixes: Number of expectations that pass for the checked tree while HEAD lacks a pass for the same expectation.
-    :param num_regressions: Number of expectations whose current result is non-pass and whose answer history contains at least one earlier `pass` result for the same expectation.
+    :param num_new_passes: Number of xpecs classified as **new pass**.
+    :param num_regressions: Number of xpecs classified as **regression**.
     :param num_pending: Number of pending expectations.
     """
     issues = failed + errors
-    if num_regressions > 0 or (len(issues) > 0 and num_fixes == 0):
+    if num_regressions > 0 or (len(issues) > 0 and num_new_passes == 0):
         _repair_instructions(issues)
         print(f"▷ Fix the issues and run `canon check` again!")
         return
-    if len(issues) == 0 and num_fixes == 0:
+    if len(issues) == 0 and num_new_passes == 0:
         assert num_pending == 0
         print("✓ All checks passed. Commit is allowed.")
         return
-    assert num_fixes > 0
-    passes_msg = f'1 pass' if num_fixes == 1 else f'{num_fixes} passes'
-    print(f"▷ +{passes_msg} compared to HEAD. Commit the staged changes NOW!")
+    assert num_new_passes > 0
+    passes_msg = f'1 pass' if num_new_passes == 1 else f'{num_new_passes} passes'
+    print(f"▷ +{passes_msg}. Commit the staged changes NOW!")
     if len(issues) > 0:
         _repair_instructions(issues)
         print(f"▷ Then fix the remaining issues and run `canon check` again!")

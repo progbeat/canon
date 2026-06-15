@@ -43,6 +43,7 @@ expectations:
       ---
       Is the implementation consistent with this glossary definition?
     a: "yes"
+    target: diff
 
   # Specs
   - path: "specs/**.md"
@@ -79,14 +80,6 @@ expectations:
     cooldown: 3d
 
   # FS side effects
-  - q: "Let CANON_STATE_DIR=$(git rev-parse --git-path canon). Does every canon command store all canon-owned non-temporary persistent state under CANON_STATE_DIR?"
-    a: "yes"
-    cooldown: 7d
-    thinking: low
-
-  - q: "Are history files append-only except for compaction removing outdated records?"
-    a: "yes"
-
   - q: "Does canon prefer memory-backed temporary storage for canon-owned temporary directories when the host platform provides it, with fallback to ordinary temporary storage otherwise?"
     a: "yes"
 

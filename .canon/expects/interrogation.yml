@@ -13,10 +13,6 @@
 - q: "Are all built-in interrogation prompt and instruction templates kept under `resources/prompts/`?"
   a: "yes"
 
-- q: "Can you find a concrete scenario where the pass-improvement count used for the final agent advice is positive even though the checked tree and against tree for the run resolve to the same Git tree?"
-  a: "no"
-  preset: smart
-
 - q: "Do your base instructions contain any answer directive whose condition depends on the topic of a substantive project claim? Treat answer directive as any instruction that affects the semantic value of the final `answer`."
   a: "no"
   cooldown: 7d

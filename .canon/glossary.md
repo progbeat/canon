@@ -1,10 +1,18 @@
 # Glossary
 
-**expectation** is the basic unit of the canon: a formalized human expectation expressed as a question and expected-answer pair.
+**xpec** (**expectation**) is the basic unit of the canon: a formalized human expectation expressed as a question and expected-answer pair.
 
-**ID** is a 20-character base62 hash derived from two separate input fields: the rendered expectation question and a deterministic hash of the expectation instructions.
+**ID** is a 20-character base62 hash derived from the tuple of the rendered expectation question, the expected answer, and a deterministic hash of the expectation instructions.
 
 **short ID** is the shortest prefix of an expectation's **ID** that uniquely identifies that expectation among the collected expectations.
+
+**evidence** is evaluator-provided text that directly justifies an answer.
+
+**expectation instructions** are the resolved `instructions` value for an expectation, or empty text when none is configured.
+
+**evaluator thread** is an ephemeral evaluator interaction context with no persisted history. It may only be reused for an interrogation with the same evaluator model, `visibleTreeOid` value from `$XPECS_DIR/$ID/last-pass.json` (empty when absent), and expectation instructions.
+
+---
 
 **scope** is a Git pathspec list that defines a file subset within a Git-tracked tree.
 
@@ -24,8 +32,15 @@ It is formed from the latest q-scope for the expectation, or full project scope 
 
 **visible tree** is the scoped tree induced by the visible scope.
 
-**evidence** is evaluator-provided text that directly justifies an answer.
+---
 
-**expectation instructions** are the resolved `instructions` value for an expectation, or empty text when none is configured.
+**new pass** is a check-run classification for an xpec whose current result is `pass` and for which no persisted `pass` result existed when the check run started.
 
-**evaluator thread** is an ephemeral, reusable evaluator interaction context with no persisted history. All interrogations on one thread must use the same evaluator model, the same visible tree, and the same expectation instructions; an interrogation with a different evaluator model, visible tree, or expectation instructions must use a different thread.
+**regression** is a check-run classification for an xpec whose current result is `fail` and for which a persisted `pass` result existed when the check run started.
+
+---
+
+**CANON_STATE_DIR** is `$(git rev-parse --git-path canon)`: the root directory for all canon-owned non-temporary persistent state.
+Every canon command stores canon-owned non-temporary persistent state only under `CANON_STATE_DIR`.
+
+**XPECS_DIR** is `${CANON_STATE_DIR}/xpecs`.
