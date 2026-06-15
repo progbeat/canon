@@ -16,15 +16,18 @@ pub(super) struct VisibleTreeChild {
 impl StagedWorktreeView {
     pub(super) fn visible_tree(
         &self,
-        scope: &[String],
+        visible_scope: &[String],
         visible_tree_oid: &str,
     ) -> Result<VisibleTree, String> {
         if !git_object_oid_has_known_shape(visible_tree_oid) {
             return Err("visibleTreeOid must be a Git object ID hex string".to_string());
         }
+        // The caller passes the complete visible scope, including configured
+        // ignore exclusions. This is the only path selection used to derive the
+        // visible tree's file entries from the checked Git tree.
         let entry_paths = self
             .source
-            .tracked_files_for_pathspecs(&self.source_root, scope)?;
+            .tracked_files_for_pathspecs(&self.source_root, visible_scope)?;
         Ok(VisibleTree {
             oid: visible_tree_oid.to_string(),
             entry_paths,

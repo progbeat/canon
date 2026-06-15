@@ -71,8 +71,8 @@ impl VisibleTreeOidCache {
         agent: &AgentConfig,
         scope: &[String],
     ) -> Result<Option<String>, String> {
-        let scope = visible_scope(agent, scope)?;
-        self.visible_tree_oid_for_source_scope(root, source, agent, scope)
+        let visible_scope_pathspec = visible_scope(agent, scope)?;
+        self.visible_tree_oid_for_source_visible_scope(root, source, agent, visible_scope_pathspec)
     }
 
     pub(crate) fn reuse_resolver(
@@ -107,8 +107,9 @@ impl VisibleTreeOidCache {
         agent: &AgentConfig,
         scope: &[String],
     ) -> Result<usize, String> {
-        let scope = visible_scope(agent, scope)?;
-        let entries = self.visible_scope_entries_for_source(root, source, agent, &scope)?;
+        let visible_scope_pathspec = visible_scope(agent, scope)?;
+        let entries =
+            self.visible_scope_entries_for_source(root, source, agent, &visible_scope_pathspec)?;
         Ok(entries
             .iter()
             .filter(|entry| !scope_entry_is_tree(entry))
@@ -132,22 +133,22 @@ impl VisibleTreeOidCache {
         Ok(false)
     }
 
-    fn visible_tree_oid_for_source_scope(
+    fn visible_tree_oid_for_source_visible_scope(
         &mut self,
         root: &Path,
         source: &TreeSource,
         agent: &AgentConfig,
-        scope: Vec<String>,
+        visible_scope_pathspec: Vec<String>,
     ) -> Result<Option<String>, String> {
         cached_clone!(
             self.visible_tree_oids,
-            source_scope_cache_key(root, source, agent, &scope)?,
+            source_scope_cache_key(root, source, agent, &visible_scope_pathspec)?,
             |value| Ok(value),
             {
                 let files = self.files_for_source(root, source)?;
                 visible_tree_oid_from_files_if_scope_present(
                     &files,
-                    &scope,
+                    &visible_scope_pathspec,
                     self.object_hash_algorithm(root)?,
                 )?
             },
@@ -228,10 +229,10 @@ impl VisibleTreeOidReuseResolver {
         &self,
         scope: &[String],
     ) -> Result<Option<String>, String> {
-        let scope = visible_scope(&self.agent, scope)?;
+        let visible_scope_pathspec = visible_scope(&self.agent, scope)?;
         visible_tree_oid_from_files_if_scope_present(
             &self.files,
-            &scope,
+            &visible_scope_pathspec,
             self.object_hash_algorithm,
         )
     }

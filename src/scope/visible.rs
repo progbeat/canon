@@ -8,9 +8,8 @@ pub(crate) fn visible_scope(
     q_scope: &[String],
 ) -> Result<Vec<String>, String> {
     // The returned value is the complete visible-scope pathspec. Configured
-    // ignores become ordinary excluding pathspec entries inside that scope, so
-    // later visible-tree selection still applies one pathspec to the checked
-    // Git tree.
+    // ignores are not a second filter; they become excluding pathspec entries
+    // inside the same pathspec later applied to the checked Git tree.
     let ignore_exclusions = effective_ignore_exclusion_pathspecs(agent)?;
     let base_scope = scope_without_configured_ignore_exclusions(q_scope, &ignore_exclusions);
     let mut scope = sanitize_scope_paths(&base_scope)?;
