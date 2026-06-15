@@ -5,7 +5,8 @@ use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::logs::DiagnosticLogWriter;
 use crate::xpec_state::{
     cached_last_result_for_expectation, check_record_from_cached_result,
-    refresh_reused_same_tree_last_result, CachedLastResultKind, XpecStateCache,
+    refresh_reused_same_tree_last_result, CachedLastResultKind, CachedLastResultLookup,
+    XpecStateCache,
 };
 use serde_json::json;
 use std::path::Path;
@@ -45,9 +46,11 @@ pub(crate) fn cached_result_for_expectation(
         expectation,
         xpec_state,
         visible_tree_oid_cache,
-        lookup.now,
-        lookup.include_same_tree,
-        lookup.include_cooldown,
+        CachedLastResultLookup {
+            now: lookup.now,
+            include_same_tree: lookup.include_same_tree,
+            include_cooldown: lookup.include_cooldown,
+        },
     )?
     else {
         return Ok(None);

@@ -10,8 +10,8 @@ use crate::output::write_stderr_line;
 use crate::repo_inspection::RepoInspectionCache;
 use crate::time::unix_timestamp;
 use crate::xpec_state::{
-    cached_last_result_for_expectation, refresh_reused_same_tree_last_result, CachedResultStatus,
-    XpecStateCache,
+    cached_last_result_for_expectation, refresh_reused_same_tree_last_result,
+    CachedLastResultLookup, CachedResultStatus, XpecStateCache,
 };
 use std::ffi::OsString;
 use std::path::Path;
@@ -234,9 +234,11 @@ fn gate_cache_result_for_tree_at(
         expectation,
         xpec_state,
         visible_tree_oid_cache,
-        now,
-        true,
-        true,
+        CachedLastResultLookup {
+            now,
+            include_same_tree: true,
+            include_cooldown: true,
+        },
     )?;
     let hit = match hit {
         Some(hit) => Some(refresh_reused_same_tree_last_result(

@@ -104,7 +104,7 @@ fn validate_unique_expectation_ids(ids: &[String]) -> Result<(), String> {
 
 fn expectation_display_ids(ids: &[String]) -> Vec<String> {
     ids.iter()
-        .map(|id| minimal_unique_expectation_prefix(id, &ids).unwrap_or_else(|| id.clone()))
+        .map(|id| minimal_unique_expectation_prefix(id, ids).unwrap_or_else(|| id.clone()))
         .collect()
 }
 

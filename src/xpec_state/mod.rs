@@ -283,17 +283,21 @@ pub(crate) fn snapshot_pass_ids(
     Ok(ids)
 }
 
+pub(crate) struct CachedLastResultLookup {
+    pub(crate) now: u64,
+    pub(crate) include_same_tree: bool,
+    pub(crate) include_cooldown: bool,
+}
+
 pub(crate) fn cached_last_result_for_expectation(
     root: &Path,
     source: &TreeSource,
     expectation: &SelectedExpectation,
     state_cache: &mut XpecStateCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
-    now: u64,
-    include_same_tree: bool,
-    include_cooldown: bool,
+    lookup: CachedLastResultLookup,
 ) -> Result<Option<CachedLastResultHit>, String> {
-    if include_same_tree {
+    if lookup.include_same_tree {
         if let Some(result) = same_tree_last_result(
             root,
             source,
@@ -310,8 +314,8 @@ pub(crate) fn cached_last_result_for_expectation(
             }));
         }
     }
-    if include_cooldown {
-        if let Some(result) = cooldown_last_result(root, expectation, state_cache, now)? {
+    if lookup.include_cooldown {
+        if let Some(result) = cooldown_last_result(root, expectation, state_cache, lookup.now)? {
             return Ok(Some(CachedLastResultHit {
                 result,
                 status: CachedResultStatus::Pass,
