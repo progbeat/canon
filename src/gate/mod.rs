@@ -9,7 +9,10 @@ use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::output::write_stderr_line;
 use crate::repo_inspection::RepoInspectionCache;
 use crate::time::unix_timestamp;
-use crate::xpec_state::{cached_last_result_for_expectation, CachedResultStatus, XpecStateCache};
+use crate::xpec_state::{
+    cached_last_result_for_expectation, refresh_reused_same_tree_last_result, CachedResultStatus,
+    XpecStateCache,
+};
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -235,6 +238,15 @@ fn gate_cache_result_for_tree_at(
         true,
         true,
     )?;
+    let hit = match hit {
+        Some(hit) => Some(refresh_reused_same_tree_last_result(
+            root,
+            expectation,
+            xpec_state,
+            hit,
+        )?),
+        None => None,
+    };
     match hit.map(|hit| hit.status) {
         Some(CachedResultStatus::Pass) => Ok(GateCacheResult::Pass),
         Some(CachedResultStatus::Fail) => Ok(GateCacheResult::Fail),

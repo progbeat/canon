@@ -303,9 +303,8 @@ pub(crate) fn cached_last_result_for_expectation(
             visible_tree_oid_cache,
         )? {
             let status = cached_status_for_same_tree(&result);
-            let refreshed = state_cache.refresh_last_result(root, expectation, &result)?;
             return Ok(Some(CachedLastResultHit {
-                result: refreshed,
+                result,
                 status,
                 kind: CachedLastResultKind::SameTree,
             }));
@@ -321,6 +320,21 @@ pub(crate) fn cached_last_result_for_expectation(
         }
     }
     Ok(None)
+}
+
+pub(crate) fn refresh_reused_same_tree_last_result(
+    root: &Path,
+    expectation: &SelectedExpectation,
+    state_cache: &mut XpecStateCache,
+    mut hit: CachedLastResultHit,
+) -> Result<CachedLastResultHit, String> {
+    if hit.kind == CachedLastResultKind::SameTree {
+        // The cached-result rule has already selected this hit. This write is
+        // only the Last Results bookkeeping required when a same-tree result is
+        // reused.
+        hit.result = state_cache.refresh_last_result(root, expectation, &hit.result)?;
+    }
+    Ok(hit)
 }
 
 pub(crate) fn check_record_from_cached_result(

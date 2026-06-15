@@ -4,8 +4,8 @@ use crate::config_types::AgentConfig;
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::logs::DiagnosticLogWriter;
 use crate::xpec_state::{
-    cached_last_result_for_expectation, check_record_from_cached_result, CachedLastResultKind,
-    XpecStateCache,
+    cached_last_result_for_expectation, check_record_from_cached_result,
+    refresh_reused_same_tree_last_result, CachedLastResultKind, XpecStateCache,
 };
 use serde_json::json;
 use std::path::Path;
@@ -52,6 +52,7 @@ pub(crate) fn cached_result_for_expectation(
     else {
         return Ok(None);
     };
+    let hit = refresh_reused_same_tree_last_result(root, expectation, xpec_state, hit)?;
     let record = check_record_from_cached_result(expectation, &hit);
     let kind = match hit.kind {
         CachedLastResultKind::SameTree => CachedResultKind::SameTree,
