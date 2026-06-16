@@ -497,7 +497,7 @@ mod tests {
     }
 
     #[test]
-    fn target_diff_previous_response_uses_full_q_scope_suggestion() {
+    fn target_diff_prompt_hint_uses_full_q_scope_suggestion() {
         let last_pass = LastResult {
             response_timestamp: "1970-01-01T00:00:01Z".to_string(),
             updated_timestamp: "1970-01-01T00:00:01Z".to_string(),
@@ -524,6 +524,10 @@ mod tests {
         )
         .unwrap();
 
+        // The turn prompt provides this response literal to the evaluator. The
+        // base instruction to keep a provided response's qScopeSuggestion
+        // refers to this rendered literal, not the stored last-pass response
+        // that was used as template input.
         assert!(prompt.contains(r#""qScopeSuggestion": ["."]"#));
         assert!(!prompt.contains(r#""qScopeSuggestion": ["src/a.rs"]"#));
         let _ = fs::remove_dir_all(output_dir);

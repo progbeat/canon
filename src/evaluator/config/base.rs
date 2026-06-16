@@ -81,6 +81,7 @@ enum FilesystemConfigValue {
     U64(u64),
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn evaluator_thread_config_with_no_sandbox(
     agent: &AgentConfig,
     _scope: &[String],

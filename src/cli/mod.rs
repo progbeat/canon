@@ -28,6 +28,10 @@ pub(crate) fn run(args: Vec<OsString>) -> Result<(), CommandError> {
 }
 
 fn run_command(args: Vec<OsString>) -> Result<(), CommandError> {
+    // This is the exhaustive public command dispatch. Each branch either
+    // renders through clap/help, returns an error reported by `cli::error`, or
+    // delegates to a command module whose public stdout/stderr goes through
+    // `crate::output` or the command's own flushing output facade.
     if args.is_empty() {
         let config = Config::from_env()?;
         print_root(&config)?;

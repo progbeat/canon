@@ -1,6 +1,10 @@
 // Command output is one component with a small facade. The leaf modules split
 // stable stdout/stderr surfaces by output kind while keeping callers away from
 // renderer internals.
+// `canon check` uses this facade instead of `crate::output` because live
+// progress shares stdout across threads; every exported writer flushes through
+// `shared::write_stdout_record` or `SharedCheckOutput` as soon as a record,
+// summary, query answer, agent message, or progress dot is eligible.
 mod escape;
 mod query;
 mod record;

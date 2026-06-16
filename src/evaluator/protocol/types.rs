@@ -5,6 +5,7 @@ use crate::token_usage_types::EvaluatorTurnUsage;
 use std::path::Path;
 
 pub(crate) trait EvaluatorRunner {
+    #[allow(clippy::too_many_arguments)]
     fn start_session(
         &mut self,
         session_cwd: &Path,

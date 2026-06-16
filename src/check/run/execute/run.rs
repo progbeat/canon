@@ -89,10 +89,11 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     while let Some(item) = check_work_queue.next() {
         match item {
             CheckWorkItem::Cached(hit) => {
-                write_cached_failures(vec![hit], &mut cached, &mut result_output)
+                write_cached_failures(vec![*hit], &mut cached, &mut result_output)
                     .map_err(|err| current_error!(err))?;
             }
             CheckWorkItem::Evaluate(expectation) => {
+                let expectation = *expectation;
                 let outcome = match run_expectation(
                     &mut ExpectationRunContext {
                         runtime: &runtime,
@@ -145,15 +146,15 @@ fn write_remaining_cached_work_items(
 ) -> Result<(), String> {
     for item in items {
         if let CheckWorkItem::Cached(hit) = item {
-            write_cached_failures(vec![hit], cached, result_output)?;
+            write_cached_failures(vec![*hit], cached, result_output)?;
         }
     }
     Ok(())
 }
 
 enum CheckWorkItem {
-    Cached(CachedExpectationHit),
-    Evaluate(SelectedExpectation),
+    Cached(Box<CachedExpectationHit>),
+    Evaluate(Box<SelectedExpectation>),
 }
 
 fn order_check_work(
@@ -164,8 +165,12 @@ fn order_check_work(
 ) -> Result<Vec<CheckWorkItem>, String> {
     let work = cached_hits
         .into_iter()
-        .map(CheckWorkItem::Cached)
-        .chain(to_evaluate.into_iter().map(CheckWorkItem::Evaluate))
+        .map(|hit| CheckWorkItem::Cached(Box::new(hit)))
+        .chain(
+            to_evaluate
+                .into_iter()
+                .map(|expectation| CheckWorkItem::Evaluate(Box::new(expectation))),
+        )
         .collect::<Vec<_>>();
     order_by_latest_non_pass(root, work, xpec_state, |item| match item {
         CheckWorkItem::Cached(hit) => &hit.expectation,
