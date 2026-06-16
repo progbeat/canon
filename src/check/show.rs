@@ -12,7 +12,6 @@ use crate::repo_inspection::RepoInspectionCache;
 use crate::scope::visible_scope;
 use clap::builder::OsStringValueParser;
 use clap::{Arg, ArgAction, Command};
-use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::io;
 use std::path::Path;
@@ -160,14 +159,12 @@ fn show_q_scope(
     expectation: &SelectedExpectation,
     caches: &mut CheckRunCaches,
 ) -> Result<Vec<String>, String> {
-    let active_lazy_full_scope_reset_ids = BTreeSet::new();
     initial_visible_scope_for_expectation(
         root,
         tree_source,
         expectation,
         &mut caches.xpec_state,
         &mut caches.visible_tree_oid,
-        &active_lazy_full_scope_reset_ids,
     )
 }
 

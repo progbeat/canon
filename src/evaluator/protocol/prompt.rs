@@ -272,6 +272,9 @@ fn template_error(message: String) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::xpec_state::LastResultStatus;
+    use serde_json::json;
+    use std::path::Path;
 
     #[test]
     fn template_command_output_truncates_large_output() {
@@ -284,5 +287,35 @@ mod tests {
         assert!(rendered.contains("; full output: "));
         assert!(!rendered.contains("[begin untrusted command output"));
         assert!(!rendered.contains("[end untrusted command output"));
+    }
+
+    #[test]
+    fn target_diff_previous_response_uses_full_q_scope_suggestion() {
+        let last_pass = LastResult {
+            response_timestamp: "1970-01-01T00:00:01Z".to_string(),
+            updated_timestamp: "1970-01-01T00:00:01Z".to_string(),
+            status: LastResultStatus::Pass,
+            response: json!({
+                "answer": "yes",
+                "evidence": "`src/a.rs`",
+                "qScopeSuggestion": ["src/a.rs"],
+            }),
+            q_scope: vec!["src/a.rs".to_string()],
+            visible_scope: vec!["src/a.rs".to_string()],
+            checked_tree_oid: Some("checked-tree".to_string()),
+            visible_tree_oid: Some("visible-tree".to_string()),
+        };
+
+        let prompt = evaluator_turn_prompt(
+            Path::new("."),
+            "Does it pass?",
+            "yes",
+            Some("diff"),
+            Some(&last_pass),
+        )
+        .unwrap();
+
+        assert!(prompt.contains(r#""qScopeSuggestion": ["."]"#));
+        assert!(!prompt.contains(r#""qScopeSuggestion": ["src/a.rs"]"#));
     }
 }

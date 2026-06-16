@@ -197,7 +197,6 @@ mod tests {
         let report = CheckRunReport {
             records: vec![staged_scope_record(&root, &expectation, &scope, "no")],
             cached: Vec::new(),
-            evaluated: 1,
             skipped: 0,
         };
         let run_start_pass_ids = BTreeSet::from([expectation.id.clone()]);
@@ -221,7 +220,6 @@ mod tests {
         CheckRunReport {
             records: vec![staged_scope_record(root, expectation, scope, "yes")],
             cached: Vec::new(),
-            evaluated: 1,
             skipped: 0,
         }
     }

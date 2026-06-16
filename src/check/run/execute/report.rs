@@ -9,13 +9,11 @@ pub(super) fn check_run_report(
     CheckRunReport {
         records,
         cached,
-        evaluated: counts.evaluated,
         skipped: counts.skipped,
     }
 }
 
 pub(super) struct CheckRunReportCounts {
-    pub(super) evaluated: usize,
     pub(super) skipped: usize,
 }
 

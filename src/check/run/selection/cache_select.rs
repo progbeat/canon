@@ -6,7 +6,6 @@ use crate::check::run::cache::{
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::logs::DiagnosticLogWriter;
 use crate::xpec_state::XpecStateCache;
-use std::collections::BTreeSet;
 use std::path::Path;
 
 pub(crate) struct CacheFilteredCheckWork {
@@ -31,7 +30,6 @@ pub(crate) struct CacheFilterContext<'a, 'log> {
     pub(crate) source: &'a TreeSource,
     pub(crate) xpec_state: &'a mut XpecStateCache,
     pub(crate) visible_tree_oid_cache: &'a mut VisibleTreeOidCache,
-    pub(crate) active_lazy_full_scope_reset_ids: &'a BTreeSet<String>,
     pub(crate) diagnostic_log: &'a mut Option<&'log mut DiagnosticLogWriter>,
 }
 
@@ -45,9 +43,6 @@ pub(crate) fn select_expectations_after_cache(
     let mut cached_hits = Vec::new();
     let mut cached_failure_seen = false;
     for expectation in options.selected.clone() {
-        let active_lazy_full_scope_reset = context
-            .active_lazy_full_scope_reset_ids
-            .contains(&expectation.id);
         match cached_result_for_expectation(
             context.root,
             context.source,
@@ -57,8 +52,8 @@ pub(crate) fn select_expectations_after_cache(
             &mut *context.visible_tree_oid_cache,
             CachedResultLookup {
                 now,
-                include_same_tree: !active_lazy_full_scope_reset,
-                include_cooldown: !options.ignore_cooldown && !active_lazy_full_scope_reset,
+                include_same_tree: true,
+                include_cooldown: !options.ignore_cooldown,
             },
         )? {
             Some(hit) => {

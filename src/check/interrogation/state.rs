@@ -28,7 +28,6 @@ pub(crate) fn initial_visible_scope_for_expectation(
     expectation: &SelectedExpectation,
     xpec_state: &mut XpecStateCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
-    active_lazy_full_scope_reset_ids: &BTreeSet<String>,
 ) -> Result<Vec<String>, String> {
     // Glossary visible-scope selection starts from the q-scope stored in
     // last-pass state. If no q-scope is stored, fresh interrogation
@@ -41,14 +40,6 @@ pub(crate) fn initial_visible_scope_for_expectation(
     // q-scope no longer maps to the current visible tree, fresh interrogation
     // starts from full project scope instead of reusing an empty tree.
     //
-    // An active lazy full-scope reset is the reset policy's invocation-start
-    // state transition: it makes the effective stored q-scope full project
-    // scope for this fresh interrogation without writing synthetic last-pass
-    // state. After the full-scope answer, ordinary qScopeSuggestion
-    // verification can still store a newly verified narrower scope.
-    if active_lazy_full_scope_reset_ids.contains(&expectation.id) {
-        return Ok(full_scope());
-    }
     let Some(last_pass) = xpec_state.read_last_pass(root, expectation)? else {
         return Ok(full_scope());
     };

@@ -15,17 +15,16 @@ use crate::check::interrogation::state::{
 };
 use crate::check::interrogation::write_expectation_result_event;
 use crate::evaluator::EvaluatorRunner;
+use crate::hash::full_scope;
 use crate::logs::DiagnosticLogWriter;
 use crate::platform::check_interrupted;
 use crate::scope::scope_is_within;
 use crate::time::{format_record_timestamp, unix_timestamp};
-use std::collections::BTreeSet;
 use std::io::Write;
 
 pub(super) struct ExpectationRunContext<'a, 'out, 'log, R: EvaluatorRunner> {
     pub(super) runtime: &'a CheckRuntime<'a>,
     pub(super) options: &'a CheckOptions,
-    pub(super) active_lazy_full_scope_reset_ids: &'a BTreeSet<String>,
     pub(super) runner: &'a mut R,
     pub(super) diagnostic_log: &'a mut Option<&'log mut DiagnosticLogWriter>,
     pub(super) result_output: &'a mut Option<&'out mut dyn Write>,
@@ -48,54 +47,85 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     // handles expectations that still need evaluator work, so every report
     // prefix started here belongs to an evaluated expectation and is followed
     // by a completed CheckRecord path; cache hits never enter this live path.
-    macro_rules! return_expectation_error {
-        ($error:expr) => {{
-            let error = $error.to_string();
-            return Err(error);
-        }};
-    }
-    macro_rules! run_expectation_try {
-        ($expr:expr) => {
-            match $expr {
-                Ok(value) => value,
-                Err(error) => return_expectation_error!(error),
-            }
-        };
-    }
-
     // Interrupts are checked before any live report prefix is started, so this
     // branch cannot leave a printed `<short ID>.` without a completed record.
     if check_interrupted() {
-        return_expectation_error!("interrupted");
+        return finish_unstarted_expectation_with_error_record(
+            context,
+            expectation,
+            full_scope(),
+            "interrupted".to_string(),
+        );
     }
 
-    let mut verified_q_scope = run_expectation_try!(initial_visible_scope_for_expectation(
+    let mut verified_q_scope = match initial_visible_scope_for_expectation(
         context.runtime.root,
         context.runtime.tree_source,
         expectation,
         &mut context.caches.xpec_state,
         &mut context.caches.visible_tree_oid,
-        context.active_lazy_full_scope_reset_ids,
-    ));
+    ) {
+        Ok(scope) => scope,
+        Err(error) => {
+            return finish_unstarted_expectation_with_error_record(
+                context,
+                expectation,
+                full_scope(),
+                error,
+            );
+        }
+    };
     // Prepare the metadata needed to render an errored expectation before
     // printing the live report prefix. After `<short ID>.` is visible, later
     // fallible steps can build an ERROR record without doing more fallible
     // tree inspection.
-    let started_report_error_visible_tree_oid =
-        run_expectation_try!(context.runtime.visible_tree_oid(
-            &mut context.caches.visible_tree_oid,
-            &expectation.agent,
-            &verified_q_scope,
-        ));
-    let started_report_error_timestamp =
-        run_expectation_try!(unix_timestamp().map(format_record_timestamp));
+    let started_report_error_visible_tree_oid = match context.runtime.visible_tree_oid(
+        &mut context.caches.visible_tree_oid,
+        &expectation.agent,
+        &verified_q_scope,
+    ) {
+        Ok(visible_tree_oid) => visible_tree_oid,
+        Err(error) => {
+            return finish_unstarted_expectation_with_error_record(
+                context,
+                expectation,
+                full_scope(),
+                error,
+            );
+        }
+    };
+    let started_report_error_timestamp = match unix_timestamp().map(format_record_timestamp) {
+        Ok(timestamp) => timestamp,
+        Err(error) => {
+            return finish_unstarted_expectation_with_error_record(
+                context,
+                expectation,
+                verified_q_scope.clone(),
+                error,
+            );
+        }
+    };
     // Start the live report entry before the evaluator turn so the first dot
     // is visible while the expectation is still being evaluated.
-    let mut started_report = run_expectation_try!(start_live_expectation_report(
+    let mut started_report = match start_live_expectation_report(
         context.runtime.root,
         context.live_report_output,
         expectation,
-    ));
+    ) {
+        Ok(report) => report,
+        Err(error) => {
+            let mut started_report = None;
+            return finish_started_expectation_with_error_record(
+                context,
+                expectation,
+                &verified_q_scope,
+                &started_report_error_visible_tree_oid,
+                &started_report_error_timestamp,
+                &mut started_report,
+                error,
+            );
+        }
+    };
     // Every fallible evaluator step after the report prefix is written is
     // inside `run_started_expectation_interrogation`. Do not route those
     // failures through a cancel-only progress helper: this match converts any
@@ -122,15 +152,12 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         // create a return path that can drop the completed CheckRecord.
         report.finish_public_output_or_keep_state_report(&record);
     } else {
-        run_expectation_try!(write_result_output_without_started_report(
-            context.result_output,
-            &record
-        ));
+        write_result_output_without_started_report(context.result_output, &record)?;
     }
     // From this point on, the public per-expectation result has already been
     // written. Later state/cache/logging errors can fail the command, but they
     // occur after the visible result block.
-    run_expectation_try!(record_finished_expectation(context, expectation, &record));
+    record_finished_expectation(context, expectation, &record)?;
     let human_review_required = record.requires_human_review();
     let run_stop_signal_hit = completed_interrogation.break_after_tokens_hit
         || completed_interrogation.context_compaction_hit
@@ -264,6 +291,30 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
         stop_after_current_expectation,
         interrupted,
     })
+}
+
+fn finish_unstarted_expectation_with_error_record<R: EvaluatorRunner>(
+    context: &mut ExpectationRunContext<'_, '_, '_, R>,
+    expectation: &SelectedExpectation,
+    scope: Vec<String>,
+    error: String,
+) -> Result<ExpectationRunOutcome, String> {
+    let visible_tree_oid = context.runtime.visible_tree_oid(
+        &mut context.caches.visible_tree_oid,
+        &expectation.agent,
+        &scope,
+    )?;
+    let timestamp = format_record_timestamp(unix_timestamp()?);
+    let mut started_report = None;
+    finish_started_expectation_with_error_record(
+        context,
+        expectation,
+        &scope,
+        &visible_tree_oid,
+        &timestamp,
+        &mut started_report,
+        error,
+    )
 }
 
 fn finish_started_expectation_with_error_record<R: EvaluatorRunner>(

@@ -7,7 +7,7 @@ mod tests;
 use crate::check::{CheckRecord, CheckResult, SelectedExpectation};
 use crate::config_types::AgentConfig;
 use crate::git::{resolve_git_path, TreeSource, VisibleTreeOidCache};
-use crate::scope::q_scope_from_visible_scope;
+use crate::scope::{q_scope_from_visible_scope, sanitize_scope, scope_is_within, visible_scope};
 use crate::state_paths::CANON_XPECS_DIR_GIT_PATH;
 use crate::time::parse_record_timestamp;
 use std::collections::{BTreeMap, BTreeSet};
@@ -165,8 +165,19 @@ pub(crate) fn latest_non_pass_timestamp(
     Ok([fail, error]
         .into_iter()
         .flatten()
-        .filter_map(|result| parse_record_timestamp(&result.updated_timestamp))
+        .filter_map(|result| parse_record_timestamp(&result.response_timestamp))
         .max())
+}
+
+fn broader_q_scope_suggestion(result: &LastResult) -> Option<Vec<String>> {
+    let suggestion = sanitize_scope(&result.question_scope_suggestion()?).ok()?;
+    if scope_is_within(&result.q_scope, &suggestion)
+        && !scope_is_within(&suggestion, &result.q_scope)
+    {
+        Some(suggestion)
+    } else {
+        None
+    }
 }
 
 fn same_tree_last_result(
@@ -185,6 +196,14 @@ fn same_tree_last_result(
         let Some(result) = state_cache.read_last_result(root, expectation, last_status)? else {
             continue;
         };
+        let result = migrate_broader_pass_scope(
+            root,
+            &expectation.agent,
+            expectation,
+            state_cache,
+            visible_tree_oid_cache,
+            result,
+        )?;
         let Some(stored_visible_tree_oid) = result.visible_tree_oid.as_deref() else {
             continue;
         };
@@ -199,6 +218,42 @@ fn same_tree_last_result(
         }
     }
     Ok(None)
+}
+
+fn migrate_broader_pass_scope(
+    root: &Path,
+    agent: &AgentConfig,
+    expectation: &SelectedExpectation,
+    state_cache: &mut XpecStateCache,
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
+    mut result: LastResult,
+) -> Result<LastResult, String> {
+    if result.status != LastResultStatus::Pass {
+        return Ok(result);
+    }
+    let Some(q_scope) = broader_q_scope_suggestion(&result) else {
+        return Ok(result);
+    };
+    let Some(checked_tree_oid) = result.checked_tree_oid.as_ref() else {
+        return Ok(result);
+    };
+    let checked_source = TreeSource::Git {
+        treeish: checked_tree_oid.clone(),
+        tree_oid: checked_tree_oid.clone(),
+    };
+    let Some(visible_tree_oid) = visible_tree_oid_cache.visible_tree_oid_for_reuse(
+        root,
+        &checked_source,
+        agent,
+        &q_scope,
+    )?
+    else {
+        return Ok(result);
+    };
+    result.q_scope = q_scope;
+    result.visible_scope = visible_scope(agent, &result.q_scope)?;
+    result.visible_tree_oid = Some(visible_tree_oid);
+    state_cache.refresh_last_result(root, expectation, &result)
 }
 
 fn cooldown_last_result(

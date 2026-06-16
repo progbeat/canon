@@ -22,6 +22,10 @@ fn last_result_files_use_status_dependent_fields_and_last_json_follows_error() {
         .unwrap();
     let pass_json = read_json(&root, &expectation.id, "last-pass.json");
     assert_eq!(pass_json["status"], "pass");
+    assert_eq!(
+        pass_json["response"]["qScopeSuggestion"],
+        serde_json::json!(["."])
+    );
     assert_eq!(pass_json["checkedTreeOid"], "checked-tree");
     assert_eq!(pass_json["visibleTreeOid"], "visible-tree");
 
@@ -79,6 +83,53 @@ fn last_error_is_not_a_cached_result() {
     let _ = fs::remove_dir_all(root);
 }
 
+#[test]
+fn broader_response_scope_suggestion_prevents_narrow_same_tree_reuse() {
+    let root = git_project("broader-suggestion-not-cached");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/a.rs"), "a\n").unwrap();
+    fs::write(root.join("src/b.rs"), "b\n").unwrap();
+    git(&root, &["add", "src/a.rs", "src/b.rs"]);
+
+    let expectation = test_expectation();
+    let scope = vec!["src/a.rs".to_string()];
+    let checked_tree_oid = TreeSource::Staged.tree_oid_for_prompt_diff(&root).unwrap();
+    let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
+    let visible_tree_oid = visible_tree_oid_cache
+        .visible_tree_oid(&root, &TreeSource::Staged, &expectation.agent, &scope)
+        .unwrap();
+    let mut record = test_record(&expectation, &scope, "yes", None);
+    record.visible_tree_oid = visible_tree_oid;
+    record.question_scope_suggestion = Some(full_scope());
+
+    let mut cache = XpecStateCache::default();
+    cache
+        .write_last_result_for_record(&root, &checked_tree_oid, &expectation, &record)
+        .unwrap();
+
+    fs::write(root.join("src/b.rs"), "changed\n").unwrap();
+    git(&root, &["add", "src/b.rs"]);
+
+    let hit = cached_last_result_for_expectation(
+        &root,
+        &TreeSource::Staged,
+        &expectation,
+        &mut cache,
+        &mut VisibleTreeOidCache::new(),
+        CachedLastResultLookup {
+            now: 2,
+            include_same_tree: true,
+            include_cooldown: false,
+        },
+    )
+    .unwrap();
+
+    assert!(hit.is_none());
+    let migrated = cache.read_last_pass(&root, &expectation).unwrap().unwrap();
+    assert_eq!(migrated.q_scope, full_scope());
+    let _ = fs::remove_dir_all(root);
+}
+
 fn test_expectation() -> SelectedExpectation {
     SelectedExpectation {
         number: 1,
@@ -92,6 +143,20 @@ fn test_expectation() -> SelectedExpectation {
         agent: AgentConfig::default(),
         cooldown: None,
     }
+}
+
+fn git(root: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn test_record(

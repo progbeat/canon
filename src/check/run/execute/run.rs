@@ -13,12 +13,10 @@ use crate::check::run::selection::{
 use crate::evaluator::EvaluatorRunner;
 use crate::time::unix_timestamp;
 use crate::xpec_state::snapshot_pass_ids;
-use std::collections::BTreeSet;
 
 pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     runtime: CheckRuntime<'_>,
     options: &CheckOptions,
-    active_lazy_full_scope_reset_ids: &BTreeSet<String>,
     runner: &mut R,
     side_effects: CheckRunSideEffects<'_, '_, '_>,
 ) -> Result<CheckRunReport, CheckRunError> {
@@ -31,7 +29,6 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     let mut records = Vec::new();
     let mut cached = Vec::new();
     let total_expectations = runtime.config.expectations.len();
-    let mut evaluated = 0usize;
     let root = runtime.root;
     macro_rules! current_error {
         ($error:expr) => {
@@ -41,7 +38,6 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                     records.clone(),
                     cached.clone(),
                     CheckRunReportCounts {
-                        evaluated,
                         skipped: skipped_count(total_expectations, &records, &cached),
                     },
                 ),
@@ -66,7 +62,6 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             source: runtime.tree_source,
             xpec_state: &mut caches.xpec_state,
             visible_tree_oid_cache: &mut caches.visible_tree_oid,
-            active_lazy_full_scope_reset_ids,
             diagnostic_log: &mut diagnostic_log,
         },
         options,
@@ -83,12 +78,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         && check_work.to_evaluate.is_empty()
         && !options.selectors_provided
     {
-        return Ok(current_report(
-            records,
-            cached,
-            total_expectations,
-            evaluated,
-        ));
+        return Ok(current_report(records, cached, total_expectations));
     }
     let check_work_queue = run_try!(order_by_latest_non_pass(
         root,
@@ -101,7 +91,6 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             &mut ExpectationRunContext {
                 runtime: &runtime,
                 options,
-                active_lazy_full_scope_reset_ids,
                 runner,
                 diagnostic_log: &mut diagnostic_log,
                 result_output: &mut result_output,
@@ -114,10 +103,9 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             Ok(outcome) => outcome,
             Err(error) => return Err(current_error!(error)),
         };
-        evaluated += 1;
         records.push(outcome.record);
         if outcome.stop_run {
-            let report = current_report(records, cached, total_expectations, evaluated);
+            let report = current_report(records, cached, total_expectations);
             if outcome.interrupted {
                 // The post-summary agent-message spec is explicitly scoped to
                 // runs without Ctrl-C or other interruption. Resource/control
@@ -131,12 +119,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             return Ok(report);
         }
     }
-    Ok(current_report(
-        records,
-        cached,
-        total_expectations,
-        evaluated,
-    ))
+    Ok(current_report(records, cached, total_expectations))
 }
 
 fn write_cached_failures(
@@ -166,8 +149,7 @@ fn current_report(
     records: Vec<CheckRecord>,
     cached: Vec<CachedExpectation>,
     total_expectations: usize,
-    evaluated: usize,
 ) -> CheckRunReport {
     let skipped = skipped_count(total_expectations, &records, &cached);
-    check_run_report(records, cached, CheckRunReportCounts { evaluated, skipped })
+    check_run_report(records, cached, CheckRunReportCounts { skipped })
 }

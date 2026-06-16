@@ -1,6 +1,8 @@
 use crate::check::{CheckRecord, CheckResult, SelectedExpectation};
 use crate::fs_util::{ensure_dir_without_symlinks, reject_symlink, write_temp_file_then_replace};
-use crate::scope::visible_scope;
+use crate::git::{TreeSource, VisibleTreeOidCache};
+use crate::hash::full_scope;
+use crate::scope::{sanitize_scope, scope_is_within, visible_scope};
 use crate::time::{format_record_timestamp, parse_record_timestamp, unix_timestamp};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -90,7 +92,7 @@ impl LastResult {
             .to_string()
     }
 
-    fn question_scope_suggestion(&self) -> Option<Vec<String>> {
+    pub(crate) fn question_scope_suggestion(&self) -> Option<Vec<String>> {
         self.response
             .get("qScopeSuggestion")?
             .as_array()
@@ -155,17 +157,28 @@ impl XpecStateCache {
     ) -> Result<LastResult, String> {
         let status = last_result_status_for_record(expectation, record);
         let now = format_record_timestamp(unix_timestamp()?);
+        let q_scope = persisted_q_scope_for_record(record);
+        let visible_scope = visible_scope(&expectation.agent, &q_scope)?;
         let result = LastResult {
             response_timestamp: record.timestamp.clone(),
             updated_timestamp: now,
             status,
             response: normalized_response_from_record(record),
-            q_scope: record.scope.clone(),
-            visible_scope: visible_scope(&expectation.agent, &record.scope)?,
+            q_scope: q_scope.clone(),
+            visible_scope,
             checked_tree_oid: (status == LastResultStatus::Pass)
                 .then(|| checked_tree_oid.to_string()),
             visible_tree_oid: matches!(status, LastResultStatus::Pass | LastResultStatus::Fail)
-                .then(|| record.visible_tree_oid.clone()),
+                .then(|| {
+                    visible_tree_oid_for_persisted_scope(
+                        root,
+                        checked_tree_oid,
+                        expectation,
+                        record,
+                        &q_scope,
+                    )
+                })
+                .transpose()?,
         };
         self.write_last_result(root, expectation, &result)?;
         Ok(result)
@@ -285,10 +298,45 @@ fn normalized_response_from_record(record: &CheckRecord) -> Value {
         response.insert("answer".to_string(), json!(record.observed));
     }
     response.insert("evidence".to_string(), json!(record.evidence));
-    if let Some(suggestion) = record.question_scope_suggestion.as_ref() {
-        response.insert("qScopeSuggestion".to_string(), json!(suggestion));
-    }
+    let suggestion = record
+        .question_scope_suggestion
+        .as_ref()
+        .unwrap_or(&record.scope);
+    response.insert("qScopeSuggestion".to_string(), json!(suggestion));
     Value::Object(response)
+}
+
+fn persisted_q_scope_for_record(record: &CheckRecord) -> Vec<String> {
+    let Some(suggestion) = record.question_scope_suggestion.as_ref() else {
+        return record.scope.clone();
+    };
+    let Ok(suggestion) = sanitize_scope(suggestion) else {
+        return record.scope.clone();
+    };
+    if scope_is_within(&record.scope, &suggestion) {
+        suggestion
+    } else {
+        record.scope.clone()
+    }
+}
+
+fn visible_tree_oid_for_persisted_scope(
+    root: &Path,
+    checked_tree_oid: &str,
+    expectation: &SelectedExpectation,
+    record: &CheckRecord,
+    q_scope: &[String],
+) -> Result<String, String> {
+    if q_scope == record.scope.as_slice() {
+        return Ok(record.visible_tree_oid.clone());
+    }
+    let checked_source = TreeSource::Git {
+        treeish: checked_tree_oid.to_string(),
+        tree_oid: checked_tree_oid.to_string(),
+    };
+    VisibleTreeOidCache::new()
+        .visible_tree_oid(root, &checked_source, &expectation.agent, q_scope)
+        .map_err(|err| format!("failed to hash persisted q-scope: {}", err))
 }
 
 fn read_last_result_path(
@@ -301,8 +349,9 @@ fn read_last_result_path(
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(format!("failed to read {}: {}", path.display(), err)),
     };
-    let result = serde_json::from_str::<LastResult>(&content)
+    let mut result = serde_json::from_str::<LastResult>(&content)
         .map_err(|err| format!("invalid last-result JSON in {}: {}", path.display(), err))?;
+    normalize_legacy_last_result_response(&mut result);
     validate_last_result(expected_status, &result).map_err(|message| {
         format!(
             "invalid last-result JSON in {}: {}",
@@ -311,6 +360,20 @@ fn read_last_result_path(
         )
     })?;
     Ok(Some(result))
+}
+
+fn normalize_legacy_last_result_response(result: &mut LastResult) {
+    if result.question_scope_suggestion().is_some() {
+        return;
+    }
+    if let Some(response) = result.response.as_object_mut() {
+        let fallback_scope = if result.status == LastResultStatus::Pass {
+            full_scope()
+        } else {
+            result.q_scope.clone()
+        };
+        response.insert("qScopeSuggestion".to_string(), json!(fallback_scope));
+    }
 }
 
 fn validate_last_result(
@@ -337,6 +400,9 @@ fn validate_last_result(
         .is_none()
     {
         return Err("response must contain evidence".to_string());
+    }
+    if result.question_scope_suggestion().is_none() {
+        return Err("response must contain qScopeSuggestion".to_string());
     }
     match expected_status {
         LastResultStatus::Pass => {

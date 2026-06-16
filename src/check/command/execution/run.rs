@@ -13,10 +13,6 @@ use crate::check::command::output::SharedCheckOutput;
 use crate::check::command::{finish_check_report, CheckReportFinishContext};
 use crate::check::core::CheckCommandArgs;
 use crate::check::interrogation::{state::CheckRuntime, write_check_lifecycle_start_event};
-use crate::check::run::lazy_reset::{
-    active_lazy_full_scope_reset_ids, apply_lazy_full_scope_reset,
-    clear_evaluated_lazy_full_scope_resets,
-};
 use crate::check::run::selection::{expectation_identities, resolve_check_options_with_identities};
 use crate::check::{run_check_with_runner_and_caches, CheckRunCaches, CheckRunSideEffects};
 use crate::cli::CommandError;
@@ -91,18 +87,6 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             )
         }
     };
-    let active_reset_ids =
-        match active_lazy_full_scope_reset_ids(root, &identities, &mut check_caches.lazy_reset) {
-            Ok(ids) => ids,
-            Err(err) => {
-                return fail_check_before_selection(
-                    &mut diagnostic_log,
-                    query_start_field,
-                    query_mode,
-                    err,
-                )
-            }
-        };
     let options =
         match resolve_check_options_with_identities(&config, &identities, &command.options) {
             Ok(options) => options,
@@ -144,7 +128,6 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     let records_result = run_check_with_runner_and_caches(
         runtime,
         &options,
-        &active_reset_ids,
         &mut execution.runner,
         CheckRunSideEffects {
             diagnostic_log: Some(&mut diagnostic_log),
@@ -164,15 +147,12 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         },
     };
     finish_completed_check(
-        root,
-        &config,
         &mut diagnostic_log,
         &mut result_output,
         &mut check_caches,
         &mut execution.runner,
         &completed,
         started,
-        &active_reset_ids,
         write_agent_message,
     )
 }
@@ -242,15 +222,12 @@ fn cleanup_cache_dirs(
 
 #[allow(clippy::too_many_arguments)]
 fn finish_completed_check(
-    root: &Path,
-    config: &crate::config_types::CheckConfig,
     diagnostic_log: &mut DiagnosticLogWriter,
     result_output: &mut dyn Write,
     check_caches: &mut CheckRunCaches,
     runner: &mut crate::app::LazyAppServerRunner,
     completed: &CompletedCheckRun,
     started: Instant,
-    active_reset_ids: &std::collections::BTreeSet<String>,
     write_agent_message: bool,
 ) -> Result<(), CommandError> {
     if let Err(err) = result_output.flush() {
@@ -272,28 +249,7 @@ fn finish_completed_check(
             error: err,
         });
     }
-    let mut completed_error = completed.error.clone();
-    let mut post_finish_error = None;
-    if let Err(err) = clear_evaluated_lazy_full_scope_resets(
-        root,
-        active_reset_ids,
-        &completed.report.records,
-        &mut check_caches.lazy_reset,
-    ) {
-        completed_error.get_or_insert_with(|| err.clone());
-        post_finish_error.get_or_insert_with(|| err.into());
-    }
-    if let Err(err) = apply_lazy_full_scope_reset(
-        root,
-        config,
-        completed.report.evaluated,
-        &completed.report.cached,
-        &mut check_caches.lazy_reset,
-        diagnostic_log,
-    ) {
-        completed_error.get_or_insert_with(|| err.clone());
-        post_finish_error.get_or_insert_with(|| err.into());
-    }
+    let completed_error = completed.error.clone();
     finish_check_report(
         CheckReportFinishContext {
             diagnostic_log,
@@ -304,9 +260,6 @@ fn finish_completed_check(
         &completed.report,
         completed_error.as_deref(),
     )?;
-    if let Some(err) = post_finish_error {
-        return Err(err);
-    }
     if completed.error.is_none() && check_report_passed(&completed.report) {
         Ok(())
     } else {

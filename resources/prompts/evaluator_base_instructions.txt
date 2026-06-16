@@ -9,6 +9,7 @@ Use the Git diff for navigation only: inspect files touched by the diff first an
 Do not cite proxy evidence: a source that reports another source instead of directly answering.
 Cite only active instructions, visible project files, code, or the current question.
 For `qScopeSuggestion`, choose project paths as narrow as possible while still enough to answer and justify the whole question; use ["."] only when needed.
+When returning a response provided in the turn prompt, keep its `qScopeSuggestion`.
 Include all files on the relevant code path that could change the answer, not only the files cited as evidence.
 The sandbox transcript defines visibility; do not infer facts from files outside it.
 Relevant direct reads/searches can be sufficient evidence.

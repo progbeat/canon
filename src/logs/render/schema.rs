@@ -37,8 +37,6 @@ fn required_runtime_log_fields(event: &str) -> Option<&'static [&'static str]> {
         "expectation.review_required" | "interrogation.review_required" => Some(&[
             "id", "result", "observed", "evidence", "scope", "prompt", "expected", "reason",
         ]),
-        "lazy_full_scope_reset" => Some(&["evaluated", "candidates", "reset", "ids"]),
-        "lazy_full_scope_reset.error" => Some(&["message"]),
         "model.failure" => Some(&["id", "model", "error"]),
         "model.fallback" => Some(&["id", "from", "to", "reason"]),
         "query.result" => Some(&["prompt", "observed", "evidence", "qScopeSuggestion"]),

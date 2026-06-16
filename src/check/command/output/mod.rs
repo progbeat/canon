@@ -79,7 +79,6 @@ mod tests {
         let report = CheckRunReport {
             records: vec![evaluated_error],
             cached: vec![cached_failure, cached_error],
-            evaluated: 1,
             skipped: 0,
         };
 
