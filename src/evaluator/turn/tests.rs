@@ -1,5 +1,5 @@
 use super::*;
-use crate::check::ERROR_UNPARSABLE;
+use crate::check::INTERNAL_ERROR_UNPARSABLE;
 use crate::config_types::AgentConfig;
 use crate::evaluator::{EvaluatorError, EvaluatorResponseParseCache, EvaluatorRunner};
 use crate::token_usage_types::{EvaluatorTurnUsage, TokenUsage};
@@ -56,7 +56,10 @@ fn malformed_repair_response_stays_unparsable() {
     )
     .unwrap();
 
-    assert_eq!(parsed.answer.error.as_deref(), Some(ERROR_UNPARSABLE));
+    assert_eq!(
+        parsed.answer.error.as_deref(),
+        Some(INTERNAL_ERROR_UNPARSABLE)
+    );
     assert!(parsed
         .answer
         .evidence
@@ -100,6 +103,7 @@ impl EvaluatorRunner for RunnerWithResponses {
     fn start_session(
         &mut self,
         _session_cwd: &Path,
+        _template_output_dir: &Path,
         _developer_instructions: &str,
         _agent: &AgentConfig,
         _model: Option<&str>,

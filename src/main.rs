@@ -17,6 +17,7 @@ mod notes;
 mod output;
 mod path_io_error;
 mod platform;
+mod process_cwd;
 mod project;
 mod project_types;
 mod repo_inspection;

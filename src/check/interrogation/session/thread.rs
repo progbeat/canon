@@ -6,11 +6,11 @@ use crate::check::interrogation::state::{
 };
 use crate::config_types::AgentConfig;
 use crate::evaluator::{
-    ask_once as ask_evaluator_once, developer_instructions, effective_thinking,
-    evaluator_turn_prompt, is_context_window_failure, session_failure_invalidates_thread,
-    write_thread_lifecycle_event, write_thread_restart_event, DeveloperInstructionsContext,
-    EvaluatorError, EvaluatorResponseParseCache, EvaluatorRunner, EvaluatorTurnContext,
-    ParsedTurnResponse, ThreadLifecycleLog,
+    ask_once as ask_evaluator_once, create_prompt_template_output_dir, developer_instructions,
+    effective_thinking, evaluator_turn_prompt, is_context_window_failure,
+    session_failure_invalidates_thread, write_thread_lifecycle_event, write_thread_restart_event,
+    DeveloperInstructionsContext, EvaluatorError, EvaluatorResponseParseCache, EvaluatorRunner,
+    EvaluatorTurnContext, ParsedTurnResponse, ThreadLifecycleLog,
 };
 use crate::logs::DiagnosticLogWriter;
 use crate::scope::{sanitize_scope, visible_scope};
@@ -27,6 +27,7 @@ pub(crate) struct ThreadTurnRequest<'a> {
     pub(crate) expectation_id: Option<&'a str>,
     pub(crate) expectation_instructions: &'a str,
     pub(crate) prompt: &'a str,
+    pub(crate) template_output_dir: &'a Path,
     pub(crate) last_pass: Option<&'a LastResult>,
 }
 
@@ -207,17 +208,6 @@ fn start_thread_session<R: EvaluatorRunner>(
         request.agent,
         request.enforced_scope,
     )?;
-    let developer_instructions = developer_instructions(DeveloperInstructionsContext {
-        root: runtime.root,
-        against_tree_oid: &runtime.tree_context.against_tree_oid,
-        checked_tree_oid: &runtime.tree_context.checked_tree_oid,
-        expectation_instructions: request.expectation_instructions,
-        visible_scope: &visible_scope,
-        checked_file_count: runtime.tree_context.checked_file_count,
-        visible_file_count,
-        last_pass: request.last_pass,
-    })
-    .map_err(EvaluatorError::message)?;
     let session_root = runtime
         .session_root_for_scope(request.agent, request.enforced_scope, visible_tree_oid)
         .map_err(EvaluatorError::message)?;
@@ -228,8 +218,21 @@ fn start_thread_session<R: EvaluatorRunner>(
         .as_ref()
         .map(|isolation| isolation.path())
         .unwrap_or(session_root.as_path());
+    let developer_instructions = developer_instructions(DeveloperInstructionsContext {
+        root: runtime.root,
+        template_output_dir: request.template_output_dir,
+        against_tree_oid: &runtime.tree_context.against_tree_oid,
+        checked_tree_oid: &runtime.tree_context.checked_tree_oid,
+        expectation_instructions: request.expectation_instructions,
+        visible_scope: &visible_scope,
+        checked_file_count: runtime.tree_context.checked_file_count,
+        visible_file_count,
+        last_pass: request.last_pass,
+    })
+    .map_err(EvaluatorError::message)?;
     let created = match runner.start_session(
         session_cwd,
+        request.template_output_dir,
         &developer_instructions,
         request.agent,
         request.model,
@@ -359,8 +362,11 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
     model: Option<&str>,
     last_pass: Option<&LastResult>,
 ) -> Result<InterrogationResult, EvaluatorError> {
+    let template_output_dir =
+        create_prompt_template_output_dir().map_err(EvaluatorError::message)?;
     let prompt = evaluator_turn_prompt(
         runtime.root,
+        &template_output_dir,
         &expectation.question,
         &expectation.expected_answer,
         expectation.target.as_ref().map(|target| target.as_str()),
@@ -381,6 +387,7 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
             expectation_id: Some(&expectation.id),
             expectation_instructions: &expectation.instructions,
             prompt: &prompt,
+            template_output_dir: &template_output_dir,
             last_pass,
         },
     )?;

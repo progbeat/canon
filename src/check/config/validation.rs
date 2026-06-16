@@ -1,6 +1,6 @@
 use crate::check::core::{
     contains_line_break, is_line_break_char, matches_answer_pattern, ANSWER_PATTERN,
-    ERROR_INVALID_QUESTION, ERROR_SCOPE_TOO_NARROW, ERROR_UNPARSABLE,
+    ERROR_INVALID_QUESTION, ERROR_SCOPE_TOO_NARROW, INTERNAL_ERROR_UNPARSABLE,
 };
 use crate::check::run::selection::{minimal_unique_expectation_prefix, parse_cooldown};
 use crate::config_types::{AgentConfig, CheckConfig};
@@ -46,9 +46,11 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
                 ),
             ));
         }
+        // Expected answers cannot collide with either evaluator schema errors
+        // or Canon's internal unparsable-response marker.
         if matches!(
             expectation.a.as_str(),
-            ERROR_SCOPE_TOO_NARROW | ERROR_INVALID_QUESTION | ERROR_UNPARSABLE
+            ERROR_SCOPE_TOO_NARROW | ERROR_INVALID_QUESTION | INTERNAL_ERROR_UNPARSABLE
         ) {
             return Err(render_expectation_validation_error(
                 &display_ids[index],

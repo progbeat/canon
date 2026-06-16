@@ -25,6 +25,26 @@ pub(crate) fn evaluator_working_tree_permissions(
     Ok(permissions)
 }
 
+pub(crate) fn evaluator_template_output_permissions(
+    template_output_dir: &Path,
+) -> EvaluatorConfigResult<BTreeMap<String, String>> {
+    let mut permissions = BTreeMap::new();
+    insert_filesystem_permission(
+        &mut permissions,
+        path_to_config_string(template_output_dir, "evaluator template output dir")?,
+        "read",
+    )?;
+    insert_filesystem_permission(
+        &mut permissions,
+        path_to_config_string(
+            &template_output_dir.join("**"),
+            "evaluator template output dir glob",
+        )?,
+        "read",
+    )?;
+    Ok(permissions)
+}
+
 pub(crate) fn evaluator_state_dir_permissions(
     app_server_root: &Path,
 ) -> EvaluatorConfigResult<BTreeMap<String, String>> {
@@ -193,6 +213,20 @@ mod tests {
         let root_key = path_to_config_string(&session_root, "test session root").unwrap();
         let children_key =
             path_to_config_string(&session_root.join("**"), "test session children").unwrap();
+
+        assert_eq!(permissions.get(&root_key), Some(&"read".to_string()));
+        assert_eq!(permissions.get(&children_key), Some(&"read".to_string()));
+    }
+
+    #[test]
+    fn template_output_permissions_read_output_dir_and_children() {
+        let output_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("canon-template-output");
+        let permissions = evaluator_template_output_permissions(&output_dir).unwrap();
+        let root_key = path_to_config_string(&output_dir, "test output dir").unwrap();
+        let children_key =
+            path_to_config_string(&output_dir.join("**"), "test output children").unwrap();
 
         assert_eq!(permissions.get(&root_key), Some(&"read".to_string()));
         assert_eq!(permissions.get(&children_key), Some(&"read".to_string()));

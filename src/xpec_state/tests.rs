@@ -1,9 +1,9 @@
 use super::*;
 use crate::check::{CheckRecord, CheckResult, SelectedExpectation};
-use crate::config_types::AgentConfig;
+use crate::config_types::{AgentConfig, ExpectationTarget};
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::hash::full_scope;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
@@ -84,25 +84,83 @@ fn last_error_is_not_a_cached_result() {
 }
 
 #[test]
-fn broader_response_scope_suggestion_prevents_narrow_same_tree_reuse() {
-    let root = git_project("broader-suggestion-not-cached");
+fn last_error_keeps_response_suggestion_separate_from_persisted_q_scope() {
+    let root = git_project("last-error-suggestion-separate");
+    let expectation = test_expectation();
+    let mut cache = XpecStateCache::default();
+    let scope = vec!["src/too-narrow.rs".to_string()];
+    let suggestion = vec!["src/needed.rs".to_string()];
+    let mut error = test_record(
+        &expectation,
+        &scope,
+        "ScopeTooNarrow",
+        Some("ScopeTooNarrow"),
+    );
+    error.question_scope_suggestion = Some(suggestion.clone());
+
+    cache
+        .write_last_result_for_record(&root, "checked-tree", &expectation, &error)
+        .unwrap();
+
+    let error_json = read_json(&root, &expectation.id, "last-error.json");
+    assert_eq!(error_json["qScope"], json!(scope));
+    assert_eq!(
+        error_json["response"]["qScopeSuggestion"],
+        json!(suggestion)
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn last_pass_keeps_response_suggestion_separate_from_persisted_q_scope() {
+    let root = git_project("last-pass-suggestion-separate");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/narrow.rs"), "narrow\n").unwrap();
+    fs::write(root.join("src/extra.rs"), "extra\n").unwrap();
+    git(&root, &["add", "src/narrow.rs", "src/extra.rs"]);
+
+    let expectation = test_expectation();
+    let checked_tree_oid = TreeSource::Staged.tree_oid_for_prompt_diff(&root).unwrap();
+    let persisted_scope = vec!["src/narrow.rs".to_string()];
+    let mut record = test_record(&expectation, &persisted_scope, "yes", None);
+    record.visible_tree_oid = VisibleTreeOidCache::new()
+        .visible_tree_oid(
+            &root,
+            &TreeSource::Staged,
+            &expectation.agent,
+            &persisted_scope,
+        )
+        .unwrap();
+    record.question_scope_suggestion = Some(full_scope());
+
+    XpecStateCache::default()
+        .write_last_result_for_record(&root, &checked_tree_oid, &expectation, &record)
+        .unwrap();
+
+    let pass_json = read_json(&root, &expectation.id, "last-pass.json");
+    assert_eq!(pass_json["qScope"], json!(persisted_scope));
+    assert_eq!(pass_json["response"]["qScopeSuggestion"], json!(["."]));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn same_tree_pass_reuses_last_pass_when_only_hidden_files_change() {
+    let root = git_project("same-tree-pass-hidden-change");
     fs::create_dir_all(root.join("src")).unwrap();
     fs::write(root.join("src/a.rs"), "a\n").unwrap();
     fs::write(root.join("src/b.rs"), "b\n").unwrap();
     git(&root, &["add", "src/a.rs", "src/b.rs"]);
 
-    let expectation = test_expectation();
-    let scope = vec!["src/a.rs".to_string()];
-    let checked_tree_oid = TreeSource::Staged.tree_oid_for_prompt_diff(&root).unwrap();
-    let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
-    let visible_tree_oid = visible_tree_oid_cache
-        .visible_tree_oid(&root, &TreeSource::Staged, &expectation.agent, &scope)
-        .unwrap();
-    let mut record = test_record(&expectation, &scope, "yes", None);
-    record.visible_tree_oid = visible_tree_oid;
-    record.question_scope_suggestion = Some(full_scope());
-
+    let mut expectation = test_expectation();
+    expectation.target = Some(ExpectationTarget::Diff);
     let mut cache = XpecStateCache::default();
+    let q_scope = vec!["src/a.rs".to_string()];
+    let checked_tree_oid = TreeSource::Staged.tree_oid_for_prompt_diff(&root).unwrap();
+    let mut record = test_record(&expectation, &q_scope, "yes", None);
+    record.visible_tree_oid = VisibleTreeOidCache::new()
+        .visible_tree_oid(&root, &TreeSource::Staged, &expectation.agent, &q_scope)
+        .unwrap();
+    record.question_scope_suggestion = Some(full_scope());
     cache
         .write_last_result_for_record(&root, &checked_tree_oid, &expectation, &record)
         .unwrap();
@@ -119,14 +177,63 @@ fn broader_response_scope_suggestion_prevents_narrow_same_tree_reuse() {
         CachedLastResultLookup {
             now: 2,
             include_same_tree: true,
-            include_cooldown: false,
+            include_cooldown: true,
         },
     )
+    .unwrap()
     .unwrap();
 
-    assert!(hit.is_none());
-    let migrated = cache.read_last_pass(&root, &expectation).unwrap().unwrap();
-    assert_eq!(migrated.q_scope, full_scope());
+    assert_eq!(hit.status, CachedResultStatus::Pass);
+    assert_eq!(hit.kind, CachedLastResultKind::SameTree);
+    assert_eq!(hit.result.q_scope, q_scope);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn stored_q_scope_uses_latest_result() {
+    let root = git_project("stored-q-scope-latest-result");
+    let expectation = test_expectation();
+    let mut cache = XpecStateCache::default();
+    let pass_scope = vec!["src/pass.rs".to_string()];
+    let fail_scope = vec!["src/fail.rs".to_string()];
+    let error_scope = vec!["src/error.rs".to_string()];
+
+    cache.last_results.insert(
+        (root.clone(), expectation.id.clone(), LastResultStatus::Pass),
+        Some(test_last_result(
+            LastResultStatus::Pass,
+            &pass_scope,
+            "1970-01-01T00:00:01Z",
+        )),
+    );
+    cache.last_results.insert(
+        (root.clone(), expectation.id.clone(), LastResultStatus::Fail),
+        Some(test_last_result(
+            LastResultStatus::Fail,
+            &fail_scope,
+            "1970-01-01T00:00:02Z",
+        )),
+    );
+    cache.last_results.insert(
+        (
+            root.clone(),
+            expectation.id.clone(),
+            LastResultStatus::Error,
+        ),
+        Some(test_last_result(
+            LastResultStatus::Error,
+            &error_scope,
+            "1970-01-01T00:00:03Z",
+        )),
+    );
+
+    assert_eq!(
+        cache
+            .read_stored_q_scope(&root, &expectation)
+            .unwrap()
+            .unwrap(),
+        error_scope
+    );
     let _ = fs::remove_dir_all(root);
 }
 
@@ -179,6 +286,41 @@ fn test_record(
         visible_tree_oid: "visible-tree".to_string(),
         id: expectation.id.clone(),
         display_id: expectation.display_id.clone(),
+    }
+}
+
+fn test_last_result(
+    status: LastResultStatus,
+    scope: &[String],
+    updated_timestamp: &str,
+) -> LastResult {
+    let response = match status {
+        LastResultStatus::Pass => json!({
+            "answer": "yes",
+            "evidence": "evidence",
+            "qScopeSuggestion": scope,
+        }),
+        LastResultStatus::Fail => json!({
+            "answer": "no",
+            "evidence": "evidence",
+            "qScopeSuggestion": scope,
+        }),
+        LastResultStatus::Error => json!({
+            "error": "ScopeTooNarrow",
+            "evidence": "evidence",
+            "qScopeSuggestion": scope,
+        }),
+    };
+    LastResult {
+        response_timestamp: "1970-01-01T00:00:01Z".to_string(),
+        updated_timestamp: updated_timestamp.to_string(),
+        status,
+        response,
+        q_scope: scope.to_vec(),
+        visible_scope: scope.to_vec(),
+        checked_tree_oid: (status == LastResultStatus::Pass).then(|| "checked-tree".to_string()),
+        visible_tree_oid: matches!(status, LastResultStatus::Pass | LastResultStatus::Fail)
+            .then(|| "visible-tree".to_string()),
     }
 }
 

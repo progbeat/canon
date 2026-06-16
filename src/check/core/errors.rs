@@ -1,8 +1,12 @@
-use crate::check::core::{CheckRecord, CheckResult, SelectedExpectation, ERROR_UNPARSABLE};
+use crate::check::core::{CheckRecord, CheckResult, SelectedExpectation};
 use crate::check::interrogation::state::CheckRuntime;
 use crate::config_types::AgentConfig;
 use crate::git::VisibleTreeOidCache;
 use crate::time::{format_record_timestamp, unix_timestamp};
+
+// Internal normalized failure marker for technical evaluator failures that do
+// not produce a schema-valid evaluator response.
+pub(crate) const INTERNAL_ERROR_UNPARSABLE: &str = "unparsable";
 
 pub(crate) fn error_record_from_interrogation_error(
     runtime: &CheckRuntime<'_>,
@@ -45,8 +49,8 @@ pub(crate) fn error_record_from_visible_tree_oid_at(
         result: CheckResult::Fail,
         question: Some(expectation.question.clone()),
         expected_answer: Some(expectation.expected_answer.clone()),
-        observed: ERROR_UNPARSABLE.to_string(),
-        error: Some(ERROR_UNPARSABLE.to_string()),
+        observed: INTERNAL_ERROR_UNPARSABLE.to_string(),
+        error: Some(INTERNAL_ERROR_UNPARSABLE.to_string()),
         evidence: error.to_string(),
         scope: scope.to_vec(),
         question_scope_suggestion: None,

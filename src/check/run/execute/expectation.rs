@@ -6,13 +6,13 @@ use crate::check::command::output::{
 use crate::check::core::errors::error_record_from_visible_tree_oid_at;
 use crate::check::core::{CheckOptions, CheckRecord, SelectedExpectation};
 use crate::check::interrogation::policy::{
+    initial_visible_scope_for_expectation, interrogate_or_error_record,
     interrogate_with_full_scope_retry, narrowed_scope_is_accepted,
-    question_scope_suggestion_scope_for_independent_verification, turn_exceeds_break_after_tokens,
-    turn_has_context_compaction, write_scope_narrowing_event, ScopedInterrogation,
+    question_scope_suggestion_scope_for_unused_follow_up, turn_exceeds_break_after_tokens,
+    turn_has_context_compaction, write_scope_narrowing_event, InterrogationCall,
+    ScopedInterrogation,
 };
-use crate::check::interrogation::state::{
-    initial_visible_scope_for_expectation, CheckRuntime, InterrogationRunState,
-};
+use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::interrogation::write_expectation_result_event;
 use crate::evaluator::EvaluatorRunner;
 use crate::hash::full_scope;
@@ -47,6 +47,8 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     // handles expectations that still need evaluator work, so every report
     // prefix started here belongs to an evaluated expectation and is followed
     // by a completed CheckRecord path; cache hits never enter this live path.
+    // In particular, a same-tree result already handles checked-tree changes
+    // outside the stored visible scope before a fresh interrogation can start.
     // Interrupts are checked before any live report prefix is started, so this
     // branch cannot leave a printed `<short ID>.` without a completed record.
     if check_interrupted() {
@@ -146,7 +148,13 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
                 );
             }
         };
-    let record = completed_interrogation.record;
+    let CompletedInterrogation {
+        record,
+        break_after_tokens_hit,
+        context_compaction_hit,
+        stop_after_current_expectation,
+        interrupted: interrogation_interrupted,
+    } = completed_interrogation;
     if let Some(report) = started_report.take() {
         // Live output is best-effort after the prefix; completion does not
         // create a return path that can drop the completed CheckRecord.
@@ -159,10 +167,9 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     // occur after the visible result block.
     record_finished_expectation(context, expectation, &record)?;
     let human_review_required = record.requires_human_review();
-    let run_stop_signal_hit = completed_interrogation.break_after_tokens_hit
-        || completed_interrogation.context_compaction_hit
-        || completed_interrogation.stop_after_current_expectation;
-    let interrupted = run_stop_signal_hit || completed_interrogation.interrupted;
+    let run_stop_signal_hit =
+        break_after_tokens_hit || context_compaction_hit || stop_after_current_expectation;
+    let interrupted = run_stop_signal_hit || interrogation_interrupted;
     // Default check order stops after the first evaluated non-pass. Evaluator
     // stop signals are resource/control limits, so they stop after the current
     // result even when the result itself passed.
@@ -211,7 +218,7 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
 ) -> Result<CompletedInterrogation, String> {
     // `run_expectation` catches every error from this helper and finishes the
     // already-started report entry with an ERROR record before returning.
-    let mut interrogation = interrogate_with_full_scope_retry(
+    let initial = interrogate_with_full_scope_retry(
         ScopedInterrogation {
             runtime: context.runtime,
             expectation,
@@ -224,42 +231,39 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
         &mut context.caches.visible_tree_oid,
         context.options.break_after_tokens,
     )?;
+    let initial_interrogation = initial.interrogation();
     let mut break_after_tokens_hit =
-        turn_exceeds_break_after_tokens(&interrogation, context.options.break_after_tokens);
-    let mut context_compaction_hit = turn_has_context_compaction(&interrogation);
-    let mut stop_after_current_expectation = interrogation.stop_after_current_expectation;
-    let mut interrupted = interrogation.interrupted;
+        turn_exceeds_break_after_tokens(initial_interrogation, context.options.break_after_tokens);
+    let mut context_compaction_hit = turn_has_context_compaction(initial_interrogation);
+    let mut stop_after_current_expectation = initial_interrogation.stop_after_current_expectation;
+    let mut interrupted = initial_interrogation.interrupted;
 
-    let record_scope = interrogation.record.scope.clone();
+    let record_scope = initial_interrogation.record.scope.clone();
     if !scope_is_within(&record_scope, verified_q_scope) {
         *verified_q_scope = record_scope.clone();
     }
     debug_assert!(scope_is_within(&record_scope, verified_q_scope));
-    let proposed_q_scope = if interrogation.record.requires_human_review() {
-        None
-    } else {
-        question_scope_suggestion_scope_for_independent_verification(
-            context.runtime,
-            &expectation.agent,
-            interrogation.record.question_scope_suggestion.as_deref(),
-            verified_q_scope,
-            &mut context.caches.visible_tree_oid,
-        )?
-    };
+    let proposed_q_scope = question_scope_suggestion_scope_for_unused_follow_up(
+        context.runtime,
+        &expectation.agent,
+        &initial,
+        verified_q_scope,
+        &mut context.caches.visible_tree_oid,
+    )?;
+    let mut interrogation = initial.into_interrogation();
     if let Some(proposed_scope) = proposed_q_scope {
-        let mut verification_scope = proposed_scope.clone();
-        let narrowed = interrogate_with_full_scope_retry(
-            ScopedInterrogation {
+        let verification_scope = proposed_scope.clone();
+        let narrowed = interrogate_or_error_record(
+            InterrogationCall {
                 runtime: context.runtime,
                 expectation,
-                enforced_scope: &mut verification_scope,
+                scope: &verification_scope,
             },
             context.runner,
             context.diagnostic_log,
             context.interrogation_run_state,
             &mut context.caches.xpec_state,
             &mut context.caches.visible_tree_oid,
-            context.options.break_after_tokens,
         )?;
         break_after_tokens_hit |=
             turn_exceeds_break_after_tokens(&narrowed, context.options.break_after_tokens);
@@ -276,12 +280,6 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
         )?;
         if accepted {
             interrogation = narrowed;
-        } else {
-            interrogation.record.question_scope_suggestion = None;
-            debug_assert_eq!(
-                interrogation.record.scope.as_slice(),
-                verified_q_scope.as_slice()
-            );
         }
     }
     Ok(CompletedInterrogation {

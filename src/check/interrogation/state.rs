@@ -1,4 +1,4 @@
-use crate::check::core::{SelectedExpectation, ERROR_SCOPE_TOO_NARROW};
+use crate::check::core::ERROR_SCOPE_TOO_NARROW;
 use crate::config_types::{AgentConfig, CheckConfig};
 use crate::evaluator::{
     app_server_model_key, evaluator_models, AppServerModelKey, EvaluatorResponseParseCache,
@@ -8,7 +8,6 @@ use crate::hash::full_scope;
 use crate::isolation::{NaiveIsolationGuard, NaiveIsolationPolicy};
 use crate::scope::{effective_ignore_patterns, visible_scope};
 use crate::staged::StagedWorktreeView;
-use crate::xpec_state::XpecStateCache;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -20,38 +19,6 @@ pub(crate) fn should_retry_full_scope_after_error(error: Option<&str>, scope: &[
         return true;
     }
     false
-}
-
-pub(crate) fn initial_visible_scope_for_expectation(
-    root: &Path,
-    tree_source: &TreeSource,
-    expectation: &SelectedExpectation,
-    xpec_state: &mut XpecStateCache,
-    visible_tree_oid_cache: &mut VisibleTreeOidCache,
-) -> Result<Vec<String>, String> {
-    // Glossary visible-scope selection starts from the q-scope stored in
-    // last-pass state. If no q-scope is stored, fresh interrogation
-    // starts from full project scope. The actual visible scope is formed later
-    // by appending the expectation agent's configured ignore patterns as
-    // excluding pathspec items.
-    //
-    // Stored scopes are trusted because they are written only after independent
-    // q-scope verification, but source files can move later. If the stored
-    // q-scope no longer maps to the current visible tree, fresh interrogation
-    // starts from full project scope instead of reusing an empty tree.
-    //
-    let Some(last_pass) = xpec_state.read_last_pass(root, expectation)? else {
-        return Ok(full_scope());
-    };
-    let scope = last_pass.q_scope;
-    if visible_tree_oid_cache
-        .visible_tree_oid_for_reuse(root, tree_source, &expectation.agent, &scope)?
-        .is_some()
-    {
-        Ok(scope)
-    } else {
-        Ok(full_scope())
-    }
 }
 
 pub(crate) fn evaluator_thread_reuse_key(

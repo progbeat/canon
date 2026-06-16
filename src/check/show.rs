@@ -1,5 +1,5 @@
 use crate::check::command::output::{escape_check_output_text, write_stdout_record};
-use crate::check::interrogation::state::initial_visible_scope_for_expectation;
+use crate::check::interrogation::policy::initial_visible_scope_for_expectation;
 use crate::check::run::selection::{
     expectation_identities, order_by_latest_non_pass, select_expectations_with_identities,
 };
@@ -142,7 +142,11 @@ fn expectation_is_affected_by_pathspecs(
     caches: &mut CheckRunCaches,
 ) -> Result<bool, String> {
     // This chooses the q-scope used for the selected-tree visible OID below.
-    // The pathspec filter itself still runs through visible-scope intersection.
+    // Under the `canon show` pathspec rule, "the visible tree OID would change
+    // if every tracked file matched by the pathspecs changed" is equivalent to
+    // "at least one tracked file is in both the visible scope and the pathspecs".
+    // The helper below implements that OID-change predicate by testing the
+    // overlap directly instead of materializing a synthetic changed tree.
     let q_scope = show_q_scope(root, tree_source, expectation, caches)?;
     let visible_scope = visible_scope(&expectation.agent, &q_scope)?;
     caches.visible_tree_oid.visible_scope_intersects_pathspecs(

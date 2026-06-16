@@ -123,6 +123,9 @@ impl VisibleTreeOidCache {
         visible_scope: &[String],
         pathspecs: &[String],
     ) -> Result<bool, String> {
+        // Used by `canon show -- <pathspec>`. If every tracked file matched by
+        // `pathspecs` were changed, the visible tree OID would change exactly
+        // when at least one changed tracked file is selected by `visible_scope`.
         for file in self.files_for_source(root, source)? {
             if path_bytes_in_scope(&file.path, visible_scope)?
                 && path_bytes_in_scope(&file.path, pathspecs)?

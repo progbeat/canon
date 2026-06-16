@@ -1,4 +1,4 @@
-use crate::check::{ParsedAnswer, ERROR_UNPARSABLE};
+use crate::check::{ParsedAnswer, INTERNAL_ERROR_UNPARSABLE};
 use crate::config_types::AgentConfig;
 use crate::evaluator::protocol::response_cache::response_excerpt;
 use crate::evaluator::EvaluatorResponseParseCache;
@@ -18,7 +18,7 @@ pub(super) fn parse_visible_evaluator_response(
 
 pub(super) fn unparsable_response_answer(err: &str, response: &str) -> ParsedAnswer {
     ParsedAnswer::error(
-        ERROR_UNPARSABLE.to_string(),
+        INTERNAL_ERROR_UNPARSABLE.to_string(),
         format!(
             "evaluator response could not be parsed: {}\nresponse: {}",
             err,

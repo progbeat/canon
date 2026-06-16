@@ -2,7 +2,7 @@ use crate::check::{CheckRecord, CheckResult, SelectedExpectation};
 use crate::fs_util::{ensure_dir_without_symlinks, reject_symlink, write_temp_file_then_replace};
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::hash::full_scope;
-use crate::scope::{sanitize_scope, scope_is_within, visible_scope};
+use crate::scope::visible_scope;
 use crate::time::{format_record_timestamp, parse_record_timestamp, unix_timestamp};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -157,7 +157,7 @@ impl XpecStateCache {
     ) -> Result<LastResult, String> {
         let status = last_result_status_for_record(expectation, record);
         let now = format_record_timestamp(unix_timestamp()?);
-        let q_scope = persisted_q_scope_for_record(record);
+        let q_scope = record.scope.clone();
         let visible_scope = visible_scope(&expectation.agent, &q_scope)?;
         let result = LastResult {
             response_timestamp: record.timestamp.clone(),
@@ -281,6 +281,9 @@ fn last_result_status_for_record(
     expectation: &SelectedExpectation,
     record: &CheckRecord,
 ) -> LastResultStatus {
+    // Records with `error` are the human-review path. They are stored in the
+    // error status file so ordering and summaries can include them as non-pass
+    // results without a separate persisted status.
     if record.error.is_some() {
         LastResultStatus::Error
     } else if record.observed == expectation.expected_answer {
@@ -304,20 +307,6 @@ fn normalized_response_from_record(record: &CheckRecord) -> Value {
         .unwrap_or(&record.scope);
     response.insert("qScopeSuggestion".to_string(), json!(suggestion));
     Value::Object(response)
-}
-
-fn persisted_q_scope_for_record(record: &CheckRecord) -> Vec<String> {
-    let Some(suggestion) = record.question_scope_suggestion.as_ref() else {
-        return record.scope.clone();
-    };
-    let Ok(suggestion) = sanitize_scope(suggestion) else {
-        return record.scope.clone();
-    };
-    if scope_is_within(&record.scope, &suggestion) {
-        suggestion
-    } else {
-        record.scope.clone()
-    }
 }
 
 fn visible_tree_oid_for_persisted_scope(

@@ -8,7 +8,7 @@ use crate::check::interrogation::{
 };
 use crate::config_types::AgentConfig;
 use crate::evaluator::EvaluatorRunner;
-use crate::git::VisibleTreeOidCache;
+use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::hash::full_scope;
 use crate::logs::DiagnosticLogWriter;
 use crate::scope::sanitize_scope;
@@ -24,6 +24,25 @@ pub(crate) struct ScopedInterrogation<'a> {
     pub(crate) runtime: &'a CheckRuntime<'a>,
     pub(crate) expectation: &'a SelectedExpectation,
     pub(crate) enforced_scope: &'a mut Vec<String>,
+}
+
+pub(crate) struct PolicyInterrogationResult {
+    interrogation: InterrogationResult,
+    follow_up_used: bool,
+}
+
+impl PolicyInterrogationResult {
+    pub(crate) fn interrogation(&self) -> &InterrogationResult {
+        &self.interrogation
+    }
+
+    pub(crate) fn into_interrogation(self) -> InterrogationResult {
+        self.interrogation
+    }
+
+    fn follow_up_used(&self) -> bool {
+        self.follow_up_used
+    }
 }
 
 impl<'a> ScopedInterrogation<'a> {
@@ -44,7 +63,7 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
     xpec_state: &mut XpecStateCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
     break_after_tokens: Option<u64>,
-) -> Result<InterrogationResult, String> {
+) -> Result<PolicyInterrogationResult, String> {
     let mut interrogation = interrogate_or_error_record(
         call.call(),
         runner,
@@ -59,13 +78,9 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
     if should_retry_full_scope_after_error(
         interrogation.record.error.as_deref(),
         call.enforced_scope,
-    ) || restricted_non_pass_needs_full_scope_confirmation(
-        &interrogation.record,
-        call.enforced_scope,
     ) {
-        // Restricted ScopeTooNarrow is not final. A restricted non-pass
-        // answer is also confirmed once at full scope so a stale q-scope cannot
-        // be the sole basis for reporting a project violation.
+        // Restricted ScopeTooNarrow is not final. The single policy follow-up
+        // retries it once at full scope.
         *call.enforced_scope = full_scope();
         interrogation = interrogate_or_error_record(
             call.call(),
@@ -76,10 +91,20 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
             visible_tree_oid_cache,
         )?;
         interrogation.stop_after_current_expectation |= should_stop_after_current_expectation;
+        return Ok(PolicyInterrogationResult {
+            interrogation,
+            follow_up_used: true,
+        });
     } else if should_stop_after_current_expectation {
-        return Ok(interrogation);
+        return Ok(PolicyInterrogationResult {
+            interrogation,
+            follow_up_used: false,
+        });
     }
-    Ok(interrogation)
+    Ok(PolicyInterrogationResult {
+        interrogation,
+        follow_up_used: false,
+    })
 }
 
 pub(crate) fn interrogate_or_error_record<R: EvaluatorRunner>(
@@ -134,11 +159,57 @@ pub(crate) fn turn_has_context_compaction(interrogation: &InterrogationResult) -
     interrogation.context_compacted
 }
 
-pub(crate) fn restricted_non_pass_needs_full_scope_confirmation(
-    record: &CheckRecord,
-    scope: &[String],
-) -> bool {
-    scope != full_scope() && record.error.is_none() && !record.passed()
+pub(crate) fn initial_visible_scope_for_expectation(
+    root: &std::path::Path,
+    _tree_source: &TreeSource,
+    expectation: &SelectedExpectation,
+    xpec_state: &mut XpecStateCache,
+    _visible_tree_oid_cache: &mut VisibleTreeOidCache,
+) -> Result<Vec<String>, String> {
+    // Fresh interrogation starts from the stored q-scope. If no q-scope is
+    // stored, it starts from full project scope. The actual visible scope is
+    // formed later by appending the expectation agent's configured ignore
+    // patterns as excluding pathspec items.
+    // This scopes the materialized tree and detailed diff, not every prompt
+    // signal: prompt rendering also includes an unscoped diff summary, so a
+    // changed path outside this scope is still visible enough for the evaluator
+    // to report ScopeTooNarrow when it needs the hidden details.
+    // `target` is intentionally not an input; target-specific behavior belongs
+    // to evaluator prompt rendering.
+    let stored_q_scope = xpec_state.read_stored_q_scope(root, expectation)?;
+    Ok(initial_scope_from_stored_q_scope(stored_q_scope))
+}
+
+pub(crate) fn initial_scope_from_stored_q_scope(
+    stored_q_scope: Option<Vec<String>>,
+) -> Vec<String> {
+    stored_q_scope.unwrap_or_else(full_scope)
+}
+
+pub(crate) fn question_scope_suggestion_scope_for_unused_follow_up(
+    runtime: &CheckRuntime<'_>,
+    agent: &AgentConfig,
+    result: &PolicyInterrogationResult,
+    current_scope: &[String],
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
+) -> Result<Option<Vec<String>>, String> {
+    // `ScopeTooNarrow` full-scope retry and q-scope verification share the
+    // Interrogation Policy's single follow-up budget. If the retry already
+    // consumed that budget, no q-scope verification turn is allowed.
+    if result.follow_up_used() || result.interrogation.record.error.is_some() {
+        return Ok(None);
+    }
+    question_scope_suggestion_scope_for_independent_verification(
+        runtime,
+        agent,
+        result
+            .interrogation
+            .record
+            .question_scope_suggestion
+            .as_deref(),
+        current_scope,
+        visible_tree_oid_cache,
+    )
 }
 
 pub(crate) fn question_scope_suggestion_scope_for_independent_verification(
@@ -220,7 +291,6 @@ pub(crate) fn write_scope_narrowing_event(
 mod tests {
     use super::{
         narrowed_scope_is_accepted, question_scope_suggestion_scope_for_independent_verification,
-        restricted_non_pass_needs_full_scope_confirmation,
         suggested_scope_is_at_least_25_percent_smaller,
     };
     use crate::check::core::{CheckRecord, CheckResult, ERROR_SCOPE_TOO_NARROW};
@@ -241,32 +311,14 @@ mod tests {
     }
 
     #[test]
-    fn restricted_non_pass_answer_needs_full_scope_confirmation() {
-        let restricted_scope = vec!["src".to_string()];
-        let non_pass = test_record("no", CheckResult::Fail, None);
-        let pass = test_record("yes", CheckResult::Pass, None);
-        let error = test_record(
-            ERROR_SCOPE_TOO_NARROW,
-            CheckResult::Fail,
-            Some(ERROR_SCOPE_TOO_NARROW),
-        );
+    fn initial_scope_uses_stored_q_scope_or_full_scope() {
+        let stored = vec!["src/main.rs".to_string()];
 
-        assert!(restricted_non_pass_needs_full_scope_confirmation(
-            &non_pass,
-            &restricted_scope
-        ));
-        assert!(!restricted_non_pass_needs_full_scope_confirmation(
-            &non_pass,
-            &full_scope()
-        ));
-        assert!(!restricted_non_pass_needs_full_scope_confirmation(
-            &pass,
-            &restricted_scope
-        ));
-        assert!(!restricted_non_pass_needs_full_scope_confirmation(
-            &error,
-            &restricted_scope
-        ));
+        assert_eq!(
+            super::initial_scope_from_stored_q_scope(Some(stored.clone())),
+            stored
+        );
+        assert_eq!(super::initial_scope_from_stored_q_scope(None), full_scope());
     }
 
     #[test]
@@ -278,7 +330,6 @@ mod tests {
             CheckResult::Fail,
             Some(ERROR_SCOPE_TOO_NARROW),
         );
-
         assert!(narrowed_scope_is_accepted(&pass));
         assert!(narrowed_scope_is_accepted(&fail));
         assert!(!narrowed_scope_is_accepted(&error));

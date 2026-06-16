@@ -3,7 +3,6 @@ use serde_json::{json, Value};
 
 pub(crate) const ERROR_SCOPE_TOO_NARROW: &str = "ScopeTooNarrow";
 pub(crate) const ERROR_INVALID_QUESTION: &str = "InvalidQuestion";
-pub(crate) const ERROR_UNPARSABLE: &str = "unparsable";
 pub(crate) const ANSWER_PATTERN: &str = "^[-_a-z0-9]+$";
 
 #[derive(Debug, Clone)]
@@ -297,7 +296,7 @@ mod tests {
     use super::{
         evaluator_response_json_schema, evaluator_response_output_schema,
         parse_evaluator_response_json, EvaluatorResponseJson, ANSWER_PATTERN,
-        ERROR_INVALID_QUESTION, ERROR_SCOPE_TOO_NARROW, ERROR_UNPARSABLE,
+        ERROR_INVALID_QUESTION, ERROR_SCOPE_TOO_NARROW,
     };
     use serde_json::json;
 
@@ -426,10 +425,10 @@ mod tests {
     }
 
     #[test]
-    fn evaluator_response_schema_rejects_internal_unparsable_marker() {
+    fn evaluator_response_schema_rejects_non_canonical_error_token() {
         let response = EvaluatorResponseJson {
             answer: None,
-            error: Some(ERROR_UNPARSABLE.to_string()),
+            error: Some("TechnicalFailure".to_string()),
             evidence: "ok".to_string(),
             question_scope_suggestion: vec![".".to_string()],
         };
