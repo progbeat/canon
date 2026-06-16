@@ -18,8 +18,8 @@ Each `last-<status>.json` file stores a JSON object with this schema:
 - `updatedTimestamp` is required and uses ISO 8601 format. It records when the file was written.
 - `status` is required and is `pass`, `fail`, or `error`.
 - `response` is required.
-- `qScope` is required.
-- `visibleScope` is required.
+- `qScope` is required. It is the q-scope used to form the visible scope for the evaluator work that produced `response`.
+- `visibleScope` is required. It is the visible scope used for the evaluator work that produced `response`.
 - `checkedTreeOid` is required when `status` is `pass` and omitted otherwise.
 - `visibleTreeOid` is required when `status` is `pass` or `fail` and omitted when `status` is `error`.
 
