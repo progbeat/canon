@@ -142,6 +142,8 @@ fn expectation_is_affected_by_pathspecs(
     pathspecs: &[String],
     caches: &mut CheckRunCaches,
 ) -> Result<bool, String> {
+    // This chooses the q-scope used for the selected-tree visible OID below.
+    // The pathspec filter itself still runs through visible-scope intersection.
     let q_scope = show_q_scope(root, tree_source, expectation, caches)?;
     let visible_scope = visible_scope(&expectation.agent, &q_scope)?;
     caches.visible_tree_oid.visible_scope_intersects_pathspecs(
@@ -165,9 +167,6 @@ fn show_q_scope(
         expectation,
         &mut caches.xpec_state,
         &mut caches.visible_tree_oid,
-        // `canon show` has no against-tree input. Use full scope for
-        // diff-targeted expectations so path filtering cannot miss a planned
-        // edit that `canon check` would need to inspect.
         true,
         &active_lazy_full_scope_reset_ids,
     )
