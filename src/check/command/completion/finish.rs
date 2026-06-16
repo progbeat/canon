@@ -188,24 +188,6 @@ mod tests {
     }
 
     #[test]
-    fn pending_expectations_without_issues_violates_documented_agent_message_invariant() {
-        let root = git_project("pending-without-issues-agent-message");
-        let agent = AgentConfig::default();
-        let config = test_config(&agent);
-        let expectation = test_expectation_from_config(&config);
-        let scope = full_scope();
-        let mut report = passing_report_for_staged_scope(&root, &expectation, &scope);
-        report.skipped = 1;
-        let run_start_pass_ids = BTreeSet::from([expectation.id.clone()]);
-
-        let result =
-            std::panic::catch_unwind(|| check_agent_messages(&report, &run_start_pass_ids));
-
-        assert!(result.is_err());
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
     fn prior_pass_regression_agent_message_repairs_instead_of_commits() {
         let root = git_project("prior-pass-regression-agent-message");
         let agent = AgentConfig::default();

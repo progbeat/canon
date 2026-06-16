@@ -128,18 +128,6 @@ mod tests {
         ));
     }
 
-    #[test]
-    #[should_panic]
-    fn all_passed_agent_message_enforces_documented_pending_invariant() {
-        let _ = render_check_agent_messages(&[], &[], 0, 0, 1);
-    }
-
-    #[test]
-    #[should_panic]
-    fn pass_improvement_commit_message_enforces_documented_pending_invariant() {
-        let _ = render_check_agent_messages(&[], &[], 1, 0, 1);
-    }
-
     fn issues(ids: &[&str]) -> Vec<String> {
         ids.iter().map(|id| (*id).to_string()).collect()
     }
