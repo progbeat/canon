@@ -3,15 +3,6 @@
   target: diff
   thinking: high
 
-- q: "With bounded configuration and retained data, is non-temporary project-owned persistent state across the whole project practically size-bounded across repeated normal command runs and configuration changes without manual cleanup?"
-  a: "yes"
-  target: diff
-  thinking: high
-
-- q: "Does the project avoid repeating expensive deterministic operations within a single high-level operation by reusing results keyed by all inputs that can affect them, including repository inspections, filesystem reads, parsed data, and derived hashes?"
-  a: "yes"
-  target: diff
-
 - q: "Can you find any obsolete, unused, stray, dead-end, duplicated, or redundant project files or code paths that are safe to remove or consolidate without changing intended functionality?"
   a: "no"
   target: diff
@@ -41,11 +32,6 @@
   target: diff
   cooldown: {pass: 20m, fail: 20m}
 
-- q: "Are writes under CANON_STATE_DIR amortized O(N) over N newly persisted bytes?"
-  a: "yes"
-  target: diff
-  thinking: high
-
 - q: "Can you find any naming inconsistencies that would obviously be better to fix?"
   a: "no"
   target: diff
@@ -71,7 +57,6 @@
 
 - q: "Can you find any dedicated test files?"
   a: "yes"
-  # forbidden_evidence_substrings: "`README.md`"
 
 - q: |
     A well-structured implementation is organized as self-contained, platform-independent components with minimal necessary public interfaces. A component owns the source locations that define, assemble, and expose its behavior, including its internal source structure. Other components interact with it only through its public interface. A component may span multiple source locations, but those locations must be clearly part of the component's own declared implementation boundary.

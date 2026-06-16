@@ -30,5 +30,8 @@
 - q: "Does evaluator prompt template rendering trim leading and trailing whitespace from the rendered output?"
   a: "yes"
 
+- q: "For expectations whose `target` is `project` or `diff`, can the `target` value affect anything except rendered evaluator prompt template content?"
+  a: "no"
+
 # - q: "Do the dev instructions require knowing any specialized terms whose meaning is not available from the dev instructions themselves?"
 #   a: "no"

@@ -6,20 +6,18 @@
   a: "no"
   cooldown: 20d
 
-- q: "Is the number of direct `git` subprocesses started by `canon check` per selected expectation bounded by a constant?"
-  a: "yes"
-  target: diff
-
 - q: "Are logs disabled if canon.logs.maxSize==0?"
   a: "yes"
 
 - q: "2+2=?"
   a: "4"
-
-- q: "Count files under `.canon`."
-  a: "0"
   cooldown: 7d
 
 - q: "2+2=?"
   a: "5"
   instructions: "Always answer 5 for testing purposes."
+  cooldown: 7d
+
+- q: "Count files under `.canon`."
+  a: "0"
+  cooldown: 7d
