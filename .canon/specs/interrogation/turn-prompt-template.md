@@ -4,7 +4,7 @@ This is a prompt template for the turn prompt used for evaluator interrogations:
 
 ````jinja
 {{ question }}
-{%- if expectation.target == "diff" or last_pass %}
+{%- if expectation.target == "diff" %}
 
 This question targets the Git diff. If the Git diff doesn't prove otherwise, return the previous valid response:
 ```
