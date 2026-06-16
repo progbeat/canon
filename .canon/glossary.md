@@ -27,8 +27,7 @@ Canon may reuse the OID when Git already has it; otherwise canon serializes and 
 **q-scope suggestion** is an evaluator-provided scope claiming to be a narrow scope sufficient to answer the question.
 It may or may not be a valid q-scope.
 
-**visible scope** is the scope applied to a Git-tracked tree for an evaluator interrogation.
-It is formed from the latest q-scope for the expectation, or full project scope when no verified q-scope exists. Configured ignore patterns are normalized as project-relative pathspec items, converted to excluding pathspec items, and applied last.
+**visible scope** is a q-scope plus ignore patterns applied as exclusions.
 
 **visible tree** is the scoped tree induced by the visible scope.
 
