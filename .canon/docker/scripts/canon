@@ -3,11 +3,7 @@ set -euo pipefail
 
 image="${CANON_DOCKER_IMAGE:-ghcr.io/progbeat/canon:latest}"
 project_root="$(git rev-parse --path-format=absolute --show-toplevel)"
-git_dir="${project_root}/.git"  # worktrees are not currently supported
-canon_state="${git_dir}/canon"
 container_repository="/scratch/secret/repository"
-
-mkdir -p "${canon_state}"
 
 # Host-side trust boundary:
 # - project files are writable so `canon init` can create .canon/check.yml;
@@ -19,8 +15,6 @@ exec docker run --rm -i \
   --security-opt=no-new-privileges \
   --read-only \
   --tmpfs "/scratch:mode=1777" \
-  -v "${project_root}:${container_repository}:rw" \
-  -v "${git_dir}:${container_repository}/.git:ro" \
-  -v "${canon_state}:${container_repository}/.git/canon:rw" \
+  -v "${project_root}:${container_repository}:rw" \  # Git worktrees are not currently supported
   --mount "type=bind,src=${CODEX_HOME:-$HOME/.codex},dst=/codex,readonly" \
   "${image}" "$@"

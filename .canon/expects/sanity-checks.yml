@@ -20,4 +20,4 @@
 
 - q: "Count files under `.canon`."
   a: "0"
-  cooldown: 7d
+  cooldown: {pass: 7d, fail: 5m}

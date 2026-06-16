@@ -33,5 +33,8 @@
 - q: "For expectations whose `target` is `project` or `diff`, can the `target` value affect anything except rendered evaluator prompt template content?"
   a: "no"
 
+- q: "Does `canon check` run at most two evaluator interrogations per expectation: the initial interrogation plus either one full-scope retry for restricted `ScopeTooNarrow`, or one independent q-scope verification for an eligible narrower q-scope suggestion, but not both?"
+  a: "yes"
+
 # - q: "Do the dev instructions require knowing any specialized terms whose meaning is not available from the dev instructions themselves?"
 #   a: "no"
