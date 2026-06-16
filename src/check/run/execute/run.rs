@@ -117,12 +117,18 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         evaluated += 1;
         records.push(outcome.record);
         if outcome.stop_run {
-            return Ok(current_report(
-                records,
-                cached,
-                total_expectations,
-                evaluated,
-            ));
+            let report = current_report(records, cached, total_expectations, evaluated);
+            if outcome.interrupted {
+                // The post-summary agent-message spec is explicitly scoped to
+                // runs without Ctrl-C or other interruption. Resource/control
+                // stop signals finish through the error-report path so no
+                // commit/fix instruction is printed for a partial run.
+                return Err(check_run_error(
+                    "check interrupted after the current expectation".to_string(),
+                    report,
+                ));
+            }
+            return Ok(report);
         }
     }
     Ok(current_report(

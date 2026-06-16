@@ -188,8 +188,8 @@ mod tests {
     }
 
     #[test]
-    fn pending_expectations_without_issues_do_not_emit_agent_messages() {
-        let root = git_project("pending-without-issues-no-agent-message");
+    fn pending_expectations_without_issues_violates_documented_agent_message_invariant() {
+        let root = git_project("pending-without-issues-agent-message");
         let agent = AgentConfig::default();
         let config = test_config(&agent);
         let expectation = test_expectation_from_config(&config);
@@ -198,9 +198,10 @@ mod tests {
         report.skipped = 1;
         let run_start_pass_ids = BTreeSet::from([expectation.id.clone()]);
 
-        let messages = check_agent_messages(&report, &run_start_pass_ids);
+        let result =
+            std::panic::catch_unwind(|| check_agent_messages(&report, &run_start_pass_ids));
 
-        assert!(messages.is_empty());
+        assert!(result.is_err());
         let _ = fs::remove_dir_all(root);
     }
 

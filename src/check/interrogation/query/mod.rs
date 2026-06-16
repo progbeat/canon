@@ -1,6 +1,5 @@
 use crate::check::core::{
-    ParsedAnswer, QueryResult, ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION,
-    ERROR_UNPARSABLE,
+    ParsedAnswer, QueryResult, ERROR_INVALID_QUESTION, ERROR_SCOPE_TOO_NARROW, ERROR_UNPARSABLE,
 };
 use crate::check::interrogation::policy::question_scope_suggestion_scope_for_independent_verification;
 use crate::check::interrogation::state::{
@@ -122,7 +121,7 @@ fn ask_with_full_scope_retry<R: EvaluatorRunner>(
         model,
     )?;
     if should_retry_full_scope_after_error(result.answer.error.as_deref(), enforced_scope) {
-        // Restricted InsufficientEvidence is not final for query-mode
+        // Restricted ScopeTooNarrow is not final for query-mode
         // interrogations either; retry once with full project scope.
         *enforced_scope = full_scope();
         result = ask_once(
@@ -192,7 +191,7 @@ fn answer_is_accepted(narrowed: &ParsedAnswer) -> bool {
 
 fn human_review_reason(result: &QueryResult) -> Option<&'static str> {
     match result.answer.error.as_deref() {
-        Some(ERROR_INSUFFICIENT_EVIDENCE) => Some("insufficient evidence"),
+        Some(ERROR_SCOPE_TOO_NARROW) => Some("scope too narrow"),
         Some(ERROR_INVALID_QUESTION) => Some("invalid question"),
         Some(ERROR_UNPARSABLE) => Some("unparsable evaluator response"),
         None => None,

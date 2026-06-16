@@ -1,4 +1,4 @@
-use crate::check::core::{SelectedExpectation, ERROR_INSUFFICIENT_EVIDENCE};
+use crate::check::core::{SelectedExpectation, ERROR_SCOPE_TOO_NARROW};
 use crate::config_types::{AgentConfig, CheckConfig};
 use crate::evaluator::{
     app_server_model_key, evaluator_models, AppServerModelKey, EvaluatorResponseParseCache,
@@ -16,7 +16,7 @@ pub(crate) fn should_retry_full_scope_after_error(error: Option<&str>, scope: &[
     if scope == full_scope() {
         return false;
     }
-    if error == Some(ERROR_INSUFFICIENT_EVIDENCE) {
+    if error == Some(ERROR_SCOPE_TOO_NARROW) {
         return true;
     }
     false

@@ -37,6 +37,7 @@ pub(super) struct ExpectationRunContext<'a, 'out, 'log, R: EvaluatorRunner> {
 pub(super) struct ExpectationRunOutcome {
     pub(super) record: CheckRecord,
     pub(super) stop_run: bool,
+    pub(super) interrupted: bool,
 }
 
 pub(super) fn run_expectation<R: EvaluatorRunner>(
@@ -136,6 +137,7 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     let run_stop_signal_hit = completed_interrogation.break_after_tokens_hit
         || completed_interrogation.context_compaction_hit
         || completed_interrogation.stop_after_current_expectation;
+    let interrupted = run_stop_signal_hit || completed_interrogation.interrupted;
     // Default check order stops after the first evaluated non-pass. Evaluator
     // stop signals are resource/control limits, so they stop after the current
     // result even when the result itself passed.
@@ -144,7 +146,11 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     if run_stop_signal_hit {
         context.interrogation_run_state.clear_thread_sessions();
     }
-    Ok(ExpectationRunOutcome { record, stop_run })
+    Ok(ExpectationRunOutcome {
+        record,
+        stop_run,
+        interrupted,
+    })
 }
 
 fn record_finished_expectation<R: EvaluatorRunner>(
@@ -170,6 +176,7 @@ struct CompletedInterrogation {
     break_after_tokens_hit: bool,
     context_compaction_hit: bool,
     stop_after_current_expectation: bool,
+    interrupted: bool,
 }
 
 fn run_started_expectation_interrogation<R: EvaluatorRunner>(
@@ -196,6 +203,7 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
         turn_exceeds_break_after_tokens(&interrogation, context.options.break_after_tokens);
     let mut context_compaction_hit = turn_has_context_compaction(&interrogation);
     let mut stop_after_current_expectation = interrogation.stop_after_current_expectation;
+    let mut interrupted = interrogation.interrupted;
 
     let record_scope = interrogation.record.scope.clone();
     if !scope_is_within(&record_scope, verified_q_scope) {
@@ -232,6 +240,7 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
             turn_exceeds_break_after_tokens(&narrowed, context.options.break_after_tokens);
         context_compaction_hit |= turn_has_context_compaction(&narrowed);
         stop_after_current_expectation |= narrowed.stop_after_current_expectation;
+        interrupted |= narrowed.interrupted;
         let accepted = narrowed_scope_is_accepted(&narrowed.record);
         write_scope_narrowing_event(
             context.diagnostic_log,
@@ -255,6 +264,7 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
         break_after_tokens_hit,
         context_compaction_hit,
         stop_after_current_expectation,
+        interrupted,
     })
 }
 
@@ -290,5 +300,6 @@ fn finish_started_expectation_with_error_record<R: EvaluatorRunner>(
     Ok(ExpectationRunOutcome {
         record,
         stop_run: !context.options.keep_going,
+        interrupted: false,
     })
 }

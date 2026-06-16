@@ -26,7 +26,7 @@ mod tests {
         SharedCheckOutput,
     };
     use crate::check::core::{
-        CachedExpectation, CheckRecord, CheckResult, CheckRunReport, ERROR_INSUFFICIENT_EVIDENCE,
+        CachedExpectation, CheckRecord, CheckResult, CheckRunReport, ERROR_SCOPE_TOO_NARROW,
     };
     use crate::check::SelectedExpectation;
     use crate::config_types::AgentConfig;
@@ -129,13 +129,15 @@ mod tests {
     }
 
     #[test]
-    fn all_passed_agent_message_waits_for_pending_expectations() {
-        assert!(render_check_agent_messages(&[], &[], 0, 0, 1).is_empty());
+    #[should_panic]
+    fn all_passed_agent_message_enforces_documented_pending_invariant() {
+        let _ = render_check_agent_messages(&[], &[], 0, 0, 1);
     }
 
     #[test]
-    fn pass_improvement_commit_message_waits_for_pending_expectations() {
-        assert!(render_check_agent_messages(&[], &[], 1, 0, 1).is_empty());
+    #[should_panic]
+    fn pass_improvement_commit_message_enforces_documented_pending_invariant() {
+        let _ = render_check_agent_messages(&[], &[], 1, 0, 1);
     }
 
     fn issues(ids: &[&str]) -> Vec<String> {
@@ -176,7 +178,7 @@ mod tests {
         record_with_identity(
             CheckResult::Fail,
             "",
-            Some(ERROR_INSUFFICIENT_EVIDENCE),
+            Some(ERROR_SCOPE_TOO_NARROW),
             id,
             display_id,
         )

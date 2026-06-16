@@ -299,7 +299,7 @@ fn finish_completed_check(
             diagnostic_log,
             result_output,
             check_caches,
-            write_agent_message,
+            write_agent_message: write_agent_message && completed_error.is_none(),
         },
         &completed.report,
         completed_error.as_deref(),

@@ -1,7 +1,7 @@
 use serde::{de, Deserialize};
 use serde_json::{json, Value};
 
-pub(crate) const ERROR_INSUFFICIENT_EVIDENCE: &str = "InsufficientEvidence";
+pub(crate) const ERROR_SCOPE_TOO_NARROW: &str = "ScopeTooNarrow";
 pub(crate) const ERROR_INVALID_QUESTION: &str = "InvalidQuestion";
 pub(crate) const ERROR_UNPARSABLE: &str = "unparsable";
 pub(crate) const ANSWER_PATTERN: &str = "^[-_a-z0-9]+$";
@@ -65,7 +65,7 @@ pub(crate) fn evaluator_response_json_schema() -> Value {
             "error": {
                 "type": "string",
                 "enum": [
-                    ERROR_INSUFFICIENT_EVIDENCE,
+                    ERROR_SCOPE_TOO_NARROW,
                     ERROR_INVALID_QUESTION,
                 ],
             },
@@ -116,7 +116,7 @@ pub(crate) fn evaluator_response_output_schema() -> Value {
         .get_mut("error")
         .expect("evaluator response schema has error");
     error["type"] = json!(["string", "null"]);
-    error["enum"] = json!([ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION, null,]);
+    error["enum"] = json!([ERROR_SCOPE_TOO_NARROW, ERROR_INVALID_QUESTION, null,]);
     schema
 }
 
@@ -175,7 +175,7 @@ impl EvaluatorResponseJson {
             }
         }
         if let Some(error) = self.error.as_deref() {
-            if !matches!(error, ERROR_INSUFFICIENT_EVIDENCE | ERROR_INVALID_QUESTION) {
+            if !matches!(error, ERROR_SCOPE_TOO_NARROW | ERROR_INVALID_QUESTION) {
                 return Err(format!("unsupported evaluator error: {}", error));
             }
         }
@@ -297,7 +297,7 @@ mod tests {
     use super::{
         evaluator_response_json_schema, evaluator_response_output_schema,
         parse_evaluator_response_json, EvaluatorResponseJson, ANSWER_PATTERN,
-        ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION, ERROR_UNPARSABLE,
+        ERROR_INVALID_QUESTION, ERROR_SCOPE_TOO_NARROW, ERROR_UNPARSABLE,
     };
     use serde_json::json;
 
@@ -314,7 +314,7 @@ mod tests {
         assert_eq!(schema["properties"]["error"]["type"], json!("string"));
         assert_eq!(
             schema["properties"]["error"]["enum"],
-            json!([ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION])
+            json!([ERROR_SCOPE_TOO_NARROW, ERROR_INVALID_QUESTION])
         );
         assert_eq!(schema["oneOf"][0]["required"], json!(["answer"]));
         assert_eq!(schema["oneOf"][1]["required"], json!(["error"]));
@@ -339,7 +339,7 @@ mod tests {
         );
         assert_eq!(
             schema["properties"]["error"]["enum"],
-            json!([ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION, null])
+            json!([ERROR_SCOPE_TOO_NARROW, ERROR_INVALID_QUESTION, null])
         );
         assert!(schema.get("oneOf").is_none());
     }

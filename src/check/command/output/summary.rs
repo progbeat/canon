@@ -66,18 +66,19 @@ pub(crate) fn render_check_agent_messages(
         messages.push(FIX_ISSUES_MESSAGE.to_string());
         return messages;
     }
-    if num_issues == 0 && num_pending > 0 {
-        return Vec::new();
-    }
     if num_issues == 0 && num_new_passes == 0 {
+        assert_eq!(num_pending, 0);
         return vec![ALL_CHECKS_PASSED_MESSAGE.to_string()];
     }
 
+    assert!(num_new_passes > 0);
     let mut messages =
         vec![pass_improvement_notice(num_new_passes).expect("positive new-pass count")];
     if num_issues > 0 {
         messages.extend(repair_instruction_messages(failed, errors));
         messages.push(THEN_FIX_REMAINING_MESSAGE.to_string());
+    } else {
+        assert_eq!(num_pending, 0);
     }
     messages
 }

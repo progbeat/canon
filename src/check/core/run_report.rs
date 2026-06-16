@@ -9,6 +9,7 @@ pub(crate) struct InterrogationResult {
     pub(crate) turn_usage: Option<TokenUsage>,
     pub(crate) context_compacted: bool,
     pub(crate) stop_after_current_expectation: bool,
+    pub(crate) interrupted: bool,
 }
 
 #[derive(Debug)]

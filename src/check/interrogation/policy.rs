@@ -63,7 +63,7 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
         &interrogation.record,
         call.enforced_scope,
     ) {
-        // Restricted InsufficientEvidence is not final. A restricted non-pass
+        // Restricted ScopeTooNarrow is not final. A restricted non-pass
         // answer is also confirmed once at full scope so a stale q-scope cannot
         // be the sole basis for reporting a project violation.
         *call.enforced_scope = full_scope();
@@ -100,19 +100,23 @@ pub(crate) fn interrogate_or_error_record<R: EvaluatorRunner>(
         call.scope,
     ) {
         Ok(interrogation) => Ok(interrogation),
-        Err(err) => Ok(InterrogationResult {
-            record: error_record_from_interrogation_error(
-                call.runtime,
-                &call.expectation.agent,
-                call.expectation,
-                call.scope,
-                &err,
-                visible_tree_oid_cache,
-            )?,
-            turn_usage: None,
-            context_compacted: false,
-            stop_after_current_expectation: false,
-        }),
+        Err(err) => {
+            let interrupted = err == "interrupted";
+            Ok(InterrogationResult {
+                record: error_record_from_interrogation_error(
+                    call.runtime,
+                    &call.expectation.agent,
+                    call.expectation,
+                    call.scope,
+                    &err,
+                    visible_tree_oid_cache,
+                )?,
+                turn_usage: None,
+                context_compacted: false,
+                stop_after_current_expectation: false,
+                interrupted,
+            })
+        }
     }
 }
 
@@ -219,7 +223,7 @@ mod tests {
         restricted_non_pass_needs_full_scope_confirmation,
         suggested_scope_is_at_least_25_percent_smaller,
     };
-    use crate::check::core::{CheckRecord, CheckResult, ERROR_INSUFFICIENT_EVIDENCE};
+    use crate::check::core::{CheckRecord, CheckResult, ERROR_SCOPE_TOO_NARROW};
     use crate::check::interrogation::state::{CheckRuntime, CheckTreeContext};
     use crate::config_types::{AgentConfig, CheckConfig};
     use crate::git::{TreeSource, VisibleTreeOidCache};
@@ -242,9 +246,9 @@ mod tests {
         let non_pass = test_record("no", CheckResult::Fail, None);
         let pass = test_record("yes", CheckResult::Pass, None);
         let error = test_record(
-            ERROR_INSUFFICIENT_EVIDENCE,
+            ERROR_SCOPE_TOO_NARROW,
             CheckResult::Fail,
-            Some(ERROR_INSUFFICIENT_EVIDENCE),
+            Some(ERROR_SCOPE_TOO_NARROW),
         );
 
         assert!(restricted_non_pass_needs_full_scope_confirmation(
@@ -270,9 +274,9 @@ mod tests {
         let pass = test_record("yes", CheckResult::Pass, None);
         let fail = test_record("no", CheckResult::Fail, None);
         let error = test_record(
-            ERROR_INSUFFICIENT_EVIDENCE,
+            ERROR_SCOPE_TOO_NARROW,
             CheckResult::Fail,
-            Some(ERROR_INSUFFICIENT_EVIDENCE),
+            Some(ERROR_SCOPE_TOO_NARROW),
         );
 
         assert!(narrowed_scope_is_accepted(&pass));

@@ -36,6 +36,7 @@ pub(crate) fn finalize_interrogation_response(
         turn_usage: turn_response.usage,
         context_compacted: turn_response.context_compacted,
         stop_after_current_expectation: false,
+        interrupted: false,
     })
 }
 
