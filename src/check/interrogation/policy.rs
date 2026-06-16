@@ -63,7 +63,7 @@ pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
         &interrogation.record,
         call.enforced_scope,
     ) {
-        // Restricted insufficient-evidence is not final. A restricted non-pass
+        // Restricted InsufficientEvidence is not final. A restricted non-pass
         // answer is also confirmed once at full scope so a stale q-scope cannot
         // be the sole basis for reporting a project violation.
         *call.enforced_scope = full_scope();
@@ -219,7 +219,7 @@ mod tests {
         restricted_non_pass_needs_full_scope_confirmation,
         suggested_scope_is_at_least_25_percent_smaller,
     };
-    use crate::check::core::{CheckRecord, CheckResult};
+    use crate::check::core::{CheckRecord, CheckResult, ERROR_INSUFFICIENT_EVIDENCE};
     use crate::check::interrogation::state::{CheckRuntime, CheckTreeContext};
     use crate::config_types::{AgentConfig, CheckConfig};
     use crate::git::{TreeSource, VisibleTreeOidCache};
@@ -242,9 +242,9 @@ mod tests {
         let non_pass = test_record("no", CheckResult::Fail, None);
         let pass = test_record("yes", CheckResult::Pass, None);
         let error = test_record(
-            "insufficient-evidence",
+            ERROR_INSUFFICIENT_EVIDENCE,
             CheckResult::Fail,
-            Some("insufficient-evidence"),
+            Some(ERROR_INSUFFICIENT_EVIDENCE),
         );
 
         assert!(restricted_non_pass_needs_full_scope_confirmation(
@@ -270,9 +270,9 @@ mod tests {
         let pass = test_record("yes", CheckResult::Pass, None);
         let fail = test_record("no", CheckResult::Fail, None);
         let error = test_record(
-            "insufficient-evidence",
+            ERROR_INSUFFICIENT_EVIDENCE,
             CheckResult::Fail,
-            Some("insufficient-evidence"),
+            Some(ERROR_INSUFFICIENT_EVIDENCE),
         );
 
         assert!(narrowed_scope_is_accepted(&pass));

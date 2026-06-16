@@ -7,12 +7,14 @@ pub(crate) fn full_scope() -> Vec<String> {
     vec![".".to_string()]
 }
 
-pub(crate) fn expectation_id(question: &str, instructions: &str) -> String {
-    // Expectation IDs are 20-character base62 IDs derived from the question and
-    // a deterministic hash of the resolved expectation instructions.
+pub(crate) fn expectation_id(question: &str, expected_answer: &str, instructions: &str) -> String {
+    // Expectation IDs are 20-character base62 IDs derived from the question,
+    // expected answer, and a deterministic hash of the resolved expectation
+    // instructions.
     let instructions_hash = hash_60(instructions.as_bytes());
     let mut input = Vec::new();
     push_expectation_id_frame(&mut input, "question", question.as_bytes());
+    push_expectation_id_frame(&mut input, "expectedAnswer", expected_answer.as_bytes());
     push_expectation_id_frame(&mut input, "instructionsHash", instructions_hash.as_bytes());
     expectation_id_base62_20(&input)
 }
@@ -63,4 +65,17 @@ fn encode_base62_20(mut value: u128) -> String {
         value /= 62;
     }
     String::from_utf8(bytes.to_vec()).expect("base62 alphabet is valid UTF-8")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::expectation_id;
+
+    #[test]
+    fn expectation_id_changes_when_expected_answer_changes() {
+        let yes = expectation_id("Does it pass?", "yes", "");
+        let no = expectation_id("Does it pass?", "no", "");
+
+        assert_ne!(yes, no);
+    }
 }

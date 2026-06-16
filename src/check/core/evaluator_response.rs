@@ -1,8 +1,8 @@
 use serde::{de, Deserialize};
 use serde_json::{json, Value};
 
-pub(crate) const ERROR_INSUFFICIENT_EVIDENCE: &str = "insufficient-evidence";
-pub(crate) const ERROR_INVALID_QUESTION: &str = "invalid-question";
+pub(crate) const ERROR_INSUFFICIENT_EVIDENCE: &str = "InsufficientEvidence";
+pub(crate) const ERROR_INVALID_QUESTION: &str = "InvalidQuestion";
 pub(crate) const ERROR_UNPARSABLE: &str = "unparsable";
 pub(crate) const ANSWER_PATTERN: &str = "^[-_a-z0-9]+$";
 
@@ -67,7 +67,6 @@ pub(crate) fn evaluator_response_json_schema() -> Value {
                 "enum": [
                     ERROR_INSUFFICIENT_EVIDENCE,
                     ERROR_INVALID_QUESTION,
-                    ERROR_UNPARSABLE,
                 ],
             },
             "evidence": {
@@ -117,12 +116,7 @@ pub(crate) fn evaluator_response_output_schema() -> Value {
         .get_mut("error")
         .expect("evaluator response schema has error");
     error["type"] = json!(["string", "null"]);
-    error["enum"] = json!([
-        ERROR_INSUFFICIENT_EVIDENCE,
-        ERROR_INVALID_QUESTION,
-        ERROR_UNPARSABLE,
-        null,
-    ]);
+    error["enum"] = json!([ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION, null,]);
     schema
 }
 
@@ -181,10 +175,7 @@ impl EvaluatorResponseJson {
             }
         }
         if let Some(error) = self.error.as_deref() {
-            if !matches!(
-                error,
-                ERROR_INSUFFICIENT_EVIDENCE | ERROR_INVALID_QUESTION | ERROR_UNPARSABLE
-            ) {
+            if !matches!(error, ERROR_INSUFFICIENT_EVIDENCE | ERROR_INVALID_QUESTION) {
                 return Err(format!("unsupported evaluator error: {}", error));
             }
         }
@@ -306,6 +297,7 @@ mod tests {
     use super::{
         evaluator_response_json_schema, evaluator_response_output_schema,
         parse_evaluator_response_json, EvaluatorResponseJson, ANSWER_PATTERN,
+        ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION, ERROR_UNPARSABLE,
     };
     use serde_json::json;
 
@@ -320,6 +312,10 @@ mod tests {
             json!(ANSWER_PATTERN)
         );
         assert_eq!(schema["properties"]["error"]["type"], json!("string"));
+        assert_eq!(
+            schema["properties"]["error"]["enum"],
+            json!([ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION])
+        );
         assert_eq!(schema["oneOf"][0]["required"], json!(["answer"]));
         assert_eq!(schema["oneOf"][1]["required"], json!(["error"]));
         assert_eq!(schema["additionalProperties"], json!(false));
@@ -340,6 +336,10 @@ mod tests {
         assert_eq!(
             schema["properties"]["error"]["type"],
             json!(["string", "null"])
+        );
+        assert_eq!(
+            schema["properties"]["error"]["enum"],
+            json!([ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION, null])
         );
         assert!(schema.get("oneOf").is_none());
     }
@@ -423,6 +423,21 @@ mod tests {
 
             assert!(response.validate_schema().unwrap_err().contains("answer"));
         }
+    }
+
+    #[test]
+    fn evaluator_response_schema_rejects_internal_unparsable_marker() {
+        let response = EvaluatorResponseJson {
+            answer: None,
+            error: Some(ERROR_UNPARSABLE.to_string()),
+            evidence: "ok".to_string(),
+            question_scope_suggestion: vec![".".to_string()],
+        };
+
+        assert!(response
+            .validate_schema()
+            .unwrap_err()
+            .contains("unsupported evaluator error"));
     }
 
     #[test]

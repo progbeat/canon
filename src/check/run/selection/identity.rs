@@ -140,8 +140,9 @@ pub(crate) fn expectation_identities(
         .iter()
         .map(|expectation| {
             let rendered_question = &expectation.q;
+            let expected_answer = &expectation.a;
             let resolved_instructions = &expectation.instructions;
-            expectation_id(rendered_question, resolved_instructions)
+            expectation_id(rendered_question, expected_answer, resolved_instructions)
         })
         .collect::<Vec<_>>();
     let mut seen = BTreeSet::new();

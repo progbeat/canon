@@ -88,7 +88,9 @@ fn expectation_ids(config: &CheckConfig) -> Vec<String> {
     config
         .expectations
         .iter()
-        .map(|expectation| expectation_id(&expectation.q, &expectation.instructions))
+        .map(|expectation| {
+            expectation_id(&expectation.q, &expectation.a, &expectation.instructions)
+        })
         .collect()
 }
 
@@ -128,7 +130,10 @@ fn push_config_error_unicode_escape(output: &mut String, ch: char) {
     if (ch as u32) <= 0xff {
         push_json_control_escape(output, ch as u8);
     } else {
-        output.push_str(&format!("\\u{:04x}", ch as u32));
+        let mut units = [0; 2];
+        for unit in ch.encode_utf16(&mut units) {
+            output.push_str(&format!("\\u{unit:04x}"));
+        }
     }
 }
 
@@ -316,6 +321,7 @@ pub(crate) fn normalize_agent_ignore_pattern_for_config(value: &str) -> Result<S
 
 #[cfg(test)]
 mod tests {
+    use super::push_config_error_unicode_escape;
     use super::validate_check_config;
     use crate::config_types::{AgentConfig, CheckConfig, Expectation, ExpectationTarget};
     use std::collections::BTreeMap;
@@ -383,5 +389,14 @@ mod tests {
         let error = validate_check_config(&config).unwrap_err();
 
         assert!(error.starts_with("duplicate expectation ID: "), "{error}");
+    }
+
+    #[test]
+    fn unicode_escape_uses_surrogate_pairs_for_non_bmp_codepoints() {
+        let mut escaped = String::new();
+
+        push_config_error_unicode_escape(&mut escaped, '\u{1f600}');
+
+        assert_eq!(escaped, "\\ud83d\\ude00");
     }
 }

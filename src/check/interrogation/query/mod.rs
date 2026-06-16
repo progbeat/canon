@@ -122,7 +122,7 @@ fn ask_with_full_scope_retry<R: EvaluatorRunner>(
         model,
     )?;
     if should_retry_full_scope_after_error(result.answer.error.as_deref(), enforced_scope) {
-        // Restricted insufficient-evidence is not final for query-mode
+        // Restricted InsufficientEvidence is not final for query-mode
         // interrogations either; retry once with full project scope.
         *enforced_scope = full_scope();
         result = ask_once(

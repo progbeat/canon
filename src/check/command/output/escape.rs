@@ -21,6 +21,9 @@ fn push_check_output_unicode_escape(output: &mut String, ch: char) {
     if (ch as u32) <= 0xff {
         push_json_control_escape(output, ch as u8);
     } else {
-        output.push_str(&format!("\\u{:04x}", ch as u32));
+        let mut units = [0; 2];
+        for unit in ch.encode_utf16(&mut units) {
+            output.push_str(&format!("\\u{unit:04x}"));
+        }
     }
 }

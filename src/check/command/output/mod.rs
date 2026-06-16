@@ -25,7 +25,9 @@ mod tests {
         write_cached_non_pass_output, write_result_output_without_started_report,
         SharedCheckOutput,
     };
-    use crate::check::core::{CachedExpectation, CheckRecord, CheckResult, CheckRunReport};
+    use crate::check::core::{
+        CachedExpectation, CheckRecord, CheckResult, CheckRunReport, ERROR_INSUFFICIENT_EVIDENCE,
+    };
     use crate::check::SelectedExpectation;
     use crate::config_types::AgentConfig;
     use std::io::{self, Write};
@@ -174,7 +176,7 @@ mod tests {
         record_with_identity(
             CheckResult::Fail,
             "",
-            Some("insufficient-evidence"),
+            Some(ERROR_INSUFFICIENT_EVIDENCE),
             id,
             display_id,
         )

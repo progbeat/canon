@@ -4,7 +4,7 @@ use crate::evaluator::protocol::response_cache::response_excerpt;
 use crate::evaluator::EvaluatorResponseParseCache;
 use std::path::Path;
 
-pub(super) const RESPONSE_REPAIR_PROMPT: &str = "Your previous response was invalid for this same question. Return exactly one schema JSON object only, escaping quotes and backslashes inside strings. Do not include progress prose, markdown, or tool-call JSON. Cite only files visible in this evaluator working tree. Do not cite hidden `.canon/` paths, even when explaining access denial; cite the sandbox transcript or visible scope instead. If visible files are insufficient, use error:\"insufficient-evidence\".";
+pub(super) const RESPONSE_REPAIR_PROMPT: &str = "Your previous response was invalid for this same question. Return exactly one schema JSON object only, escaping quotes and backslashes inside strings. Do not include progress prose, markdown, or tool-call JSON. Cite only files visible in this evaluator working tree. Do not cite hidden `.canon/` paths, even when explaining access denial; cite the sandbox transcript or visible scope instead. If visible files are insufficient, use error:\"InsufficientEvidence\".";
 
 pub(super) fn parse_visible_evaluator_response(
     parser_cache: &mut EvaluatorResponseParseCache,

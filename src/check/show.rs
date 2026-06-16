@@ -280,7 +280,7 @@ expectations:
         )
         .unwrap();
         git(&root, &["add", ".canon/check.yml"]);
-        let alpha_id = crate::hash::expectation_id("Does alpha pass?", "");
+        let alpha_id = crate::hash::expectation_id("Does alpha pass?", "yes", "");
         let selector = format!("not:{}", alpha_id);
 
         let mut output = Vec::new();
