@@ -167,7 +167,6 @@ fn show_q_scope(
         expectation,
         &mut caches.xpec_state,
         &mut caches.visible_tree_oid,
-        true,
         &active_lazy_full_scope_reset_ids,
     )
 }

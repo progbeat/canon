@@ -28,7 +28,6 @@ pub(crate) fn initial_visible_scope_for_expectation(
     expectation: &SelectedExpectation,
     xpec_state: &mut XpecStateCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
-    force_full_scope_for_diff_target: bool,
     active_lazy_full_scope_reset_ids: &BTreeSet<String>,
 ) -> Result<Vec<String>, String> {
     // Glossary visible-scope selection starts from the q-scope stored in
@@ -47,14 +46,6 @@ pub(crate) fn initial_visible_scope_for_expectation(
     // scope for this fresh interrogation without writing synthetic last-pass
     // state. After the full-scope answer, ordinary qScopeSuggestion
     // verification can still store a newly verified narrower scope.
-    if force_full_scope_for_diff_target
-        && expectation
-            .target
-            .as_ref()
-            .is_some_and(|target| target.as_str() == "diff")
-    {
-        return Ok(full_scope());
-    }
     if active_lazy_full_scope_reset_ids.contains(&expectation.id) {
         return Ok(full_scope());
     }

@@ -75,8 +75,6 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         expectation,
         &mut context.caches.xpec_state,
         &mut context.caches.visible_tree_oid,
-        context.runtime.tree_context.checked_tree_oid
-            != context.runtime.tree_context.against_tree_oid,
         context.active_lazy_full_scope_reset_ids,
     ));
     // Prepare the metadata needed to render an errored expectation before
