@@ -1,7 +1,7 @@
 use crate::app::LazyAppServerRunner;
 use crate::check::command::output::{summary_outcome_counts, write_summary_line};
 use crate::check::command::{collect_check_token_usage, print_token_usage_summary};
-use crate::check::core::{CheckRunReport, RawCheckOptions};
+use crate::check::core::{CheckCommandArgs, CheckRunReport};
 use crate::check::CHECK_PATH;
 use crate::git::TreeSource;
 use std::io::Write;
@@ -19,18 +19,19 @@ pub(super) fn check_report_passed(report: &CheckRunReport) -> bool {
 }
 
 pub(super) fn check_command_writes_agent_message(
-    config_path: &Path,
+    command: &CheckCommandArgs,
     checked_tree: &TreeSource,
     against_tree: &TreeSource,
-    options: &RawCheckOptions,
-    no_sandbox: bool,
 ) -> bool {
+    let options = &command.options;
+    // The post-summary agent-message spec is for the default check run:
+    // no selectors, default config/trees, and no behavior-changing check flags.
     options.selectors.is_empty()
         && !options.keep_going
         && !options.ignore_cooldown
         && options.break_after_tokens.is_none()
-        && !no_sandbox
-        && config_path == Path::new(CHECK_PATH)
+        && !command.no_sandbox
+        && command.config_path == Path::new(CHECK_PATH)
         && checked_tree.is_default_checked_tree()
         && against_tree.is_default_against_tree()
 }

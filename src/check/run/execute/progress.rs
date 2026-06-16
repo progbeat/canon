@@ -91,6 +91,9 @@ fn write_live_report_state(path: &Path, value: Value) -> Result<(), String> {
         ensure_dir_without_symlinks(parent)?;
     }
     reject_symlink(path)?;
+    // Live reports are single-record snapshots. Truncating replaces only this
+    // one report record, so write work is linear in the newly persisted JSON
+    // bytes rather than accumulated retained state.
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create(true)

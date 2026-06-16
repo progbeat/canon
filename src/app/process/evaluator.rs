@@ -139,6 +139,8 @@ fn turn_sandbox_policy(no_sandbox: bool) -> Value {
     if no_sandbox {
         json!({ "type": "dangerFullAccess" })
     } else {
+        // This runtime guard is what makes evaluator filesystem write attempts
+        // fail without producing observable state changes.
         json!({ "type": "readOnly", "networkAccess": false })
     }
 }
@@ -196,7 +198,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_evaluator_turn_uses_read_only_sandbox_policy() {
+    fn default_evaluator_turn_denies_write_attempts_with_read_only_sandbox_policy() {
         let request = turn_start_request(
             "thread",
             "question",

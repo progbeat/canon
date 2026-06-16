@@ -159,9 +159,8 @@ fn add_cached_summary_record(counts: &mut SummaryOutcomeCounts, record: &CheckRe
     if record.passed() {
         counts.passed += 1;
     } else if record.requires_human_review() {
-        // Cached results come from last-result state, so review-required records
-        // should not reach this path. If legacy or malformed state does reach
-        // it, it is not an error encountered during this run.
+        // Human-review last-error records are not cache hits; cache selection
+        // rejects them before cached output or summary accounting.
     } else {
         counts.failed += 1;
     }

@@ -28,6 +28,9 @@ use std::io::Write;
 use std::path::Path;
 use std::time::Instant;
 
+// Command execution coordinates CLI parsing, tree/config preparation, and
+// final reporting. Per-expectation completion and last-result bookkeeping are
+// delegated to the check-run execution layer.
 pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), CommandError> {
     let started = Instant::now();
     install_check_signal_handlers().map_err(CommandError::from)?;
@@ -39,13 +42,8 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         &command.against_tree,
         command.against_tree_explicit,
     )?;
-    let write_agent_message = check_command_writes_agent_message(
-        &command.config_path,
-        &checked_tree,
-        &against_tree,
-        &command.options,
-        command.no_sandbox,
-    );
+    let write_agent_message =
+        check_command_writes_agent_message(&command, &checked_tree, &against_tree);
     let mut repo_cache = RepoInspectionCache::new();
     let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
     let query_mode = command.query.is_some();
@@ -194,6 +192,7 @@ fn run_query_mode(
         config: query_config,
         question,
         query_scope: &command.query_scope,
+        query_scope_provided: command.query_scope_provided,
         tree_source: checked_tree,
         against_tree,
         no_sandbox: command.no_sandbox,

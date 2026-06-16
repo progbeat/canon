@@ -19,5 +19,5 @@ pub(crate) use options::{CheckCommandArgs, CheckOptions, RawCheckOptions};
 pub(crate) use record::{CheckRecord, CheckRecordOutcome};
 pub(crate) use run_report::{
     check_run_error, for_each_unique_report_record, CachedExpectation, CheckRunError,
-    CheckRunReport, InterrogationResult, QueryResult,
+    CheckRunReport, InterrogationResult, QueryExpectationRecord, QueryResult,
 };

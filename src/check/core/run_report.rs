@@ -15,6 +15,13 @@ pub(crate) struct InterrogationResult {
 #[derive(Debug)]
 pub(crate) struct QueryResult {
     pub(crate) answer: ParsedAnswer,
+    pub(crate) record: Option<QueryExpectationRecord>,
+}
+
+#[derive(Debug)]
+pub(crate) struct QueryExpectationRecord {
+    pub(crate) expectation: SelectedExpectation,
+    pub(crate) record: CheckRecord,
 }
 
 #[derive(Debug, Clone)]

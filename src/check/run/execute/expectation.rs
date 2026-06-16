@@ -336,13 +336,7 @@ fn finish_started_expectation_with_error_record<R: EvaluatorRunner>(
     } else {
         write_result_output_without_started_report(context.result_output, &record)?;
     }
-    context.caches.xpec_state.write_last_result_for_record(
-        context.runtime.root,
-        &context.runtime.tree_context.checked_tree_oid,
-        expectation,
-        &record,
-    )?;
-    write_expectation_result_event(context.diagnostic_log, &record)?;
+    record_finished_expectation(context, expectation, &record)?;
     context.interrogation_run_state.clear_thread_sessions();
     Ok(ExpectationRunOutcome {
         record,

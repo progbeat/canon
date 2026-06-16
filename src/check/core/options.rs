@@ -30,5 +30,6 @@ pub(crate) struct CheckCommandArgs {
     pub(crate) query: Option<String>,
     pub(crate) query_preset: Option<String>,
     pub(crate) query_scope: Vec<String>,
+    pub(crate) query_scope_provided: bool,
     pub(crate) options: RawCheckOptions,
 }

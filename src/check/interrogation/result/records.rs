@@ -1,7 +1,9 @@
 use crate::check::core::{
-    CheckRecord, InterrogationResult, ParsedAnswer, QueryResult, SelectedExpectation,
+    CheckRecord, InterrogationResult, ParsedAnswer, QueryExpectationRecord, QueryResult,
+    SelectedExpectation,
 };
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
+use crate::config_types::AgentConfig;
 use crate::evaluator::{record_from_response, EvaluatorError, ParsedTurnResponse};
 use crate::logs::{DiagnosticLogWriter, DiagnosticRecordEvent};
 use crate::scope::sanitize_scope;
@@ -43,19 +45,30 @@ pub(crate) fn finalize_interrogation_response(
 pub(crate) fn finalize_query_answer(
     runtime: &CheckRuntime<'_>,
     state: &mut InterrogationRunState,
+    agent: &AgentConfig,
+    expectation: Option<&SelectedExpectation>,
     enforced_scope: &[String],
     _question: &str,
     response: ParsedAnswer,
 ) -> Result<QueryResult, EvaluatorError> {
-    let finalized = finalize_parsed_answer(
-        runtime,
-        state,
-        &runtime.config.agent,
-        enforced_scope,
-        response,
-    )?;
+    let finalized = finalize_parsed_answer(runtime, state, agent, enforced_scope, response)?;
+    let record = expectation
+        .map(|expectation| {
+            record_from_response(
+                expectation,
+                finalized.response.clone(),
+                finalized.scope.clone(),
+                finalized.visible_tree_oid.clone(),
+            )
+            .map(|record| QueryExpectationRecord {
+                expectation: expectation.clone(),
+                record,
+            })
+        })
+        .transpose()?;
     Ok(QueryResult {
         answer: finalized.response,
+        record,
     })
 }
 

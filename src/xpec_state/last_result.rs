@@ -205,6 +205,9 @@ impl XpecStateCache {
         validate_last_result(result.status, result)?;
         let path = self.last_result_path(root, expectation, result.status)?;
         let temp_path = temp_path_for(&path)?;
+        // Last-result files are whole-record snapshots. Refreshing a result
+        // writes one complete newly persisted status record plus the `last.json`
+        // alias below; it never rewrites an accumulated log or state prefix.
         write_temp_file_then_replace(&temp_path, &path, |file| {
             serde_json::to_writer(&mut *file, result)
                 .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;

@@ -9,9 +9,10 @@ use crate::xpec_state::XpecStateCache;
 use std::path::Path;
 
 pub(crate) struct CacheFilteredCheckWork {
+    // Expectations that still require evaluator work. Cached hits are excluded
+    // from this queue and are not selected evaluations.
     pub(crate) to_evaluate: Vec<SelectedExpectation>,
     pub(crate) cached_hits: Vec<CachedExpectationHit>,
-    pub(crate) cached_failure_seen: bool,
 }
 
 pub(crate) struct CachedExpectationHit {
@@ -33,6 +34,8 @@ pub(crate) struct CacheFilterContext<'a, 'log> {
     pub(crate) diagnostic_log: &'a mut Option<&'log mut DiagnosticLogWriter>,
 }
 
+// Cache filtering receives command-independent `CheckOptions`; CLI/trailer
+// policy stays in the command layer before and after this selection step.
 pub(crate) fn select_expectations_after_cache(
     context: CacheFilterContext<'_, '_>,
     options: &CheckOptions,
@@ -43,6 +46,9 @@ pub(crate) fn select_expectations_after_cache(
     let mut cached_hits = Vec::new();
     let mut cached_failure_seen = false;
     for expectation in options.selected.clone() {
+        // Cached results come only from pass/fail same-tree or cooldown state;
+        // last-error human-review records remain non-pass history for ordering,
+        // but are not cache hits.
         match cached_result_for_expectation(
             context.root,
             context.source,
@@ -67,6 +73,11 @@ pub(crate) fn select_expectations_after_cache(
         }
     }
     if cached_failure_seen && cached_failure_mode == CachedFailureMode::StopDefaultSelection {
+        // Selected Expectations default policy: when a no-selector run sees a
+        // cached failure, the selected queue is empty until that cached failure
+        // is fixed. This is before evaluation starts, so canon-check-order's
+        // evaluated-expectation ordering and stop-after-non-pass rule is not
+        // reached for the cleared expectations.
         to_evaluate.clear();
         cached_hits =
             order_by_latest_non_pass(context.root, cached_hits, context.xpec_state, |hit| {
@@ -76,6 +87,5 @@ pub(crate) fn select_expectations_after_cache(
     Ok(CacheFilteredCheckWork {
         to_evaluate,
         cached_hits,
-        cached_failure_seen,
     })
 }

@@ -4,6 +4,7 @@ use super::CheckRunSideEffects;
 use crate::check::command::output::write_cached_non_pass_output;
 use crate::check::core::{
     check_run_error, CachedExpectation, CheckOptions, CheckRecord, CheckRunError, CheckRunReport,
+    SelectedExpectation,
 };
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::run::selection::{
@@ -13,7 +14,11 @@ use crate::check::run::selection::{
 use crate::evaluator::EvaluatorRunner;
 use crate::time::unix_timestamp;
 use crate::xpec_state::snapshot_pass_ids;
+use std::path::Path;
 
+// This runtime layer consumes resolved check options and owns cache/evaluator
+// work ordering. Command-line policy such as default-run agent messaging stays
+// in `check::command::execution`.
 pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     runtime: CheckRuntime<'_>,
     options: &CheckOptions,
@@ -72,54 +77,100 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             CachedFailureMode::StopDefaultSelection
         },
     ));
-    write_cached_failures(check_work.cached_hits, &mut cached, &mut result_output)
-        .map_err(|err| current_error!(err))?;
-    if check_work.cached_failure_seen
-        && check_work.to_evaluate.is_empty()
-        && !options.selectors_provided
-    {
-        return Ok(current_report(records, cached, total_expectations));
-    }
-    let check_work_queue = run_try!(order_by_latest_non_pass(
+    // Cached hits reuse results while evaluate items still require evaluator
+    // work, but both are ordered together for the public check run.
+    let check_work_queue = run_try!(order_check_work(
         root,
+        check_work.cached_hits,
         check_work.to_evaluate,
         &mut caches.xpec_state,
-        |expectation| expectation
     ));
-    for expectation in &check_work_queue {
-        let outcome = match run_expectation(
-            &mut ExpectationRunContext {
-                runtime: &runtime,
-                options,
-                runner,
-                diagnostic_log: &mut diagnostic_log,
-                result_output: &mut result_output,
-                live_report_output: &live_report_output,
-                caches,
-                interrogation_run_state: &mut interrogation_run_state,
-            },
-            expectation,
-        ) {
-            Ok(outcome) => outcome,
-            Err(error) => return Err(current_error!(error)),
-        };
-        records.push(outcome.record);
-        if outcome.stop_run {
-            let report = current_report(records, cached, total_expectations);
-            if outcome.interrupted {
-                // The post-summary agent-message spec is explicitly scoped to
-                // runs without Ctrl-C or other interruption. Resource/control
-                // stop signals finish through the error-report path so no
-                // commit/fix instruction is printed for a partial run.
-                return Err(check_run_error(
-                    "check interrupted after the current expectation".to_string(),
-                    report,
-                ));
+    let mut check_work_queue = check_work_queue.into_iter();
+    while let Some(item) = check_work_queue.next() {
+        match item {
+            CheckWorkItem::Cached(hit) => {
+                write_cached_failures(vec![hit], &mut cached, &mut result_output)
+                    .map_err(|err| current_error!(err))?;
             }
-            return Ok(report);
+            CheckWorkItem::Evaluate(expectation) => {
+                let outcome = match run_expectation(
+                    &mut ExpectationRunContext {
+                        runtime: &runtime,
+                        options,
+                        runner,
+                        diagnostic_log: &mut diagnostic_log,
+                        result_output: &mut result_output,
+                        live_report_output: &live_report_output,
+                        caches,
+                        interrogation_run_state: &mut interrogation_run_state,
+                    },
+                    &expectation,
+                ) {
+                    Ok(outcome) => outcome,
+                    Err(error) => return Err(current_error!(error)),
+                };
+                records.push(outcome.record);
+                if outcome.stop_run {
+                    if !outcome.interrupted {
+                        write_remaining_cached_work_items(
+                            &mut check_work_queue,
+                            &mut cached,
+                            &mut result_output,
+                        )
+                        .map_err(|err| current_error!(err))?;
+                    }
+                    let report = current_report(records, cached, total_expectations);
+                    if outcome.interrupted {
+                        // The post-summary agent-message spec is explicitly scoped to
+                        // runs without Ctrl-C or other interruption. Resource/control
+                        // stop signals finish through the error-report path so no
+                        // commit/fix instruction is printed for a partial run.
+                        return Err(check_run_error(
+                            "check interrupted after the current expectation".to_string(),
+                            report,
+                        ));
+                    }
+                    return Ok(report);
+                }
+            }
         }
     }
     Ok(current_report(records, cached, total_expectations))
+}
+
+fn write_remaining_cached_work_items(
+    items: &mut impl Iterator<Item = CheckWorkItem>,
+    cached: &mut Vec<CachedExpectation>,
+    result_output: &mut Option<&mut dyn std::io::Write>,
+) -> Result<(), String> {
+    for item in items {
+        if let CheckWorkItem::Cached(hit) = item {
+            write_cached_failures(vec![hit], cached, result_output)?;
+        }
+    }
+    Ok(())
+}
+
+enum CheckWorkItem {
+    Cached(CachedExpectationHit),
+    Evaluate(SelectedExpectation),
+}
+
+fn order_check_work(
+    root: &Path,
+    cached_hits: Vec<CachedExpectationHit>,
+    to_evaluate: Vec<SelectedExpectation>,
+    xpec_state: &mut crate::xpec_state::XpecStateCache,
+) -> Result<Vec<CheckWorkItem>, String> {
+    let work = cached_hits
+        .into_iter()
+        .map(CheckWorkItem::Cached)
+        .chain(to_evaluate.into_iter().map(CheckWorkItem::Evaluate))
+        .collect::<Vec<_>>();
+    order_by_latest_non_pass(root, work, xpec_state, |item| match item {
+        CheckWorkItem::Cached(hit) => &hit.expectation,
+        CheckWorkItem::Evaluate(expectation) => expectation,
+    })
 }
 
 fn write_cached_failures(
@@ -131,8 +182,9 @@ fn write_cached_failures(
         let record = hit.record;
         // Cached passes are summary-only results; they do not start a displayed
         // expectation report because no `<short ID>.` prefix is printed for
-        // them. The only cached results with a printed short ID are
-        // non-passes, and this branch writes their complete public block.
+        // them. Cache selection excludes human-review last-error records, so
+        // the only cached results with a printed short ID are failed answers,
+        // and this branch writes their complete public block.
         let cached_result_prints_short_id = !record.passed();
         if cached_result_prints_short_id {
             write_cached_non_pass_output(result_output, &record)?;

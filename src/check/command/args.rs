@@ -67,6 +67,7 @@ pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommand
         let value = arg_to_string(&value)?;
         query_scope.push(normalize_query_scope_path("--scope", &value)?);
     }
+    let query_scope_provided = !query_scope.is_empty();
     let options = raw_check_options_from_matches(&matches)?;
 
     if query.is_none() && !query_scope.is_empty() {
@@ -90,6 +91,7 @@ pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommand
         query,
         query_preset,
         query_scope,
+        query_scope_provided,
         options,
     })
 }
@@ -232,6 +234,15 @@ mod tests {
         let command = parse(&["-q", "Can this pass?"]).unwrap();
 
         assert_eq!(command.query_scope, vec![".".to_string()]);
+        assert!(!command.query_scope_provided);
+    }
+
+    #[test]
+    fn query_tracks_explicit_scope() {
+        let command = parse(&["-q", "Can this pass?", "-s", "."]).unwrap();
+
+        assert_eq!(command.query_scope, vec![".".to_string()]);
+        assert!(command.query_scope_provided);
     }
 
     #[test]
