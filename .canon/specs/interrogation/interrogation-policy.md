@@ -16,7 +16,7 @@ An evaluator response must be a single JSON object matching this JSON Schema:
     },
     "error": {
       "type": "string",
-      "enum": ["InsufficientEvidence", "InvalidQuestion"]
+      "enum": ["ScopeTooNarrow", "InvalidQuestion"]
     },
     "evidence": {
       "type": "string"
@@ -42,8 +42,8 @@ An evaluator response must be a single JSON object matching this JSON Schema:
 
 A fresh interrogation uses the stored q-scope for that expectation, or full project scope if no q-scope is stored.
 
-When an interrogation that does not use full project scope returns `error: "InsufficientEvidence"`, `canon check` retries with full project scope.
-The restricted `InsufficientEvidence` is not final.
+When an interrogation that does not use full project scope returns `error: "ScopeTooNarrow"`, `canon check` retries with full project scope.
+The restricted `ScopeTooNarrow` is not final.
 
 When the final evaluator response has `error`, human review is required.
 

@@ -6,19 +6,20 @@ This is a prompt template for the turn prompt used for evaluator interrogations:
 {{ question }}
 {%- if expectation.target == "diff" %}
 
-This question targets the Git diff. If the Git diff doesn't prove otherwise, return the previous valid response:
+This question targets the Git diff. Evaluate whether the diff changes the answer. Return the previous valid response if it still holds:
 ```
 {%- if last_pass %}
 {
   "answer": {{ last_pass.response.answer|json }},
-  "evidence": {{ last_pass.response.evidence|json }}
+  "evidence": {{ last_pass.response.evidence|json }},
+  "qScopeSuggestion": ["."]
 }
 {%- else %}
-{"answer": {{ expectation.a|json }}, "evidence": ""}
+{"answer": {{ expectation.a|json }}, "evidence": "", "qScopeSuggestion": ["."]}
 {%- endif %}
 ```
 {%- endif %}
 ````
 
-*When `last_pass` exists, the prompt intentionally targets the Git diff so the evaluator checks only whether the diff invalidates the previous pass.
-For `target: diff` without `last_pass`, the expected-answer response is intentionally rendered as the previous valid response so evidence stays limited to the diff.*
+*Prompt hints may be intentionally false when that makes the evaluator's answer search more effective.
+For `target: diff`, the default response is presented as a previous valid response so the evaluator focuses on whether the diff changes the answer.*
