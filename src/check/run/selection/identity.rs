@@ -167,6 +167,8 @@ fn matching_expectation_indexes(identities: &[ExpectationIdentity], selector: &s
     identities
         .iter()
         .enumerate()
+        // Selectors are prefixes of the full expectation ID; a display ID is
+        // only the shortest such prefix that is unique for human-facing output.
         .filter_map(|(index, identity)| identity.id.starts_with(selector).then_some(index))
         .collect()
 }
@@ -186,6 +188,32 @@ pub(crate) fn minimal_unique_expectation_prefix(id: &str, ids: &[String]) -> Opt
 mod tests {
     use super::*;
     use crate::config_types::{AgentConfig, CheckConfig, Expectation};
+
+    #[test]
+    fn include_selector_selects_matching_unique_id_prefix() {
+        let config = two_expectation_config();
+        let identities = expectation_identities(&config).unwrap();
+        let selector = OsString::from(identities[0].display_id.clone());
+
+        let selected =
+            select_expectations_with_identities(&config, &identities, &[selector]).unwrap();
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].id, identities[0].id);
+    }
+
+    #[test]
+    fn include_selector_accepts_full_id() {
+        let config = two_expectation_config();
+        let identities = expectation_identities(&config).unwrap();
+        let selector = OsString::from(identities[1].id.clone());
+
+        let selected =
+            select_expectations_with_identities(&config, &identities, &[selector]).unwrap();
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].id, identities[1].id);
+    }
 
     #[test]
     fn exclusion_selector_selects_all_except_matching_prefix() {

@@ -207,6 +207,19 @@ mod tests {
     }
 
     #[test]
+    fn check_accepts_expectation_id_selectors() {
+        let command = parse(&["a7F", "0123456789abcdefghij"]).unwrap();
+
+        assert_eq!(
+            command.options.selectors,
+            vec![
+                OsString::from("a7F"),
+                OsString::from("0123456789abcdefghij")
+            ]
+        );
+    }
+
+    #[test]
     fn query_accepts_preset() {
         let command = parse(&["-q", "Can this pass?", "--preset", "smart"]).unwrap();
 
