@@ -10,8 +10,8 @@ of being selected from the configured expectations.
 
 ## Cache
 
-Stored check history that lets `canon` avoid asking the evaluator again when a
-previous answer still applies to the current staged project state.
+Stored last-result history that lets `canon` avoid asking the evaluator again
+when a previous answer still applies to the current staged project state.
 
 ## Cached result
 
@@ -38,20 +38,31 @@ The YAML file that defines evaluator settings and expectations. By default,
 
 ## Cooldown
 
-A time window during which a recent answer-history result can avoid being
+A time window during which a recent pass/fail last result can avoid being
 re-proven for every small staged change. Cooldown is useful for broad review
 expectations that are expensive to recheck on every commit.
 
 ## Cooldown result
 
-A pass cached result derived from the latest answer-history record when that
-record's current pass or fail result has a configured cooldown duration and its
-timestamp is still inside that window.
+A pass cached result derived from the latest pass/fail last result when that
+result has a configured cooldown duration and its timestamp is still inside that
+window.
 
 ## Evidence
 
 The evaluator's explanation for an observed answer, usually citing the files or
 code that support it.
+
+## Expectation Instructions
+
+Additional per-expectation developer instructions resolved from an
+expectation's `instructions` field, or empty text when none is configured.
+
+## Expectation ID
+
+A 20-character base62 hash derived from the rendered expectation question, the
+expected answer, and a deterministic hash of the resolved expectation
+instructions.
 
 ## Expected answer
 
@@ -61,7 +72,16 @@ to the observed answer using exact string equality.
 ## Expectation
 
 A question and expected answer that the project should satisfy. In
-`.canon/check.yml`, a basic expectation has a `q` field and an `a` field.
+`.canon/check.yml`, a basic expectation has a `q` field and an `a` field. An
+expectation may also provide per-expectation instructions.
+
+## Evaluator thread
+
+An ephemeral evaluator interaction context reused within one `canon check` run
+only if the evaluator model, visible tree, and expectation instructions all
+match. The implementation may split reuse further for other developer
+instruction inputs such as plugins, effective ignore patterns, and enforced
+scope.
 
 ## Generator item
 
@@ -123,8 +143,8 @@ that verification produces a valid evaluator response with an answer.
 
 ## Same-tree result
 
-The latest answer-history record for an expectation whose stored
-`visibleTreeOid` matches the current `visibleTreeOid` for that record's scope.
+A pass or fail last result for an expectation whose stored `visibleTreeOid`
+matches the current `visibleTreeOid` for that result's visible scope.
 
 ## Selected expectations
 
@@ -147,9 +167,8 @@ evaluator after the visible scope is applied.
 ## Visible scope
 
 The scope applied to a staged tracked tree for an evaluator interrogation. It is
-formed from the latest verified q-scope for the expectation, or full project
-scope when no verified q-scope is stored or the stored q-scope cannot be reused
-for the current visible tree. Configured ignore patterns are normalized as
+formed from the stored q-scope for the expectation, or full project scope when
+no q-scope is stored. Configured ignore patterns are normalized as
 project-relative pathspec items, converted to excluding pathspec items, and
 applied last.
 
@@ -160,7 +179,8 @@ The scoped tree induced by a visible scope.
 ## Implementation Map
 
 `config_types::Expectation` and `check::core::SelectedExpectation` carry
-expectation questions and expected answers from config loading into check runs.
+expectation questions, expected answers, expectation instructions, and target
+metadata from config loading into check runs.
 
 `scope` keeps scopes as Git pathspec lists: it normalizes repository paths,
 forms visible scopes by appending configured ignore patterns as excluding
@@ -174,25 +194,30 @@ otherwise it serializes and hashes a synthetic tree object with the
 repository's object hash algorithm. `staged::worktree` uses that same OID when
 materializing evaluator-visible trees.
 
-`check::interrogation::state::initial_visible_scope_for_expectation` forms the
-base q-scope from the latest verified q-scope, or full project scope when none
-is available or the stored q-scope cannot be reused for the current visible
-tree. `staged::worktree::StagedWorktreeView::materialize_visible_scope` then
-applies the visible scope before creating the evaluator working tree.
+`check::interrogation::policy::initial_visible_scope_for_expectation` forms the
+base q-scope from the stored q-scope, or full project scope when no q-scope has
+been stored. `xpec_state::XpecStateCache::read_stored_q_scope` reads that stored
+q-scope from the newest status-specific last-result file, including pass, fail,
+and error results. `staged::worktree::StagedWorktreeView::materialize_visible_scope`
+then applies the visible scope before creating the evaluator working tree.
 
 `check::core::EvaluatorResponseJson` parses evaluator evidence and the required
 `qScopeSuggestion` value. `check::interrogation::policy` treats suggestions as
 unverified claims until an independent verification turn accepts them.
-`history` persists answer records with `visibleScope` and `visibleTreeOid`;
-`history::reuse` reads reusable answer history when seeding future q-scopes or
+`xpec_state` persists status-specific last-result files with `qScope`,
+`visibleScope`, and status-dependent tree OIDs. It reads q-scope history when
+seeding future interrogations and reads pass/fail last results when checking
 same-tree cached results.
 
 `evaluator::protocol::prompt` renders the prompt templates stored under
 `resources/prompts/` with MiniJinja. The developer-instructions template is
 `resources/prompts/evaluator_developer_instructions.txt`; the renderer registers
-the `json`, `shq`, and `sh` filters and runs `sh` blocks from the repository
-root.
+the `json`, `shq`, `shargs`, and `sh` filters and runs `sh` blocks from the
+repository root.
 
 `check::interrogation::ask_with_reused_thread` enforces evaluator-thread reuse.
-Its lookup key begins with evaluator model and `visibleTreeOid`, so a different
-model or visible tree cannot reuse an existing evaluator thread.
+Its lookup key includes evaluator model, `visibleTreeOid`, and expectation
+instructions, so a different model, visible tree, or expectation instructions
+cannot reuse an existing evaluator thread. It also includes stricter
+developer-instruction inputs such as plugins, effective ignore patterns, and the
+enforced scope.

@@ -12,12 +12,11 @@ An evaluator response must be a single JSON object matching this JSON Schema:
   "properties": {
     "answer": {
       "type": "string",
-      "minLength": 1,
-      "pattern": "^[^\\r\\n]*$"
+      "pattern": "^[-_a-z0-9]+$"
     },
     "error": {
       "type": "string",
-      "enum": ["insufficient-evidence", "invalid-question", "unparsable"]
+      "enum": ["ScopeTooNarrow", "InvalidQuestion"]
     },
     "evidence": {
       "type": "string"
@@ -41,15 +40,17 @@ An evaluator response must be a single JSON object matching this JSON Schema:
 }
 ```
 
-An unparsable evaluator response is invalid JSON or does not match the evaluator response schema. The contents of schema-valid fields do not make a response unparsable. `canon check` treats an unparsable evaluator response as `{"error":"unparsable","evidence":"<parse-error>"}`.
-
 A fresh interrogation uses the stored q-scope for that expectation, or full project scope if no q-scope is stored.
 
-When an interrogation that does not use full project scope returns `error: "insufficient-evidence"`, `canon check` retries with full project scope. The restricted `insufficient-evidence` is not final.
+A **follow-up interrogation** is an additional interrogation required by this policy for the same expectation after the initial interrogation receives an evaluator response.
+
+For one expectation, `canon check` performs at most one follow-up interrogation.
+
+When the initial interrogation does not use full project scope and returns `error: "ScopeTooNarrow"`, the follow-up interrogation retries with full project scope.
 
 When the final evaluator response has `error`, human review is required.
 
-If the evaluator returns an answer, `canon check` verifies the suggested q-scope with an independent interrogation only when the visible tree induced by that suggestion contains at least 25% fewer files than the current visible tree.
+If the initial interrogation returns an answer, the follow-up interrogation verifies the suggested q-scope only when the visible tree induced by that suggestion contains at least 25% fewer files than the current visible tree.
 The narrowed scope is accepted and stored only when the verification interrogation produces a valid response with an `answer` field.
 
 If the evaluator returns an invalid `qScopeSuggestion`, `canon check` does not attempt narrowing from it.
@@ -58,4 +59,3 @@ The expectation's `models` setting configures evaluator models in retry order.
 `canon check` starts with the first model and tries later models in order only after technical evaluator failures.
 
 The expectation's `thinking` setting configures evaluator thinking effort and is applied to each evaluator interrogation.
-`thinking` does not affect evaluator thread reuse.

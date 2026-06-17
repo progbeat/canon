@@ -9,18 +9,15 @@ mod fs_util;
 mod gate;
 mod git;
 mod hash;
-mod history;
+mod hooks;
 mod isolation;
 mod json_util;
-// Cache answer history is implemented end-to-end in `history::store`: path/read
-// cache, answer-only durable JSONL writes, required field order, and
-// probabilistic retention. `history::reuse` owns same-tree/cooldown lookup.
-mod hooks;
 mod logs;
 mod notes;
 mod output;
 mod path_io_error;
 mod platform;
+mod process_cwd;
 mod project;
 mod project_types;
 mod repo_inspection;
@@ -29,6 +26,7 @@ mod staged;
 mod state_paths;
 mod time;
 mod token_usage_types;
+mod xpec_state;
 
 fn main() {
     cli::main();

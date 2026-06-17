@@ -6,15 +6,15 @@ use crate::check::interrogation::state::{
 };
 use crate::config_types::AgentConfig;
 use crate::evaluator::{
-    ask_once, developer_instructions, effective_thinking, evaluator_turn_prompt,
-    is_context_window_failure, session_failure_invalidates_thread, write_thread_lifecycle_event,
-    write_thread_restart_event, DeveloperInstructionsContext, EvaluatorError,
-    EvaluatorResponseParseCache, EvaluatorRunner, EvaluatorTurnContext, ParsedTurnResponse,
-    ThreadLifecycleLog,
+    ask_once as ask_evaluator_once, create_prompt_template_output_dir, developer_instructions,
+    effective_thinking, evaluator_turn_prompt, is_context_window_failure,
+    session_failure_invalidates_thread, write_thread_lifecycle_event, write_thread_restart_event,
+    DeveloperInstructionsContext, EvaluatorError, EvaluatorResponseParseCache, EvaluatorRunner,
+    EvaluatorTurnContext, ParsedTurnResponse, ThreadLifecycleLog,
 };
-use crate::history::{against_tree_answer_with_cache, HistoryCache};
 use crate::logs::DiagnosticLogWriter;
 use crate::scope::{sanitize_scope, visible_scope};
+use crate::xpec_state::{LastResult, XpecStateCache};
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -25,7 +25,10 @@ pub(crate) struct ThreadTurnRequest<'a> {
     pub(crate) model: Option<&'a str>,
     pub(crate) thinking: &'a str,
     pub(crate) expectation_id: Option<&'a str>,
+    pub(crate) expectation_instructions: &'a str,
     pub(crate) prompt: &'a str,
+    pub(crate) template_output_dir: &'a Path,
+    pub(crate) last_pass: Option<&'a LastResult>,
 }
 
 pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
@@ -35,7 +38,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
     state: &mut InterrogationRunState,
     request: ThreadTurnRequest<'_>,
 ) -> Result<ParsedTurnResponse, EvaluatorError> {
-    let visible_tree_oid = state
+    let current_visible_tree_oid = state
         .visible_tree_oid_cache
         .visible_tree_oid(
             runtime.root,
@@ -44,16 +47,22 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
             request.enforced_scope,
         )
         .map_err(EvaluatorError::message)?;
+    let reuse_visible_tree_oid = request
+        .last_pass
+        .and_then(|last_pass| last_pass.visible_tree_oid.as_deref())
+        .unwrap_or("");
     let session_key = evaluator_thread_reuse_key(
         request.agent,
         request.enforced_scope,
         request.model,
-        &visible_tree_oid,
+        reuse_visible_tree_oid,
+        request.expectation_instructions,
     )
     .map_err(EvaluatorError::message)?;
-    // The lookup key begins with the evaluator model and visibleTreeOid. A
-    // restricted retry or q-scope verification with a different visible tree
-    // therefore misses this pool and starts a separate evaluator thread.
+    // The lookup key begins with evaluator model, visibleTreeOid, and
+    // expectation instructions. A restricted retry or q-scope verification with
+    // a different visible tree therefore misses this pool and starts a separate
+    // evaluator thread.
     let existing_session = state
         .thread_sessions_by_reuse_key
         .get(&session_key)
@@ -66,7 +75,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
             runner,
             state,
             &session_key,
-            &visible_tree_oid,
+            &current_visible_tree_oid,
             request,
         )?,
     };
@@ -103,7 +112,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
                 runner,
                 state,
                 &session_key,
-                &visible_tree_oid,
+                &current_visible_tree_oid,
                 request,
             )?;
             session_id = lifecycle_log.session_id.clone();
@@ -169,7 +178,9 @@ fn ask_in_thread<R: EvaluatorRunner>(
     };
     let visible_scope =
         visible_scope(agent, request.enforced_scope).map_err(EvaluatorError::message)?;
-    ask_once(
+    // The evaluator turn boundary owns agent.request/agent.response runtime
+    // log events for the initial turn and any repair turn.
+    ask_evaluator_once(
         runner,
         &turn,
         request.prompt,
@@ -197,15 +208,6 @@ fn start_thread_session<R: EvaluatorRunner>(
         request.agent,
         request.enforced_scope,
     )?;
-    let developer_instructions = developer_instructions(DeveloperInstructionsContext {
-        root: runtime.root,
-        against_tree_oid: &runtime.tree_context.against_tree_oid,
-        checked_tree_oid: &runtime.tree_context.checked_tree_oid,
-        visible_scope: &visible_scope,
-        checked_file_count: runtime.tree_context.checked_file_count,
-        visible_file_count,
-    })
-    .map_err(EvaluatorError::message)?;
     let session_root = runtime
         .session_root_for_scope(request.agent, request.enforced_scope, visible_tree_oid)
         .map_err(EvaluatorError::message)?;
@@ -216,8 +218,21 @@ fn start_thread_session<R: EvaluatorRunner>(
         .as_ref()
         .map(|isolation| isolation.path())
         .unwrap_or(session_root.as_path());
+    let developer_instructions = developer_instructions(DeveloperInstructionsContext {
+        root: runtime.root,
+        template_output_dir: request.template_output_dir,
+        against_tree_oid: &runtime.tree_context.against_tree_oid,
+        checked_tree_oid: &runtime.tree_context.checked_tree_oid,
+        expectation_instructions: request.expectation_instructions,
+        visible_scope: &visible_scope,
+        checked_file_count: runtime.tree_context.checked_file_count,
+        visible_file_count,
+        last_pass: request.last_pass,
+    })
+    .map_err(EvaluatorError::message)?;
     let created = match runner.start_session(
         session_cwd,
+        request.template_output_dir,
         &developer_instructions,
         request.agent,
         request.model,
@@ -312,33 +327,50 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     state: &mut InterrogationRunState,
-    history_cache: &mut HistoryCache,
+    xpec_state: &mut XpecStateCache,
     enforced_scope: &[String],
     model: Option<&str>,
 ) -> Result<InterrogationResult, EvaluatorError> {
-    // Expectation mode may start from a history-derived restricted scope, but
+    // Expectation mode may start from a last-pass restricted scope, but
     // after sanitization this path shares query mode's first-turn construction:
     // developer instructions and the turn prompt are rendered from
     // `resources/prompts/` plus runtime data.
     let enforced_scope = sanitize_scope(enforced_scope)?;
-    let against_tree_answer = if expectation.question_answer_only {
-        None
-    } else {
-        against_tree_answer_with_cache(
-            runtime.root,
-            &runtime.tree_context.against_tree,
-            &expectation.agent,
-            expectation,
-            &enforced_scope,
-            history_cache,
-            &mut state.visible_tree_oid_cache,
-        )
-        .map_err(EvaluatorError::message)?
-    };
+    let last_pass = xpec_state
+        .read_last_pass(runtime.root, expectation)
+        .map_err(EvaluatorError::message)?;
+    ask_expectation_turn(
+        runtime,
+        expectation,
+        runner,
+        diagnostic_log,
+        state,
+        &enforced_scope,
+        model,
+        last_pass.as_ref(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ask_expectation_turn<R: EvaluatorRunner>(
+    runtime: &CheckRuntime<'_>,
+    expectation: &SelectedExpectation,
+    runner: &mut R,
+    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    state: &mut InterrogationRunState,
+    enforced_scope: &[String],
+    model: Option<&str>,
+    last_pass: Option<&LastResult>,
+) -> Result<InterrogationResult, EvaluatorError> {
+    let template_output_dir =
+        create_prompt_template_output_dir().map_err(EvaluatorError::message)?;
     let prompt = evaluator_turn_prompt(
         runtime.root,
+        &template_output_dir,
         &expectation.question,
-        against_tree_answer.as_ref(),
+        &expectation.expected_answer,
+        expectation.target.as_ref().map(|target| target.as_str()),
+        last_pass,
     )
     .map_err(EvaluatorError::message)?;
     let thinking = effective_thinking(&expectation.agent, expectation);
@@ -349,11 +381,14 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
         state,
         ThreadTurnRequest {
             agent: &expectation.agent,
-            enforced_scope: &enforced_scope,
+            enforced_scope,
             model,
             thinking,
             expectation_id: Some(&expectation.id),
+            expectation_instructions: &expectation.instructions,
             prompt: &prompt,
+            template_output_dir: &template_output_dir,
+            last_pass,
         },
     )?;
     finalize_interrogation_response(
@@ -361,7 +396,7 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
         expectation,
         diagnostic_log,
         state,
-        &enforced_scope,
+        enforced_scope,
         response,
     )
 }

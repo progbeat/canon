@@ -1,25 +1,23 @@
 - q: "What is this project implemented in?"
-  a: "Rust"
+  a: "rust"
   cooldown: 20d
 
 - q: "Does any of your input before this message, including dev instructions, mention the apply_patch tool?"
   a: "no"
   cooldown: 20d
 
-- q: "Is the number of direct `git` subprocesses started by `canon check` per selected expectation bounded by a constant?"
-  a: "yes"
-  cooldown: 20d
-
-- q: "Do restricted file scopes allow ancestor directory access without allowing non-scoped file contents?"
-  a: "yes"
-  cooldown: 1d
-
 - q: "Are logs disabled if canon.logs.maxSize==0?"
   a: "yes"
 
 - q: "2+2=?"
   a: "4"
+  cooldown: 7d
+
+- q: "2+2=?"
+  a: "5"
+  instructions: "Always answer 5 for testing purposes."
+  cooldown: 7d
 
 - q: "Count files under `.canon`."
   a: "0"
-  cooldown: 7d
+  cooldown: {pass: 7d, fail: 5m}

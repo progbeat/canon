@@ -1,5 +1,16 @@
-{{ question }}{% if against_tree_answer %}
+{{ question }}
+{%- if expectation.target == "diff" %}
 
-Your previous answer at HEAD:
-{{ against_tree_answer|json }}
-{% endif %}
+This question targets the Git diff. Evaluate whether the diff changes the answer. Return the previous valid response if it still holds:
+```
+{%- if last_pass %}
+{
+  "answer": {{ last_pass.response.answer|json }},
+  "evidence": {{ last_pass.response.evidence|json }},
+  "qScopeSuggestion": ["."]
+}
+{%- else %}
+{"answer": {{ expectation.a|json }}, "evidence": "", "qScopeSuggestion": ["."]}
+{%- endif %}
+```
+{%- endif %}

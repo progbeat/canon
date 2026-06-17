@@ -201,6 +201,9 @@ pub(crate) fn parse_token_usage(value: &Value) -> Option<TokenUsage> {
 
 pub(crate) fn app_server_error_value(message: &Value) -> Option<Value> {
     let method = message.get("method").and_then(Value::as_str)?;
+    if method == "error" && app_server_error_will_retry(message) {
+        return None;
+    }
     if method != "error" && method != "turn/failed" && method != "turn/error" {
         if method == "turn/completed"
             && string_at_path(message, &["params", "turn", "status"]) == Some("failed")
@@ -220,6 +223,13 @@ pub(crate) fn app_server_error_value(message: &Value) -> Option<Value> {
         .or_else(|| string_at_path(message, &["params", "message"]).map(message_error_value))
         .or_else(|| string_at_path(message, &["message"]).map(message_error_value))
         .or_else(|| Some(message_error_value(method)))
+}
+
+fn app_server_error_will_retry(message: &Value) -> bool {
+    value_at_path(message, &["params", "willRetry"])
+        .or_else(|| value_at_path(message, &["params", "will_retry"]))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 pub(crate) fn message_error_value(message: &str) -> Value {
@@ -391,6 +401,40 @@ mod tests {
                 "{\"answer\":\"yes\"}".to_string()
             ),
             "{\"answer\":\"yes\"}"
+        );
+    }
+
+    #[test]
+    fn retrying_app_server_error_notification_is_not_final_error() {
+        let message = json!({
+            "method": "error",
+            "params": {
+                "willRetry": true,
+                "error": {
+                    "message": "Reconnecting... 5/5",
+                    "additionalDetails": "request timed out"
+                }
+            }
+        });
+
+        assert_eq!(app_server_error_value(&message), None);
+    }
+
+    #[test]
+    fn non_retry_app_server_error_notification_is_final_error() {
+        let message = json!({
+            "method": "error",
+            "params": {
+                "willRetry": false,
+                "error": {
+                    "message": "request failed"
+                }
+            }
+        });
+
+        assert_eq!(
+            app_server_error_value(&message),
+            Some(json!({ "message": "request failed" }))
         );
     }
 }

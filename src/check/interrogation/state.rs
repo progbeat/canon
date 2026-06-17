@@ -1,11 +1,10 @@
-use crate::check::core::{SelectedExpectation, ERROR_INSUFFICIENT_EVIDENCE};
+use crate::check::core::ERROR_SCOPE_TOO_NARROW;
 use crate::config_types::{AgentConfig, CheckConfig};
 use crate::evaluator::{
     app_server_model_key, evaluator_models, AppServerModelKey, EvaluatorResponseParseCache,
 };
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::hash::full_scope;
-use crate::history::{latest_stored_q_scope_with_cache, HistoryCache};
 use crate::isolation::{NaiveIsolationGuard, NaiveIsolationPolicy};
 use crate::scope::{effective_ignore_patterns, visible_scope};
 use crate::staged::StagedWorktreeView;
@@ -16,52 +15,10 @@ pub(crate) fn should_retry_full_scope_after_error(error: Option<&str>, scope: &[
     if scope == full_scope() {
         return false;
     }
-    if error == Some(ERROR_INSUFFICIENT_EVIDENCE) {
+    if error == Some(ERROR_SCOPE_TOO_NARROW) {
         return true;
     }
     false
-}
-
-pub(crate) fn initial_visible_scope_for_expectation(
-    root: &Path,
-    tree_source: &TreeSource,
-    expectation: &SelectedExpectation,
-    history_cache: &mut HistoryCache,
-    visible_tree_oid_cache: &mut VisibleTreeOidCache,
-    active_lazy_full_scope_reset_ids: &BTreeSet<String>,
-) -> Result<Vec<String>, String> {
-    // Glossary visible-scope selection starts from the latest verified q-scope
-    // stored in answer history. If no q-scope is stored, fresh interrogation
-    // starts from full project scope. The actual visible scope is formed later
-    // by appending the expectation agent's configured ignore patterns as
-    // excluding pathspec items.
-    //
-    // Stored scopes are trusted because they are written only after independent
-    // q-scope verification, but source files can move later. If the stored
-    // q-scope no longer maps to the current visible tree, fresh interrogation
-    // starts from full project scope instead of reusing an empty tree.
-    //
-    // An active lazy full-scope reset is the reset policy's invocation-start
-    // state transition: it makes the effective stored q-scope full project
-    // scope for this fresh interrogation without writing synthetic answer
-    // history. After the full-scope answer, ordinary qScopeSuggestion
-    // verification can still store a newly verified narrower scope.
-    if active_lazy_full_scope_reset_ids.contains(&expectation.id) {
-        return Ok(full_scope());
-    }
-    let Some(scope) =
-        latest_stored_q_scope_with_cache(root, &expectation.agent, expectation, history_cache)?
-    else {
-        return Ok(full_scope());
-    };
-    if visible_tree_oid_cache
-        .visible_tree_oid_for_reuse(root, tree_source, &expectation.agent, &scope)?
-        .is_some()
-    {
-        Ok(scope)
-    } else {
-        Ok(full_scope())
-    }
 }
 
 pub(crate) fn evaluator_thread_reuse_key(
@@ -69,16 +26,28 @@ pub(crate) fn evaluator_thread_reuse_key(
     scope: &[String],
     model: Option<&str>,
     visible_tree_oid: &str,
+    expectation_instructions: &str,
 ) -> Result<String, String> {
+    // Evaluator thread reuse is context reuse, not a deterministic result cache.
+    // The canon glossary defines its stable reuse boundary as model,
+    // last-pass visibleTreeOid, and expectation instructions. checkedTreeOid is
+    // intentionally not a key component: for a valid stored q-scope, changes
+    // outside the visible tree do not change the answer. The remaining key
+    // parts below are stable configuration inputs that further restrict reuse
+    // without changing that glossary invariant.
     // The glossary's thread invariant is one-way: a reused thread must keep
-    // the same evaluator model and visible tree, and different model/tree
-    // inputs must not share a thread. Extra key parts below are stricter
-    // developer-instruction inputs that prevent unsafe reuse without allowing
-    // cross-model or cross-visible-tree reuse.
+    // the same evaluator model, visible tree, and expectation instructions.
+    // Extra key parts below are stricter developer-instruction inputs that
+    // prevent unsafe reuse without allowing cross-model, cross-visible-tree, or
+    // cross-instruction reuse.
     let mut key = String::new();
     app_server_model_key(model).push_cache_key_part(&mut key);
     key.push('\0');
     key.push_str(visible_tree_oid);
+    key.push('\0');
+    key.push_str(&expectation_instructions.len().to_string());
+    key.push('\0');
+    key.push_str(expectation_instructions);
     key.push('\0');
     for plugin in &agent.plugins {
         key.push_str(&plugin.len().to_string());
@@ -116,7 +85,6 @@ pub(crate) struct CheckRuntime<'a> {
 pub(crate) struct CheckTreeContext {
     pub(crate) checked_tree_oid: String,
     pub(crate) against_tree_oid: String,
-    pub(crate) against_tree: TreeSource,
     pub(crate) checked_file_count: usize,
 }
 
@@ -167,10 +135,10 @@ impl<'a> CheckRuntime<'a> {
         scope: &[String],
         visible_tree_oid: &str,
     ) -> Result<PathBuf, String> {
-        // Configured ignore patterns shape the evaluator-visible Git tree
-        // before the lazy hardlink materialization step. From here down,
-        // materialization applies only this visible scope pathspec to checked
-        // Git entries.
+        // `visible_scope` returns the complete visible-scope pathspec,
+        // including configured ignore exclusions. From here down,
+        // materialization selects paths solely by applying that pathspec to
+        // checked Git entries.
         let visible_scope = visible_scope(agent, scope)?;
         self.staged_view
             .materialize_visible_scope(&visible_scope, visible_tree_oid)
@@ -180,8 +148,8 @@ impl<'a> CheckRuntime<'a> {
 pub(crate) struct InterrogationRunState {
     pub(crate) session_isolations: BTreeMap<String, NaiveIsolationGuard>,
     // This is a run-level pool of evaluator threads, not one thread. The
-    // reuse key starts with evaluator model and visibleTreeOid, so a changed
-    // visible tree cannot look up an existing session from another tree.
+    // reuse key enforces the glossary's model/visible-tree/instructions
+    // invariant and also splits on stricter developer-instruction inputs.
     pub(crate) thread_sessions_by_reuse_key: BTreeMap<String, String>,
     pub(crate) session_instructions: BTreeMap<String, String>,
     pub(crate) session_roots_by_id: BTreeMap<String, PathBuf>,

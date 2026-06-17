@@ -6,13 +6,13 @@ use crate::check::{
 use crate::cli::CommandError;
 use crate::config_types::{AgentConfig, CheckConfig};
 use crate::git::{TreeSource, VisibleTreeOidCache};
-use crate::history::{
-    cached_history_record, cooldown_history_record,
-    latest_history_record_matching_visible_tree_oid, CachedHistoryRecord, HistoryCache,
-};
 use crate::output::write_stderr_line;
 use crate::repo_inspection::RepoInspectionCache;
 use crate::time::unix_timestamp;
+use crate::xpec_state::{
+    cached_last_result_for_expectation, refresh_reused_same_tree_last_result,
+    CachedLastResultLookup, CachedResultStatus, XpecStateCache,
+};
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -51,11 +51,11 @@ fn gate_regression_count(root: &Path) -> Result<usize, CommandError> {
             Err(_) => return Ok(0),
         };
     let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
-    let mut history_cache = HistoryCache::default();
+    let mut xpec_state = XpecStateCache::default();
     gate_result_or_failure(gate_regression_count_with_config(
         root,
         &config,
-        &mut history_cache,
+        &mut xpec_state,
         &mut visible_tree_oid_cache,
     ))
 }
@@ -102,7 +102,7 @@ fn write_mixed_canon_change_failure() -> Result<(), String> {
 pub(crate) fn gate_regression_count_with_config(
     root: &Path,
     config: &CheckConfig,
-    history_cache: &mut HistoryCache,
+    xpec_state: &mut XpecStateCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<usize, String> {
     let identities = expectation_identities(config)?;
@@ -112,7 +112,7 @@ pub(crate) fn gate_regression_count_with_config(
         root,
         &config.agent,
         &selected_expectations,
-        history_cache,
+        xpec_state,
         visible_tree_oid_cache,
         now,
     )
@@ -122,7 +122,7 @@ fn gate_selected_regression_count(
     root: &Path,
     agent: &AgentConfig,
     selected_expectations: &[SelectedExpectation],
-    history_cache: &mut HistoryCache,
+    xpec_state: &mut XpecStateCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
     now: u64,
 ) -> Result<usize, String> {
@@ -136,7 +136,7 @@ fn gate_selected_regression_count(
                 root,
                 agent,
                 expectation,
-                history_cache,
+                xpec_state,
                 visible_tree_oid_cache,
                 now,
             )?
@@ -149,7 +149,7 @@ fn gate_expectation_status(
     root: &Path,
     agent: &AgentConfig,
     expectation: &SelectedExpectation,
-    history_cache: &mut HistoryCache,
+    xpec_state: &mut XpecStateCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
     now: u64,
 ) -> Result<GateExpectationStatus, String> {
@@ -158,7 +158,7 @@ fn gate_expectation_status(
         agent,
         expectation,
         GateComparisonTree::Head,
-        history_cache,
+        xpec_state,
         visible_tree_oid_cache,
         now,
     )?;
@@ -167,7 +167,7 @@ fn gate_expectation_status(
         agent,
         expectation,
         GateComparisonTree::StagedIndex,
-        history_cache,
+        xpec_state,
         visible_tree_oid_cache,
         now,
     )?;
@@ -211,55 +211,47 @@ pub(crate) enum GateCacheResult {
     Missing,
 }
 
-pub(crate) fn gate_cached_result_for_tree(
-    root: &Path,
-    agent: &AgentConfig,
-    expectation: &SelectedExpectation,
-    tree: GateComparisonTree,
-    history_cache: &mut HistoryCache,
-    visible_tree_oid_cache: &mut VisibleTreeOidCache,
-) -> Result<GateCacheResult, String> {
-    gate_cache_result_for_tree_at(
-        root,
-        agent,
-        expectation,
-        tree,
-        history_cache,
-        visible_tree_oid_cache,
-        unix_timestamp()?,
-    )
-}
-
 fn gate_cache_result_for_tree_at(
     root: &Path,
-    agent: &AgentConfig,
+    _agent: &AgentConfig,
     expectation: &SelectedExpectation,
     tree: GateComparisonTree,
-    history_cache: &mut HistoryCache,
+    xpec_state: &mut XpecStateCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
     now: u64,
 ) -> Result<GateCacheResult, String> {
-    let same_tree =
-        latest_history_record_matching_visible_tree_oid(
+    let source = match tree {
+        GateComparisonTree::StagedIndex => TreeSource::Staged,
+        GateComparisonTree::Head => TreeSource::resolve_default_against_tree(
             root,
-            agent,
+            crate::git::DEFAULT_AGAINST_TREE_ARG,
+            false,
+        )?,
+    };
+    let hit = cached_last_result_for_expectation(
+        root,
+        &source,
+        expectation,
+        xpec_state,
+        visible_tree_oid_cache,
+        CachedLastResultLookup {
+            now,
+            include_same_tree: true,
+            include_cooldown: true,
+        },
+    )?;
+    let hit = match hit {
+        Some(hit) => Some(refresh_reused_same_tree_last_result(
+            root,
             expectation,
-            history_cache,
-            |scope| match tree {
-                GateComparisonTree::StagedIndex => visible_tree_oid_cache
-                    .visible_tree_oid_for_reuse(root, &TreeSource::Staged, agent, scope),
-                GateComparisonTree::Head => {
-                    visible_tree_oid_cache.gate_head_tree_fingerprint(root, agent, scope)
-                }
-            },
-        )?;
-    let cooldown = cooldown_history_record(root, agent, expectation, history_cache, now)?;
-    let record = cached_history_record(same_tree, cooldown).map(|hit| match hit {
-        CachedHistoryRecord::SameTree(record) | CachedHistoryRecord::Cooldown(record) => record,
-    });
-    match record {
-        Some(record) if record.passed() => Ok(GateCacheResult::Pass),
-        Some(_) => Ok(GateCacheResult::Fail),
+            xpec_state,
+            hit,
+        )?),
+        None => None,
+    };
+    match hit.map(|hit| hit.status) {
+        Some(CachedResultStatus::Pass) => Ok(GateCacheResult::Pass),
+        Some(CachedResultStatus::Fail) => Ok(GateCacheResult::Fail),
         None => Ok(GateCacheResult::Missing),
     }
 }

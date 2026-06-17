@@ -124,6 +124,8 @@ pub(crate) fn selected_expectation_at(
         display_id: identity.display_id.clone(),
         question: expectation.q.clone(),
         expected_answer: expectation.a.clone(),
+        instructions: expectation.instructions.clone(),
+        target: expectation.target.clone(),
         question_answer_only: expectation.question_answer_only,
         agent: expectation.agent.clone(),
         cooldown,
@@ -136,7 +138,12 @@ pub(crate) fn expectation_identities(
     let ids = config
         .expectations
         .iter()
-        .map(|expectation| expectation_id(&expectation.q))
+        .map(|expectation| {
+            let rendered_question = &expectation.q;
+            let expected_answer = &expectation.a;
+            let resolved_instructions = &expectation.instructions;
+            expectation_id(rendered_question, expected_answer, resolved_instructions)
+        })
         .collect::<Vec<_>>();
     let mut seen = BTreeSet::new();
     for id in &ids {
@@ -160,11 +167,13 @@ fn matching_expectation_indexes(identities: &[ExpectationIdentity], selector: &s
     identities
         .iter()
         .enumerate()
+        // Selectors are prefixes of the full expectation ID; a display ID is
+        // only the shortest such prefix that is unique for human-facing output.
         .filter_map(|(index, identity)| identity.id.starts_with(selector).then_some(index))
         .collect()
 }
 
-fn minimal_unique_expectation_prefix(id: &str, ids: &[String]) -> Option<String> {
+pub(crate) fn minimal_unique_expectation_prefix(id: &str, ids: &[String]) -> Option<String> {
     (1..=id.len()).find_map(|end| {
         let prefix = &id[..end];
         let matches = ids
@@ -179,6 +188,32 @@ fn minimal_unique_expectation_prefix(id: &str, ids: &[String]) -> Option<String>
 mod tests {
     use super::*;
     use crate::config_types::{AgentConfig, CheckConfig, Expectation};
+
+    #[test]
+    fn include_selector_selects_matching_unique_id_prefix() {
+        let config = two_expectation_config();
+        let identities = expectation_identities(&config).unwrap();
+        let selector = OsString::from(identities[0].display_id.clone());
+
+        let selected =
+            select_expectations_with_identities(&config, &identities, &[selector]).unwrap();
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].id, identities[0].id);
+    }
+
+    #[test]
+    fn include_selector_accepts_full_id() {
+        let config = two_expectation_config();
+        let identities = expectation_identities(&config).unwrap();
+        let selector = OsString::from(identities[1].id.clone());
+
+        let selected =
+            select_expectations_with_identities(&config, &identities, &[selector]).unwrap();
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].id, identities[1].id);
+    }
 
     #[test]
     fn exclusion_selector_selects_all_except_matching_prefix() {
@@ -238,6 +273,8 @@ mod tests {
         Expectation {
             q: question.to_string(),
             a: "yes".to_string(),
+            instructions: String::new(),
+            target: None,
             question_answer_only: true,
             agent: AgentConfig::implementation_default(),
             cooldown: None,

@@ -1,29 +1,37 @@
 - q: "Are you instructed to format evidence references as project-relative refs enclosed in backticks?"
   a: yes
 
-- q: "Do the developer instructions explicitly prohibit proxy evidence?"
+- q: "Do your instructions before this question explicitly prohibit proxy evidence?"
   a: yes
+
+- q: "Are you instructed to use the minimum evidence sufficient to answer correctly, cite it precisely, then stop?"
+  a: "yes"
 
 - q: "Do your instructions encourage you to make `qScopeSuggestion` as narrow as possible while still enough to justify the answer?"
   a: "yes"
 
-- q: "Are all interrogation prompt and instruction texts/templates kept under `resources/prompts/`?"
+- q: "Are all built-in interrogation prompt and instruction templates kept under `resources/prompts/`?"
   a: "yes"
 
-- q: "Can you find a concrete scenario where the pass-improvement count used for the final agent advice is positive even though the checked tree and against tree for the run resolve to the same Git tree?"
-  a: "no"
-  preset: smart
-
-- q: "Do your developer instructions contain any answer directive whose condition depends on the topic of a substantive project claim? Treat answer directive as any instruction that affects the semantic value of the final `answer`."
+- q: "Do your base instructions contain any answer directive whose condition depends on the topic of a substantive project claim? Treat answer directive as any instruction that affects the semantic value of the final `answer`."
   a: "no"
   cooldown: 7d
 
 - q: "Can you find any logic that depends on the content of the evidence provided by the evaluator agent?"
   a: "no"
-  cooldown: 1d
+  target: diff
 
 - q: "Is the evaluator's response schema enforced by `turn/start.params.outputSchema`, not merely requested in the prompt?"
   a: "yes"
+
+- q: "When `canon check` prints <short ID>, can you find an abnormal scenario in which it does not report anything for this expectation?"
+  a: "no"
+
+- q: "Does evaluator prompt template rendering trim leading and trailing whitespace from the rendered output?"
+  a: "yes"
+
+- q: "For expectations whose `target` is `project` or `diff`, can the `target` value affect anything except rendered evaluator prompt template content?"
+  a: "no"
 
 # - q: "Do the dev instructions require knowing any specialized terms whose meaning is not available from the dev instructions themselves?"
 #   a: "no"

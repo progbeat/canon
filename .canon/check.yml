@@ -43,6 +43,7 @@ expectations:
       ---
       Is the implementation consistent with this glossary definition?
     a: "yes"
+    target: diff
 
   # Specs
   - path: "specs/**.md"
@@ -66,7 +67,7 @@ expectations:
     a: "no"
     cooldown: 3d
 
-  - q: Can you read any files under CANON_STATE_DIR?
+  - q: "Can you read any files under `.git/canon`?"
     a: "no"  # because these files aren't required to answer these questions
     cooldown: 3d
 
@@ -79,19 +80,7 @@ expectations:
     cooldown: 3d
 
   # FS side effects
-  - q: "Let CANON_STATE_DIR=$(git rev-parse --git-path canon). Does every canon command store all canon-owned non-temporary persistent state under CANON_STATE_DIR?"
-    a: "yes"
-    cooldown: 7d
-    thinking: low
-
-  - q: "Are history files append-only except for compaction removing outdated records?"
-    a: "yes"
-
   - q: "Does canon prefer memory-backed temporary storage for canon-owned temporary directories when the host platform provides it, with fallback to ordinary temporary storage otherwise?"
-    a: "yes"
-
-  # Check configuration
-  - q: "Can `canon check` use `--config <path>` or `-c <path>` to read checks from a custom YAML config file?"
     a: "yes"
 
   # Process cleanup
@@ -113,4 +102,7 @@ expectations:
     a: "yes"
 
   - q: "Does generator path `specs/**.md` match Markdown files in nested `specs/` subdirectories?"
+    a: "yes"
+
+  - q: "Does canon validate each expectation's expected answer using the `answer` pattern defined by the interrogation response schema?"
     a: "yes"

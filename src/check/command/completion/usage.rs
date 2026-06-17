@@ -3,13 +3,14 @@ use crate::check::command::output::render_token_usage_summary;
 use crate::output::write_stderr_line;
 use crate::token_usage_types::TokenUsage;
 
-pub(crate) fn collect_check_token_usage(
-    runner: &mut LazyAppServerRunner,
-) -> Result<TokenUsage, String> {
-    runner
-        .drain_token_usage_updates()
-        .map_err(|err| err.to_string())?;
-    Ok(runner.token_usage().unwrap_or_default())
+pub(crate) fn collect_check_token_usage(runner: &mut LazyAppServerRunner) -> Option<TokenUsage> {
+    // The public check trailer always includes a token-usage line. If late
+    // usage collection fails, usage is unavailable for that line and the
+    // renderer emits the documented zero values.
+    if runner.drain_token_usage_updates().is_err() {
+        return None;
+    }
+    runner.token_usage()
 }
 
 pub(crate) fn print_token_usage_summary(usage: Option<TokenUsage>) -> Result<(), String> {

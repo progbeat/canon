@@ -1,54 +1,42 @@
-use crate::config_types::{CooldownConfig, RawExpectationItem, RawExpectationSettings};
+use crate::config_types::{RawExpectationCommonConfig, RawExpectationItem};
 
 pub(super) fn inherit_include_fields(
     items: &mut [RawExpectationItem],
-    inherited_settings: &RawExpectationSettings,
-    inherited_cooldown: &Option<CooldownConfig>,
+    inherited: &RawExpectationCommonConfig,
 ) {
     for item in items {
-        match item {
-            RawExpectationItem::Explicit(item) => {
-                inherit_expectation_settings(&mut item.settings, inherited_settings);
-                inherit_expectation_cooldown(&mut item.cooldown, inherited_cooldown);
-            }
-            RawExpectationItem::Generator(item) => {
-                inherit_expectation_settings(&mut item.settings, inherited_settings);
-                inherit_expectation_cooldown(&mut item.cooldown, inherited_cooldown);
-            }
-            RawExpectationItem::Include(item) => {
-                inherit_expectation_settings(&mut item.settings, inherited_settings);
-                inherit_expectation_cooldown(&mut item.cooldown, inherited_cooldown);
-            }
-        }
+        inherit_expectation_common_config(item.common_config_mut(), inherited);
     }
 }
 
-fn inherit_expectation_settings(
-    settings: &mut RawExpectationSettings,
-    inherited: &RawExpectationSettings,
+fn inherit_expectation_common_config(
+    config: &mut RawExpectationCommonConfig,
+    inherited: &RawExpectationCommonConfig,
 ) {
-    if settings.preset.is_none() {
-        settings.preset = inherited.preset.clone();
+    if config.settings.preset.is_none() {
+        config.settings.preset = inherited.settings.preset.clone();
     }
-    if settings.models.is_none() {
-        settings.models = inherited.models.clone();
+    if config.settings.models.is_none() {
+        config.settings.models = inherited.settings.models.clone();
     }
-    if settings.thinking.is_none() {
-        settings.thinking = inherited.thinking.clone();
+    if config.settings.thinking.is_none() {
+        config.settings.thinking = inherited.settings.thinking.clone();
     }
-    if settings.ignore.is_none() {
-        settings.ignore = inherited.ignore.clone();
+    if config.settings.ignore.is_none() {
+        config.settings.ignore = inherited.settings.ignore.clone();
     }
-    if settings.plugins.is_none() {
-        settings.plugins = inherited.plugins.clone();
+    if config.settings.plugins.is_none() {
+        config.settings.plugins = inherited.settings.plugins.clone();
     }
+    if config.cooldown.is_none() {
+        config.cooldown = inherited.cooldown.clone();
+    }
+    inherit_expectation_text(&mut config.instructions, &inherited.instructions);
+    inherit_expectation_text(&mut config.target, &inherited.target);
 }
 
-fn inherit_expectation_cooldown(
-    cooldown: &mut Option<CooldownConfig>,
-    inherited: &Option<CooldownConfig>,
-) {
-    if cooldown.is_none() {
-        *cooldown = inherited.clone();
+fn inherit_expectation_text(value: &mut Option<String>, inherited: &Option<String>) {
+    if value.is_none() {
+        *value = inherited.clone();
     }
 }

@@ -1,9 +1,13 @@
 use crate::check::core::{
-    contains_line_break, ERROR_INSUFFICIENT_EVIDENCE, ERROR_INVALID_QUESTION, ERROR_UNPARSABLE,
+    contains_line_break, is_line_break_char, matches_answer_pattern, ANSWER_PATTERN,
+    ERROR_INVALID_QUESTION, ERROR_SCOPE_TOO_NARROW, INTERNAL_ERROR_UNPARSABLE,
 };
-use crate::check::run::selection::parse_cooldown;
+use crate::check::run::selection::{minimal_unique_expectation_prefix, parse_cooldown};
 use crate::config_types::{AgentConfig, CheckConfig};
+use crate::hash::expectation_id;
+use crate::logs::push_json_control_escape;
 use crate::scope::normalize_repo_path;
+use std::collections::BTreeSet;
 
 pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> {
     if config.version != 1 {
@@ -19,6 +23,9 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
     if config.expectations.is_empty() {
         return Err("check.yml expectations must not be empty".to_string());
     }
+    let ids = expectation_ids(config);
+    validate_unique_expectation_ids(&ids)?;
+    let display_ids = expectation_display_ids(&ids);
     for (index, expectation) in config.expectations.iter().enumerate() {
         let number = index + 1;
         if !contains_visible_config_text(&expectation.q) {
@@ -27,25 +34,32 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
                 number
             ));
         }
-        if contains_line_break(&expectation.a) {
-            return Err(format!(
-                "expectation {} expected answer must be single-line",
-                number
+        if !matches_answer_pattern(&expectation.a) {
+            return Err(render_expectation_validation_error(
+                &display_ids[index],
+                &expectation.q,
+                "invalid-expected-answer",
+                &format!(
+                    "configured expected answer `{}` does not match answer pattern {}",
+                    escape_config_error_block_text(&expectation.a),
+                    ANSWER_PATTERN
+                ),
             ));
         }
-        if !contains_visible_config_text(&expectation.a) {
-            return Err(format!(
-                "expectation {} expected answer must contain visible text",
-                number
-            ));
-        }
+        // Expected answers cannot collide with either evaluator schema errors
+        // or Canon's internal unparsable-response marker.
         if matches!(
             expectation.a.as_str(),
-            ERROR_INSUFFICIENT_EVIDENCE | ERROR_INVALID_QUESTION | ERROR_UNPARSABLE
+            ERROR_SCOPE_TOO_NARROW | ERROR_INVALID_QUESTION | INTERNAL_ERROR_UNPARSABLE
         ) {
-            return Err(format!(
-                "expectation {} expected answer must not be an evaluator error token",
-                number
+            return Err(render_expectation_validation_error(
+                &display_ids[index],
+                &expectation.q,
+                "expected answer must not be an evaluator error token",
+                &format!(
+                    "configured expected answer is `{}`",
+                    escape_config_error_block_text(&expectation.a)
+                ),
             ));
         }
         if let Some(cooldown) = expectation.cooldown.as_ref() {
@@ -55,6 +69,74 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
         validate_agent_config(&expectation.agent, &format!("expectation {}", number))?;
     }
     Ok(())
+}
+
+fn render_expectation_validation_error(
+    display_id: &str,
+    question: &str,
+    error: &str,
+    evidence: &str,
+) -> String {
+    format!(
+        "{}. ERROR\n{}\nError: {}\nEvidence: {}",
+        display_id,
+        escape_config_error_block_text(question),
+        error,
+        evidence
+    )
+}
+
+fn expectation_ids(config: &CheckConfig) -> Vec<String> {
+    config
+        .expectations
+        .iter()
+        .map(|expectation| {
+            expectation_id(&expectation.q, &expectation.a, &expectation.instructions)
+        })
+        .collect()
+}
+
+fn validate_unique_expectation_ids(ids: &[String]) -> Result<(), String> {
+    let mut seen = BTreeSet::new();
+    for id in ids {
+        if !seen.insert(id.clone()) {
+            return Err(format!("duplicate expectation ID: {}", id));
+        }
+    }
+    Ok(())
+}
+
+fn expectation_display_ids(ids: &[String]) -> Vec<String> {
+    ids.iter()
+        .map(|id| minimal_unique_expectation_prefix(id, ids).unwrap_or_else(|| id.clone()))
+        .collect()
+}
+
+fn escape_config_error_block_text(value: &str) -> String {
+    let mut output = String::new();
+    for ch in value.chars() {
+        match ch {
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            '\t' => output.push_str("\\t"),
+            ch if is_line_break_char(ch) || ch.is_control() => {
+                push_config_error_unicode_escape(&mut output, ch);
+            }
+            ch => output.push(ch),
+        }
+    }
+    output
+}
+
+fn push_config_error_unicode_escape(output: &mut String, ch: char) {
+    if (ch as u32) <= 0xff {
+        push_json_control_escape(output, ch as u8);
+    } else {
+        let mut units = [0; 2];
+        for unit in ch.encode_utf16(&mut units) {
+            output.push_str(&format!("\\u{unit:04x}"));
+        }
+    }
 }
 
 fn validate_agent_config(agent: &AgentConfig, label: &str) -> Result<(), String> {
@@ -237,4 +319,86 @@ pub(crate) fn normalize_agent_ignore_pattern_for_config(value: &str) -> Result<S
         return Err("agent ignore pattern: path must not be empty".to_string());
     }
     normalize_repo_path(value).map_err(|err| format!("agent ignore pattern: {}", err))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::push_config_error_unicode_escape;
+    use super::validate_check_config;
+    use crate::config_types::{AgentConfig, CheckConfig, Expectation, ExpectationTarget};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn invalid_expected_answer_error_uses_expectation_block_format() {
+        let question = "What is this project implemented in?";
+        let agent = AgentConfig::default();
+        let mut presets = BTreeMap::new();
+        presets.insert("default".to_string(), agent.clone());
+        let config = CheckConfig {
+            version: 1,
+            presets,
+            agent: agent.clone(),
+            expectations: vec![Expectation {
+                q: question.to_string(),
+                a: "Rust".to_string(),
+                instructions: String::new(),
+                target: None,
+                question_answer_only: false,
+                agent,
+                cooldown: None,
+            }],
+        };
+
+        let error = validate_check_config(&config).unwrap_err();
+
+        let mut lines = error.lines();
+        let header = lines.next().unwrap();
+        assert!(header.ends_with(". ERROR"));
+        assert_ne!(header, ". ERROR");
+        assert_eq!(lines.next(), Some(question));
+        assert_eq!(lines.next(), Some("Error: invalid-expected-answer"));
+        assert_eq!(
+            lines.next(),
+            Some("Evidence: configured expected answer `Rust` does not match answer pattern ^[-_a-z0-9]+$")
+        );
+        assert_eq!(lines.next(), None);
+    }
+
+    #[test]
+    fn duplicate_expectation_ids_are_rejected_even_when_targets_differ() {
+        let agent = AgentConfig::default();
+        let mut presets = BTreeMap::new();
+        presets.insert("default".to_string(), agent.clone());
+        let expectation = |target| Expectation {
+            q: "Does this behavior work?".to_string(),
+            a: "yes".to_string(),
+            instructions: String::new(),
+            target,
+            question_answer_only: false,
+            agent: agent.clone(),
+            cooldown: None,
+        };
+        let config = CheckConfig {
+            version: 1,
+            presets,
+            agent: agent.clone(),
+            expectations: vec![
+                expectation(None),
+                expectation(Some(ExpectationTarget::Diff)),
+            ],
+        };
+
+        let error = validate_check_config(&config).unwrap_err();
+
+        assert!(error.starts_with("duplicate expectation ID: "), "{error}");
+    }
+
+    #[test]
+    fn unicode_escape_uses_surrogate_pairs_for_non_bmp_codepoints() {
+        let mut escaped = String::new();
+
+        push_config_error_unicode_escape(&mut escaped, '\u{1f600}');
+
+        assert_eq!(escaped, "\\ud83d\\ude00");
+    }
 }

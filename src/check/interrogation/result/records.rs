@@ -1,5 +1,9 @@
-use crate::check::core::{InterrogationResult, ParsedAnswer, QueryResult, SelectedExpectation};
+use crate::check::core::{
+    CheckRecord, InterrogationResult, ParsedAnswer, QueryExpectationRecord, QueryResult,
+    SelectedExpectation,
+};
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
+use crate::config_types::AgentConfig;
 use crate::evaluator::{record_from_response, EvaluatorError, ParsedTurnResponse};
 use crate::logs::{DiagnosticLogWriter, DiagnosticRecordEvent};
 use crate::scope::sanitize_scope;
@@ -34,25 +38,37 @@ pub(crate) fn finalize_interrogation_response(
         turn_usage: turn_response.usage,
         context_compacted: turn_response.context_compacted,
         stop_after_current_expectation: false,
+        interrupted: false,
     })
 }
 
 pub(crate) fn finalize_query_answer(
     runtime: &CheckRuntime<'_>,
     state: &mut InterrogationRunState,
+    agent: &AgentConfig,
+    expectation: Option<&SelectedExpectation>,
     enforced_scope: &[String],
     _question: &str,
     response: ParsedAnswer,
 ) -> Result<QueryResult, EvaluatorError> {
-    let finalized = finalize_parsed_answer(
-        runtime,
-        state,
-        &runtime.config.agent,
-        enforced_scope,
-        response,
-    )?;
+    let finalized = finalize_parsed_answer(runtime, state, agent, enforced_scope, response)?;
+    let record = expectation
+        .map(|expectation| {
+            record_from_response(
+                expectation,
+                finalized.response.clone(),
+                finalized.scope.clone(),
+                finalized.visible_tree_oid.clone(),
+            )
+            .map(|record| QueryExpectationRecord {
+                expectation: expectation.clone(),
+                record,
+            })
+        })
+        .transpose()?;
     Ok(QueryResult {
         answer: finalized.response,
+        record,
     })
 }
 
@@ -75,6 +91,22 @@ pub(crate) fn write_query_result_event(
                 ),
             ],
         )?;
+    }
+    Ok(())
+}
+
+// Result records are only one runtime-log family. Evaluator boundary events
+// such as thread creation/reuse, restart, agent request/response/failure, and
+// per-turn token usage are emitted by `check::interrogation::session` through
+// the same `DiagnosticLogWriter`.
+pub(crate) fn write_expectation_result_event(
+    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    record: &CheckRecord,
+) -> Result<(), String> {
+    if let Some(writer) = diagnostic_log.as_deref_mut() {
+        writer
+            .write_record_event(DiagnosticRecordEvent::Expectation, record)
+            .map_err(|err| err.to_string())?;
     }
     Ok(())
 }

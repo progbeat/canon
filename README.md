@@ -115,7 +115,8 @@ results to avoid unnecessary evaluator work.
 canon check a7F K9m
 ```
 
-Explicitly evaluate selected expectations by unique ID prefix.
+Explicitly evaluate selected expectations by unique ID prefix or full ID. These
+selectors are expectation IDs, not 1-based expectation numbers.
 
 ```sh
 canon check -q "Can you find any practically exploitable security vulnerability?"

@@ -83,7 +83,8 @@ Error: <escaped error>
 Evidence: <escaped evidence>
 ```
 
-**progress dots** are a non-empty sequence of `.` characters printed and flushed while an expectation is being evaluated: print one dot immediately, then one more dot every minute until the result is ready.
+**progress dots** are a sequence of `.` characters printed before the result status.
+The sequence starts with one dot printed immediately; for evaluated expectations, one more dot is printed and flushed every minute until the result is ready.
 
 Embedded control characters in the question, expected answer, observed answer,
 error, and evidence are escaped before writing to stdout. Escaping prevents
@@ -110,45 +111,51 @@ Then stdout contains one summary line:
 ```
 
 `outcome-list` is a comma-separated list of non-zero outcome counts in this
-order: failed, error/errors, passed, skipped. If every count is zero, the
+order: failed, error/errors, passed, pending. If every count is zero, the
 outcome list is `0 passed`. The outcome text is surrounded by spaces and padded
 with `=` characters on both sides.
 
-Outcome labels follow pytest pluralization: `failed`, `passed`, and `skipped`
+Outcome labels follow pytest pluralization: `failed`, `passed`, and `pending`
 are used for both singular and plural counts; `error` is used for one error and
 `errors` for every other error count.
 
-`passed` is the number of selected expectations whose result is `pass`.
-`failed` is the number of expectations whose cached or evaluated result is `fail`.
-`errors` is the number of selected expectations whose result requires human review.
-`skipped` is the number of expectations not included in any category above (i.e. without output).
+`passed` is the number of expectations whose result is pass.
+`failed` is the number of expectations whose result is fail.
+`errors` is the number of expectations that encountered errors during evaluation in this run.
+`pending` is the number of expectations that do not yet have an evaluated or cached result.
+
+Each collected expectation is counted exactly once in passed, failed, errors, or pending.
 
 ## Instructions to Agent
 
 Assuming no Ctrl-C or other interruption, when `canon check` runs without expectation selectors, with the default config, on the `:staged` tree, and against `HEAD`, it may emit instructions for the agent that ran it like this:
 
 ```python
-def print_agent_messages(failed, errors, num_fixes, num_regressions):
+def print_agent_messages(failed, errors, num_new_passes, num_regressions, num_pending):
     """
     :param failed: Short IDs of failed expectations.
     :param errors: Short IDs of expectations that encountered errors in this run.
-    :param num_fixes: Number of expectations that changed from non-pass to pass compared to HEAD.
-    :param num_regressions: Number of expectations whose current result is non-pass and whose answer history contains at least one earlier `pass` result for the same expectation.
+    :param num_new_passes: Number of xpecs classified as **new pass**.
+    :param num_regressions: Number of xpecs classified as **regression**.
+    :param num_pending: Number of pending expectations.
     """
     issues = failed + errors
-    if num_regressions > 0 or (len(issues) > 0 and num_fixes == 0):
+    if num_regressions > 0 or (len(issues) > 0 and num_new_passes == 0):
         _repair_instructions(issues)
         print(f"▷ Fix the issues and run `canon check` again!")
         return
-    if len(issues) == 0 and num_fixes == 0:
+    if len(issues) == 0 and num_new_passes == 0:
+        assert num_pending == 0
         print("✓ All checks passed. Commit is allowed.")
         return
-    assert num_fixes > 0
-    passes_msg = f'1 pass' if num_fixes == 1 else f'{num_fixes} passes'
-    print(f"▷ +{passes_msg} compared to HEAD. Commit the staged changes NOW!")
+    assert num_new_passes > 0
+    passes_msg = f'1 pass' if num_new_passes == 1 else f'{num_new_passes} passes'
+    print(f"▷ +{passes_msg}. Commit the staged changes NOW!")
     if len(issues) > 0:
         _repair_instructions(issues)
         print(f"▷ Then fix the remaining issues and run `canon check` again!")
+    else:
+        assert num_pending == 0
 
 def _repair_instructions(issues):
     assert len(issues) > 0

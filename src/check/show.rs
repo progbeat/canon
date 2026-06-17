@@ -1,5 +1,5 @@
 use crate::check::command::output::{escape_check_output_text, write_stdout_record};
-use crate::check::interrogation::state::initial_visible_scope_for_expectation;
+use crate::check::interrogation::policy::initial_visible_scope_for_expectation;
 use crate::check::run::selection::{
     expectation_identities, order_by_latest_non_pass, select_expectations_with_identities,
 };
@@ -12,7 +12,6 @@ use crate::repo_inspection::RepoInspectionCache;
 use crate::scope::visible_scope;
 use clap::builder::OsStringValueParser;
 use clap::{Arg, ArgAction, Command};
-use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::io;
 use std::path::Path;
@@ -34,9 +33,10 @@ pub(crate) fn run_show_command(root: &Path, args: &[OsString]) -> Result<(), Com
         &command.pathspecs,
         &mut caches,
     )?;
-    let ordered = order_by_latest_non_pass(root, filtered, &mut caches.history, |expectation| {
-        expectation
-    })?;
+    let ordered =
+        order_by_latest_non_pass(root, filtered, &mut caches.xpec_state, |expectation| {
+            expectation
+        })?;
     write_show_output(&ordered).map_err(CommandError::from)
 }
 
@@ -141,6 +141,12 @@ fn expectation_is_affected_by_pathspecs(
     pathspecs: &[String],
     caches: &mut CheckRunCaches,
 ) -> Result<bool, String> {
+    // This chooses the q-scope used for the selected-tree visible OID below.
+    // Under the `canon show` pathspec rule, "the visible tree OID would change
+    // if every tracked file matched by the pathspecs changed" is equivalent to
+    // "at least one tracked file is in both the visible scope and the pathspecs".
+    // The helper below implements that OID-change predicate by testing the
+    // overlap directly instead of materializing a synthetic changed tree.
     let q_scope = show_q_scope(root, tree_source, expectation, caches)?;
     let visible_scope = visible_scope(&expectation.agent, &q_scope)?;
     caches.visible_tree_oid.visible_scope_intersects_pathspecs(
@@ -157,14 +163,12 @@ fn show_q_scope(
     expectation: &SelectedExpectation,
     caches: &mut CheckRunCaches,
 ) -> Result<Vec<String>, String> {
-    let active_lazy_full_scope_reset_ids = BTreeSet::new();
     initial_visible_scope_for_expectation(
         root,
         tree_source,
         expectation,
-        &mut caches.history,
+        &mut caches.xpec_state,
         &mut caches.visible_tree_oid,
-        &active_lazy_full_scope_reset_ids,
     )
 }
 
@@ -244,6 +248,8 @@ mod tests {
             display_id: "1".to_string(),
             question: "Line one\nLine two".to_string(),
             expected_answer: "yes\tplease".to_string(),
+            instructions: String::new(),
+            target: None,
             question_answer_only: false,
             agent: Default::default(),
             cooldown: None,
@@ -273,7 +279,7 @@ expectations:
         )
         .unwrap();
         git(&root, &["add", ".canon/check.yml"]);
-        let alpha_id = crate::hash::expectation_id("Does alpha pass?");
+        let alpha_id = crate::hash::expectation_id("Does alpha pass?", "yes", "");
         let selector = format!("not:{}", alpha_id);
 
         let mut output = Vec::new();
@@ -342,7 +348,7 @@ expectations:
             &mut caches,
         )?;
         let ordered =
-            order_by_latest_non_pass(root, filtered, &mut caches.history, |expectation| {
+            order_by_latest_non_pass(root, filtered, &mut caches.xpec_state, |expectation| {
                 expectation
             })?;
         for expectation in ordered {

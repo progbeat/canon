@@ -1,77 +1,57 @@
 - q: "Can you find any unnecessary copy-pasted code outside tests?"
   a: "no"
-  cooldown: 7d
-  thinking: xhigh
+  target: diff
+  thinking: high
 
-- q: "With bounded configuration and retained data, is non-temporary project-owned persistent state across the whole project practically size-bounded across repeated normal command runs and configuration changes without manual cleanup?"
-  a: "yes"
-  cooldown: 7d
-  thinking: xhigh
-
-- q: "Does the project avoid repeating expensive deterministic operations within a single high-level operation by reusing results keyed by all inputs that can affect them, including repository inspections, filesystem reads, parsed data, and derived hashes?"
-  a: "yes"
-  cooldown: 7d
-
-- q: "Can you find any obsolete, unused, stray, dead-end, duplicated, or redundant Git-tracked project files or code paths that are safe to remove or consolidate without changing intended functionality?"
+- q: "Can you find any obsolete, unused, stray, dead-end, duplicated, or redundant project files or code paths that are safe to remove or consolidate without changing intended functionality?"
   a: "no"
-  cooldown: {pass: 7d, fail: 2h}
+  target: diff
 
 - q: "Can you find any hand-written, non-generated source files that are excessively large or mix unrelated responsibilities enough that they should be split into smaller focused modules?"
   a: "no"
-  cooldown: 7d
-  thinking: xhigh
+  target: diff
+  thinking: high
 
 - q: "Do any source-code boundaries hide dependencies or add indirection without clarifying ownership?"
   a: "no"
-  cooldown: 7d
-  thinking: xhigh
+  target: diff
+  thinking: high
 
 - q: "Can you find any dirty hacks that can be avoided?"
   a: "no"
-  cooldown: {pass: 7d, fail: 30m}
+  target: diff
   thinking: high
 
 - q: "Does the project avoid unnecessary unsafe code?"
   a: "yes"
-  cooldown: 7d
-  thinking: xhigh
-
-- q: "Can you find any avoidable violations of commonly accepted idiomatic Rust practices that materially reduce this project's maintainability, correctness, readability, type safety, or future extensibility, excluding purely stylistic alternatives unless they create a concrete demonstrated risk?"
-  a: "no"
-  cooldown: {pass: 7d, fail: 30m}
+  target: diff
   thinking: high
-
-- q: "Are writes under CANON_STATE_DIR amortized O(N) over N newly persisted bytes?"
-  a: "yes"
-  cooldown: 7d
-  thinking: xhigh
 
 - q: "Can you find any naming inconsistencies that would obviously be better to fix?"
   a: "no"
-  cooldown: 7d
-  thinking: xhigh
+  target: diff
+  thinking: high
 
 - q: "Does each nontrivial platform-specific implementation live in its own platform-named source file?"
   a: "yes"
-  cooldown: 7d
+  target: diff
 
 - q: "Can you find any source-code directories with many files from unrelated domains, where splitting them into smaller cohesive subdirectories would clearly improve navigation?"
   a: "no"
-  cooldown: 7d
+  target: diff
 
 - q: "Do `canon --help` and every `canon <command> --help` output render through clap?"
   a: "yes"
 
 - q: "Can you find any obvious removable naming redundancies in source paths or module/import paths that make navigation noisier?"
   a: "no"
-  cooldown: 7d
+  target: diff
 
 - q: "Are tests outside implementation files limited to platform-independent intended behavior through public interfaces?"
   a: "yes"
 
 - q: "Can you find any dedicated test files?"
   a: "yes"
-  # forbidden_evidence_substrings: "`README.md`"
 
 - q: |
     A well-structured implementation is organized as self-contained, platform-independent components with minimal necessary public interfaces. A component owns the source locations that define, assemble, and expose its behavior, including its internal source structure. Other components interact with it only through its public interface. A component may span multiple source locations, but those locations must be clearly part of the component's own declared implementation boundary.
@@ -80,26 +60,33 @@
     Can you find any source location that violates these design principles?
   a: "no"
   preset: smart
-  cooldown: 7d
+  target: diff
 
 - q: "Can you find any misleading or stale comments or documentation that no longer match the implementation?"
   a: "no"
-  cooldown: 7d
+  target: diff
+
+- q: "Can you find code structure that is overly flat?"
+  a: "no"
+  target: diff
+
+- q: 'Can you find tests that assert incidental implementation details instead of stable observable behavior through a public or component interface?'
+  a: "no"
+  target: diff
+
+- q: "Can you find any avoidable violations of commonly accepted idiomatic Rust practices that materially reduce this project's maintainability, correctness, readability, type safety, or future extensibility, excluding purely stylistic alternatives unless they create a concrete demonstrated risk?"
+  a: "no"
+  target: diff
+  cooldown: {pass: 20m, fail: 10m}
 
 - q: "Can you find a critical high-confidence bug with a concrete failing scenario?"
   a: "no"
   preset: smart
-  cooldown: {"pass": 7d, "fail": 1d}
+  target: diff
+  cooldown: {pass: 20m, fail: 10m}
 
 - q: "Can you find any high-confidence, practically exploitable security vulnerability?"
   a: "no"
   preset: smart
-  cooldown: {"pass": 7d, "fail": 1d}
-
-- q: "Can you find code structure that is overly flat?"
-  a: "no"
-  cooldown: {"pass": 7d, "fail": 1d}
-
-- q: 'Can you find tests that assert incidental implementation details instead of stable observable behavior through a public or component interface?'
-  a: "no"
-  cooldown: {"pass": 7d, "fail": 1d}
+  target: diff
+  cooldown: {pass: 20m, fail: 10m}

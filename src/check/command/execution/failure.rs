@@ -5,14 +5,10 @@ use crate::check::interrogation::{
 };
 use crate::check::CheckRunCaches;
 use crate::cli::CommandError;
-use crate::config_types::CheckConfig;
 use crate::logs::DiagnosticLogWriter;
 use std::io::Write;
-use std::path::Path;
 
-pub(super) struct CheckErrorReportFinish<'a, 'b> {
-    pub(super) root: &'a Path,
-    pub(super) config: &'a CheckConfig,
+pub(super) struct CheckErrorReportFinish<'b> {
     pub(super) diagnostic_log: &'b mut DiagnosticLogWriter,
     pub(super) result_output: &'b mut dyn Write,
     pub(super) check_caches: &'b mut CheckRunCaches,
@@ -21,18 +17,15 @@ pub(super) struct CheckErrorReportFinish<'a, 'b> {
 }
 
 pub(super) fn finish_check_error_report(
-    context: CheckErrorReportFinish<'_, '_>,
+    context: CheckErrorReportFinish<'_>,
 ) -> Result<(), CommandError> {
     let error = context.error;
     finish_check_report(
         CheckReportFinishContext {
-            root: context.root,
-            config: context.config,
             diagnostic_log: context.diagnostic_log,
             result_output: context.result_output,
             check_caches: context.check_caches,
             write_agent_message: false,
-            checked_tree_matches_against_tree: false,
         },
         context.report,
         Some(&error),

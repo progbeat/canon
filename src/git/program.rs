@@ -100,13 +100,6 @@ pub(super) fn staged_tracked_files_for_pathspecs(
     tracked_files_for_pathspecs(root, None, pathspecs)
 }
 
-pub(crate) fn head_tracked_files(root: &Path) -> Result<Option<Vec<StagedTrackedFile>>, String> {
-    if !git_head_tree_exists(root)? {
-        return Ok(None);
-    }
-    tree_tracked_files(root, "HEAD").map(Some)
-}
-
 pub(crate) fn resolve_tree_oid(root: &Path, treeish: &str) -> Result<String, String> {
     let output = Command::new("git")
         .arg("-C")

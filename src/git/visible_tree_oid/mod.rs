@@ -1,4 +1,4 @@
-use super::program::{head_tracked_files, staged_tracked_files, StagedTrackedFile};
+use super::program::{staged_tracked_files, StagedTrackedFile};
 use super::tree_source::TreeSource;
 use crate::config_types::AgentConfig;
 use crate::scope::{effective_ignore_patterns, path_bytes_in_scope, visible_scope};
@@ -10,21 +10,14 @@ mod scope_entries;
 #[cfg(test)]
 mod tests;
 
-use hash::{
-    git_object_hash_algorithm, git_object_oid_hex_len, scope_entry_is_tree,
-    visible_tree_oid_from_entries, GitObjectHashAlgorithm,
-};
-pub(crate) use hash::{git_object_oid_has_hex_len, git_object_oid_has_known_shape};
+pub(crate) use hash::git_object_oid_has_known_shape;
+use hash::{git_object_hash_algorithm, scope_entry_is_tree, GitObjectHashAlgorithm};
 use scope_entries::{
-    scope_includes_match_tracked_files, visible_scope_entries_from_files,
-    visible_tree_oid_from_files_if_scope_present,
+    visible_scope_entries_from_files, visible_tree_oid_from_files_if_scope_present,
 };
 
-// Cache-spec ownership note: this module implements only the `visibleTreeOid`
-// fingerprint. Answer-history storage, JSONL rendering, append, and compaction
-// live under `history`, so whole Cache-spec review must inspect those modules
-// in addition to this one.
-type ScopeCacheKey = (PathBuf, Vec<String>, Vec<String>);
+// This module implements only the `visibleTreeOid` fingerprint. Persistent
+// per-expectation result state lives under `xpec_state`.
 type SourceScopeCacheKey = (PathBuf, String, Vec<String>, Vec<String>);
 type SourceFilesCacheKey = (PathBuf, String);
 
@@ -46,9 +39,13 @@ pub(crate) struct VisibleTreeOidCache {
     visible_scope_entries: BTreeMap<SourceScopeCacheKey, Vec<String>>,
     tree_source_files: BTreeMap<SourceFilesCacheKey, Result<Vec<StagedTrackedFile>, String>>,
     staged_files: BTreeMap<PathBuf, Result<Vec<StagedTrackedFile>, String>>,
-    gate_head_values: BTreeMap<ScopeCacheKey, Option<String>>,
-    head_files: BTreeMap<PathBuf, Result<Option<Vec<StagedTrackedFile>>, String>>,
     object_hash_algorithms: BTreeMap<PathBuf, GitObjectHashAlgorithm>,
+}
+
+pub(crate) struct VisibleTreeOidReuseResolver {
+    agent: AgentConfig,
+    files: Vec<StagedTrackedFile>,
+    object_hash_algorithm: GitObjectHashAlgorithm,
 }
 
 impl VisibleTreeOidCache {
@@ -74,25 +71,25 @@ impl VisibleTreeOidCache {
         agent: &AgentConfig,
         scope: &[String],
     ) -> Result<Option<String>, String> {
-        let scope = visible_scope(agent, scope)?;
-        self.visible_tree_oid_for_source_scope(root, source, agent, scope)
+        let visible_scope_pathspec = visible_scope(agent, scope)?;
+        self.visible_tree_oid_for_source_visible_scope(root, source, agent, visible_scope_pathspec)
     }
 
-    pub(crate) fn visible_tree_oid_for_visible_scope(
+    pub(crate) fn reuse_resolver(
         &mut self,
         root: &Path,
         source: &TreeSource,
-        visible_scope: &[String],
-    ) -> Result<Option<String>, String> {
-        let files = match source {
-            TreeSource::Staged => self.staged_files(root)?,
-            TreeSource::Git { .. } => self.tree_source_files(root, source)?,
-        };
-        visible_tree_oid_from_files_if_scope_present(
-            &files,
-            visible_scope,
-            self.object_hash_algorithm(root)?,
-        )
+        agent: &AgentConfig,
+    ) -> Result<VisibleTreeOidReuseResolver, String> {
+        // History reuse can scan many records with many stored scopes. Snapshot
+        // the source file list and hash algorithm once; each per-record scope
+        // is filtered and hashed in-process, so distinct history scopes do not
+        // start additional Git subprocesses.
+        Ok(VisibleTreeOidReuseResolver {
+            agent: agent.clone(),
+            files: self.files_for_source(root, source)?,
+            object_hash_algorithm: self.object_hash_algorithm(root)?,
+        })
     }
 
     pub(crate) fn checked_file_count(
@@ -110,8 +107,9 @@ impl VisibleTreeOidCache {
         agent: &AgentConfig,
         scope: &[String],
     ) -> Result<usize, String> {
-        let scope = visible_scope(agent, scope)?;
-        let entries = self.visible_scope_entries_for_source(root, source, agent, &scope)?;
+        let visible_scope_pathspec = visible_scope(agent, scope)?;
+        let entries =
+            self.visible_scope_entries_for_source(root, source, agent, &visible_scope_pathspec)?;
         Ok(entries
             .iter()
             .filter(|entry| !scope_entry_is_tree(entry))
@@ -125,6 +123,9 @@ impl VisibleTreeOidCache {
         visible_scope: &[String],
         pathspecs: &[String],
     ) -> Result<bool, String> {
+        // Used by `canon show -- <pathspec>`. If every tracked file matched by
+        // `pathspecs` were changed, the visible tree OID would change exactly
+        // when at least one changed tracked file is selected by `visible_scope`.
         for file in self.files_for_source(root, source)? {
             if path_bytes_in_scope(&file.path, visible_scope)?
                 && path_bytes_in_scope(&file.path, pathspecs)?
@@ -135,29 +136,22 @@ impl VisibleTreeOidCache {
         Ok(false)
     }
 
-    pub(crate) fn repository_native_object_oid_hex_len(
-        &mut self,
-        root: &Path,
-    ) -> Result<usize, String> {
-        Ok(git_object_oid_hex_len(self.object_hash_algorithm(root)?))
-    }
-
-    fn visible_tree_oid_for_source_scope(
+    fn visible_tree_oid_for_source_visible_scope(
         &mut self,
         root: &Path,
         source: &TreeSource,
         agent: &AgentConfig,
-        scope: Vec<String>,
+        visible_scope_pathspec: Vec<String>,
     ) -> Result<Option<String>, String> {
         cached_clone!(
             self.visible_tree_oids,
-            source_scope_cache_key(root, source, agent, &scope)?,
+            source_scope_cache_key(root, source, agent, &visible_scope_pathspec)?,
             |value| Ok(value),
             {
                 let files = self.files_for_source(root, source)?;
                 visible_tree_oid_from_files_if_scope_present(
                     &files,
-                    &scope,
+                    &visible_scope_pathspec,
                     self.object_hash_algorithm(root)?,
                 )?
             },
@@ -222,51 +216,6 @@ impl VisibleTreeOidCache {
         )
     }
 
-    pub(crate) fn gate_head_tree_fingerprint(
-        &mut self,
-        root: &Path,
-        agent: &AgentConfig,
-        scope: &[String],
-    ) -> Result<Option<String>, String> {
-        let scope = visible_scope(agent, scope)?;
-        cached_clone!(
-            self.gate_head_values,
-            source_scope_cache_key_parts(root, agent, &scope)?,
-            |value| Ok(value),
-            {
-                let object_hash_algorithm = self.object_hash_algorithm(root)?;
-                self.head_visible_scope_entries(root, &scope)?
-                    .map(|entries| visible_tree_oid_from_entries(&entries, object_hash_algorithm))
-                    .transpose()?
-            },
-            |value| Ok(value)
-        )
-    }
-
-    fn head_visible_scope_entries(
-        &mut self,
-        root: &Path,
-        scope: &[String],
-    ) -> Result<Option<Vec<String>>, String> {
-        let Some(files) = self.head_files(root)? else {
-            return Ok(None);
-        };
-        if !scope_includes_match_tracked_files(&files, scope)? {
-            return Ok(None);
-        }
-        visible_scope_entries_from_files(&files, scope).map(Some)
-    }
-
-    fn head_files(&mut self, root: &Path) -> Result<Option<Vec<StagedTrackedFile>>, String> {
-        cached_clone!(
-            self.head_files,
-            root.to_path_buf(),
-            |value| value,
-            head_tracked_files(root),
-            |value| value
-        )
-    }
-
     fn object_hash_algorithm(&mut self, root: &Path) -> Result<GitObjectHashAlgorithm, String> {
         cached_clone!(
             self.object_hash_algorithms,
@@ -274,6 +223,20 @@ impl VisibleTreeOidCache {
             |value| Ok(value),
             git_object_hash_algorithm(root)?,
             |value| Ok(value)
+        )
+    }
+}
+
+impl VisibleTreeOidReuseResolver {
+    pub(crate) fn visible_tree_oid_for_scope(
+        &self,
+        scope: &[String],
+    ) -> Result<Option<String>, String> {
+        let visible_scope_pathspec = visible_scope(&self.agent, scope)?;
+        visible_tree_oid_from_files_if_scope_present(
+            &self.files,
+            &visible_scope_pathspec,
+            self.object_hash_algorithm,
         )
     }
 }

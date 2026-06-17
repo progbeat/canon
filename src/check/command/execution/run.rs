@@ -13,24 +13,24 @@ use crate::check::command::output::SharedCheckOutput;
 use crate::check::command::{finish_check_report, CheckReportFinishContext};
 use crate::check::core::CheckCommandArgs;
 use crate::check::interrogation::{state::CheckRuntime, write_check_lifecycle_start_event};
-use crate::check::run::lazy_reset::{
-    active_lazy_full_scope_reset_ids, apply_lazy_full_scope_reset,
-    clear_evaluated_lazy_full_scope_resets,
-};
 use crate::check::run::selection::{expectation_identities, resolve_check_options_with_identities};
 use crate::check::{run_check_with_runner_and_caches, CheckRunCaches, CheckRunSideEffects};
 use crate::cli::CommandError;
 use crate::git::TreeSource;
-use crate::history::{active_expectation_ids_from_identities, cleanup_stale_cache_dirs};
 use crate::logs::{write_cache_cleanup_event, DiagnosticLogWriter};
 use crate::platform::{install_check_signal_handlers, reset_check_interrupted};
 use crate::repo_inspection::RepoInspectionCache;
-use crate::state_paths::CANON_CACHE_DIR_GIT_PATH;
+use crate::xpec_state::{
+    active_expectation_ids_from_identities, cleanup_stale_xpec_dirs, XpecStateCache,
+};
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::Path;
 use std::time::Instant;
 
+// Command execution coordinates CLI parsing, tree/config preparation, and
+// final reporting. Per-expectation completion and last-result bookkeeping are
+// delegated to the check-run execution layer.
 pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), CommandError> {
     let started = Instant::now();
     install_check_signal_handlers().map_err(CommandError::from)?;
@@ -42,12 +42,8 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         &command.against_tree,
         command.against_tree_explicit,
     )?;
-    let write_agent_message = check_command_writes_agent_message(
-        &command.config_path,
-        &checked_tree,
-        &against_tree,
-        !command.options.selectors.is_empty(),
-    );
+    let write_agent_message =
+        check_command_writes_agent_message(&command, &checked_tree, &against_tree);
     let mut repo_cache = RepoInspectionCache::new();
     let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
     let query_mode = command.query.is_some();
@@ -89,18 +85,6 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
             )
         }
     };
-    let active_reset_ids =
-        match active_lazy_full_scope_reset_ids(root, &identities, &mut check_caches.lazy_reset) {
-            Ok(ids) => ids,
-            Err(err) => {
-                return fail_check_before_selection(
-                    &mut diagnostic_log,
-                    query_start_field,
-                    query_mode,
-                    err,
-                )
-            }
-        };
     let options =
         match resolve_check_options_with_identities(&config, &identities, &command.options) {
             Ok(options) => options,
@@ -128,7 +112,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         Ok(execution) => execution,
         Err(err) => return fail_check_after_start(&mut diagnostic_log, false, err),
     };
-    cleanup_cache_dirs(root, &mut repo_cache, &identities, &mut diagnostic_log)?;
+    cleanup_cache_dirs(root, &identities, &mut diagnostic_log)?;
     let shared_output = SharedCheckOutput::stdout();
     let mut result_output = shared_output.clone();
     let runtime = CheckRuntime::materialized(
@@ -139,17 +123,14 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         &config,
         command.no_sandbox,
     );
-    let checked_tree_matches_against_tree =
-        execution.tree_context.checked_tree_oid == execution.tree_context.against_tree_oid;
     let records_result = run_check_with_runner_and_caches(
         runtime,
         &options,
-        &active_reset_ids,
         &mut execution.runner,
         CheckRunSideEffects {
             diagnostic_log: Some(&mut diagnostic_log),
             result_output: Some(&mut result_output),
-            live_progress_output: Some(shared_output.clone()),
+            live_report_output: Some(shared_output.clone()),
             caches: &mut check_caches,
         },
     );
@@ -164,17 +145,13 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         },
     };
     finish_completed_check(
-        root,
-        &config,
         &mut diagnostic_log,
         &mut result_output,
         &mut check_caches,
         &mut execution.runner,
         &completed,
         started,
-        &active_reset_ids,
         write_agent_message,
-        checked_tree_matches_against_tree,
     )
 }
 
@@ -215,6 +192,7 @@ fn run_query_mode(
         config: query_config,
         question,
         query_scope: &command.query_scope,
+        query_scope_provided: command.query_scope_provided,
         tree_source: checked_tree,
         against_tree,
         no_sandbox: command.no_sandbox,
@@ -226,15 +204,14 @@ fn run_query_mode(
 
 fn cleanup_cache_dirs(
     root: &Path,
-    repo_cache: &mut RepoInspectionCache,
     identities: &[crate::check::ExpectationIdentity],
     diagnostic_log: &mut DiagnosticLogWriter,
 ) -> Result<(), CommandError> {
-    let cache_dir = repo_cache
-        .git_path(root, CANON_CACHE_DIR_GIT_PATH)
+    let xpecs_dir = XpecStateCache::default()
+        .xpecs_dir(root)
         .map_err(CommandError::from)?;
     let active_ids = active_expectation_ids_from_identities(identities);
-    let cleanup = match cleanup_stale_cache_dirs(&cache_dir, &active_ids) {
+    let cleanup = match cleanup_stale_xpec_dirs(&xpecs_dir, &active_ids) {
         Ok(cleanup) => cleanup,
         Err(err) => return fail_check_after_start(diagnostic_log, false, err),
     };
@@ -244,23 +221,17 @@ fn cleanup_cache_dirs(
 
 #[allow(clippy::too_many_arguments)]
 fn finish_completed_check(
-    root: &Path,
-    config: &crate::config_types::CheckConfig,
     diagnostic_log: &mut DiagnosticLogWriter,
     result_output: &mut dyn Write,
     check_caches: &mut CheckRunCaches,
     runner: &mut crate::app::LazyAppServerRunner,
     completed: &CompletedCheckRun,
     started: Instant,
-    active_reset_ids: &std::collections::BTreeSet<String>,
     write_agent_message: bool,
-    checked_tree_matches_against_tree: bool,
 ) -> Result<(), CommandError> {
     if let Err(err) = result_output.flush() {
         let err = format!("failed to flush check result to stdout: {}", err);
         return finish_check_error_report(CheckErrorReportFinish {
-            root,
-            config,
             diagnostic_log,
             result_output,
             check_caches,
@@ -270,8 +241,6 @@ fn finish_completed_check(
     }
     if let Err(err) = write_check_trailer(runner, result_output, &completed.report, started) {
         return finish_check_error_report(CheckErrorReportFinish {
-            root,
-            config,
             diagnostic_log,
             result_output,
             check_caches,
@@ -279,44 +248,17 @@ fn finish_completed_check(
             error: err,
         });
     }
-    let mut completed_error = completed.error.clone();
-    let mut post_finish_error = None;
-    if let Err(err) = clear_evaluated_lazy_full_scope_resets(
-        root,
-        active_reset_ids,
-        &completed.report.records,
-        &mut check_caches.lazy_reset,
-    ) {
-        completed_error.get_or_insert_with(|| err.clone());
-        post_finish_error.get_or_insert_with(|| err.into());
-    }
-    if let Err(err) = apply_lazy_full_scope_reset(
-        root,
-        config,
-        completed.report.evaluated,
-        &completed.report.cached,
-        &mut check_caches.lazy_reset,
-        diagnostic_log,
-    ) {
-        completed_error.get_or_insert_with(|| err.clone());
-        post_finish_error.get_or_insert_with(|| err.into());
-    }
+    let completed_error = completed.error.clone();
     finish_check_report(
         CheckReportFinishContext {
-            root,
-            config,
             diagnostic_log,
             result_output,
             check_caches,
-            write_agent_message,
-            checked_tree_matches_against_tree,
+            write_agent_message: write_agent_message && completed_error.is_none(),
         },
         &completed.report,
         completed_error.as_deref(),
     )?;
-    if let Some(err) = post_finish_error {
-        return Err(err);
-    }
     if completed.error.is_none() && check_report_passed(&completed.report) {
         Ok(())
     } else {

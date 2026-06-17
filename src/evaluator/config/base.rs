@@ -1,8 +1,8 @@
 use super::codec::{config_entries_to_json, push_toml_arg, ConfigEntry, ConfigEntryValue};
 use super::permissions::{
     evaluator_runtime_permissions, evaluator_state_dir_permissions,
-    evaluator_working_tree_permissions, merge_filesystem_permissions,
-    EVALUATOR_FILESYSTEM_GLOB_SCAN_MAX_DEPTH, FILESYSTEM_DENY,
+    evaluator_template_output_permissions, evaluator_working_tree_permissions,
+    merge_filesystem_permissions, EVALUATOR_FILESYSTEM_GLOB_SCAN_MAX_DEPTH, FILESYSTEM_DENY,
 };
 use super::{
     EvaluatorConfigResult, EVALUATOR_DISABLED_FEATURES, EVALUATOR_EXTRA_DISABLED_FEATURES,
@@ -81,6 +81,7 @@ enum FilesystemConfigValue {
     U64(u64),
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn evaluator_thread_config_with_no_sandbox(
     agent: &AgentConfig,
     _scope: &[String],
@@ -88,6 +89,7 @@ pub(crate) fn evaluator_thread_config_with_no_sandbox(
     thinking: &str,
     app_server_root: &Path,
     session_root: &Path,
+    template_output_dir: &Path,
     no_sandbox: bool,
 ) -> EvaluatorConfigResult<Value> {
     // Scope and ignore filtering is enforced by the materialized evaluator
@@ -101,6 +103,10 @@ pub(crate) fn evaluator_thread_config_with_no_sandbox(
     merge_filesystem_permissions(
         &mut extra_permissions,
         evaluator_state_dir_permissions(app_server_root)?,
+    )?;
+    merge_filesystem_permissions(
+        &mut extra_permissions,
+        evaluator_template_output_permissions(template_output_dir)?,
     )?;
     EvaluatorConfigSettings::new(FILESYSTEM_DENY, codex_reasoning_effort(thinking))
         .with_extra_filesystem_permissions(extra_permissions)

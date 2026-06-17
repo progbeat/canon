@@ -11,66 +11,82 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-const PROGRESS_DOT_INTERVAL: Duration = Duration::from_secs(60);
+const LIVE_REPORT_DOT_INTERVAL: Duration = Duration::from_secs(60);
 
-pub(crate) struct LiveCheckProgressOutput {
+pub(crate) struct StartedExpectationReportOutput {
     output: SharedCheckOutput,
     stop: Sender<()>,
     active: Arc<AtomicBool>,
     worker: Option<JoinHandle<Result<(), String>>>,
+    prefix_completed: bool,
 }
 
-pub(crate) fn start_live_check_progress_output(
+pub(crate) fn start_expectation_report_output(
     output: SharedCheckOutput,
     display_id: &str,
-) -> Result<LiveCheckProgressOutput, String> {
+) -> StartedExpectationReportOutput {
     // Evaluated expectations call this before evaluator work starts. The first
-    // dot is written and flushed immediately; the worker appends later dots
-    // while the evaluator is still running.
+    // report byte is the documented `<short ID>.` prefix; the worker appends
+    // later dots while the evaluator is still running.
     let mut immediate_output = output.clone();
-    write_stdout_record(
+    let prefix_completed = write_stdout_record(
         &mut immediate_output,
         format!("{}.", display_id).as_bytes(),
-        "check progress prefix",
-    )?;
+        "started expectation report prefix",
+    )
+    .is_ok();
 
     let (stop, stop_requested) = mpsc::channel();
     let active = Arc::new(AtomicBool::new(true));
     let worker_active = active.clone();
-    let mut progress_output = output.clone();
+    let mut dot_output = output.clone();
     let worker = thread::spawn(move || loop {
-        match stop_requested.recv_timeout(PROGRESS_DOT_INTERVAL) {
+        match stop_requested.recv_timeout(LIVE_REPORT_DOT_INTERVAL) {
             Ok(()) | Err(RecvTimeoutError::Disconnected) => return Ok(()),
             Err(RecvTimeoutError::Timeout) => {
                 if !worker_active.load(Ordering::Acquire) {
                     return Ok(());
                 }
-                write_stdout_record(&mut progress_output, b".", "check progress dot")?;
+                write_stdout_record(&mut dot_output, b".", "check live report dot")?;
             }
         }
     });
 
-    Ok(LiveCheckProgressOutput {
+    StartedExpectationReportOutput {
         output,
         stop,
         active,
         worker: Some(worker),
-    })
+        prefix_completed,
+    }
 }
 
-impl LiveCheckProgressOutput {
-    pub(crate) fn finish_with_record(mut self, record: &CheckRecord) -> Result<(), String> {
-        self.stop_progress_worker()?;
-        let completion = render_check_output_record_completion(record);
+impl StartedExpectationReportOutput {
+    pub(crate) fn finish_with_record(mut self, record: &CheckRecord) -> bool {
+        // Once the report prefix is visible, final result output has priority
+        // over delayed dot-worker cleanup errors.
+        let _ = self.stop_dot_worker();
+        let completion = if self.prefix_completed {
+            render_check_output_record_completion(record)
+        } else {
+            render_check_output_record_with_initial_dot(record)
+        };
         let mut output = self.output.clone();
-        write_stdout_record(&mut output, completion.as_bytes(), "check result")
+        if write_stdout_record(&mut output, completion.as_bytes(), "check result").is_err() {
+            // Human byte sinks can reject all writes; no CLI can force bytes
+            // into closed stdout/stderr. The report invariant here is that
+            // human-output failure cannot erase the CheckRecord returned for
+            // summary accounting, last-result state, or diagnostic logs.
+            return write_live_completion_fallback_to_stderr(
+                record,
+                &completion,
+                self.prefix_completed,
+            );
+        }
+        true
     }
 
-    pub(crate) fn cancel(mut self) -> Result<(), String> {
-        self.stop_progress_worker()
-    }
-
-    fn stop_progress_worker(&mut self) -> Result<(), String> {
+    fn stop_dot_worker(&mut self) -> Result<(), String> {
         self.active.store(false, Ordering::Release);
         let _ = self.stop.send(());
         let Some(worker) = self.worker.take() else {
@@ -78,18 +94,37 @@ impl LiveCheckProgressOutput {
         };
         worker
             .join()
-            .map_err(|_| "check progress thread panicked".to_string())?
+            .map_err(|_| "check live report dot thread panicked".to_string())?
     }
 }
 
-// No-progress callers still write the documented minimum progress prefix. They
-// do not represent an evaluator currently running, so a single dot is enough.
-pub(crate) fn write_result_output_without_live_progress(
+fn write_live_completion_fallback_to_stderr(
+    record: &CheckRecord,
+    completion: &str,
+    prefix_completed: bool,
+) -> bool {
+    let fallback = if prefix_completed {
+        format!("{}{}", record.display_id, completion)
+    } else {
+        completion.to_string()
+    };
+    // Best-effort human-output fallback only. A closed stderr must not panic
+    // before the caller can return the CheckRecord for report accounting.
+    let mut stderr = std::io::stderr();
+    stderr
+        .write_all(fallback.as_bytes())
+        .and_then(|_| stderr.flush())
+        .is_ok()
+}
+
+// Callers without a started report still write the documented minimum prefix.
+// They do not represent an evaluator currently running, so a single dot is enough.
+pub(crate) fn write_result_output_without_started_report(
     result_output: &mut Option<&mut dyn Write>,
     record: &CheckRecord,
 ) -> Result<(), String> {
     if let Some(writer) = result_output.as_mut() {
-        let line = render_check_output_record_with_progress_dot(record);
+        let line = render_check_output_record_with_initial_dot(record);
         write_stdout_record(*writer, line.as_bytes(), "check result")?;
     }
     Ok(())
@@ -99,15 +134,17 @@ pub(crate) fn write_cached_non_pass_output(
     result_output: &mut Option<&mut dyn Write>,
     record: &CheckRecord,
 ) -> Result<(), String> {
+    // Cached non-passes are displayed issue reports. This helper writes the
+    // `<short ID>.` prefix and the full non-pass block together.
     debug_assert!(!record.passed());
     if let Some(writer) = result_output.as_mut() {
-        let line = render_check_output_record_with_progress_dot(record);
+        let line = render_check_output_record_with_initial_dot(record);
         write_stdout_record(*writer, line.as_bytes(), "cached check result")?;
     }
     Ok(())
 }
 
-fn render_check_output_record_with_progress_dot(record: &CheckRecord) -> String {
+fn render_check_output_record_with_initial_dot(record: &CheckRecord) -> String {
     let mut output = record.display_id.clone();
     output.push('.');
     output.push_str(&render_check_output_record_completion(record));

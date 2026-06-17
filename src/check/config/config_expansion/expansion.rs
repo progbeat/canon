@@ -3,8 +3,9 @@ use super::include::inherit_include_fields;
 use super::presets::{apply_expectation_settings, raw_presets_from_config, resolve_presets};
 use super::source::CheckConfigSource;
 use crate::config_types::{
-    AgentConfig, CheckConfig, Expectation, RawCheckConfig, RawExpectationItem,
-    RawExpectationSettings, RawGeneratorExpectation, RawIncludeExpectation,
+    AgentConfig, CheckConfig, Expectation, ExpectationTarget, RawCheckConfig,
+    RawExpectationCommonConfig, RawExpectationItem, RawExpectationSettings,
+    RawGeneratorExpectation, RawIncludeExpectation,
 };
 use crate::repo_inspection::RepoInspectionCache;
 use std::collections::BTreeMap;
@@ -61,14 +62,29 @@ impl RawExpectationExpansion<'_> {
         for (index, item) in items.into_iter().enumerate() {
             match item {
                 RawExpectationItem::Explicit(item) => {
-                    let question_answer_only = item.cooldown.is_none() && item.settings.is_empty();
-                    let agent = self.resolve_expectation_agent(&item.settings)?;
+                    let RawExpectationCommonConfig {
+                        instructions,
+                        target,
+                        cooldown,
+                        settings,
+                    } = item.common;
+                    let item_number = index + 1;
+                    let instructions = resolved_expectation_instructions(instructions);
+                    let target = resolve_expectation_target(target)
+                        .map_err(|err| format!("expectation {} target: {}", item_number, err))?;
+                    let question_answer_only = cooldown.is_none()
+                        && settings.is_empty()
+                        && instructions.is_empty()
+                        && target.is_none();
+                    let agent = self.resolve_expectation_agent(&settings)?;
                     self.expectations.push(Expectation {
                         q: item.q,
                         a: item.a,
+                        instructions,
+                        target,
                         question_answer_only,
                         agent,
-                        cooldown: item.cooldown,
+                        cooldown,
                     })
                 }
                 RawExpectationItem::Generator(item) => {
@@ -91,6 +107,9 @@ impl RawExpectationExpansion<'_> {
         let item_number = index + 1;
         let files = self.expand_paths(config_path, &item.path, item_number, "path")?;
         let uses_content = item.generated_question_format.contains("{{content}}");
+        let common = item.common;
+        let target = resolve_expectation_target(common.target.clone())
+            .map_err(|err| format!("expectation {} target: {}", item_number, err))?;
         for file in files {
             let content = if uses_content {
                 self.read_expanded_file(&file)?
@@ -100,9 +119,11 @@ impl RawExpectationExpansion<'_> {
             self.expectations.push(Expectation {
                 q: render_generator_expectation_question(&item.generated_question_format, &content),
                 a: item.a.clone(),
+                instructions: resolved_expectation_instructions(common.instructions.clone()),
+                target: target.clone(),
                 question_answer_only: false,
-                agent: self.resolve_expectation_agent(&item.settings)?,
-                cooldown: item.cooldown.clone(),
+                agent: self.resolve_expectation_agent(&common.settings)?,
+                cooldown: common.cooldown.clone(),
             });
         }
         Ok(())
@@ -124,7 +145,7 @@ impl RawExpectationExpansion<'_> {
             let result = (|| {
                 let content = self.read_expanded_file(&file)?;
                 let mut included = self.parse_included_items(&file, &content)?;
-                inherit_include_fields(&mut included, &item.settings, &item.cooldown);
+                inherit_include_fields(&mut included, &item.common);
                 self.expand_items(Path::new(&file), included)
             })();
             self.include_stack.pop();
@@ -189,4 +210,16 @@ impl RawExpectationExpansion<'_> {
         apply_expectation_settings(&mut agent, settings)?;
         Ok(agent)
     }
+}
+
+fn resolved_expectation_instructions(instructions: Option<String>) -> String {
+    instructions
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string()
+}
+
+fn resolve_expectation_target(target: Option<String>) -> Result<Option<ExpectationTarget>, String> {
+    target.map(|target| target.parse()).transpose()
 }
