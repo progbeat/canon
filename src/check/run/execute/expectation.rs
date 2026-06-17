@@ -243,7 +243,11 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
         *verified_q_scope = record_scope.clone();
     }
     debug_assert!(scope_is_within(&record_scope, verified_q_scope));
-    let proposed_q_scope = question_scope_suggestion_scope_for_unused_follow_up(
+    // This is the Interrogation Policy q-scope verification follow-up. It is
+    // the only check-run decision point that consumes an evaluator
+    // `qScopeSuggestion`; the rest of this function only executes the
+    // verification turn planned by policy.
+    let q_scope_verification_scope = question_scope_suggestion_scope_for_unused_follow_up(
         context.runtime,
         &expectation.agent,
         &initial,
@@ -251,7 +255,7 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
         &mut context.caches.visible_tree_oid,
     )?;
     let mut interrogation = initial.into_interrogation();
-    if let Some(proposed_scope) = proposed_q_scope {
+    if let Some(proposed_scope) = q_scope_verification_scope {
         let verification_scope = proposed_scope.clone();
         let narrowed = interrogate_or_error_record(
             InterrogationCall {

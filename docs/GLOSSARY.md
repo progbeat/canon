@@ -220,4 +220,5 @@ Its lookup key includes evaluator model, `visibleTreeOid`, and expectation
 instructions, so a different model, visible tree, or expectation instructions
 cannot reuse an existing evaluator thread. It also includes stricter
 developer-instruction inputs such as plugins, effective ignore patterns, and the
-enforced scope.
+enforced scope, plus the diff base and checked tree IDs rendered into the
+developer-instructions transcript.
