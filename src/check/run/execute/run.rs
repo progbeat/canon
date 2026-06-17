@@ -185,11 +185,11 @@ fn write_cached_failures(
 ) -> Result<(), String> {
     for CachedExpectationHit { expectation, hit } in cached_hits {
         let record = hit.record;
-        // Cached passes are summary-only results; they do not start a displayed
-        // expectation report because no `<short ID>.` prefix is printed for
-        // them. Cache selection excludes human-review last-error records, so
-        // the only cached results with a printed short ID are failed answers,
-        // and this branch writes their complete public block.
+        // Cached passes are counted in the summary only; they are not emitted
+        // as per-expectation stdout result entries and therefore have no
+        // progress timeline. Cache selection excludes human-review last-error
+        // records, so the only cached results with a printed short ID are
+        // failed answers, and this branch writes their complete public block.
         let cached_result_prints_short_id = !record.passed();
         if cached_result_prints_short_id {
             write_cached_non_pass_output(result_output, &record)?;

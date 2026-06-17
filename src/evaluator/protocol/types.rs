@@ -1,5 +1,6 @@
 use crate::config_types::AgentConfig;
 use crate::evaluator::turn::EvaluatorFailureKind;
+use crate::evaluator::EvaluatorProgress;
 use crate::logs::DiagnosticLogError;
 use crate::token_usage_types::EvaluatorTurnUsage;
 use std::path::Path;
@@ -32,6 +33,8 @@ pub(crate) trait EvaluatorRunner {
     fn take_retired_sessions(&mut self) -> Vec<String> {
         Vec::new()
     }
+
+    fn set_progress_reporter(&mut self, _progress: Option<EvaluatorProgress>) {}
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

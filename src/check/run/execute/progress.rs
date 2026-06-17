@@ -2,6 +2,7 @@ use crate::check::command::output::{
     start_expectation_report_output, SharedCheckOutput, StartedExpectationReportOutput,
 };
 use crate::check::core::{CheckRecord, SelectedExpectation};
+use crate::evaluator::EvaluatorProgress;
 use crate::fs_util::{ensure_dir_without_symlinks, reject_symlink};
 use crate::git::resolve_git_path;
 use crate::state_paths::CANON_LIVE_REPORT_DIR_GIT_PATH;
@@ -49,6 +50,10 @@ pub(super) fn start_live_expectation_report(
 }
 
 impl StateBackedLiveExpectationReport {
+    pub(super) fn progress(&self) -> EvaluatorProgress {
+        self.output.progress()
+    }
+
     pub(super) fn finish_public_output_or_keep_state_report(self, record: &CheckRecord) {
         let _ = write_live_report_state(
             &self.state_path,

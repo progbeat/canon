@@ -1,4 +1,4 @@
-use crate::evaluator::ModelCatalogFile;
+use crate::evaluator::{EvaluatorProgress, ModelCatalogFile};
 use crate::token_usage_types::{
     ContextCompactionEvent, EvaluatorTurnUsage, TokenUsage, TokenUsageUpdate,
 };
@@ -24,6 +24,7 @@ pub(crate) struct AppServerRunner {
     pub(super) last_turn_usage: Option<EvaluatorTurnUsage>,
     pub(super) retired_sessions: BTreeSet<String>,
     pub(super) session_cwds: BTreeMap<String, PathBuf>,
+    pub(super) progress: Option<EvaluatorProgress>,
     pub(super) no_sandbox: bool,
     pub(super) startup_model_catalog_file: Option<ModelCatalogFile>,
 }
@@ -57,5 +58,27 @@ impl AppServerRunner {
             self.session_cwds.remove(session_id);
         }
         retired
+    }
+
+    pub(crate) fn set_progress_reporter(&mut self, progress: Option<EvaluatorProgress>) {
+        self.progress = progress;
+    }
+
+    pub(crate) fn record_app_server_activity_progress(&self) {
+        if let Some(progress) = &self.progress {
+            progress.record_app_server_activity();
+        }
+    }
+
+    pub(crate) fn record_turn_attempt_failure_progress(&self) {
+        if let Some(progress) = &self.progress {
+            progress.record_turn_attempt_failure();
+        }
+    }
+
+    pub(crate) fn record_no_app_server_activity_warning_progress(&self) {
+        if let Some(progress) = &self.progress {
+            progress.record_no_app_server_activity_warning();
+        }
     }
 }

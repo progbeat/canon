@@ -1,8 +1,6 @@
 use crate::check::core::errors::error_record_from_interrogation_error;
 use crate::check::core::{CheckRecord, InterrogationResult, SelectedExpectation};
-use crate::check::interrogation::state::{
-    should_retry_full_scope_after_error, CheckRuntime, InterrogationRunState,
-};
+use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::interrogation::{
     interrogate_expectation_with_model_fallbacks, scope_narrowing_log_fields,
 };
@@ -20,18 +18,22 @@ pub(crate) struct InterrogationCall<'a> {
     pub(crate) scope: &'a [String],
 }
 
-pub(crate) struct ScopedInterrogation<'a> {
-    pub(crate) runtime: &'a CheckRuntime<'a>,
-    pub(crate) expectation: &'a SelectedExpectation,
-    pub(crate) enforced_scope: &'a mut Vec<String>,
-}
-
 pub(crate) struct PolicyInterrogationResult {
     interrogation: InterrogationResult,
     follow_up_used: bool,
 }
 
 impl PolicyInterrogationResult {
+    pub(crate) fn new(
+        interrogation: InterrogationResult,
+        follow_up_used: bool,
+    ) -> PolicyInterrogationResult {
+        PolicyInterrogationResult {
+            interrogation,
+            follow_up_used,
+        }
+    }
+
     pub(crate) fn interrogation(&self) -> &InterrogationResult {
         &self.interrogation
     }
@@ -43,68 +45,6 @@ impl PolicyInterrogationResult {
     fn follow_up_used(&self) -> bool {
         self.follow_up_used
     }
-}
-
-impl<'a> ScopedInterrogation<'a> {
-    fn call(&self) -> InterrogationCall<'_> {
-        InterrogationCall {
-            runtime: self.runtime,
-            expectation: self.expectation,
-            scope: self.enforced_scope,
-        }
-    }
-}
-
-pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
-    call: ScopedInterrogation<'_>,
-    runner: &mut R,
-    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    interrogation_run_state: &mut InterrogationRunState,
-    xpec_state: &mut XpecStateCache,
-    visible_tree_oid_cache: &mut VisibleTreeOidCache,
-    break_after_tokens: Option<u64>,
-) -> Result<PolicyInterrogationResult, String> {
-    let mut interrogation = interrogate_or_error_record(
-        call.call(),
-        runner,
-        diagnostic_log,
-        interrogation_run_state,
-        xpec_state,
-        visible_tree_oid_cache,
-    )?;
-    let should_stop_after_current_expectation =
-        turn_exceeds_break_after_tokens(&interrogation, break_after_tokens)
-            || turn_has_context_compaction(&interrogation);
-    if should_retry_full_scope_after_error(
-        interrogation.record.error.as_deref(),
-        call.enforced_scope,
-    ) {
-        // Restricted ScopeTooNarrow is not final. The single policy follow-up
-        // retries it once at full scope.
-        *call.enforced_scope = full_scope();
-        interrogation = interrogate_or_error_record(
-            call.call(),
-            runner,
-            diagnostic_log,
-            interrogation_run_state,
-            xpec_state,
-            visible_tree_oid_cache,
-        )?;
-        interrogation.stop_after_current_expectation |= should_stop_after_current_expectation;
-        return Ok(PolicyInterrogationResult {
-            interrogation,
-            follow_up_used: true,
-        });
-    } else if should_stop_after_current_expectation {
-        return Ok(PolicyInterrogationResult {
-            interrogation,
-            follow_up_used: false,
-        });
-    }
-    Ok(PolicyInterrogationResult {
-        interrogation,
-        follow_up_used: false,
-    })
 }
 
 pub(crate) fn interrogate_or_error_record<R: EvaluatorRunner>(

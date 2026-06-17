@@ -1,12 +1,13 @@
 use super::escape::escape_check_output_text;
 use super::shared::{write_stdout_record, SharedCheckOutput};
 use crate::check::core::CheckRecord;
+use crate::evaluator::{EvaluatorProgress, EvaluatorProgressMarker, EvaluatorProgressSnapshot};
 use crate::json_util::compact_json_string_array;
 use std::io::Write;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -17,8 +18,15 @@ pub(crate) struct StartedExpectationReportOutput {
     output: SharedCheckOutput,
     stop: Sender<()>,
     active: Arc<AtomicBool>,
+    progress: EvaluatorProgress,
+    timeline: Arc<Mutex<ProgressTimelineState>>,
     worker: Option<JoinHandle<Result<(), String>>>,
     prefix_completed: bool,
+}
+
+struct ProgressTimelineState {
+    last_snapshot: EvaluatorProgressSnapshot,
+    emitted_elapsed_marker: bool,
 }
 
 pub(crate) fn start_expectation_report_output(
@@ -39,6 +47,14 @@ pub(crate) fn start_expectation_report_output(
     let (stop, stop_requested) = mpsc::channel();
     let active = Arc::new(AtomicBool::new(true));
     let worker_active = active.clone();
+    let progress = EvaluatorProgress::new();
+    let worker_progress = progress.clone();
+    let initial_snapshot = progress.snapshot();
+    let timeline = Arc::new(Mutex::new(ProgressTimelineState {
+        last_snapshot: initial_snapshot,
+        emitted_elapsed_marker: false,
+    }));
+    let worker_timeline = timeline.clone();
     let mut dot_output = output.clone();
     let worker = thread::spawn(move || loop {
         match stop_requested.recv_timeout(LIVE_REPORT_DOT_INTERVAL) {
@@ -47,7 +63,20 @@ pub(crate) fn start_expectation_report_output(
                 if !worker_active.load(Ordering::Acquire) {
                     return Ok(());
                 }
-                write_stdout_record(&mut dot_output, b".", "check live report dot")?;
+                let marker = worker_progress.with_snapshot(|snapshot| {
+                    let mut timeline = worker_timeline
+                        .lock()
+                        .map_err(|_| "check live report progress state poisoned")?;
+                    let marker = snapshot.marker_since(timeline.last_snapshot);
+                    timeline.last_snapshot = snapshot;
+                    timeline.emitted_elapsed_marker = true;
+                    Ok::<EvaluatorProgressMarker, String>(marker)
+                })??;
+                write_stdout_record(
+                    &mut dot_output,
+                    marker.as_str().as_bytes(),
+                    "check live report progress marker",
+                )?;
             }
         }
     });
@@ -56,21 +85,32 @@ pub(crate) fn start_expectation_report_output(
         output,
         stop,
         active,
+        progress,
+        timeline,
         worker: Some(worker),
         prefix_completed,
     }
 }
 
 impl StartedExpectationReportOutput {
+    pub(crate) fn progress(&self) -> EvaluatorProgress {
+        self.progress.clone()
+    }
+
     pub(crate) fn finish_with_record(mut self, record: &CheckRecord) -> bool {
         // Once the report prefix is visible, final result output has priority
         // over delayed dot-worker cleanup errors.
         let _ = self.stop_dot_worker();
-        let completion = if self.prefix_completed {
+        let mut completion = if self.prefix_completed {
             render_check_output_record_completion(record)
         } else {
             render_check_output_record_with_initial_dot(record)
         };
+        if self.prefix_completed {
+            if let Some(marker) = self.pending_final_progress_marker() {
+                completion.insert_str(0, marker.as_str());
+            }
+        }
         let mut output = self.output.clone();
         if write_stdout_record(&mut output, completion.as_bytes(), "check result").is_err() {
             // Human byte sinks can reject all writes; no CLI can force bytes
@@ -95,6 +135,27 @@ impl StartedExpectationReportOutput {
         worker
             .join()
             .map_err(|_| "check live report dot thread panicked".to_string())?
+    }
+
+    fn pending_final_progress_marker(&self) -> Option<EvaluatorProgressMarker> {
+        self.progress
+            .with_snapshot(|snapshot| {
+                let mut timeline = self.timeline.lock().ok()?;
+                if !timeline.emitted_elapsed_marker {
+                    return None;
+                }
+                if !snapshot.has_event_since(timeline.last_snapshot) {
+                    return None;
+                }
+                let marker = snapshot.marker_since(timeline.last_snapshot);
+                if marker == EvaluatorProgressMarker::Idle {
+                    return None;
+                }
+                timeline.last_snapshot = snapshot;
+                Some(marker)
+            })
+            .ok()
+            .flatten()
     }
 }
 

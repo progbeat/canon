@@ -69,6 +69,7 @@ impl AppServerRunner {
             last_turn_usage: None,
             retired_sessions: Default::default(),
             session_cwds: BTreeMap::new(),
+            progress: None,
             no_sandbox,
             startup_model_catalog_file: model_catalog_file.take(),
         };
