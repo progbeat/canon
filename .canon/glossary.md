@@ -10,7 +10,8 @@
 
 **expectation instructions** are the resolved `instructions` value for an expectation, or empty text when none is configured.
 
-**evaluator thread** is an ephemeral evaluator interaction context with no persisted history. It may only be reused for an interrogation with the same evaluator model, `visibleTreeOid` value from `$XPECS_DIR/$ID/last-pass.json` (empty when absent), and expectation instructions.
+**evaluator thread** is an ephemeral evaluator interaction context with no persisted history.
+It may only be reused for an interrogation with the same evaluator model and the same rendered developer instructions.
 
 ---
 
