@@ -1,11 +1,13 @@
 use crate::fs_util::ensure_dir_without_symlinks;
-use crate::hash::hash_60;
 use crate::platform;
 use std::env;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 const EVALUATOR_CODEX_HOME_AUTH_FILES: &[&str] = &["auth.json", "installation_id", "version.json"];
+const EVALUATOR_CODEX_HOME_RANDOM_BYTES: usize = 16;
+const EVALUATOR_CODEX_HOME_RANDOM_ATTEMPTS: usize = 1000;
 const SYSTEM_SKILLS_MARKER: &str = ".codex-system-skills.marker";
 const EVALUATOR_CODEX_HOME_RESET_DIRS: &[&str] =
     &["mcp", "memories", "plugins", "sessions", "skills"];
@@ -43,22 +45,46 @@ pub(crate) fn prepare_evaluator_codex_home(root: &Path) -> Result<PathBuf, Strin
     Ok(codex_home)
 }
 
-fn evaluator_codex_home_path(root: &Path) -> Result<PathBuf, String> {
-    let root = root
-        .canonicalize()
-        .map_err(|err| format!("failed to canonicalize evaluator root: {}", err))?;
+fn evaluator_codex_home_path(_root: &Path) -> Result<PathBuf, String> {
     let temp_root = env::temp_dir()
         .canonicalize()
         .map_err(|err| format!("failed to canonicalize temp dir: {}", err))?;
-    let root_key = hash_60(root.to_string_lossy().as_bytes());
-    Ok(temp_root
-        .join("canon-evaluator-codex-home")
-        .join(root_key)
-        .join(".codex"))
+    for _ in 0..EVALUATOR_CODEX_HOME_RANDOM_ATTEMPTS {
+        let parent = temp_root.join(format!(
+            "canon-evaluator-codex-home-{}",
+            random_hex(EVALUATOR_CODEX_HOME_RANDOM_BYTES)?
+        ));
+        match platform::create_private_dir(&parent) {
+            Ok(()) => return Ok(parent.join(".codex")),
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(format!("failed to create {}: {}", parent.display(), err)),
+        }
+    }
+    Err(format!(
+        "failed to allocate unique evaluator Codex home under {}",
+        temp_root.display()
+    ))
 }
 
 fn ensure_evaluator_codex_home_dir(path: &Path) -> Result<(), String> {
     ensure_dir_without_symlinks(path)
+}
+
+fn random_hex(len: usize) -> Result<String, String> {
+    let mut bytes = vec![0u8; len];
+    getrandom::fill(&mut bytes)
+        .map_err(|err| format!("failed to generate evaluator Codex home name: {}", err))?;
+    Ok(hex(&bytes))
+}
+
+fn hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(DIGITS[(byte >> 4) as usize] as char);
+        out.push(DIGITS[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 fn write_empty_system_skills_marker(
@@ -138,13 +164,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn evaluator_codex_home_path_does_not_encode_repo_root() {
+    fn evaluator_codex_home_path_uses_private_random_temp_parent() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).canonicalize().unwrap();
-        let codex_home = evaluator_codex_home_path(&root).unwrap();
+        let first = evaluator_codex_home_path(&root).unwrap();
+        let second = evaluator_codex_home_path(&root).unwrap();
 
-        assert_eq!(codex_home.file_name(), Some(std::ffi::OsStr::new(".codex")));
-        assert!(codex_home.starts_with(env::temp_dir().canonicalize().unwrap()));
-        assert!(!codex_home.starts_with(&root));
-        assert!(!codex_home.to_string_lossy().contains(&root.to_string_lossy()[..]));
+        assert_ne!(first, second);
+        for codex_home in [&first, &second] {
+            assert_eq!(codex_home.file_name(), Some(std::ffi::OsStr::new(".codex")));
+            assert!(codex_home.starts_with(env::temp_dir().canonicalize().unwrap()));
+            assert!(!codex_home.starts_with(&root));
+            assert!(!codex_home.to_string_lossy().contains(&root.to_string_lossy()[..]));
+            assert!(codex_home.parent().unwrap().is_dir());
+        }
+        let _ = fs::remove_dir_all(first.parent().unwrap());
+        let _ = fs::remove_dir_all(second.parent().unwrap());
     }
 }

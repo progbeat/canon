@@ -68,17 +68,14 @@ fn ask_query<R: EvaluatorRunner>(
         diagnostic_log,
         state,
     )?;
+    // Query mode uses the same Interrogation Policy q-scope verification
+    // follow-up as expectation mode. All query-mode dependence on
+    // `qScopeSuggestion` is contained in this verification planning helper.
+    let q_scope_verification_scope =
+        q_scope_verification_scope_for_query_answer(runtime, query, state, &active_scope, &attempt)
+            .map_err(|err| err.to_string())?;
     let mut result = attempt.result;
-    let proposed_q_scope =
-        // `ScopeTooNarrow` full-scope retry and q-scope verification share the
-        // same single follow-up budget in query mode too.
-        if should_attempt_q_scope_verification(attempt.follow_up_used, &result.answer) {
-            scope_for_verification(runtime, query, state, &active_scope, &result.answer)
-                .map_err(|err| err.to_string())?
-        } else {
-            None
-        };
-    if let Some(proposed_scope) = proposed_q_scope {
+    if let Some(proposed_scope) = q_scope_verification_scope {
         let narrowed = ask_once(
             runtime,
             query,
@@ -220,20 +217,23 @@ fn ask_once_with_model<R: EvaluatorRunner>(
     )
 }
 
-fn scope_for_verification(
+fn q_scope_verification_scope_for_query_answer(
     runtime: &CheckRuntime<'_>,
     query: QueryRequest<'_>,
     state: &mut InterrogationRunState,
     enforced_scope: &[String],
-    answer: &ParsedAnswer,
+    attempt: &QueryAttempt,
 ) -> Result<Option<Vec<String>>, EvaluatorError> {
-    if answer.error.is_some() {
+    // `ScopeTooNarrow` full-scope retry and q-scope verification share the
+    // same single follow-up budget in query mode too.
+    if !q_scope_verification_follow_up_is_available(attempt.follow_up_used, &attempt.result.answer)
+    {
         return Ok(None);
     }
     question_scope_suggestion_scope_for_independent_verification(
         runtime,
         query.agent(&runtime.config.agent),
-        answer.question_scope_suggestion.as_deref(),
+        attempt.result.answer.question_scope_suggestion.as_deref(),
         enforced_scope,
         &mut state.visible_tree_oid_cache,
     )
@@ -244,7 +244,10 @@ fn answer_is_accepted(narrowed: &ParsedAnswer) -> bool {
     narrowed.error.is_none()
 }
 
-fn should_attempt_q_scope_verification(follow_up_used: bool, answer: &ParsedAnswer) -> bool {
+fn q_scope_verification_follow_up_is_available(
+    follow_up_used: bool,
+    answer: &ParsedAnswer,
+) -> bool {
     !follow_up_used && answer.error.is_none()
 }
 
@@ -320,9 +323,9 @@ mod tests {
         );
         let error = ParsedAnswer::error(ERROR_SCOPE_TOO_NARROW.to_string(), "evidence".to_string());
 
-        assert!(should_attempt_q_scope_verification(false, &answer));
-        assert!(!should_attempt_q_scope_verification(true, &answer));
-        assert!(!should_attempt_q_scope_verification(false, &error));
+        assert!(q_scope_verification_follow_up_is_available(false, &answer));
+        assert!(!q_scope_verification_follow_up_is_available(true, &answer));
+        assert!(!q_scope_verification_follow_up_is_available(false, &error));
     }
 
     #[test]

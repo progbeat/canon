@@ -31,8 +31,10 @@ pub(crate) fn evaluator_thread_reuse_key(
     checked_tree_oid: &str,
 ) -> Result<String, String> {
     // Evaluator thread reuse is context reuse, not a deterministic result cache.
-    // A reused thread keeps the original developer instructions, so every
-    // input that renders those instructions must participate in the key.
+    // A reused thread keeps its original developer instructions and live
+    // thread-start context, so the key includes the model, the inputs that
+    // render the current developer-instructions template, and the non-rendered
+    // context that changes the evaluator cwd or tools.
     let mut key = String::new();
     app_server_model_key(model).push_cache_key_part(&mut key);
     key.push('\0');
@@ -189,8 +191,8 @@ mod tests {
 pub(crate) struct InterrogationRunState {
     pub(crate) session_isolations: BTreeMap<String, NaiveIsolationGuard>,
     // This is a run-level pool of evaluator threads, not one thread. The
-    // reuse key enforces the glossary's model/visible-tree/instructions
-    // invariant and also splits on stricter developer-instruction inputs.
+    // reuse key enforces the glossary's model/rendered-developer-instructions
+    // invariant and also splits on stricter live thread-start context.
     pub(crate) thread_sessions_by_reuse_key: BTreeMap<String, String>,
     pub(crate) session_instructions: BTreeMap<String, String>,
     pub(crate) session_roots_by_id: BTreeMap<String, PathBuf>,
