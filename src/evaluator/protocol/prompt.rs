@@ -74,6 +74,8 @@ pub(crate) fn evaluator_turn_prompt(
     target: Option<&str>,
     last_pass: Option<&LastResult>,
 ) -> Result<String, String> {
+    // `diff_from` is template input for this fresh evaluator turn only. Cached
+    // results are emitted without rendering this prompt.
     render_minijinja_resource_template(
         root,
         template_output_dir,
@@ -511,7 +513,6 @@ mod tests {
             }),
             q_scope: vec!["src/a.rs".to_string()],
             visible_scope: vec!["src/a.rs".to_string()],
-            diff_from: Some(crate::config_types::DEFAULT_DIFF_FROM.to_string()),
             checked_tree_oid: Some("checked-tree".to_string()),
             visible_tree_oid: Some("visible-tree".to_string()),
         };
@@ -550,7 +551,6 @@ mod tests {
             }),
             q_scope: vec!["src/a.rs".to_string()],
             visible_scope: vec!["src/a.rs".to_string()],
-            diff_from: Some(crate::config_types::DEFAULT_DIFF_FROM.to_string()),
             checked_tree_oid: Some("checked-tree".to_string()),
             visible_tree_oid: Some("visible-tree".to_string()),
         };

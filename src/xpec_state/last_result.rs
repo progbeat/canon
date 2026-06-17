@@ -51,6 +51,8 @@ impl LastResultStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct LastResult {
+    // This struct is the persisted last-result schema. Prompt-rendering inputs
+    // such as `diff-from` are intentionally not part of this state record.
     #[serde(rename = "responseTimestamp")]
     pub(crate) response_timestamp: String,
     #[serde(rename = "updatedTimestamp")]
@@ -61,8 +63,6 @@ pub(crate) struct LastResult {
     pub(crate) q_scope: Vec<String>,
     #[serde(rename = "visibleScope")]
     pub(crate) visible_scope: Vec<String>,
-    #[serde(rename = "diffFrom", default, skip_serializing_if = "Option::is_none")]
-    pub(crate) diff_from: Option<String>,
     #[serde(
         rename = "checkedTreeOid",
         default,
@@ -168,7 +168,6 @@ impl XpecStateCache {
             response: normalized_response_from_record(record),
             q_scope: q_scope.clone(),
             visible_scope,
-            diff_from: Some(expectation.diff_from.clone()),
             checked_tree_oid: (status == LastResultStatus::Pass)
                 .then(|| checked_tree_oid.to_string()),
             visible_tree_oid: matches!(status, LastResultStatus::Pass | LastResultStatus::Fail)

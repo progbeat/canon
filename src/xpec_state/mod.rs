@@ -5,7 +5,7 @@ mod last_result;
 mod tests;
 
 use crate::check::{CheckRecord, CheckResult, SelectedExpectation};
-use crate::config_types::{AgentConfig, DEFAULT_DIFF_FROM};
+use crate::config_types::AgentConfig;
 use crate::git::{resolve_git_path, TreeSource, VisibleTreeOidCache};
 use crate::scope::q_scope_from_visible_scope;
 use crate::state_paths::CANON_XPECS_DIR_GIT_PATH;
@@ -99,7 +99,6 @@ impl XpecStateCache {
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .flatten()
-            .filter(|result| last_result_diff_from_matches(expectation, result))
             .max_by_key(|result| parse_record_timestamp(&result.updated_timestamp).unwrap_or(0)))
     }
 }
@@ -132,6 +131,9 @@ pub(crate) fn cached_last_result_for_expectation(
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
     lookup: CachedLastResultLookup,
 ) -> Result<Option<CachedLastResultHit>, String> {
+    // Cached results are answers for the checked visible tree. `diff-from`
+    // only chooses the left-hand tree for prompt-rendered Git diffs during
+    // fresh evaluator work, so it is not part of cache identity.
     if lookup.include_same_tree {
         if let Some((result, status)) = same_tree_last_result(
             root,
@@ -224,9 +226,6 @@ fn same_tree_last_result(
         let Some(result) = state_cache.read_last_result(root, expectation, last_status)? else {
             continue;
         };
-        if !last_result_diff_from_matches(expectation, &result) {
-            continue;
-        }
         let Some(stored_visible_tree_oid) = result.visible_tree_oid.as_deref() else {
             continue;
         };
@@ -271,8 +270,4 @@ fn cooldown_last_result(
         return Ok(None);
     }
     Ok(Some(result))
-}
-
-fn last_result_diff_from_matches(expectation: &SelectedExpectation, result: &LastResult) -> bool {
-    result.diff_from.as_deref().unwrap_or(DEFAULT_DIFF_FROM) == expectation.diff_from
 }

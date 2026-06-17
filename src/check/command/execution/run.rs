@@ -138,10 +138,12 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         Ok(report) => CompletedCheckRun {
             report,
             error: None,
+            interrupted: false,
         },
         Err(err) => CompletedCheckRun {
             report: *err.report,
             error: Some(err.error),
+            interrupted: err.interrupted,
         },
     };
     finish_completed_check(
@@ -254,7 +256,10 @@ fn finish_completed_check(
             diagnostic_log,
             result_output,
             check_caches,
-            write_agent_message: write_agent_message && completed_error.is_none(),
+            // Agent messages are specified for completed default runs. A
+            // resource/control interruption can leave pending expectations
+            // after a visible result, so it is reported without an instruction.
+            write_agent_message: write_agent_message && !completed.interrupted,
         },
         &completed.report,
         completed_error.as_deref(),

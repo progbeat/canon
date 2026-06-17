@@ -18,6 +18,7 @@ pub(crate) use line_break::{contains_line_break, is_line_break_char};
 pub(crate) use options::{CheckCommandArgs, CheckOptions, RawCheckOptions};
 pub(crate) use record::{CheckRecord, CheckRecordOutcome};
 pub(crate) use run_report::{
-    check_run_error, for_each_unique_report_record, CachedExpectation, CheckRunError,
-    CheckRunReport, InterrogationResult, QueryExpectationRecord, QueryResult,
+    check_run_error, for_each_unique_report_record, interrupted_check_run_error,
+    CachedExpectation, CheckRunError, CheckRunReport, InterrogationResult, QueryExpectationRecord,
+    QueryResult,
 };

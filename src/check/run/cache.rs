@@ -40,6 +40,9 @@ pub(crate) fn cached_result_for_expectation(
     if !lookup.include_same_tree && !lookup.include_cooldown {
         return Ok(None);
     }
+    // A cache hit is converted straight into the CheckRecord that the check
+    // output layer prints. It does not render evaluator prompts; prompt-only
+    // inputs such as `diff-from` apply only to fresh evaluator turns.
     let Some(hit) = cached_last_result_for_expectation(
         root,
         source,
