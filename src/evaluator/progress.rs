@@ -1,5 +1,9 @@
 use std::sync::{Arc, Mutex};
 
+// Shared progress handle for one evaluated expectation. Check execution owns the
+// handle, installs it on the evaluator runner, and records q-scope/full-scope
+// follow-up starts. App-server transport records activity, no-progress warning
+// accumulation, and exhausted no-progress turn timeouts through the same handle.
 #[derive(Clone, Default)]
 pub(crate) struct EvaluatorProgress {
     state: Arc<Mutex<EvaluatorProgressState>>,
@@ -8,8 +12,9 @@ pub(crate) struct EvaluatorProgress {
 #[derive(Default)]
 struct EvaluatorProgressState {
     app_server_activity: u64,
-    turn_attempt_failure: u64,
+    turn_timeout: u64,
     idle_accumulating: bool,
+    idle_accumulation: u64,
     full_scope_retry: u64,
     q_scope_verification: u64,
 }
@@ -17,15 +22,16 @@ struct EvaluatorProgressState {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct EvaluatorProgressSnapshot {
     app_server_activity: u64,
-    turn_attempt_failure: u64,
+    turn_timeout: u64,
     idle_accumulating: bool,
+    idle_accumulation: u64,
     full_scope_retry: u64,
     q_scope_verification: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EvaluatorProgressMarker {
-    TurnAttemptFailure,
+    TurnTimeout,
     Idle,
     FullScopeRetry,
     QScopeVerification,
@@ -44,16 +50,17 @@ impl EvaluatorProgress {
         }
     }
 
-    pub(crate) fn record_turn_attempt_failure(&self) {
+    pub(crate) fn record_turn_timeout(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.idle_accumulating = false;
-            state.turn_attempt_failure = state.turn_attempt_failure.saturating_add(1);
+            state.turn_timeout = state.turn_timeout.saturating_add(1);
         }
     }
 
     pub(crate) fn record_no_app_server_activity_warning(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.idle_accumulating = true;
+            state.idle_accumulation = state.idle_accumulation.saturating_add(1);
         }
     }
 
@@ -89,8 +96,9 @@ impl EvaluatorProgressState {
     fn snapshot(&self) -> EvaluatorProgressSnapshot {
         EvaluatorProgressSnapshot {
             app_server_activity: self.app_server_activity,
-            turn_attempt_failure: self.turn_attempt_failure,
+            turn_timeout: self.turn_timeout,
             idle_accumulating: self.idle_accumulating,
+            idle_accumulation: self.idle_accumulation,
             full_scope_retry: self.full_scope_retry,
             q_scope_verification: self.q_scope_verification,
         }
@@ -98,22 +106,16 @@ impl EvaluatorProgressState {
 }
 
 impl EvaluatorProgressSnapshot {
-    pub(crate) fn has_event_since(self, previous: EvaluatorProgressSnapshot) -> bool {
-        self.app_server_activity != previous.app_server_activity
-            || self.turn_attempt_failure != previous.turn_attempt_failure
-            || self.idle_accumulating != previous.idle_accumulating
-            || self.full_scope_retry != previous.full_scope_retry
-            || self.q_scope_verification != previous.q_scope_verification
-    }
-
     pub(crate) fn marker_since(
         self,
         previous: EvaluatorProgressSnapshot,
     ) -> EvaluatorProgressMarker {
-        if self.turn_attempt_failure != previous.turn_attempt_failure {
-            return EvaluatorProgressMarker::TurnAttemptFailure;
+        if self.turn_timeout != previous.turn_timeout {
+            return EvaluatorProgressMarker::TurnTimeout;
         }
-        if self.idle_accumulating && self.app_server_activity == previous.app_server_activity {
+        if self.idle_accumulation != previous.idle_accumulation
+            || (self.idle_accumulating && self.app_server_activity == previous.app_server_activity)
+        {
             return EvaluatorProgressMarker::Idle;
         }
         if self.full_scope_retry != previous.full_scope_retry {
@@ -129,7 +131,7 @@ impl EvaluatorProgressSnapshot {
 impl EvaluatorProgressMarker {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
-            EvaluatorProgressMarker::TurnAttemptFailure => "×",
+            EvaluatorProgressMarker::TurnTimeout => "×",
             EvaluatorProgressMarker::Idle => "~",
             EvaluatorProgressMarker::FullScopeRetry => "↗",
             EvaluatorProgressMarker::QScopeVerification => "↘",
@@ -170,6 +172,14 @@ mod tests {
         );
         let before = progress.snapshot();
 
+        progress.record_no_app_server_activity_warning();
+        progress.record_app_server_activity();
+        assert_eq!(
+            progress.snapshot().marker_since(before),
+            EvaluatorProgressMarker::Idle
+        );
+        let before = progress.snapshot();
+
         assert_eq!(
             progress.snapshot().marker_since(before),
             EvaluatorProgressMarker::AppServerActivity
@@ -194,10 +204,10 @@ mod tests {
             EvaluatorProgressMarker::FullScopeRetry
         );
 
-        progress.record_turn_attempt_failure();
+        progress.record_turn_timeout();
         assert_eq!(
             progress.snapshot().marker_since(before),
-            EvaluatorProgressMarker::TurnAttemptFailure
+            EvaluatorProgressMarker::TurnTimeout
         );
     }
 }

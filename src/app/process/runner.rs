@@ -70,9 +70,9 @@ impl AppServerRunner {
         }
     }
 
-    pub(crate) fn record_turn_attempt_failure_progress(&self) {
+    pub(crate) fn record_turn_timeout_progress(&self) {
         if let Some(progress) = &self.progress {
-            progress.record_turn_attempt_failure();
+            progress.record_turn_timeout();
         }
     }
 

@@ -86,7 +86,7 @@ impl AppServerRunner {
         let id = match self.send_json_rpc_request(method, &request.params, "request") {
             Ok(id) => id,
             Err(err) => {
-                self.record_turn_attempt_failure_unless_interrupted(&err);
+                self.record_turn_timeout_if_error_kind(&err);
                 return Err(err);
             }
         };
@@ -109,20 +109,20 @@ impl AppServerRunner {
                 Some(thread_id.as_str()),
                 turn_id.as_deref(),
             ) {
-                self.record_turn_attempt_failure_unless_interrupted(&err);
+                self.record_turn_timeout_if_error_kind(&err);
                 return Err(err);
             }
             let message = match self.read_message_or_timeout() {
                 Ok(message) => message,
                 Err(err) => {
-                    self.record_turn_attempt_failure_unless_interrupted(&err);
+                    self.record_turn_timeout_if_error_kind(&err);
                     return Err(err);
                 }
             };
             let Some(message) = message else {
                 let now = Instant::now();
                 if turn_idle_timed_out(last_activity, now) {
-                    self.record_turn_attempt_failure_progress();
+                    self.record_turn_timeout_progress();
                     return Err(EvaluatorError::failure(
                         EvaluatorFailureKind::TurnTimeout,
                         format!(
@@ -144,7 +144,6 @@ impl AppServerRunner {
             let envelope = match app_server_message(&message) {
                 Ok(envelope) => envelope,
                 Err(error) => {
-                    self.record_turn_attempt_failure_progress();
                     return Err(EvaluatorError::failure(
                         EvaluatorFailureKind::UnknownAppServer,
                         error,
@@ -159,7 +158,7 @@ impl AppServerRunner {
                     Some(thread_id.as_str()),
                     turn_id.as_deref(),
                 ) {
-                    self.record_turn_attempt_failure_unless_interrupted(&err);
+                    self.record_turn_timeout_if_error_kind(&err);
                     return Err(err);
                 }
             }
@@ -248,11 +247,7 @@ impl AppServerRunner {
         thread_id: &str,
         turn_id: Option<String>,
     ) -> Result<String, EvaluatorError> {
-        let result = self.finish_turn_request(text, completed_text, thread_id, turn_id);
-        if result.is_err() {
-            self.record_turn_attempt_failure_progress();
-        }
-        result
+        self.finish_turn_request(text, completed_text, thread_id, turn_id)
     }
 
     fn finish_turn_request(
@@ -280,7 +275,6 @@ impl AppServerRunner {
         thread_id: &str,
         turn_id: Option<&str>,
     ) -> EvaluatorError {
-        self.record_turn_attempt_failure_progress();
         if let Err(err) = self.drain_token_usage_updates() {
             return err;
         }
@@ -288,9 +282,9 @@ impl AppServerRunner {
         app_server_failure_from_value(method, error)
     }
 
-    fn record_turn_attempt_failure_unless_interrupted(&self, err: &EvaluatorError) {
-        if err.message_str() != "interrupted" {
-            self.record_turn_attempt_failure_progress();
+    fn record_turn_timeout_if_error_kind(&self, err: &EvaluatorError) {
+        if err.kind() == Some(EvaluatorFailureKind::TurnTimeout) {
+            self.record_turn_timeout_progress();
         }
     }
 }
