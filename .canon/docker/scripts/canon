@@ -5,15 +5,17 @@ image="${CANON_DOCKER_IMAGE:-ghcr.io/progbeat/canon:latest}"
 project_root="$(git rev-parse --path-format=absolute --show-toplevel)"
 
 # Run Canon's Docker image with this repository root mounted inside the
-# container.
+# container. Command arguments are passed through unchanged.
 #
-# The repository root is bind-mounted read/write so commands can update project
-# files, such as `canon init` creating .canon/check.yml, and Canon's Git-path
-# state. Command arguments are passed through unchanged. The container image
-# filesystem is read-only; writable runtime files live on /scratch tmpfs or
-# explicit bind mounts. The local Codex config is mounted read-only. This wrapper
-# assumes a normal Git repository checkout; Git worktrees are not currently
-# supported.
+# Host-side trust boundary:
+# - the repository root, including `.git`, is mounted read/write so Canon can
+#   update project files and use Git plumbing such as `git write-tree`;
+# - the local Codex config is mounted read-only;
+# - the container image filesystem is read-only, so other writable runtime files
+#   live on /scratch tmpfs or explicit bind mounts.
+#
+# This wrapper assumes a normal Git repository checkout; Git worktrees are not
+# currently supported.
 exec docker run --rm -i \
   --user "$(id -u):$(id -g)" \
   --cap-drop=ALL \
