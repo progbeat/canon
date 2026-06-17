@@ -179,6 +179,7 @@ mod tests {
             question: "Does it pass?".to_string(),
             expected_answer: "yes".to_string(),
             instructions: String::new(),
+            diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
             target: Option::<ExpectationTarget>::None,
             question_answer_only: false,
             agent: AgentConfig::default(),

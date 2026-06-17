@@ -27,7 +27,7 @@ const EVALUATOR_TURN_PROMPT_TEMPLATE: &str =
 pub(crate) struct DeveloperInstructionsContext<'a> {
     pub(crate) root: &'a Path,
     pub(crate) template_output_dir: &'a Path,
-    pub(crate) against_tree_oid: &'a str,
+    pub(crate) diff_from_tree_oid: &'a str,
     pub(crate) checked_tree_oid: &'a str,
     pub(crate) expectation_instructions: &'a str,
     pub(crate) visible_scope: &'a [String],
@@ -56,7 +56,7 @@ pub(crate) fn developer_instructions(
             "expectation": {
                 "instructions": context.expectation_instructions,
             },
-            "against_tree_oid": context.against_tree_oid,
+            "diff_from_tree_oid": context.diff_from_tree_oid,
             "checked_tree_oid": context.checked_tree_oid,
             "last_pass": context.last_pass,
             "visible_scope": context.visible_scope,
@@ -70,6 +70,7 @@ pub(crate) fn evaluator_turn_prompt(
     template_output_dir: &Path,
     question: &str,
     expected_answer: &str,
+    diff_from: &str,
     target: Option<&str>,
     last_pass: Option<&LastResult>,
 ) -> Result<String, String> {
@@ -81,6 +82,7 @@ pub(crate) fn evaluator_turn_prompt(
             "question": question,
             "expectation": {
                 "a": expected_answer,
+                "diff_from": diff_from,
                 "target": target.unwrap_or(""),
             },
             "last_pass": last_pass,
@@ -509,6 +511,7 @@ mod tests {
             }),
             q_scope: vec!["src/a.rs".to_string()],
             visible_scope: vec!["src/a.rs".to_string()],
+            diff_from: Some(crate::config_types::DEFAULT_DIFF_FROM.to_string()),
             checked_tree_oid: Some("checked-tree".to_string()),
             visible_tree_oid: Some("visible-tree".to_string()),
         };
@@ -519,6 +522,7 @@ mod tests {
             &output_dir,
             "Does it pass?",
             "yes",
+            crate::config_types::DEFAULT_DIFF_FROM,
             Some("diff"),
             Some(&last_pass),
         )
@@ -530,6 +534,41 @@ mod tests {
         // that was used as template input.
         assert!(prompt.contains(r#""qScopeSuggestion": ["."]"#));
         assert!(!prompt.contains(r#""qScopeSuggestion": ["src/a.rs"]"#));
+        let _ = fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn target_diff_prompt_uses_expected_answer_when_diff_from_is_not_checkpoint() {
+        let last_pass = LastResult {
+            response_timestamp: "1970-01-01T00:00:01Z".to_string(),
+            updated_timestamp: "1970-01-01T00:00:01Z".to_string(),
+            status: LastResultStatus::Pass,
+            response: json!({
+                "answer": "no",
+                "evidence": "`src/a.rs`",
+                "qScopeSuggestion": ["src/a.rs"],
+            }),
+            q_scope: vec!["src/a.rs".to_string()],
+            visible_scope: vec!["src/a.rs".to_string()],
+            diff_from: Some(crate::config_types::DEFAULT_DIFF_FROM.to_string()),
+            checked_tree_oid: Some("checked-tree".to_string()),
+            visible_tree_oid: Some("visible-tree".to_string()),
+        };
+        let output_dir = test_output_dir("turn-prompt-against-tree");
+
+        let prompt = evaluator_turn_prompt(
+            Path::new("."),
+            &output_dir,
+            "Does it pass?",
+            "yes",
+            crate::config_types::AGAINST_TREE_DIFF_FROM,
+            Some("diff"),
+            Some(&last_pass),
+        )
+        .unwrap();
+
+        assert!(prompt.contains(r#""answer": "yes""#));
+        assert!(!prompt.contains(r#""answer": "no""#));
         let _ = fs::remove_dir_all(output_dir);
     }
 

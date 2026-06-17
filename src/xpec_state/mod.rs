@@ -5,7 +5,7 @@ mod last_result;
 mod tests;
 
 use crate::check::{CheckRecord, CheckResult, SelectedExpectation};
-use crate::config_types::AgentConfig;
+use crate::config_types::{AgentConfig, DEFAULT_DIFF_FROM};
 use crate::git::{resolve_git_path, TreeSource, VisibleTreeOidCache};
 use crate::scope::q_scope_from_visible_scope;
 use crate::state_paths::CANON_XPECS_DIR_GIT_PATH;
@@ -99,6 +99,7 @@ impl XpecStateCache {
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .flatten()
+            .filter(|result| last_result_diff_from_matches(expectation, result))
             .max_by_key(|result| parse_record_timestamp(&result.updated_timestamp).unwrap_or(0)))
     }
 }
@@ -223,6 +224,9 @@ fn same_tree_last_result(
         let Some(result) = state_cache.read_last_result(root, expectation, last_status)? else {
             continue;
         };
+        if !last_result_diff_from_matches(expectation, &result) {
+            continue;
+        }
         let Some(stored_visible_tree_oid) = result.visible_tree_oid.as_deref() else {
             continue;
         };
@@ -267,4 +271,8 @@ fn cooldown_last_result(
         return Ok(None);
     }
     Ok(Some(result))
+}
+
+fn last_result_diff_from_matches(expectation: &SelectedExpectation, result: &LastResult) -> bool {
+    result.diff_from.as_deref().unwrap_or(DEFAULT_DIFF_FROM) == expectation.diff_from
 }

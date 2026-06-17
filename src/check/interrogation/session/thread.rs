@@ -4,7 +4,7 @@ use crate::check::interrogation::finalize_interrogation_response;
 use crate::check::interrogation::state::{
     evaluator_thread_reuse_key, CheckRuntime, InterrogationRunState,
 };
-use crate::config_types::AgentConfig;
+use crate::config_types::{AgentConfig, AGAINST_TREE_DIFF_FROM, DEFAULT_DIFF_FROM};
 use crate::evaluator::{
     ask_once as ask_evaluator_once, create_prompt_template_output_dir, developer_instructions,
     effective_thinking, evaluator_turn_prompt, is_context_window_failure,
@@ -26,6 +26,7 @@ pub(crate) struct ThreadTurnRequest<'a> {
     pub(crate) thinking: &'a str,
     pub(crate) expectation_id: Option<&'a str>,
     pub(crate) expectation_instructions: &'a str,
+    pub(crate) diff_from_tree_oid: &'a str,
     pub(crate) prompt: &'a str,
     pub(crate) template_output_dir: &'a Path,
     pub(crate) last_pass: Option<&'a LastResult>,
@@ -51,17 +52,13 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         .last_pass
         .and_then(|last_pass| last_pass.visible_tree_oid.as_deref())
         .unwrap_or("");
-    let diff_base_tree_oid = request
-        .last_pass
-        .and_then(|last_pass| last_pass.checked_tree_oid.as_deref())
-        .unwrap_or(&runtime.tree_context.against_tree_oid);
     let session_key = evaluator_thread_reuse_key(
         request.agent,
         request.enforced_scope,
         request.model,
         reuse_visible_tree_oid,
         request.expectation_instructions,
-        diff_base_tree_oid,
+        request.diff_from_tree_oid,
         &runtime.tree_context.checked_tree_oid,
     )
     .map_err(EvaluatorError::message)?;
@@ -225,7 +222,7 @@ fn start_thread_session<R: EvaluatorRunner>(
     let developer_instructions = developer_instructions(DeveloperInstructionsContext {
         root: runtime.root,
         template_output_dir: request.template_output_dir,
-        against_tree_oid: &runtime.tree_context.against_tree_oid,
+        diff_from_tree_oid: request.diff_from_tree_oid,
         checked_tree_oid: &runtime.tree_context.checked_tree_oid,
         expectation_instructions: request.expectation_instructions,
         visible_scope: &visible_scope,
@@ -368,11 +365,13 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
 ) -> Result<InterrogationResult, EvaluatorError> {
     let template_output_dir =
         create_prompt_template_output_dir().map_err(EvaluatorError::message)?;
+    let diff_from_tree_oid = resolve_diff_from_tree_oid(runtime, expectation, last_pass)?;
     let prompt = evaluator_turn_prompt(
         runtime.root,
         &template_output_dir,
         &expectation.question,
         &expectation.expected_answer,
+        &expectation.diff_from,
         expectation.target.as_ref().map(|target| target.as_str()),
         last_pass,
     )
@@ -390,6 +389,7 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
             thinking,
             expectation_id: Some(&expectation.id),
             expectation_instructions: &expectation.instructions,
+            diff_from_tree_oid: &diff_from_tree_oid,
             prompt: &prompt,
             template_output_dir: &template_output_dir,
             last_pass,
@@ -403,4 +403,21 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
         enforced_scope,
         response,
     )
+}
+
+pub(crate) fn resolve_diff_from_tree_oid(
+    runtime: &CheckRuntime<'_>,
+    expectation: &SelectedExpectation,
+    last_pass: Option<&LastResult>,
+) -> Result<String, EvaluatorError> {
+    match expectation.diff_from.as_str() {
+        DEFAULT_DIFF_FROM => Ok(last_pass
+            .and_then(|last_pass| last_pass.checked_tree_oid.as_deref())
+            .unwrap_or(&runtime.tree_context.against_tree_oid)
+            .to_string()),
+        AGAINST_TREE_DIFF_FROM => Ok(runtime.tree_context.against_tree_oid.clone()),
+        tree => crate::git::TreeSource::resolve(runtime.root, tree, "diff-from")
+            .and_then(|source| source.tree_oid_for_prompt_diff(runtime.root))
+            .map_err(EvaluatorError::message),
+    }
 }

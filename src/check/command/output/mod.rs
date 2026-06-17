@@ -184,6 +184,7 @@ mod tests {
                 question: record.question_text().to_string(),
                 expected_answer: record.expected_answer_text().unwrap_or("yes").to_string(),
                 instructions: String::new(),
+                diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
                 target: None,
                 question_answer_only: true,
                 agent: AgentConfig::default(),

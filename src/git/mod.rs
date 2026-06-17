@@ -3,7 +3,7 @@ mod program;
 mod tree_source;
 mod visible_tree_oid;
 
-pub(crate) use config::{git_config_get, git_config_get_or_else, GitConfigGetError};
+pub(crate) use config::{git_config_get, GitConfigGetError};
 #[cfg(test)]
 pub(crate) use program::{empty_tree_oid, staged_tree_oid};
 pub(crate) use program::{

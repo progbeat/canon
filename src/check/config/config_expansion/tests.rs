@@ -90,6 +90,49 @@ expectations:
 }
 
 #[test]
+fn expectation_diff_from_expands_and_inherits() {
+    let raw: RawCheckConfig = serde_saphyr::from_str(
+        r#"
+version: 1
+presets:
+  default: {}
+expectations:
+  - include: "expects.yml"
+    diff-from: ":against-tree"
+"#,
+    )
+    .expect("parse raw check config");
+    let root = test_root("diff-from-inheritance");
+    git(&root, &["init"]);
+    fs::write(
+        root.join("expects.yml"),
+        r#"
+- q: "Does inherited diff-from apply?"
+  a: "yes"
+- q: "Does child diff-from win?"
+  a: "yes"
+  diff-from: "HEAD~1"
+"#,
+    )
+    .unwrap();
+    git(&root, &["add", "expects.yml"]);
+    let mut cache = RepoInspectionCache::new();
+
+    let config = expand_raw_check_config(
+        Some(&root),
+        Path::new("check.yml"),
+        raw,
+        Some(&mut cache),
+        CheckConfigSource::Tree(TreeSource::Staged),
+    )
+    .expect("expand config");
+
+    assert_eq!(config.expectations[0].diff_from, ":against-tree");
+    assert_eq!(config.expectations[1].diff_from, "HEAD~1");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn legacy_agent_config_still_expands_to_default_preset() {
     let raw: RawCheckConfig = serde_saphyr::from_str(
         r#"

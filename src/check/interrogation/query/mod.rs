@@ -7,10 +7,11 @@ use crate::check::interrogation::state::{
     should_retry_full_scope_after_error, CheckRuntime, InterrogationRunState,
 };
 use crate::check::interrogation::{
-    ask_with_reused_thread, finalize_query_answer, run_with_model_fallbacks,
-    write_query_result_event, write_query_review_required_event, ThreadTurnRequest,
+    ask_with_reused_thread, finalize_query_answer, resolve_diff_from_tree_oid,
+    run_with_model_fallbacks, write_query_result_event, write_query_review_required_event,
+    ThreadTurnRequest,
 };
-use crate::config_types::AgentConfig;
+use crate::config_types::{AgentConfig, DEFAULT_DIFF_FROM};
 use crate::evaluator::{
     create_prompt_template_output_dir, effective_thinking, evaluator_turn_prompt, EvaluatorError,
     EvaluatorRunner,
@@ -180,11 +181,13 @@ fn ask_once_with_model<R: EvaluatorRunner>(
 ) -> Result<QueryResult, EvaluatorError> {
     let template_output_dir =
         create_prompt_template_output_dir().map_err(EvaluatorError::message)?;
+    let diff_from_tree_oid = query.diff_from_tree_oid(runtime)?;
     let prompt = evaluator_turn_prompt(
         runtime.root,
         &template_output_dir,
         query.turn_question(),
         query.expected_answer(),
+        query.diff_from(),
         query.target(),
         query.last_pass(),
     )?;
@@ -201,6 +204,7 @@ fn ask_once_with_model<R: EvaluatorRunner>(
             thinking: query.thinking(&runtime.config.agent),
             expectation_id: query.expectation_id(),
             expectation_instructions: query.expectation_instructions(),
+            diff_from_tree_oid: &diff_from_tree_oid,
             prompt: &prompt,
             template_output_dir: &template_output_dir,
             last_pass: query.last_pass(),
@@ -292,6 +296,12 @@ impl<'a> QueryRequest<'a> {
             .map(|target| target.as_str())
     }
 
+    fn diff_from(&self) -> &str {
+        self.expectation
+            .map(|context| context.expectation.diff_from.as_str())
+            .unwrap_or(DEFAULT_DIFF_FROM)
+    }
+
     fn expectation_id(&self) -> Option<&str> {
         self.expectation
             .map(|context| context.expectation.id.as_str())
@@ -305,6 +315,15 @@ impl<'a> QueryRequest<'a> {
 
     fn last_pass(&self) -> Option<&LastResult> {
         self.expectation.and_then(|context| context.last_pass)
+    }
+
+    fn diff_from_tree_oid(&self, runtime: &CheckRuntime<'_>) -> Result<String, EvaluatorError> {
+        match self.expectation {
+            Some(context) => {
+                resolve_diff_from_tree_oid(runtime, context.expectation, context.last_pass)
+            }
+            None => Ok(runtime.tree_context.against_tree_oid.clone()),
+        }
     }
 }
 
@@ -340,6 +359,7 @@ mod tests {
             question: "Does matched expectation pass?".to_string(),
             expected_answer: "yes".to_string(),
             instructions: "Use this expectation context.".to_string(),
+            diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
             target: Some(ExpectationTarget::Diff),
             question_answer_only: true,
             agent: expectation_agent,

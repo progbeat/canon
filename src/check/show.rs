@@ -249,6 +249,7 @@ mod tests {
             question: "Line one\nLine two".to_string(),
             expected_answer: "yes\tplease".to_string(),
             instructions: String::new(),
+            diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
             target: None,
             question_answer_only: false,
             agent: Default::default(),

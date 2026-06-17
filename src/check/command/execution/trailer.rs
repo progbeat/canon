@@ -24,13 +24,9 @@ pub(super) fn check_command_writes_agent_message(
     against_tree: &TreeSource,
 ) -> bool {
     let options = &command.options;
-    // The post-summary agent-message spec is for the default check run:
-    // no selectors, default config/trees, and no behavior-changing check flags.
+    // The post-summary agent-message spec is scoped by selectors, config path,
+    // checked tree, and against tree.
     options.selectors.is_empty()
-        && !options.keep_going
-        && !options.ignore_cooldown
-        && options.break_after_tokens.is_none()
-        && !command.no_sandbox
         && command.config_path == Path::new(CHECK_PATH)
         && checked_tree.is_default_checked_tree()
         && against_tree.is_default_against_tree()

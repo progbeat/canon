@@ -9,6 +9,7 @@ pub(crate) struct SelectedExpectation {
     pub(crate) question: String,
     pub(crate) expected_answer: String,
     pub(crate) instructions: String,
+    pub(crate) diff_from: String,
     pub(crate) target: Option<ExpectationTarget>,
     #[allow(dead_code)]
     pub(crate) question_answer_only: bool,

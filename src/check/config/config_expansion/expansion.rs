@@ -5,7 +5,7 @@ use super::source::CheckConfigSource;
 use crate::config_types::{
     AgentConfig, CheckConfig, Expectation, ExpectationTarget, RawCheckConfig,
     RawExpectationCommonConfig, RawExpectationItem, RawExpectationSettings,
-    RawGeneratorExpectation, RawIncludeExpectation,
+    RawGeneratorExpectation, RawIncludeExpectation, DEFAULT_DIFF_FROM,
 };
 use crate::repo_inspection::RepoInspectionCache;
 use std::collections::BTreeMap;
@@ -64,23 +64,27 @@ impl RawExpectationExpansion<'_> {
                 RawExpectationItem::Explicit(item) => {
                     let RawExpectationCommonConfig {
                         instructions,
+                        diff_from,
                         target,
                         cooldown,
                         settings,
                     } = item.common;
                     let item_number = index + 1;
                     let instructions = resolved_expectation_instructions(instructions);
+                    let diff_from = resolved_expectation_diff_from(diff_from);
                     let target = resolve_expectation_target(target)
                         .map_err(|err| format!("expectation {} target: {}", item_number, err))?;
                     let question_answer_only = cooldown.is_none()
                         && settings.is_empty()
                         && instructions.is_empty()
+                        && diff_from == DEFAULT_DIFF_FROM
                         && target.is_none();
                     let agent = self.resolve_expectation_agent(&settings)?;
                     self.expectations.push(Expectation {
                         q: item.q,
                         a: item.a,
                         instructions,
+                        diff_from,
                         target,
                         question_answer_only,
                         agent,
@@ -120,6 +124,7 @@ impl RawExpectationExpansion<'_> {
                 q: render_generator_expectation_question(&item.generated_question_format, &content),
                 a: item.a.clone(),
                 instructions: resolved_expectation_instructions(common.instructions.clone()),
+                diff_from: resolved_expectation_diff_from(common.diff_from.clone()),
                 target: target.clone(),
                 question_answer_only: false,
                 agent: self.resolve_expectation_agent(&common.settings)?,
@@ -217,6 +222,15 @@ fn resolved_expectation_instructions(instructions: Option<String>) -> String {
         .as_deref()
         .map(str::trim)
         .unwrap_or("")
+        .to_string()
+}
+
+fn resolved_expectation_diff_from(diff_from: Option<String>) -> String {
+    diff_from
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_DIFF_FROM)
         .to_string()
 }
 

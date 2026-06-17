@@ -111,12 +111,16 @@ pub(crate) fn default_thinking() -> String {
     "low".to_string()
 }
 
+pub(crate) const DEFAULT_DIFF_FROM: &str = ":checkpoint";
+pub(crate) const AGAINST_TREE_DIFF_FROM: &str = ":against-tree";
+
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Expectation {
     pub(crate) q: String,
     pub(crate) a: String,
     pub(crate) instructions: String,
+    pub(crate) diff_from: String,
     #[serde(default)]
     pub(crate) target: Option<ExpectationTarget>,
     #[serde(default)]
@@ -188,6 +192,7 @@ impl RawExpectationItem {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RawExpectationCommonConfig {
     pub(crate) instructions: Option<String>,
+    pub(crate) diff_from: Option<String>,
     pub(crate) target: Option<String>,
     pub(crate) cooldown: Option<CooldownConfig>,
     pub(crate) settings: RawExpectationSettings,
@@ -231,6 +236,9 @@ struct RawExpectationFields {
     #[serde(default)]
     instructions: Option<String>,
     #[serde(default)]
+    #[serde(rename = "diff-from")]
+    diff_from: Option<String>,
+    #[serde(default)]
     target: Option<String>,
     #[serde(default)]
     path: Option<String>,
@@ -267,6 +275,7 @@ impl RawExpectationItem {
             q_template,
             a,
             instructions,
+            diff_from,
             target,
             path,
             include,
@@ -286,6 +295,7 @@ impl RawExpectationItem {
         };
         let common = RawExpectationCommonConfig {
             instructions,
+            diff_from,
             target,
             cooldown,
             settings,

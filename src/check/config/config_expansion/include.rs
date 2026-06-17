@@ -32,6 +32,7 @@ fn inherit_expectation_common_config(
         config.cooldown = inherited.cooldown.clone();
     }
     inherit_expectation_text(&mut config.instructions, &inherited.instructions);
+    inherit_expectation_text(&mut config.diff_from, &inherited.diff_from);
     inherit_expectation_text(&mut config.target, &inherited.target);
 }
 
