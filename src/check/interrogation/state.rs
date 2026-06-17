@@ -28,6 +28,13 @@ pub(crate) fn evaluator_thread_reuse_key(
     visible_tree_oid: &str,
     expectation_instructions: &str,
 ) -> Result<String, String> {
+    // Evaluator thread reuse is context reuse, not a deterministic result cache.
+    // The canon glossary defines its stable reuse boundary as model,
+    // last-pass visibleTreeOid, and expectation instructions. checkedTreeOid is
+    // intentionally not a key component: for a valid stored q-scope, changes
+    // outside the visible tree do not change the answer. The remaining key
+    // parts below are stable configuration inputs that further restrict reuse
+    // without changing that glossary invariant.
     // The glossary's thread invariant is one-way: a reused thread must keep
     // the same evaluator model, visible tree, and expectation instructions.
     // Extra key parts below are stricter developer-instruction inputs that

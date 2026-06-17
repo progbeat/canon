@@ -60,8 +60,8 @@ expectation's `instructions` field, or empty text when none is configured.
 
 ## Expectation ID
 
-A 20-character base62 hash derived from two separate inputs: the rendered
-expectation question and a deterministic hash of the resolved expectation
+A 20-character base62 hash derived from the rendered expectation question, the
+expected answer, and a deterministic hash of the resolved expectation
 instructions.
 
 ## Expected answer
