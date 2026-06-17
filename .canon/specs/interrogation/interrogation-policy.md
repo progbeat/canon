@@ -51,7 +51,8 @@ When the initial interrogation does not use full project scope and returns `erro
 When the final evaluator response has `error`, human review is required.
 
 If the initial interrogation returns an answer, the follow-up interrogation verifies the suggested q-scope only when the visible tree induced by that suggestion contains at least 25% fewer files than the current visible tree.
-The narrowed scope is accepted and stored only when the verification interrogation produces a valid response with an `answer` field.
+The narrowed scope is accepted only when the verification result is pass -> pass, pass -> fail, or fail -> fail relative to the initial result.
+It is rejected when verification would turn an initial fail into pass.
 
 If the evaluator returns an invalid `qScopeSuggestion`, `canon check` does not attempt narrowing from it.
 

@@ -53,13 +53,13 @@ is emitted by the run.
 For each passing evaluated expectation, stdout contains exactly one line:
 
 ```
-<short ID><progress dots> OK
+<short ID><progress timeline> OK
 ```
 
 For each failed expectation, evaluated or cached, stdout contains exactly one block. The block has these required lines:
 
 ```
-<short ID><progress dots> FAILED
+<short ID><progress timeline> FAILED
 <escaped question>
 Expected: <escaped expected>
 Observed: <escaped observed>
@@ -77,14 +77,11 @@ The line is omitted when no q-scope suggestion is available.
 For each errored expectation, stdout contains exactly one block of lines:
 
 ```
-<short ID><progress dots> ERROR
+<short ID><progress timeline> ERROR
 <escaped question>
 Error: <escaped error>
 Evidence: <escaped evidence>
 ```
-
-**progress dots** are a sequence of `.` characters printed before the result status.
-The sequence starts with one dot printed immediately; for evaluated expectations, one more dot is printed and flushed every minute until the result is ready.
 
 Embedded control characters in the question, expected answer, observed answer,
 error, and evidence are escaped before writing to stdout. Escaping prevents
