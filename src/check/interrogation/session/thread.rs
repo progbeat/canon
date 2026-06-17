@@ -51,18 +51,22 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         .last_pass
         .and_then(|last_pass| last_pass.visible_tree_oid.as_deref())
         .unwrap_or("");
+    let diff_base_tree_oid = request
+        .last_pass
+        .and_then(|last_pass| last_pass.checked_tree_oid.as_deref())
+        .unwrap_or(&runtime.tree_context.against_tree_oid);
     let session_key = evaluator_thread_reuse_key(
         request.agent,
         request.enforced_scope,
         request.model,
         reuse_visible_tree_oid,
         request.expectation_instructions,
+        diff_base_tree_oid,
+        &runtime.tree_context.checked_tree_oid,
     )
     .map_err(EvaluatorError::message)?;
-    // The lookup key begins with evaluator model, visibleTreeOid, and
-    // expectation instructions. A restricted retry or q-scope verification with
-    // a different visible tree therefore misses this pool and starts a separate
-    // evaluator thread.
+    // A restricted retry, q-scope verification, or different rendered diff
+    // transcript misses this pool and starts a separate evaluator thread.
     let existing_session = state
         .thread_sessions_by_reuse_key
         .get(&session_key)

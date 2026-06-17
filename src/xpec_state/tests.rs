@@ -190,6 +190,58 @@ fn same_tree_pass_reuses_last_pass_when_only_hidden_files_change() {
 }
 
 #[test]
+fn new_answer_status_removes_stale_opposite_answer_result() {
+    let root = git_project("new-answer-removes-stale-opposite");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/a.rs"), "a\n").unwrap();
+    fs::write(root.join("src/b.rs"), "b\n").unwrap();
+    git(&root, &["add", "src/a.rs", "src/b.rs"]);
+
+    let expectation = test_expectation();
+    let mut cache = XpecStateCache::default();
+    let fail_scope = vec!["src/a.rs".to_string()];
+    let pass_scope = full_scope();
+    let checked_tree_oid = TreeSource::Staged.tree_oid_for_prompt_diff(&root).unwrap();
+    let mut oid_cache = VisibleTreeOidCache::new();
+
+    let mut fail = test_record(&expectation, &fail_scope, "no", None);
+    fail.visible_tree_oid = oid_cache
+        .visible_tree_oid(&root, &TreeSource::Staged, &expectation.agent, &fail_scope)
+        .unwrap();
+    cache
+        .write_last_result_for_record(&root, &checked_tree_oid, &expectation, &fail)
+        .unwrap();
+
+    let mut pass = test_record(&expectation, &pass_scope, "yes", None);
+    pass.visible_tree_oid = oid_cache
+        .visible_tree_oid(&root, &TreeSource::Staged, &expectation.agent, &pass_scope)
+        .unwrap();
+    cache
+        .write_last_result_for_record(&root, &checked_tree_oid, &expectation, &pass)
+        .unwrap();
+
+    assert!(!last_result_path(&root, &expectation.id, "last-fail.json").exists());
+    let hit = cached_last_result_for_expectation(
+        &root,
+        &TreeSource::Staged,
+        &expectation,
+        &mut cache,
+        &mut VisibleTreeOidCache::new(),
+        CachedLastResultLookup {
+            now: 2,
+            include_same_tree: true,
+            include_cooldown: true,
+        },
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(hit.status, CachedResultStatus::Pass);
+    assert_eq!(hit.kind, CachedLastResultKind::SameTree);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn stored_q_scope_uses_latest_result() {
     let root = git_project("stored-q-scope-latest-result");
     let expectation = test_expectation();
@@ -325,13 +377,17 @@ fn test_last_result(
 }
 
 fn read_json(root: &Path, id: &str, file_name: &str) -> Value {
-    let path = root
+    serde_json::from_str(&fs::read_to_string(last_result_path(root, id, file_name)).unwrap())
+        .unwrap()
+}
+
+fn last_result_path(root: &Path, id: &str, file_name: &str) -> PathBuf {
+    root
         .join(".git")
         .join("canon")
         .join("xpecs")
         .join(id)
-        .join(file_name);
-    serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+        .join(file_name)
 }
 
 fn git_project(name: &str) -> PathBuf {

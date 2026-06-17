@@ -42,6 +42,13 @@ pub(crate) fn select_expectations_after_cache(
     now: u64,
     cached_failure_mode: CachedFailureMode,
 ) -> Result<CacheFilteredCheckWork, String> {
+    if options.selectors_provided {
+        return Ok(CacheFilteredCheckWork {
+            to_evaluate: options.selected.clone(),
+            cached_hits: Vec::new(),
+        });
+    }
+
     let mut to_evaluate = Vec::new();
     let mut cached_hits = Vec::new();
     let mut cached_failure_seen = false;
@@ -88,4 +95,151 @@ pub(crate) fn select_expectations_after_cache(
         to_evaluate,
         cached_hits,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::check::core::{CheckRecord, CheckResult, Cooldown};
+    use crate::config_types::{AgentConfig, ExpectationTarget};
+    use crate::hash::full_scope;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::{self, Command};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn selector_runs_bypass_cached_results() {
+        let root = git_project("selector-bypasses-cache");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub fn demo() {}\n").unwrap();
+        git(&root, &["add", "src/lib.rs"]);
+
+        let expectation = test_expectation();
+        let source = TreeSource::Staged;
+        let scope = full_scope();
+        let checked_tree_oid = source.tree_oid_for_prompt_diff(&root).unwrap();
+        let visible_tree_oid = VisibleTreeOidCache::new()
+            .visible_tree_oid(&root, &source, &expectation.agent, &scope)
+            .unwrap();
+        XpecStateCache::default()
+            .write_last_result_for_record(
+                &root,
+                &checked_tree_oid,
+                &expectation,
+                &test_record(&expectation, &scope, "no", visible_tree_oid),
+            )
+            .unwrap();
+
+        let default_work = cache_filtered_work(&root, &source, expectation.clone(), false);
+        assert_eq!(default_work.cached_hits.len(), 1);
+        assert!(default_work.to_evaluate.is_empty());
+
+        let selector_work = cache_filtered_work(&root, &source, expectation, true);
+        assert!(selector_work.cached_hits.is_empty());
+        assert_eq!(selector_work.to_evaluate.len(), 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn cache_filtered_work(
+        root: &Path,
+        source: &TreeSource,
+        expectation: SelectedExpectation,
+        selectors_provided: bool,
+    ) -> CacheFilteredCheckWork {
+        let mut xpec_state = XpecStateCache::default();
+        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
+        let mut diagnostic_log = None;
+        select_expectations_after_cache(
+            CacheFilterContext {
+                root,
+                source,
+                xpec_state: &mut xpec_state,
+                visible_tree_oid_cache: &mut visible_tree_oid_cache,
+                diagnostic_log: &mut diagnostic_log,
+            },
+            &CheckOptions {
+                selected: vec![expectation],
+                selectors_provided,
+                keep_going: false,
+                ignore_cooldown: false,
+                break_after_tokens: None,
+            },
+            2,
+            CachedFailureMode::Continue,
+        )
+        .unwrap()
+    }
+
+    fn test_expectation() -> SelectedExpectation {
+        SelectedExpectation {
+            number: 1,
+            id: "abc123".to_string(),
+            display_id: "a".to_string(),
+            question: "Does it pass?".to_string(),
+            expected_answer: "yes".to_string(),
+            instructions: String::new(),
+            target: Option::<ExpectationTarget>::None,
+            question_answer_only: false,
+            agent: AgentConfig::default(),
+            cooldown: Option::<Cooldown>::None,
+        }
+    }
+
+    fn test_record(
+        expectation: &SelectedExpectation,
+        scope: &[String],
+        observed: &str,
+        visible_tree_oid: String,
+    ) -> CheckRecord {
+        CheckRecord {
+            timestamp: crate::time::format_record_timestamp(1),
+            number: expectation.number,
+            result: CheckResult::from_expected_answer(&expectation.expected_answer, observed),
+            question: Some(expectation.question.clone()),
+            expected_answer: Some(expectation.expected_answer.clone()),
+            observed: observed.to_string(),
+            error: None,
+            evidence: "evidence".to_string(),
+            scope: scope.to_vec(),
+            question_scope_suggestion: Some(scope.to_vec()),
+            visible_tree_oid,
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
+        }
+    }
+
+    fn git_project(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-tmp")
+            .join(format!(
+                "canon-cache-select-{}-{}-{}",
+                name,
+                process::id(),
+                unique
+            ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        git(&root, &["init", "--quiet"]);
+        root
+    }
+
+    fn git(root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }

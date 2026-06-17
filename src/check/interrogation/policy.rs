@@ -234,6 +234,9 @@ pub(crate) fn question_scope_suggestion_scope_for_independent_verification(
         Ok(scope) => scope,
         Err(_) => return Ok(None),
     };
+    if scope_targets_hidden_control_path(&suggested_scope) {
+        return Ok(None);
+    }
     if runtime
         .visible_tree_oid(visible_tree_oid_cache, agent, &suggested_scope)
         .is_err()
@@ -259,6 +262,15 @@ fn suggested_scope_is_at_least_25_percent_smaller(
 ) -> bool {
     suggested_count < current_count
         && suggested_count.saturating_mul(4) <= current_count.saturating_mul(3)
+}
+
+fn scope_targets_hidden_control_path(scope: &[String]) -> bool {
+    scope.iter().any(|path| {
+        path == ".canon"
+            || path.starts_with(".canon/")
+            || path == ".git"
+            || path.starts_with(".git/")
+    })
 }
 
 pub(crate) fn narrowed_scope_is_accepted(narrowed: &CheckRecord) -> bool {
@@ -361,6 +373,47 @@ mod tests {
             CheckRuntime::materialized(&root, &staged_view, &source, tree_context, &config, false);
         let current_scope = vec![".".to_string()];
         let suggestion = vec!["src/present.rs".to_string(), "src/missing.rs".to_string()];
+
+        let proposed = question_scope_suggestion_scope_for_independent_verification(
+            &runtime,
+            &agent,
+            Some(&suggestion),
+            &current_scope,
+            &mut cache,
+        )
+        .unwrap();
+
+        assert!(proposed.is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hidden_control_path_suggestion_is_not_verified_for_narrowing() {
+        let root = git_project("hidden-control-q-scope-suggestion");
+        fs::create_dir_all(root.join(".canon")).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join(".canon/check.yml"), "version: 1\n").unwrap();
+        fs::write(root.join("src/present.rs"), "present\n").unwrap();
+        git(&root, &["add", ".canon/check.yml", "src/present.rs"]);
+        let source = TreeSource::Staged;
+        let agent = AgentConfig::default();
+        let config = CheckConfig {
+            version: 1,
+            presets: Default::default(),
+            agent: agent.clone(),
+            expectations: Vec::new(),
+        };
+        let staged_view = StagedWorktreeView::apply_for_tree_source(&root, source.clone()).unwrap();
+        let mut cache = VisibleTreeOidCache::new();
+        let tree_context = CheckTreeContext {
+            checked_tree_oid: source.tree_oid_for_prompt_diff(&root).unwrap(),
+            against_tree_oid: source.tree_oid_for_prompt_diff(&root).unwrap(),
+            checked_file_count: cache.checked_file_count(&root, &source).unwrap(),
+        };
+        let runtime =
+            CheckRuntime::materialized(&root, &staged_view, &source, tree_context, &config, false);
+        let current_scope = vec![".".to_string()];
+        let suggestion = vec![".canon/check.yml".to_string()];
 
         let proposed = question_scope_suggestion_scope_for_independent_verification(
             &runtime,

@@ -219,6 +219,27 @@ impl XpecStateCache {
             (root.to_path_buf(), expectation.id.clone(), result.status),
             Some(result.clone()),
         );
+        if let Some(stale_status) = stale_answer_status_for(result.status) {
+            self.remove_last_result(root, expectation, stale_status)?;
+        }
+        Ok(())
+    }
+
+    fn remove_last_result(
+        &mut self,
+        root: &Path,
+        expectation: &SelectedExpectation,
+        status: LastResultStatus,
+    ) -> Result<(), String> {
+        let path = self.last_result_path(root, expectation, status)?;
+        reject_symlink(&path)?;
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(format!("failed to remove {}: {}", path.display(), err)),
+        }
+        self.last_results
+            .insert((root.to_path_buf(), expectation.id.clone(), status), None);
         Ok(())
     }
 
@@ -229,6 +250,14 @@ impl XpecStateCache {
         status: LastResultStatus,
     ) -> Result<PathBuf, String> {
         Ok(self.xpec_dir(root, expectation)?.join(status.file_name()))
+    }
+}
+
+fn stale_answer_status_for(status: LastResultStatus) -> Option<LastResultStatus> {
+    match status {
+        LastResultStatus::Pass => Some(LastResultStatus::Fail),
+        LastResultStatus::Fail => Some(LastResultStatus::Pass),
+        LastResultStatus::Error => None,
     }
 }
 

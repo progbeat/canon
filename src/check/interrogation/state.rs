@@ -27,23 +27,20 @@ pub(crate) fn evaluator_thread_reuse_key(
     model: Option<&str>,
     visible_tree_oid: &str,
     expectation_instructions: &str,
+    diff_base_tree_oid: &str,
+    checked_tree_oid: &str,
 ) -> Result<String, String> {
     // Evaluator thread reuse is context reuse, not a deterministic result cache.
-    // The canon glossary defines its stable reuse boundary as model,
-    // last-pass visibleTreeOid, and expectation instructions. checkedTreeOid is
-    // intentionally not a key component: for a valid stored q-scope, changes
-    // outside the visible tree do not change the answer. The remaining key
-    // parts below are stable configuration inputs that further restrict reuse
-    // without changing that glossary invariant.
-    // The glossary's thread invariant is one-way: a reused thread must keep
-    // the same evaluator model, visible tree, and expectation instructions.
-    // Extra key parts below are stricter developer-instruction inputs that
-    // prevent unsafe reuse without allowing cross-model, cross-visible-tree, or
-    // cross-instruction reuse.
+    // A reused thread keeps the original developer instructions, so every
+    // input that renders those instructions must participate in the key.
     let mut key = String::new();
     app_server_model_key(model).push_cache_key_part(&mut key);
     key.push('\0');
     key.push_str(visible_tree_oid);
+    key.push('\0');
+    key.push_str(diff_base_tree_oid);
+    key.push('\0');
+    key.push_str(checked_tree_oid);
     key.push('\0');
     key.push_str(&expectation_instructions.len().to_string());
     key.push('\0');
@@ -142,6 +139,50 @@ impl<'a> CheckRuntime<'a> {
         let visible_scope = visible_scope(agent, scope)?;
         self.staged_view
             .materialize_visible_scope(&visible_scope, visible_tree_oid)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thread_reuse_key_includes_developer_instruction_tree_inputs() {
+        let agent = AgentConfig::default();
+        let scope = full_scope();
+        let base = evaluator_thread_reuse_key(
+            &agent,
+            &scope,
+            Some("model"),
+            "visible-tree",
+            "instructions",
+            "base-a",
+            "checked-a",
+        )
+        .unwrap();
+        let different_base = evaluator_thread_reuse_key(
+            &agent,
+            &scope,
+            Some("model"),
+            "visible-tree",
+            "instructions",
+            "base-b",
+            "checked-a",
+        )
+        .unwrap();
+        let different_checked = evaluator_thread_reuse_key(
+            &agent,
+            &scope,
+            Some("model"),
+            "visible-tree",
+            "instructions",
+            "base-a",
+            "checked-b",
+        )
+        .unwrap();
+
+        assert_ne!(base, different_base);
+        assert_ne!(base, different_checked);
     }
 }
 

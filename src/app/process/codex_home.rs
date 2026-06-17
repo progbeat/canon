@@ -1,5 +1,5 @@
 use crate::fs_util::ensure_dir_without_symlinks;
-use crate::git::resolve_git_path;
+use crate::hash::hash_60;
 use crate::platform;
 use std::env;
 use std::fs;
@@ -47,7 +47,14 @@ fn evaluator_codex_home_path(root: &Path) -> Result<PathBuf, String> {
     let root = root
         .canonicalize()
         .map_err(|err| format!("failed to canonicalize evaluator root: {}", err))?;
-    resolve_git_path(&root, "canon/evaluator-codex-home/.codex")
+    let temp_root = env::temp_dir()
+        .canonicalize()
+        .map_err(|err| format!("failed to canonicalize temp dir: {}", err))?;
+    let root_key = hash_60(root.to_string_lossy().as_bytes());
+    Ok(temp_root
+        .join("canon-evaluator-codex-home")
+        .join(root_key)
+        .join(".codex"))
 }
 
 fn ensure_evaluator_codex_home_dir(path: &Path) -> Result<(), String> {
@@ -124,4 +131,20 @@ fn remove_existing_codex_home_entry(path: &Path) -> Result<(), String> {
         fs::remove_file(path)
     }
     .map_err(|err| format!("failed to replace {}: {}", path.display(), err))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn evaluator_codex_home_path_does_not_encode_repo_root() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).canonicalize().unwrap();
+        let codex_home = evaluator_codex_home_path(&root).unwrap();
+
+        assert_eq!(codex_home.file_name(), Some(std::ffi::OsStr::new(".codex")));
+        assert!(codex_home.starts_with(env::temp_dir().canonicalize().unwrap()));
+        assert!(!codex_home.starts_with(&root));
+        assert!(!codex_home.to_string_lossy().contains(&root.to_string_lossy()[..]));
+    }
 }
