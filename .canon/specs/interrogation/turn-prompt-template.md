@@ -8,7 +8,7 @@ This is a prompt template for the turn prompt used for evaluator interrogations:
 
 This question targets the Git diff. Evaluate whether the diff changes the answer. Return the previous valid response if it still holds:
 ```
-{%- if last_pass %}
+{%- if expectation.diff_from == ":checkpoint" and last_pass %}
 {
   "answer": {{ last_pass.response.answer|json }},
   "evidence": {{ last_pass.response.evidence|json }},
