@@ -3,18 +3,23 @@ set -euo pipefail
 
 image="${CANON_DOCKER_IMAGE:-ghcr.io/progbeat/canon:latest}"
 project_root="$(git rev-parse --path-format=absolute --show-toplevel)"
-container_repository="/scratch/secret/repository"
 
-# Host-side trust boundary:
-# - project files are writable so `canon init` can create .canon/check.yml;
-# - repository Git metadata is read-only except Canon-owned persistent state;
-# - one scratch tmpfs holds auth, Git locks, and evaluator files.
+# Run Canon's Docker image with this repository root mounted inside the
+# container.
+#
+# The repository root is bind-mounted read/write so commands can update project
+# files, such as `canon init` creating .canon/check.yml, and Canon's Git-path
+# state. Command arguments are passed through unchanged. The container image
+# filesystem is read-only; writable runtime files live on /scratch tmpfs or
+# explicit bind mounts. The local Codex config is mounted read-only. This wrapper
+# assumes a normal Git repository checkout; Git worktrees are not currently
+# supported.
 exec docker run --rm -i \
   --user "$(id -u):$(id -g)" \
   --cap-drop=ALL \
   --security-opt=no-new-privileges \
   --read-only \
   --tmpfs "/scratch:mode=1777" \
-  -v "${project_root}:${container_repository}:rw" \  # Git worktrees are not currently supported
+  -v "${project_root}:/scratch/secret/repository:rw" \
   --mount "type=bind,src=${CODEX_HOME:-$HOME/.codex},dst=/codex,readonly" \
   "${image}" "$@"
