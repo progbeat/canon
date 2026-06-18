@@ -1,4 +1,7 @@
-use crate::check::{CheckRecord, CheckResult, SelectedExpectation};
+use crate::check::{
+    matches_answer_pattern, CheckRecord, CheckResult, SelectedExpectation,
+    INTERNAL_ERROR_UNPARSABLE,
+};
 use crate::fs_util::{ensure_dir_without_symlinks, reject_symlink, write_temp_file_then_replace};
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::hash::full_scope;
@@ -318,10 +321,10 @@ fn last_result_status_for_record(
     expectation: &SelectedExpectation,
     record: &CheckRecord,
 ) -> LastResultStatus {
-    // Records with `error` are the human-review path. They are stored in the
-    // error status file so ordering and summaries can include them as non-pass
-    // results without a separate persisted status.
-    if record.error.is_some() {
+    // A pass/fail last result requires a schema-usable evaluator answer. Error
+    // responses and technical failures do not have one, even when their public
+    // CheckRecord carries a normalized `observed` marker for output.
+    if !record_has_usable_answer(record) {
         LastResultStatus::Error
     } else if record.observed == expectation.expected_answer {
         LastResultStatus::Pass
@@ -330,12 +333,18 @@ fn last_result_status_for_record(
     }
 }
 
+fn record_has_usable_answer(record: &CheckRecord) -> bool {
+    record.error.is_none() && matches_answer_pattern(&record.observed)
+}
+
 fn normalized_response_from_record(record: &CheckRecord) -> Value {
     let mut response = serde_json::Map::new();
     if let Some(error) = record.error.as_deref() {
         response.insert("error".to_string(), json!(error));
-    } else {
+    } else if record_has_usable_answer(record) {
         response.insert("answer".to_string(), json!(record.observed));
+    } else {
+        response.insert("error".to_string(), json!(INTERNAL_ERROR_UNPARSABLE));
     }
     response.insert("evidence".to_string(), json!(record.evidence));
     let suggestion = record

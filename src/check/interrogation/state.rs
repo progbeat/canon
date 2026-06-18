@@ -142,50 +142,6 @@ impl<'a> CheckRuntime<'a> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn thread_reuse_key_includes_developer_instruction_tree_inputs() {
-        let agent = AgentConfig::default();
-        let scope = full_scope();
-        let base = evaluator_thread_reuse_key(
-            &agent,
-            &scope,
-            Some("model"),
-            "visible-tree",
-            "instructions",
-            "base-a",
-            "checked-a",
-        )
-        .unwrap();
-        let different_base = evaluator_thread_reuse_key(
-            &agent,
-            &scope,
-            Some("model"),
-            "visible-tree",
-            "instructions",
-            "base-b",
-            "checked-a",
-        )
-        .unwrap();
-        let different_checked = evaluator_thread_reuse_key(
-            &agent,
-            &scope,
-            Some("model"),
-            "visible-tree",
-            "instructions",
-            "base-a",
-            "checked-b",
-        )
-        .unwrap();
-
-        assert_ne!(base, different_base);
-        assert_ne!(base, different_checked);
-    }
-}
-
 pub(crate) struct InterrogationRunState {
     pub(crate) session_isolations: BTreeMap<String, NaiveIsolationGuard>,
     // This is a run-level pool of evaluator threads, not one thread. The
@@ -236,5 +192,49 @@ impl InterrogationRunState {
             .as_mut()
             .map(|policy| policy.isolate(session_root))
             .transpose()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thread_reuse_key_includes_developer_instruction_tree_inputs() {
+        let agent = AgentConfig::default();
+        let scope = full_scope();
+        let base = evaluator_thread_reuse_key(
+            &agent,
+            &scope,
+            Some("model"),
+            "visible-tree",
+            "instructions",
+            "base-a",
+            "checked-a",
+        )
+        .unwrap();
+        let different_base = evaluator_thread_reuse_key(
+            &agent,
+            &scope,
+            Some("model"),
+            "visible-tree",
+            "instructions",
+            "base-b",
+            "checked-a",
+        )
+        .unwrap();
+        let different_checked = evaluator_thread_reuse_key(
+            &agent,
+            &scope,
+            Some("model"),
+            "visible-tree",
+            "instructions",
+            "base-a",
+            "checked-b",
+        )
+        .unwrap();
+
+        assert_ne!(base, different_base);
+        assert_ne!(base, different_checked);
     }
 }

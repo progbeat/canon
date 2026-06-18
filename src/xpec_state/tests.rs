@@ -84,6 +84,27 @@ fn last_error_is_not_a_cached_result() {
 }
 
 #[test]
+fn last_result_without_usable_answer_uses_error_status() {
+    let root = git_project("last-result-unusable-answer");
+    let expectation = test_expectation();
+    let mut cache = XpecStateCache::default();
+    let scope = full_scope();
+
+    let invalid_answer = test_record(&expectation, &scope, "not usable", None);
+    cache
+        .write_last_result_for_record(&root, "checked-tree", &expectation, &invalid_answer)
+        .unwrap();
+
+    let error_json = read_json(&root, &expectation.id, "last-error.json");
+    assert_eq!(error_json["status"], "error");
+    assert_eq!(error_json["response"]["error"], "unparsable");
+    assert!(error_json.get("checkedTreeOid").is_none());
+    assert!(error_json.get("visibleTreeOid").is_none());
+    assert!(!last_result_path(&root, &expectation.id, "last-fail.json").exists());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn last_error_keeps_response_suggestion_separate_from_persisted_q_scope() {
     let root = git_project("last-error-suggestion-separate");
     let expectation = test_expectation();
