@@ -4,3 +4,6 @@
     - CANON_SANDBOX_DIR=/scratch/sandbox
     - CODEX_HOME=/scratch/codex-home
   a: "yes"
+
+- q: "Does the Docker entrypoint avoid dispatching or rejecting command-line arguments itself, so arguments are ultimately handled by the `canon` binary after container setup?"
+  a: "yes"
