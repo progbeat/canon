@@ -53,7 +53,7 @@ pub(crate) fn start_expectation_report_output(
         next_marker_at: first_elapsed_marker_at,
     }));
     let worker_timeline = elapsed_timeline.clone();
-    let mut dot_output = output.clone();
+    let mut progress_output = output.clone();
     let worker = thread::spawn(move || loop {
         match stop_requested.recv_timeout(PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL) {
             Ok(()) | Err(RecvTimeoutError::Disconnected) => return Ok(()),
@@ -72,7 +72,7 @@ pub(crate) fn start_expectation_report_output(
                     Ok::<EvaluatorProgressMarker, String>(marker)
                 })??;
                 write_stdout_record(
-                    &mut dot_output,
+                    &mut progress_output,
                     marker.as_str().as_bytes(),
                     "check live report progress marker",
                 )?;
@@ -98,8 +98,8 @@ impl StartedExpectationReportOutput {
 
     pub(crate) fn finish_with_record(mut self, record: &CheckRecord) -> bool {
         // Once the report prefix is visible, final result output has priority
-        // over delayed dot-worker cleanup errors.
-        let _ = self.stop_dot_worker();
+        // over delayed progress-worker cleanup errors.
+        let _ = self.stop_progress_worker();
         let result_suffix = if self.prefix_completed {
             let mut result_suffix = String::new();
             if let Some(marker) = self.due_elapsed_progress_marker() {
@@ -125,7 +125,7 @@ impl StartedExpectationReportOutput {
         true
     }
 
-    fn stop_dot_worker(&mut self) -> Result<(), String> {
+    fn stop_progress_worker(&mut self) -> Result<(), String> {
         self.active.store(false, Ordering::Release);
         let _ = self.stop.send(());
         let Some(worker) = self.worker.take() else {
@@ -133,7 +133,7 @@ impl StartedExpectationReportOutput {
         };
         worker
             .join()
-            .map_err(|_| "check live report dot thread panicked".to_string())?
+            .map_err(|_| "check live report progress thread panicked".to_string())?
     }
 
     fn due_elapsed_progress_marker(&self) -> Option<EvaluatorProgressMarker> {
