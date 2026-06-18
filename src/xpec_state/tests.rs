@@ -1,5 +1,5 @@
 use super::*;
-use crate::check::{CheckRecord, CheckResult, SelectedExpectation};
+use crate::check::{CheckRecord, CheckResult, Cooldown, SelectedExpectation};
 use crate::config_types::{AgentConfig, ExpectationTarget};
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::hash::full_scope;
@@ -84,8 +84,8 @@ fn last_error_is_not_a_cached_result() {
 }
 
 #[test]
-fn last_result_without_usable_answer_uses_error_status() {
-    let root = git_project("last-result-unusable-answer");
+fn last_result_unexpected_answer_uses_fail_status() {
+    let root = git_project("last-result-unexpected-answer");
     let expectation = test_expectation();
     let mut cache = XpecStateCache::default();
     let scope = full_scope();
@@ -95,12 +95,12 @@ fn last_result_without_usable_answer_uses_error_status() {
         .write_last_result_for_record(&root, "checked-tree", &expectation, &invalid_answer)
         .unwrap();
 
-    let error_json = read_json(&root, &expectation.id, "last-error.json");
-    assert_eq!(error_json["status"], "error");
-    assert_eq!(error_json["response"]["error"], "unparsable");
-    assert!(error_json.get("checkedTreeOid").is_none());
-    assert!(error_json.get("visibleTreeOid").is_none());
-    assert!(!last_result_path(&root, &expectation.id, "last-fail.json").exists());
+    let fail_json = read_json(&root, &expectation.id, "last-fail.json");
+    assert_eq!(fail_json["status"], "fail");
+    assert_eq!(fail_json["response"]["answer"], "not usable");
+    assert!(fail_json.get("checkedTreeOid").is_none());
+    assert_eq!(fail_json["visibleTreeOid"], "visible-tree");
+    assert!(!last_result_path(&root, &expectation.id, "last-error.json").exists());
     let _ = fs::remove_dir_all(root);
 }
 
@@ -229,6 +229,51 @@ fn same_tree_pass_reuses_last_pass_when_only_hidden_files_change() {
 }
 
 #[test]
+fn same_tree_result_does_not_reconstruct_q_scope_from_current_agent_ignore() {
+    let root = git_project("same-tree-no-current-ignore-reconstruction");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/a.rs"), "a\n").unwrap();
+    fs::write(root.join("src/b.rs"), "b\n").unwrap();
+    git(&root, &["add", "src/a.rs", "src/b.rs"]);
+
+    let mut expectation = test_expectation();
+    expectation.agent.ignore = vec!["src/b.rs".to_string()];
+    let mut cache = XpecStateCache::default();
+    let scope = full_scope();
+    let checked_tree_oid = TreeSource::Staged.tree_oid_for_prompt_diff(&root).unwrap();
+    let mut record = test_record(&expectation, &scope, "yes", None);
+    record.visible_tree_oid = VisibleTreeOidCache::new()
+        .visible_tree_oid(&root, &TreeSource::Staged, &expectation.agent, &scope)
+        .unwrap();
+    cache
+        .write_last_result_for_record(&root, &checked_tree_oid, &expectation, &record)
+        .unwrap();
+
+    fs::write(root.join("src/b.rs"), "changed\n").unwrap();
+    git(&root, &["add", "src/b.rs"]);
+    expectation.agent.ignore.clear();
+
+    let hit = cached_last_result_for_expectation(
+        &root,
+        &TreeSource::Staged,
+        &expectation,
+        &mut cache,
+        &mut VisibleTreeOidCache::new(),
+        CachedLastResultLookup {
+            now: 2,
+            include_same_tree: true,
+            include_cooldown: true,
+        },
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(hit.status, CachedResultStatus::Pass);
+    assert_eq!(hit.kind, CachedLastResultKind::SameTree);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn same_tree_result_ignores_diff_from_prompt_direction() {
     let root = git_project("same-tree-ignores-diff-from");
     fs::create_dir_all(root.join("src")).unwrap();
@@ -271,8 +316,8 @@ fn same_tree_result_ignores_diff_from_prompt_direction() {
 }
 
 #[test]
-fn new_answer_status_removes_stale_opposite_answer_result() {
-    let root = git_project("new-answer-removes-stale-opposite");
+fn new_answer_status_keeps_opposite_answer_result() {
+    let root = git_project("new-answer-keeps-opposite");
     fs::create_dir_all(root.join("src")).unwrap();
     fs::write(root.join("src/a.rs"), "a\n").unwrap();
     fs::write(root.join("src/b.rs"), "b\n").unwrap();
@@ -301,7 +346,7 @@ fn new_answer_status_removes_stale_opposite_answer_result() {
         .write_last_result_for_record(&root, &checked_tree_oid, &expectation, &pass)
         .unwrap();
 
-    assert!(!last_result_path(&root, &expectation.id, "last-fail.json").exists());
+    assert!(last_result_path(&root, &expectation.id, "last-fail.json").exists());
     let hit = cached_last_result_for_expectation(
         &root,
         &TreeSource::Staged,
@@ -317,7 +362,7 @@ fn new_answer_status_removes_stale_opposite_answer_result() {
     .unwrap()
     .unwrap();
 
-    assert_eq!(hit.status, CachedResultStatus::Pass);
+    assert_eq!(hit.status, CachedResultStatus::Fail);
     assert_eq!(hit.kind, CachedLastResultKind::SameTree);
     let _ = fs::remove_dir_all(root);
 }
@@ -432,6 +477,131 @@ fn stored_q_scope_uses_latest_result() {
             .unwrap(),
         error_scope
     );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn stored_q_scope_ignores_unseeded_results() {
+    let root = git_project("stored-q-scope-ignores-unseeded");
+    let expectation = test_expectation();
+    let mut cache = XpecStateCache::default();
+    let seeded_scope = vec!["src/seeded.rs".to_string()];
+    let unseeded_scope = vec!["src/unseeded.rs".to_string()];
+    let seeded = test_record(&expectation, &seeded_scope, "no", None);
+    cache
+        .write_last_result_for_record(&root, "checked-tree", &expectation, &seeded)
+        .unwrap();
+    let unseeded = test_record(&expectation, &unseeded_scope, "yes", None);
+    cache
+        .write_last_result_for_record_without_stored_q_scope_seed(
+            &root,
+            "checked-tree",
+            &expectation,
+            &unseeded,
+        )
+        .unwrap();
+
+    assert_eq!(
+        cache
+            .read_stored_q_scope(&root, &expectation)
+            .unwrap()
+            .unwrap(),
+        seeded_scope
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn cooldown_can_reuse_older_pass_when_fail_is_newer() {
+    let root = git_project("cooldown-older-pass");
+    let mut expectation = test_expectation();
+    expectation.cooldown = Some(Cooldown {
+        pass_seconds: Some(10),
+        fail_seconds: None,
+    });
+    let mut cache = XpecStateCache::default();
+    cache.last_results.insert(
+        (root.clone(), expectation.id.clone(), LastResultStatus::Pass),
+        Some(test_last_result(
+            LastResultStatus::Pass,
+            &["src/pass.rs".to_string()],
+            "1970-01-01T00:00:01Z",
+        )),
+    );
+    cache.last_results.insert(
+        (root.clone(), expectation.id.clone(), LastResultStatus::Fail),
+        Some(test_last_result(
+            LastResultStatus::Fail,
+            &["src/fail.rs".to_string()],
+            "1970-01-01T00:00:02Z",
+        )),
+    );
+
+    let hit = cached_last_result_for_expectation(
+        &root,
+        &TreeSource::Staged,
+        &expectation,
+        &mut cache,
+        &mut VisibleTreeOidCache::new(),
+        CachedLastResultLookup {
+            now: 2,
+            include_same_tree: false,
+            include_cooldown: true,
+        },
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(hit.status, CachedResultStatus::Pass);
+    assert_eq!(hit.kind, CachedLastResultKind::Cooldown);
+    assert_eq!(hit.result.status, LastResultStatus::Pass);
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn cooldown_can_reuse_older_fail_when_pass_is_newer() {
+    let root = git_project("cooldown-older-fail");
+    let mut expectation = test_expectation();
+    expectation.cooldown = Some(Cooldown {
+        pass_seconds: None,
+        fail_seconds: Some(10),
+    });
+    let mut cache = XpecStateCache::default();
+    cache.last_results.insert(
+        (root.clone(), expectation.id.clone(), LastResultStatus::Fail),
+        Some(test_last_result(
+            LastResultStatus::Fail,
+            &["src/fail.rs".to_string()],
+            "1970-01-01T00:00:01Z",
+        )),
+    );
+    cache.last_results.insert(
+        (root.clone(), expectation.id.clone(), LastResultStatus::Pass),
+        Some(test_last_result(
+            LastResultStatus::Pass,
+            &["src/pass.rs".to_string()],
+            "1970-01-01T00:00:02Z",
+        )),
+    );
+
+    let hit = cached_last_result_for_expectation(
+        &root,
+        &TreeSource::Staged,
+        &expectation,
+        &mut cache,
+        &mut VisibleTreeOidCache::new(),
+        CachedLastResultLookup {
+            now: 2,
+            include_same_tree: false,
+            include_cooldown: true,
+        },
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(hit.status, CachedResultStatus::Pass);
+    assert_eq!(hit.kind, CachedLastResultKind::Cooldown);
+    assert_eq!(hit.result.status, LastResultStatus::Fail);
     let _ = fs::remove_dir_all(root);
 }
 

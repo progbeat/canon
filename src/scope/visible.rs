@@ -1,6 +1,5 @@
 use super::ignore::{effective_ignore_exclusion_pathspecs, push_unique_pattern};
 use super::normalize::sanitize_scope_paths;
-use super::pathspec::pathspec_is_exclude;
 use crate::config_types::AgentConfig;
 
 pub(crate) fn visible_scope(
@@ -19,16 +18,6 @@ pub(crate) fn visible_scope(
     Ok(scope)
 }
 
-pub(crate) fn q_scope_from_visible_scope(
-    agent: &AgentConfig,
-    visible_scope: &[String],
-) -> Result<Vec<String>, String> {
-    let ignore_exclusions = effective_ignore_exclusion_pathspecs(agent)?;
-    let q_scope = scope_without_configured_ignore_exclusions(visible_scope, &ignore_exclusions);
-    reject_reconstructed_exclusions(&q_scope)?;
-    sanitize_scope_paths(&q_scope)
-}
-
 fn scope_without_configured_ignore_exclusions(
     scope: &[String],
     ignore_exclusions: &[String],
@@ -42,16 +31,4 @@ fn scope_without_configured_ignore_exclusions(
         })
         .cloned()
         .collect()
-}
-
-fn reject_reconstructed_exclusions(scope: &[String]) -> Result<(), String> {
-    for pathspec in scope {
-        if pathspec_is_exclude(pathspec)? {
-            return Err(format!(
-                "visible scope contains exclusion that is not configured for the current agent: {}",
-                pathspec
-            ));
-        }
-    }
-    Ok(())
 }

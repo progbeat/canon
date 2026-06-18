@@ -76,9 +76,9 @@ impl AppServerRunner {
         }
     }
 
-    pub(crate) fn record_no_app_server_activity_warning_progress(&self) {
+    pub(crate) fn record_no_progress_timeout_accumulating_progress(&self) {
         if let Some(progress) = &self.progress {
-            progress.record_no_app_server_activity_warning();
+            progress.record_no_progress_timeout_accumulating();
         }
     }
 }

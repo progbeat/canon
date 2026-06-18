@@ -61,14 +61,26 @@ fn ask_query<R: EvaluatorRunner>(
     // q-scope suggestions are trusted only after an independent verification
     // turn returns a schema-valid answer under the suggested scope.
     let mut active_scope = query.enforced_scope.to_vec();
-    let attempt = ask_with_full_scope_retry(
+    let attempt = match ask_with_full_scope_retry(
         runtime,
         query,
         &mut active_scope,
         runner,
         diagnostic_log,
         state,
-    )?;
+    ) {
+        Ok(attempt) => attempt,
+        Err(error) => QueryAttempt {
+            result: query_result_from_interrogation_error(
+                runtime,
+                query,
+                state,
+                &active_scope,
+                error,
+            )?,
+            follow_up_used: false,
+        },
+    };
     // Query mode uses the same Interrogation Policy q-scope verification
     // follow-up as expectation mode. All query-mode dependence on
     // `qScopeSuggestion` is contained in this verification planning helper.
@@ -77,31 +89,70 @@ fn ask_query<R: EvaluatorRunner>(
             .map_err(|err| err.to_string())?;
     let mut result = attempt.result;
     if let Some(proposed_scope) = q_scope_verification_scope {
-        let narrowed = ask_once(
+        let narrowed = match ask_once(
             runtime,
             query,
             &proposed_scope,
             runner,
             diagnostic_log,
             state,
-        )?;
+        ) {
+            Ok(narrowed) => narrowed,
+            Err(error) => {
+                result = query_result_from_interrogation_error(
+                    runtime,
+                    query,
+                    state,
+                    &proposed_scope,
+                    error,
+                )?;
+                return finish_query_result(query, diagnostic_log, result);
+            }
+        };
         if answer_is_accepted(&narrowed.answer) {
             result = narrowed;
             result.answer.question_scope_suggestion = None;
         }
     }
-    if let Some(reason) = human_review_reason(&result) {
-        // Query mode has no CheckRecord, so it emits query.review_required
-        // directly from the finalized parsed answer.
+    finish_query_result(query, diagnostic_log, result)
+}
+
+fn finish_query_result(
+    query: QueryRequest<'_>,
+    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    result: QueryResult,
+) -> Result<QueryResult, String> {
+    if let Some(reason) = query_human_review_reason(&result) {
+        // The command layer may persist a matched expectation record before it
+        // turns this result into a human-review command error.
         write_query_review_required_event(query.question, diagnostic_log, &result.answer, reason)
             .map_err(|err| err.to_string())?;
-        return Err(format!("query requires human review: {}", reason));
+        return Ok(result);
     }
     // Successful query mode emits query.result directly from the finalized
     // parsed answer.
     write_query_result_event(query.question, diagnostic_log, &result.answer)
         .map_err(|err| err.to_string())?;
     Ok(result)
+}
+
+fn query_result_from_interrogation_error(
+    runtime: &CheckRuntime<'_>,
+    query: QueryRequest<'_>,
+    state: &mut InterrogationRunState,
+    enforced_scope: &[String],
+    error: String,
+) -> Result<QueryResult, String> {
+    finalize_query_answer(
+        runtime,
+        state,
+        query.agent(&runtime.config.agent),
+        query.expectation.map(|context| context.expectation),
+        enforced_scope,
+        query.question,
+        ParsedAnswer::error(INTERNAL_ERROR_UNPARSABLE.to_string(), error),
+    )
+    .map_err(|err| err.to_string())
 }
 
 struct QueryAttempt {
@@ -259,7 +310,7 @@ fn q_scope_verification_follow_up_is_available(
     !follow_up_used && answer.error.is_none()
 }
 
-fn human_review_reason(result: &QueryResult) -> Option<&'static str> {
+pub(crate) fn query_human_review_reason(result: &QueryResult) -> Option<&'static str> {
     match result.answer.error.as_deref() {
         Some(ERROR_SCOPE_TOO_NARROW) => Some("scope too narrow"),
         Some(ERROR_INVALID_QUESTION) => Some("invalid question"),

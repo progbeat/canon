@@ -6,11 +6,9 @@ use crate::app::APP_SERVER_TURN_TIMEOUT_SECS;
 use crate::evaluator::{EvaluatorError, EvaluatorFailureKind};
 use crate::platform::check_interrupted;
 use serde_json::Value;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::AppServerRunner;
-
-const LIVE_REPORT_IDLE_WARNING_BEFORE_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub(crate) struct AppServerTurnRequest {
     thread_id: String,
@@ -34,7 +32,6 @@ impl AppServerRunner {
     ) -> Result<Value, EvaluatorError> {
         let id = self.send_json_rpc_request(method, &params, "request")?;
         let mut last_activity = Instant::now();
-        let mut idle_warning_reported = false;
         loop {
             if check_interrupted() {
                 return Err("interrupted".into());
@@ -50,14 +47,10 @@ impl AppServerRunner {
                         ),
                     ));
                 }
-                if !idle_warning_reported && app_server_idle_warning_due(last_activity, now) {
-                    self.record_no_app_server_activity_warning_progress();
-                    idle_warning_reported = true;
-                }
+                self.record_no_progress_timeout_accumulating_progress();
                 continue;
             };
             last_activity = Instant::now();
-            idle_warning_reported = false;
             self.record_app_server_activity_progress();
             self.record_app_server_events(&message);
             let envelope = app_server_message(&message).map_err(|error| {
@@ -101,7 +94,6 @@ impl AppServerRunner {
         let mut pending_error: Option<Value> = None;
         let mut interrupted = false;
         let mut interrupt_sent = false;
-        let mut idle_warning_reported = false;
         loop {
             if let Err(err) = self.maybe_interrupt_turn(
                 &mut interrupted,
@@ -131,14 +123,10 @@ impl AppServerRunner {
                         ),
                     ));
                 }
-                if !idle_warning_reported && app_server_idle_warning_due(last_activity, now) {
-                    self.record_no_app_server_activity_warning_progress();
-                    idle_warning_reported = true;
-                }
+                self.record_no_progress_timeout_accumulating_progress();
                 continue;
             };
             last_activity = Instant::now();
-            idle_warning_reported = false;
             self.record_app_server_activity_progress();
             self.record_app_server_events(&message);
             let envelope = match app_server_message(&message) {
@@ -287,10 +275,4 @@ impl AppServerRunner {
             self.record_turn_timeout_progress();
         }
     }
-}
-
-fn app_server_idle_warning_due(last_activity: Instant, now: Instant) -> bool {
-    let timeout = Duration::from_secs(APP_SERVER_TURN_TIMEOUT_SECS);
-    let warning_after = timeout.saturating_sub(LIVE_REPORT_IDLE_WARNING_BEFORE_TIMEOUT);
-    now.duration_since(last_activity) >= warning_after
 }

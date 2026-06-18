@@ -4,10 +4,8 @@ mod last_result;
 #[cfg(test)]
 mod tests;
 
-use crate::check::{CheckRecord, CheckResult, SelectedExpectation};
-use crate::config_types::AgentConfig;
+use crate::check::{CheckRecord, CheckResult, Cooldown, SelectedExpectation};
 use crate::git::{resolve_git_path, TreeSource, VisibleTreeOidCache};
-use crate::scope::q_scope_from_visible_scope;
 use crate::state_paths::CANON_XPECS_DIR_GIT_PATH;
 use crate::time::parse_record_timestamp;
 use std::collections::{BTreeMap, BTreeSet};
@@ -68,39 +66,6 @@ impl XpecStateCache {
         self.xpec_dirs.insert(key, path.clone());
         Ok(path)
     }
-
-    pub(crate) fn read_stored_q_scope(
-        &mut self,
-        root: &Path,
-        expectation: &SelectedExpectation,
-    ) -> Result<Option<Vec<String>>, String> {
-        Ok([
-            LastResultStatus::Pass,
-            LastResultStatus::Fail,
-            LastResultStatus::Error,
-        ]
-        .into_iter()
-        .map(|status| self.read_last_result(root, expectation, status))
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .max_by_key(|result| parse_record_timestamp(&result.updated_timestamp).unwrap_or(0))
-        .map(|result| result.q_scope))
-    }
-
-    fn latest_answer_result(
-        &mut self,
-        root: &Path,
-        expectation: &SelectedExpectation,
-    ) -> Result<Option<LastResult>, String> {
-        Ok([LastResultStatus::Pass, LastResultStatus::Fail]
-            .into_iter()
-            .map(|status| self.read_last_result(root, expectation, status))
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .flatten()
-            .max_by_key(|result| parse_record_timestamp(&result.updated_timestamp).unwrap_or(0)))
-    }
 }
 
 pub(crate) fn snapshot_pass_ids(
@@ -138,7 +103,6 @@ pub(crate) fn cached_last_result_for_expectation(
         if let Some((result, status)) = same_tree_last_result(
             root,
             source,
-            &expectation.agent,
             expectation,
             state_cache,
             visible_tree_oid_cache,
@@ -220,12 +184,11 @@ pub(crate) fn latest_non_pass_timestamp(
 fn same_tree_last_result(
     root: &Path,
     source: &TreeSource,
-    agent: &AgentConfig,
     expectation: &SelectedExpectation,
     state_cache: &mut XpecStateCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<Option<(LastResult, CachedResultStatus)>, String> {
-    let resolver = visible_tree_oid_cache.reuse_resolver(root, source, agent)?;
+    let resolver = visible_tree_oid_cache.reuse_resolver(root, source)?;
     for (last_status, cached_status) in [
         (LastResultStatus::Fail, CachedResultStatus::Fail),
         (LastResultStatus::Pass, CachedResultStatus::Pass),
@@ -236,10 +199,13 @@ fn same_tree_last_result(
         let Some(stored_visible_tree_oid) = result.visible_tree_oid.as_deref() else {
             continue;
         };
-        let Ok(q_scope) = q_scope_from_visible_scope(agent, &result.visible_scope) else {
-            continue;
-        };
-        let Some(current_visible_tree_oid) = resolver.visible_tree_oid_for_scope(&q_scope)? else {
+        // The cached-result rule compares the stored visibleTreeOid with the
+        // current visible tree built from that same stored visible-scope
+        // pathspec. Reconstructing a q-scope here would make current agent
+        // ignores part of history reuse.
+        let Some(current_visible_tree_oid) =
+            resolver.visible_tree_oid_for_visible_scope_pathspec(&result.visible_scope)?
+        else {
             continue;
         };
         if current_visible_tree_oid == stored_visible_tree_oid {
@@ -258,19 +224,46 @@ fn cooldown_last_result(
     let Some(cooldown) = expectation.cooldown else {
         return Ok(None);
     };
-    let latest = state_cache.latest_answer_result(root, expectation)?;
-    let Some(result) = latest else {
+    let pass = cooldown_last_result_for_status(
+        root,
+        expectation,
+        state_cache,
+        now,
+        cooldown,
+        LastResultStatus::Pass,
+        CheckResult::Pass,
+    )?;
+    let fail = cooldown_last_result_for_status(
+        root,
+        expectation,
+        state_cache,
+        now,
+        cooldown,
+        LastResultStatus::Fail,
+        CheckResult::Fail,
+    )?;
+    Ok([pass, fail]
+        .into_iter()
+        .flatten()
+        .max_by_key(|result| parse_record_timestamp(&result.updated_timestamp).unwrap_or(0)))
+}
+
+fn cooldown_last_result_for_status(
+    root: &Path,
+    expectation: &SelectedExpectation,
+    state_cache: &mut XpecStateCache,
+    now: u64,
+    cooldown: Cooldown,
+    last_status: LastResultStatus,
+    check_result: CheckResult,
+) -> Result<Option<LastResult>, String> {
+    let Some(duration) = cooldown.duration_for(check_result) else {
+        return Ok(None);
+    };
+    let Some(result) = state_cache.read_last_result(root, expectation, last_status)? else {
         return Ok(None);
     };
     let Some(response_timestamp) = parse_record_timestamp(&result.response_timestamp) else {
-        return Ok(None);
-    };
-    let check_result = match result.status {
-        LastResultStatus::Pass => CheckResult::Pass,
-        LastResultStatus::Fail => CheckResult::Fail,
-        LastResultStatus::Error => return Ok(None),
-    };
-    let Some(duration) = cooldown.duration_for(check_result) else {
         return Ok(None);
     };
     if now.saturating_sub(response_timestamp) >= duration {

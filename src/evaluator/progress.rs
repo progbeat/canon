@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 // Shared progress handle for one evaluated expectation. Check execution owns the
 // handle, installs it on the evaluator runner, and records q-scope/full-scope
-// follow-up starts. App-server transport records activity, no-progress warning
+// follow-up starts. App-server transport records activity, no-progress timeout
 // accumulation, and exhausted no-progress turn timeouts through the same handle.
 #[derive(Clone, Default)]
 pub(crate) struct EvaluatorProgress {
@@ -57,7 +57,7 @@ impl EvaluatorProgress {
         }
     }
 
-    pub(crate) fn record_no_app_server_activity_warning(&self) {
+    pub(crate) fn record_no_progress_timeout_accumulating(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.idle_accumulating = true;
             state.idle_accumulation = state.idle_accumulation.saturating_add(1);
@@ -154,7 +154,7 @@ mod tests {
             EvaluatorProgressMarker::AppServerActivity
         );
 
-        progress.record_no_app_server_activity_warning();
+        progress.record_no_progress_timeout_accumulating();
         assert_eq!(
             progress.snapshot().marker_since(before),
             EvaluatorProgressMarker::Idle
@@ -172,7 +172,7 @@ mod tests {
         );
         let before = progress.snapshot();
 
-        progress.record_no_app_server_activity_warning();
+        progress.record_no_progress_timeout_accumulating();
         progress.record_app_server_activity();
         assert_eq!(
             progress.snapshot().marker_since(before),

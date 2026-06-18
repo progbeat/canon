@@ -3,7 +3,7 @@ use super::CheckRunCaches;
 use crate::check::command::output::{
     write_result_output_without_started_report, SharedCheckOutput,
 };
-use crate::check::core::errors::error_record_from_visible_tree_oid_at;
+use crate::check::core::errors::error_record_from_visible_tree_oid;
 use crate::check::core::{CheckOptions, CheckRecord, SelectedExpectation};
 use crate::check::interrogation::policy::{
     initial_visible_scope_for_expectation, interrogate_or_error_record, narrowed_scope_is_accepted,
@@ -21,7 +21,6 @@ use crate::hash::full_scope;
 use crate::logs::DiagnosticLogWriter;
 use crate::platform::check_interrupted;
 use crate::scope::scope_is_within;
-use crate::time::{format_record_timestamp, unix_timestamp};
 use std::io::Write;
 
 pub(super) struct ExpectationRunContext<'a, 'out, 'log, R: EvaluatorRunner> {
@@ -79,7 +78,7 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
             );
         }
     };
-    // Prepare the metadata needed to render an errored expectation before
+    // Prepare the tree metadata needed to render an errored expectation before
     // printing the live report prefix. After `<short ID>.` is visible, later
     // fallible steps can build an ERROR record without doing more fallible
     // tree inspection.
@@ -94,17 +93,6 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
                 context,
                 expectation,
                 full_scope(),
-                error,
-            );
-        }
-    };
-    let started_report_error_timestamp = match unix_timestamp().map(format_record_timestamp) {
-        Ok(timestamp) => timestamp,
-        Err(error) => {
-            return finish_unstarted_expectation_with_error_record(
-                context,
-                expectation,
-                verified_q_scope.clone(),
                 error,
             );
         }
@@ -124,7 +112,6 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
                 expectation,
                 &verified_q_scope,
                 &started_report_error_visible_tree_oid,
-                &started_report_error_timestamp,
                 &mut started_report,
                 error,
             );
@@ -151,7 +138,6 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
                 expectation,
                 &verified_q_scope,
                 &started_report_error_visible_tree_oid,
-                &started_report_error_timestamp,
                 &mut started_report,
                 error.to_string(),
             );
@@ -360,14 +346,12 @@ fn finish_unstarted_expectation_with_error_record<R: EvaluatorRunner>(
         &expectation.agent,
         &scope,
     )?;
-    let timestamp = format_record_timestamp(unix_timestamp()?);
     let mut started_report = None;
     finish_started_expectation_with_error_record(
         context,
         expectation,
         &scope,
         &visible_tree_oid,
-        &timestamp,
         &mut started_report,
         error,
     )
@@ -378,17 +362,15 @@ fn finish_started_expectation_with_error_record<R: EvaluatorRunner>(
     expectation: &SelectedExpectation,
     scope: &[String],
     visible_tree_oid: &str,
-    timestamp: &str,
     started_report: &mut Option<StateBackedLiveExpectationReport>,
     error: String,
 ) -> Result<ExpectationRunOutcome, String> {
-    let record = error_record_from_visible_tree_oid_at(
+    let record = error_record_from_visible_tree_oid(
         expectation,
         scope,
         &error,
         visible_tree_oid.to_string(),
-        timestamp.to_string(),
-    );
+    )?;
     if let Some(report) = started_report.take() {
         report.finish_public_output_or_keep_state_report(&record);
     } else {
