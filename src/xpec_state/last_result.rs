@@ -227,7 +227,7 @@ impl XpecStateCache {
             (root.to_path_buf(), expectation.id.clone(), result.status),
             Some(result.clone()),
         );
-        if let Some(stale_status) = stale_answer_status_for(result.status) {
+        if let Some(stale_status) = stale_status_removed_after_write(result.status) {
             self.remove_last_result(root, expectation, stale_status)?;
         }
         Ok(())
@@ -261,11 +261,10 @@ impl XpecStateCache {
     }
 }
 
-fn stale_answer_status_for(status: LastResultStatus) -> Option<LastResultStatus> {
+fn stale_status_removed_after_write(status: LastResultStatus) -> Option<LastResultStatus> {
     match status {
         LastResultStatus::Pass => Some(LastResultStatus::Fail),
-        LastResultStatus::Fail => Some(LastResultStatus::Pass),
-        LastResultStatus::Error => None,
+        LastResultStatus::Fail | LastResultStatus::Error => None,
     }
 }
 

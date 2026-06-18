@@ -323,6 +323,71 @@ fn new_answer_status_removes_stale_opposite_answer_result() {
 }
 
 #[test]
+fn new_fail_keeps_last_pass_checkpoint_and_reusable_same_tree_pass() {
+    let root = git_project("new-fail-keeps-last-pass");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/a.rs"), "a\n").unwrap();
+    fs::write(root.join("src/b.rs"), "b\n").unwrap();
+    git(&root, &["add", "src/a.rs", "src/b.rs"]);
+
+    let expectation = test_expectation();
+    let mut cache = XpecStateCache::default();
+    let pass_scope = vec!["src/a.rs".to_string()];
+    let fail_scope = vec!["src/b.rs".to_string()];
+    let checked_tree_oid = TreeSource::Staged.tree_oid_for_prompt_diff(&root).unwrap();
+    let mut oid_cache = VisibleTreeOidCache::new();
+
+    let mut pass = test_record(&expectation, &pass_scope, "yes", None);
+    pass.visible_tree_oid = oid_cache
+        .visible_tree_oid(&root, &TreeSource::Staged, &expectation.agent, &pass_scope)
+        .unwrap();
+    cache
+        .write_last_result_for_record(&root, &checked_tree_oid, &expectation, &pass)
+        .unwrap();
+
+    let mut fail = test_record(&expectation, &fail_scope, "no", None);
+    fail.visible_tree_oid = oid_cache
+        .visible_tree_oid(&root, &TreeSource::Staged, &expectation.agent, &fail_scope)
+        .unwrap();
+    cache
+        .write_last_result_for_record(&root, &checked_tree_oid, &expectation, &fail)
+        .unwrap();
+
+    let last_pass = cache.read_last_pass(&root, &expectation).unwrap().unwrap();
+    assert_eq!(
+        last_pass.checked_tree_oid.as_deref(),
+        Some(checked_tree_oid.as_str())
+    );
+    assert!(last_result_path(&root, &expectation.id, "last-fail.json").exists());
+
+    fs::write(root.join("src/b.rs"), "changed\n").unwrap();
+    git(&root, &["add", "src/b.rs"]);
+
+    let hit = cached_last_result_for_expectation(
+        &root,
+        &TreeSource::Staged,
+        &expectation,
+        &mut cache,
+        &mut VisibleTreeOidCache::new(),
+        CachedLastResultLookup {
+            now: 2,
+            include_same_tree: true,
+            include_cooldown: true,
+        },
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(hit.status, CachedResultStatus::Pass);
+    assert_eq!(hit.kind, CachedLastResultKind::SameTree);
+    assert_eq!(
+        hit.result.checked_tree_oid.as_deref(),
+        Some(checked_tree_oid.as_str())
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn stored_q_scope_uses_latest_result() {
     let root = git_project("stored-q-scope-latest-result");
     let expectation = test_expectation();
