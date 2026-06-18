@@ -29,14 +29,6 @@ if [ -e "$system_skills_marker" ]; then
   cp "$system_skills_marker" "$codex_home/skills/.system/.codex-system-skills.marker"
 fi
 
-case "$1" in
-  init|hook|check|gate|help|-*)
-    ;;
-  *)
-    exec "$@"
-    ;;
-esac
-
 if [ "$1" = "check" ]; then
   has_no_sandbox=0
   for arg in "$@"; do
