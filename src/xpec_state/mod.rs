@@ -164,6 +164,7 @@ pub(crate) fn cached_last_result_for_expectation(
 
 pub(crate) fn refresh_reused_same_tree_last_result(
     root: &Path,
+    source: &TreeSource,
     expectation: &SelectedExpectation,
     state_cache: &mut XpecStateCache,
     mut hit: CachedLastResultHit,
@@ -172,7 +173,13 @@ pub(crate) fn refresh_reused_same_tree_last_result(
         // The cached-result rule has already selected this hit. This write is
         // only the Last Results bookkeeping required when a same-tree result is
         // reused.
-        hit.result = state_cache.refresh_last_result(root, expectation, &hit.result)?;
+        let current_checked_tree_oid = source.tree_oid_for_prompt_diff(root)?;
+        hit.result = state_cache.refresh_last_result_for_checked_tree(
+            root,
+            &current_checked_tree_oid,
+            expectation,
+            &hit.result,
+        )?;
     }
     Ok(hit)
 }

@@ -186,14 +186,17 @@ impl XpecStateCache {
         Ok(result)
     }
 
-    pub(crate) fn refresh_last_result(
+    pub(crate) fn refresh_last_result_for_checked_tree(
         &mut self,
         root: &Path,
+        current_checked_tree_oid: &str,
         expectation: &SelectedExpectation,
         result: &LastResult,
     ) -> Result<LastResult, String> {
         let mut refreshed = result.clone();
         refreshed.updated_timestamp = format_record_timestamp(unix_timestamp()?);
+        refreshed.checked_tree_oid = (refreshed.status == LastResultStatus::Pass)
+            .then(|| current_checked_tree_oid.to_string());
         self.write_last_result(root, expectation, &refreshed)?;
         Ok(refreshed)
     }

@@ -167,6 +167,8 @@ fn same_tree_pass_reuses_last_pass_when_only_hidden_files_change() {
 
     fs::write(root.join("src/b.rs"), "changed\n").unwrap();
     git(&root, &["add", "src/b.rs"]);
+    let refreshed_checked_tree_oid = TreeSource::Staged.tree_oid_for_prompt_diff(&root).unwrap();
+    assert_ne!(checked_tree_oid, refreshed_checked_tree_oid);
 
     let hit = cached_last_result_for_expectation(
         &root,
@@ -186,6 +188,22 @@ fn same_tree_pass_reuses_last_pass_when_only_hidden_files_change() {
     assert_eq!(hit.status, CachedResultStatus::Pass);
     assert_eq!(hit.kind, CachedLastResultKind::SameTree);
     assert_eq!(hit.result.q_scope, q_scope);
+
+    let hit = refresh_reused_same_tree_last_result(
+        &root,
+        &TreeSource::Staged,
+        &expectation,
+        &mut cache,
+        hit,
+    )
+    .unwrap();
+
+    assert_eq!(
+        hit.result.checked_tree_oid.as_deref(),
+        Some(refreshed_checked_tree_oid.as_str())
+    );
+    let pass_json = read_json(&root, &expectation.id, "last-pass.json");
+    assert_eq!(pass_json["checkedTreeOid"], refreshed_checked_tree_oid);
     let _ = fs::remove_dir_all(root);
 }
 

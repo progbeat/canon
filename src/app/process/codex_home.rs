@@ -165,7 +165,9 @@ mod tests {
 
     #[test]
     fn evaluator_codex_home_path_uses_private_random_temp_parent() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).canonicalize().unwrap();
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .canonicalize()
+            .unwrap();
         let first = evaluator_codex_home_path(&root).unwrap();
         let second = evaluator_codex_home_path(&root).unwrap();
 
@@ -174,7 +176,9 @@ mod tests {
             assert_eq!(codex_home.file_name(), Some(std::ffi::OsStr::new(".codex")));
             assert!(codex_home.starts_with(env::temp_dir().canonicalize().unwrap()));
             assert!(!codex_home.starts_with(&root));
-            assert!(!codex_home.to_string_lossy().contains(&root.to_string_lossy()[..]));
+            assert!(!codex_home
+                .to_string_lossy()
+                .contains(&root.to_string_lossy()[..]));
             assert!(codex_home.parent().unwrap().is_dir());
         }
         let _ = fs::remove_dir_all(first.parent().unwrap());

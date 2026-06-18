@@ -91,10 +91,14 @@ fn ask_query<R: EvaluatorRunner>(
         }
     }
     if let Some(reason) = human_review_reason(&result) {
+        // Query mode has no CheckRecord, so it emits query.review_required
+        // directly from the finalized parsed answer.
         write_query_review_required_event(query.question, diagnostic_log, &result.answer, reason)
             .map_err(|err| err.to_string())?;
         return Err(format!("query requires human review: {}", reason));
     }
+    // Successful query mode emits query.result directly from the finalized
+    // parsed answer.
     write_query_result_event(query.question, diagnostic_log, &result.answer)
         .map_err(|err| err.to_string())?;
     Ok(result)

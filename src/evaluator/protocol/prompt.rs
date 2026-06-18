@@ -78,21 +78,32 @@ pub(crate) fn evaluator_turn_prompt(
     last_pass: Option<&LastResult>,
 ) -> Result<String, String> {
     // `diff_from` is template input for this fresh evaluator turn only. Cached
-    // results are emitted without rendering this prompt.
+    // results are emitted without rendering this prompt. The turn template uses
+    // `expectation.diff_from` to choose whether a target-diff prompt can reuse
+    // the checkpoint response or must render the expectation's default answer.
+    let expectation_context = turn_prompt_expectation_context(expected_answer, diff_from, target);
     render_minijinja_resource_template(
         root,
         template_output_dir,
         EVALUATOR_TURN_PROMPT_TEMPLATE,
         json!({
             "question": question,
-            "expectation": {
-                "a": expected_answer,
-                "diff_from": diff_from,
-                "target": target.unwrap_or(""),
-            },
+            "expectation": expectation_context,
             "last_pass": last_pass,
         }),
     )
+}
+
+fn turn_prompt_expectation_context(
+    expected_answer: &str,
+    diff_from: &str,
+    target: Option<&str>,
+) -> JsonValue {
+    json!({
+        "a": expected_answer,
+        "diff_from": diff_from,
+        "target": target.unwrap_or(""),
+    })
 }
 
 fn render_minijinja_resource_template(

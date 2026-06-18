@@ -81,6 +81,9 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         )?,
     };
     let mut session_id = lifecycle_log.session_id.clone();
+    // Runtime logs expose the effective instructions for every thread start or
+    // reuse, so thread behavior can be audited from the log without reading
+    // derived state.
     write_thread_lifecycle_event(
         diagnostic_log,
         &lifecycle_log,
@@ -410,14 +413,31 @@ pub(crate) fn resolve_diff_from_tree_oid(
     expectation: &SelectedExpectation,
     last_pass: Option<&LastResult>,
 ) -> Result<String, EvaluatorError> {
+    // Canon `diff-from` resolution: `:checkpoint` prefers the last pass
+    // checked tree and falls back to the against tree; `:against-tree` uses
+    // the against tree; any other value is resolved as a tree source.
     match expectation.diff_from.as_str() {
-        DEFAULT_DIFF_FROM => Ok(last_pass
-            .and_then(|last_pass| last_pass.checked_tree_oid.as_deref())
-            .unwrap_or(&runtime.tree_context.against_tree_oid)
-            .to_string()),
+        DEFAULT_DIFF_FROM => Ok(checkpoint_diff_base_tree_oid(
+            last_pass,
+            &runtime.tree_context.against_tree_oid,
+        )
+        .to_string()),
         AGAINST_TREE_DIFF_FROM => Ok(runtime.tree_context.against_tree_oid.clone()),
-        tree => crate::git::TreeSource::resolve(runtime.root, tree, "diff-from")
-            .and_then(|source| source.tree_oid_for_prompt_diff(runtime.root))
-            .map_err(EvaluatorError::message),
+        tree => explicit_diff_base_tree_oid(runtime.root, tree),
     }
+}
+
+fn checkpoint_diff_base_tree_oid<'a>(
+    last_pass: Option<&'a LastResult>,
+    against_tree_oid: &'a str,
+) -> &'a str {
+    last_pass
+        .and_then(|last_pass| last_pass.checked_tree_oid.as_deref())
+        .unwrap_or(against_tree_oid)
+}
+
+fn explicit_diff_base_tree_oid(root: &Path, tree: &str) -> Result<String, EvaluatorError> {
+    crate::git::TreeSource::resolve(root, tree, "diff-from")
+        .and_then(|source| source.tree_oid_for_prompt_diff(root))
+        .map_err(EvaluatorError::message)
 }

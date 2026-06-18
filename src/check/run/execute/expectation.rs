@@ -203,7 +203,9 @@ fn record_finished_expectation<R: EvaluatorRunner>(
     // This is the durable result-reporting path used after a CheckRecord is
     // formed. Live output has already attempted its human-facing completion;
     // this path keeps the completed result available for later inspection and
-    // cache decisions.
+    // cache decisions. The final call emits the evaluated expectation's
+    // expectation.result and, when needed, expectation.review_required runtime
+    // log events through DiagnosticLogWriter::write_record_event.
     context.caches.xpec_state.write_last_result_for_record(
         context.runtime.root,
         &context.runtime.tree_context.checked_tree_oid,

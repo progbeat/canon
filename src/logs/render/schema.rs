@@ -24,6 +24,10 @@ pub(super) fn validate_runtime_log_event_schema(
 }
 
 fn required_runtime_log_fields(event: &str) -> Option<&'static [&'static str]> {
+    // This table is the schema map for known runtime-log events. Thread
+    // lifecycle events require the effective base/developer instructions for
+    // inspection, and `validate_agent_token_usage_schema` below validates
+    // per-turn token usage fields for agent response/error events.
     match event {
         "agent.request" => Some(&["id", "attempt", "reason", "request"]),
         "agent.response" => Some(&["id", "attempt", "reason", "response"]),
