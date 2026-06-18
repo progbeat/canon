@@ -21,6 +21,9 @@ const TEMPLATE_OUTPUT_TEMP_ATTEMPTS: usize = 16;
 // included here because they are rendered with runtime check data.
 const DEVELOPER_INSTRUCTIONS_TEMPLATE: &str =
     include_str!("../../../resources/prompts/evaluator_developer_instructions.txt");
+// Implements the Turn Prompt Template spec: the resource template is rendered
+// by `evaluator_turn_prompt`, including the `target: diff` previous-response
+// hint driven by `diff_from` and `last_pass` below.
 const EVALUATOR_TURN_PROMPT_TEMPLATE: &str =
     include_str!("../../../resources/prompts/evaluator_turn_prompt.txt");
 
@@ -529,6 +532,10 @@ mod tests {
         )
         .unwrap();
 
+        assert!(prompt.contains("This question targets the Git diff."));
+        assert!(prompt.contains("Return the previous valid response if it still holds:"));
+        assert!(prompt.contains(r#""answer": "yes""#));
+        assert!(prompt.contains(r#""evidence": "`src/a.rs`""#));
         // The turn prompt provides this response literal to the evaluator. The
         // base instruction to keep a provided response's qScopeSuggestion
         // refers to this rendered literal, not the stored last-pass response
@@ -567,6 +574,8 @@ mod tests {
         )
         .unwrap();
 
+        assert!(prompt.contains("This question targets the Git diff."));
+        assert!(prompt.contains(r#""evidence": """#));
         assert!(prompt.contains(r#""answer": "yes""#));
         assert!(!prompt.contains(r#""answer": "no""#));
         let _ = fs::remove_dir_all(output_dir);
