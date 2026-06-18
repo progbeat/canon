@@ -5,12 +5,12 @@ use crate::xpec_state::LastResult;
 use minijinja::value::{Kwargs, Value as MiniValue};
 use minijinja::{Environment, Error, ErrorKind};
 use serde_json::{json, Value as JsonValue};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 const TEMPLATE_OUTPUT_HEAD_BYTES: usize = 8 * 1024;
-const TEMPLATE_OUTPUT_TEMP_ATTEMPTS: usize = 16;
 
 // These resource files are the Canon-owned interrogation prompt/instruction
 // templates. User-authored expectation questions are runtime data inserted into
@@ -321,22 +321,22 @@ fn shell_transcript_filter(
 }
 
 fn truncated_template_command_output(
-    output: &[u8],
+    stdout: &[u8],
     template_output_dir: &Path,
 ) -> Result<String, Error> {
-    if output.len() <= TEMPLATE_OUTPUT_HEAD_BYTES {
-        return Ok(String::from_utf8_lossy(output).into_owned());
+    if stdout.len() <= TEMPLATE_OUTPUT_HEAD_BYTES {
+        return Ok(String::from_utf8_lossy(stdout).into_owned());
     }
     // Prompt-template truncation is a token-budget mechanism, not a visibility
     // boundary. The Prompt Templates spec deliberately exposes a readable file
     // containing the same command stdout so the evaluator can inspect more of
     // an already-visible transcript when the head is insufficient.
-    let path = write_full_template_output(template_output_dir, output)?;
-    let (mut head, head_lines) = template_output_head(output);
+    let path = write_full_template_command_stdout(template_output_dir, stdout)?;
+    let (mut head, head_lines) = template_command_stdout_head(stdout);
     if !head.ends_with('\n') {
         head.push('\n');
     }
-    let total_lines = output_line_count(output);
+    let total_lines = output_line_count(stdout);
     head.push_str(&format!(
         "[truncated: showing first {} of {} lines; full output: {}]\n",
         head_lines,
@@ -346,10 +346,10 @@ fn truncated_template_command_output(
     Ok(head)
 }
 
-fn template_output_head(output: &[u8]) -> (String, usize) {
+fn template_command_stdout_head(stdout: &[u8]) -> (String, usize) {
     let mut end = 0usize;
     let mut head_lines = 0usize;
-    for line in output.split_inclusive(|byte| *byte == b'\n') {
+    for line in stdout.split_inclusive(|byte| *byte == b'\n') {
         if end.saturating_add(line.len()) > TEMPLATE_OUTPUT_HEAD_BYTES {
             break;
         }
@@ -358,14 +358,14 @@ fn template_output_head(output: &[u8]) -> (String, usize) {
     }
     if head_lines > 0 {
         return (
-            String::from_utf8_lossy(&output[..end]).into_owned(),
+            String::from_utf8_lossy(&stdout[..end]).into_owned(),
             head_lines,
         );
     }
 
-    let end = TEMPLATE_OUTPUT_HEAD_BYTES.min(output.len());
-    let head = String::from_utf8_lossy(&output[..end]).into_owned();
-    let head_lines = output_line_count(&output[..end]);
+    let end = TEMPLATE_OUTPUT_HEAD_BYTES.min(stdout.len());
+    let head = String::from_utf8_lossy(&stdout[..end]).into_owned();
+    let head_lines = output_line_count(&stdout[..end]);
     (head, head_lines)
 }
 
@@ -381,7 +381,10 @@ fn output_line_count(output: &[u8]) -> usize {
     }
 }
 
-fn write_full_template_output(template_output_dir: &Path, output: &[u8]) -> Result<PathBuf, Error> {
+fn write_full_template_command_stdout(
+    template_output_dir: &Path,
+    stdout: &[u8],
+) -> Result<PathBuf, Error> {
     fs::create_dir_all(template_output_dir).map_err(|err| {
         template_error(format!(
             "failed to create prompt template output dir {}: {}",
@@ -389,36 +392,61 @@ fn write_full_template_output(template_output_dir: &Path, output: &[u8]) -> Resu
             err
         ))
     })?;
-    for _ in 0..TEMPLATE_OUTPUT_TEMP_ATTEMPTS {
-        let random = getrandom::u64().map_err(|err| {
-            template_error(format!(
-                "failed to choose prompt template output path: {}",
-                err
-            ))
-        })?;
-        let path = template_output_dir.join(format!("canon-template-output-{random:016x}.txt"));
-        match create_template_output_file(&path, output) {
-            Ok(()) => return Ok(path),
-            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(err) => {
-                return Err(template_error(format!(
-                    "failed to write {}: {}",
+    let path = template_output_dir.join(format!(
+        "canon-template-output-sha256-{}.txt",
+        sha256_hex(stdout)
+    ));
+    // This file stores raw command stdout referenced by the truncation line.
+    // The rendered prompt string is trimmed later by
+    // `trim_rendered_prompt_template_output`.
+    match create_template_command_stdout_file(&path, stdout) {
+        Ok(()) => Ok(path),
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+            let existing = fs::read(&path).map_err(|read_err| {
+                template_error(format!(
+                    "failed to read existing prompt template output file {}: {}",
                     path.display(),
-                    err
-                )));
+                    read_err
+                ))
+            })?;
+            if existing == stdout {
+                return Ok(path);
             }
+            Err(template_error(format!(
+                "prompt template output hash collision or stale file at {}",
+                path.display()
+            )))
         }
+        Err(err) => Err(template_error(format!(
+            "failed to write {}: {}",
+            path.display(),
+            err
+        ))),
     }
-    Err(template_error(format!(
-        "failed to create a unique prompt template output file in {}",
-        template_output_dir.display()
-    )))
 }
 
-fn create_template_output_file(path: &Path, output: &[u8]) -> io::Result<()> {
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut output = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        output.push(hex_digit(byte >> 4));
+        output.push(hex_digit(byte & 0x0f));
+    }
+    output
+}
+
+fn hex_digit(value: u8) -> char {
+    match value {
+        0..=9 => (b'0' + value) as char,
+        10..=15 => (b'a' + value - 10) as char,
+        _ => unreachable!("hex digit nibble is always in range"),
+    }
+}
+
+fn create_template_command_stdout_file(path: &Path, stdout: &[u8]) -> io::Result<()> {
     let mut file = template_output_open_options().open(path)?;
     let result = set_template_output_file_permissions(&file)
-        .and_then(|()| file.write_all(output))
+        .and_then(|()| file.write_all(stdout))
         .and_then(|()| file.flush());
     if result.is_err() {
         let _ = fs::remove_file(path);
@@ -480,7 +508,31 @@ mod tests {
     }
 
     #[test]
+    fn template_command_output_file_is_content_addressed_and_deduplicated() {
+        let output = (0..1200)
+            .map(|index| format!("line {index}\n"))
+            .collect::<String>();
+        let output_dir = test_output_dir("dedupe");
+
+        let first = truncated_template_command_output(output.as_bytes(), &output_dir).unwrap();
+        let second = truncated_template_command_output(output.as_bytes(), &output_dir).unwrap();
+        let first_path = PathBuf::from(full_output_path_from_rendered(&first));
+        let second_path = PathBuf::from(full_output_path_from_rendered(&second));
+
+        assert_eq!(first_path, second_path);
+        assert!(first_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("canon-template-output-sha256-"));
+        assert_eq!(fs::read(&first_path).unwrap(), output.as_bytes());
+        let _ = fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
     fn template_command_output_file_preserves_raw_stdout_bytes() {
+        // The saved file is raw command stdout. The full rendered prompt string
+        // is trimmed separately after all `sh` filters return.
         let mut output = (0..1200)
             .flat_map(|index| format!("line {index}\n").into_bytes())
             .collect::<Vec<_>>();
@@ -488,22 +540,25 @@ mod tests {
         let output_dir = test_output_dir("raw-bytes");
 
         let rendered = truncated_template_command_output(&output, &output_dir).unwrap();
-        let truncation_line = rendered
-            .lines()
-            .find(|line| line.starts_with("[truncated: "))
-            .unwrap();
-        let path = truncation_line
-            .strip_suffix(']')
-            .unwrap()
-            .rsplit_once("full output: ")
-            .unwrap()
-            .1;
+        let path = full_output_path_from_rendered(&rendered);
         let saved = fs::read(path).unwrap();
 
         assert_eq!(saved, output);
         let saved_path = Path::new(path);
         assert_eq!(saved_path.parent(), Some(output_dir.as_path()));
         let _ = fs::remove_dir_all(output_dir);
+    }
+
+    fn full_output_path_from_rendered(rendered: &str) -> &str {
+        rendered
+            .lines()
+            .find(|line| line.starts_with("[truncated: "))
+            .unwrap()
+            .strip_suffix(']')
+            .unwrap()
+            .rsplit_once("full output: ")
+            .unwrap()
+            .1
     }
 
     fn test_output_dir(label: &str) -> PathBuf {
