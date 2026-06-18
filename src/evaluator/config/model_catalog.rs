@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const EVALUATOR_MODEL_CATALOG_TEMP_DIR: &str = "canon-evaluator-model-catalogs";
 static MODEL_CATALOG_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-pub(crate) struct ModelCatalogFile {
+pub(super) struct ModelCatalogFile {
     path: PathBuf,
 }
 
@@ -200,7 +200,7 @@ impl ModelCatalogFile {
         ModelCatalogFile { path }
     }
 
-    pub(crate) fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         &self.path
     }
 }

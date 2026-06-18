@@ -5,7 +5,7 @@ mod turn;
 
 pub(crate) use config::{
     app_server_args_with_no_sandbox, app_server_model_key, evaluator_thread_config_with_no_sandbox,
-    AppServerModelKey, ModelCatalogFile,
+    AppServerArgs,
 };
 pub(crate) use progress::{EvaluatorProgress, EvaluatorProgressMarker, EvaluatorProgressSnapshot};
 pub(crate) use protocol::{

@@ -1,4 +1,4 @@
-use crate::evaluator::{EvaluatorProgress, ModelCatalogFile};
+use crate::evaluator::{AppServerArgs, EvaluatorProgress};
 use crate::token_usage_types::{
     ContextCompactionEvent, EvaluatorTurnUsage, TokenUsage, TokenUsageUpdate,
 };
@@ -26,7 +26,7 @@ pub(crate) struct AppServerRunner {
     pub(super) session_cwds: BTreeMap<String, PathBuf>,
     pub(super) progress: Option<EvaluatorProgress>,
     pub(super) no_sandbox: bool,
-    pub(super) startup_model_catalog_file: Option<ModelCatalogFile>,
+    pub(super) startup_args: Option<AppServerArgs>,
 }
 
 impl AppServerRunner {

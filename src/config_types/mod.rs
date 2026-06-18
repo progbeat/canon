@@ -175,6 +175,9 @@ pub(crate) struct CooldownMappingConfig {
 #[derive(Debug, Clone)]
 pub(crate) enum RawExpectationItem {
     Explicit(RawExplicitExpectation),
+    // The Expectations spec calls both `include` and `path`/`q_template`/`a`
+    // forms generator items. Internally they stay split so config expansion can
+    // route include recursion separately from per-file question generation.
     Generator(RawGeneratorExpectation),
     Include(RawIncludeExpectation),
 }

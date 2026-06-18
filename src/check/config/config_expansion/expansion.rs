@@ -92,6 +92,8 @@ impl RawExpectationExpansion<'_> {
                     })
                 }
                 RawExpectationItem::Generator(item) => {
+                    // Generator items are the `path` + `q_template` + `a`
+                    // expectation form from the Expectations spec.
                     self.expand_path_generator(config_path, index, item)?
                 }
                 RawExpectationItem::Include(item) => {

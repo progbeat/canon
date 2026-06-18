@@ -8,8 +8,8 @@ use crate::config_types::AgentConfig;
 use std::path::Path;
 
 pub(crate) struct AppServerArgs {
-    pub(crate) args: Vec<String>,
-    pub(crate) model_catalog_file: Option<ModelCatalogFile>,
+    args: Vec<String>,
+    _model_catalog_file: Option<ModelCatalogFile>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -40,8 +40,14 @@ pub(crate) fn app_server_args_with_no_sandbox(
     args.push("stdio://".to_string());
     Ok(AppServerArgs {
         args,
-        model_catalog_file: startup_config.model_catalog_file,
+        _model_catalog_file: startup_config.model_catalog_file,
     })
+}
+
+impl AppServerArgs {
+    pub(crate) fn args(&self) -> &[String] {
+        &self.args
+    }
 }
 
 fn evaluator_disabled_app_server_features(load_plugins: bool) -> Vec<&'static str> {

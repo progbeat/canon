@@ -243,10 +243,12 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
         *verified_q_scope = record_scope.clone();
     }
     debug_assert!(scope_is_within(&record_scope, verified_q_scope));
+    let initial_result = initial_interrogation.record.result;
     // This is the Interrogation Policy q-scope verification follow-up. It is
     // the only check-run decision point that consumes an evaluator
     // `qScopeSuggestion`; the rest of this function only executes the
-    // verification turn planned by policy.
+    // verification turn planned by policy. It is unrelated to check-config
+    // expectation item expansion.
     let q_scope_verification_scope = question_scope_suggestion_scope_for_unused_follow_up(
         context.runtime,
         &expectation.agent,
@@ -277,7 +279,7 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
         context_compaction_hit |= turn_has_context_compaction(&narrowed);
         stop_after_current_expectation |= narrowed.stop_after_current_expectation;
         interrupted |= narrowed.interrupted;
-        let accepted = narrowed_scope_is_accepted(&narrowed.record);
+        let accepted = narrowed_scope_is_accepted(initial_result, &narrowed.record);
         write_scope_narrowing_event(
             context.diagnostic_log,
             &expectation.id,

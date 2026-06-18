@@ -9,6 +9,68 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
+fn path_generator_expands_q_template_for_each_matching_file() {
+    let root = test_root("path-generator-q-template");
+    git(&root, &["init"]);
+    fs::create_dir_all(root.join("specs/nested")).unwrap();
+    fs::write(root.join("specs/root.md"), "Root spec").unwrap();
+    fs::write(root.join("specs/nested/child.md"), "Nested spec").unwrap();
+    fs::write(root.join("specs/nested/child.txt"), "Ignored spec").unwrap();
+    git(
+        &root,
+        &[
+            "add",
+            "specs/root.md",
+            "specs/nested/child.md",
+            "specs/nested/child.txt",
+        ],
+    );
+    let raw: RawCheckConfig = serde_saphyr::from_str(
+        r#"
+version: 1
+presets:
+  default: {}
+expectations:
+  - path: "specs/**.md"
+    q_template: |
+      {{content}}
+      ---
+      Is this generated spec implemented?
+    a: "yes"
+"#,
+    )
+    .expect("parse raw check config");
+    let mut cache = RepoInspectionCache::new();
+
+    let config = expand_raw_check_config(
+        Some(&root),
+        Path::new("check.yml"),
+        raw,
+        Some(&mut cache),
+        CheckConfigSource::Tree(TreeSource::Staged),
+    )
+    .expect("expand config");
+
+    let questions = config
+        .expectations
+        .iter()
+        .map(|expectation| expectation.q.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        questions,
+        vec![
+            "Nested spec\n---\nIs this generated spec implemented?\n",
+            "Root spec\n---\nIs this generated spec implemented?\n",
+        ]
+    );
+    assert!(config
+        .expectations
+        .iter()
+        .all(|expectation| expectation.a == "yes"));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn include_cooldown_is_inherited_without_overriding_child_cooldown() {
     let root = test_root("include-cooldown-inheritance");
     git(&root, &["init"]);

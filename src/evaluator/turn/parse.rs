@@ -13,6 +13,8 @@ pub(super) fn parse_visible_evaluator_response(
     _visible_scope: &[String],
     _session_root: &Path,
 ) -> Result<ParsedAnswer, String> {
+    // Response parsing enforces only the evaluator response schema. Evidence
+    // text remains evaluator-provided justification, not check-run input.
     parser_cache.parse(text, agent)
 }
 

@@ -1,5 +1,5 @@
 use crate::check::core::errors::error_record_from_interrogation_error;
-use crate::check::core::{CheckRecord, InterrogationResult, SelectedExpectation};
+use crate::check::core::{CheckRecord, CheckResult, InterrogationResult, SelectedExpectation};
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::interrogation::{
     interrogate_expectation_with_model_fallbacks, scope_narrowing_log_fields,
@@ -160,13 +160,12 @@ pub(crate) fn question_scope_suggestion_scope_for_independent_verification(
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<Option<Vec<String>>, String> {
     // Glossary-level q-scope suggestions are evaluator-provided claims. This
-    // helper implements only the Interrogation Policy gate for whether such a
-    // claim is worth an independent verification turn: at least 25% fewer
-    // visible files. The response JSON Schema does not require repo-relative
-    // or semantically sufficient paths; sufficiency is established only when
-    // the independent verification produces an answer. Returning `None` leaves
-    // the evaluator's claim unverified; it does not redefine what a q-scope
-    // suggestion is.
+    // helper rejects syntactically invalid suggestions before the
+    // Interrogation Policy's 25%-smaller verification gate. The response JSON
+    // Schema does not require semantically sufficient paths; sufficiency is
+    // established only when the independent verification produces an answer.
+    // Returning `None` leaves the evaluator's claim unverified; it does not
+    // redefine what a q-scope suggestion is.
     let Some(suggestion) = suggestion else {
         return Ok(None);
     };
@@ -174,9 +173,6 @@ pub(crate) fn question_scope_suggestion_scope_for_independent_verification(
         Ok(scope) => scope,
         Err(_) => return Ok(None),
     };
-    if scope_targets_hidden_control_path(&suggested_scope) {
-        return Ok(None);
-    }
     if runtime
         .visible_tree_oid(visible_tree_oid_cache, agent, &suggested_scope)
         .is_err()
@@ -204,20 +200,25 @@ fn suggested_scope_is_at_least_25_percent_smaller(
         && suggested_count.saturating_mul(4) <= current_count.saturating_mul(3)
 }
 
-fn scope_targets_hidden_control_path(scope: &[String]) -> bool {
-    scope.iter().any(|path| {
-        path == ".canon"
-            || path.starts_with(".canon/")
-            || path == ".git"
-            || path.starts_with(".git/")
-    })
-}
-
-pub(crate) fn narrowed_scope_is_accepted(narrowed: &CheckRecord) -> bool {
+pub(crate) fn narrowed_scope_is_accepted(
+    initial_result: CheckResult,
+    narrowed: &CheckRecord,
+) -> bool {
     // Acceptance means the q-scope suggestion graduated from evaluator claim
-    // to verified reusable q-scope. Interrogation Policy requires the
-    // independent verification turn to produce a schema-valid answer.
-    narrowed.error.is_none()
+    // to verified reusable q-scope. A valid fail from a smaller scope is a
+    // local counterexample: while that scope stays unchanged, outside files
+    // cannot make the recorded failure disappear. A fail that turns into pass
+    // has the opposite shape, so the proposed scope omitted necessary failure
+    // evidence and is too narrow to trust.
+    if narrowed.error.is_some() {
+        return false;
+    }
+    match (initial_result, narrowed.result) {
+        (CheckResult::Fail, CheckResult::Pass) => false,
+        (CheckResult::Pass, CheckResult::Pass)
+        | (CheckResult::Pass, CheckResult::Fail)
+        | (CheckResult::Fail, CheckResult::Fail) => true,
+    }
 }
 
 pub(crate) fn write_scope_narrowing_event(
@@ -274,7 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn narrowed_scope_acceptance_requires_answer() {
+    fn narrowed_scope_acceptance_rejects_only_fail_to_pass_answer_change() {
         let pass = test_record("yes", CheckResult::Pass, None);
         let fail = test_record("no", CheckResult::Fail, None);
         let error = test_record(
@@ -282,9 +283,11 @@ mod tests {
             CheckResult::Fail,
             Some(ERROR_SCOPE_TOO_NARROW),
         );
-        assert!(narrowed_scope_is_accepted(&pass));
-        assert!(narrowed_scope_is_accepted(&fail));
-        assert!(!narrowed_scope_is_accepted(&error));
+        assert!(narrowed_scope_is_accepted(CheckResult::Pass, &pass));
+        assert!(narrowed_scope_is_accepted(CheckResult::Pass, &fail));
+        assert!(narrowed_scope_is_accepted(CheckResult::Fail, &fail));
+        assert!(!narrowed_scope_is_accepted(CheckResult::Fail, &pass));
+        assert!(!narrowed_scope_is_accepted(CheckResult::Pass, &error));
     }
 
     #[test]
@@ -313,47 +316,6 @@ mod tests {
             CheckRuntime::materialized(&root, &staged_view, &source, tree_context, &config, false);
         let current_scope = vec![".".to_string()];
         let suggestion = vec!["src/present.rs".to_string(), "src/missing.rs".to_string()];
-
-        let proposed = question_scope_suggestion_scope_for_independent_verification(
-            &runtime,
-            &agent,
-            Some(&suggestion),
-            &current_scope,
-            &mut cache,
-        )
-        .unwrap();
-
-        assert!(proposed.is_none());
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn hidden_control_path_suggestion_is_not_verified_for_narrowing() {
-        let root = git_project("hidden-control-q-scope-suggestion");
-        fs::create_dir_all(root.join(".canon")).unwrap();
-        fs::create_dir_all(root.join("src")).unwrap();
-        fs::write(root.join(".canon/check.yml"), "version: 1\n").unwrap();
-        fs::write(root.join("src/present.rs"), "present\n").unwrap();
-        git(&root, &["add", ".canon/check.yml", "src/present.rs"]);
-        let source = TreeSource::Staged;
-        let agent = AgentConfig::default();
-        let config = CheckConfig {
-            version: 1,
-            presets: Default::default(),
-            agent: agent.clone(),
-            expectations: Vec::new(),
-        };
-        let staged_view = StagedWorktreeView::apply_for_tree_source(&root, source.clone()).unwrap();
-        let mut cache = VisibleTreeOidCache::new();
-        let tree_context = CheckTreeContext {
-            checked_tree_oid: source.tree_oid_for_prompt_diff(&root).unwrap(),
-            against_tree_oid: source.tree_oid_for_prompt_diff(&root).unwrap(),
-            checked_file_count: cache.checked_file_count(&root, &source).unwrap(),
-        };
-        let runtime =
-            CheckRuntime::materialized(&root, &staged_view, &source, tree_context, &config, false);
-        let current_scope = vec![".".to_string()];
-        let suggestion = vec![".canon/check.yml".to_string()];
 
         let proposed = question_scope_suggestion_scope_for_independent_verification(
             &runtime,

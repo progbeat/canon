@@ -1,14 +1,12 @@
 use crate::check::core::ERROR_SCOPE_TOO_NARROW;
 use crate::config_types::{AgentConfig, CheckConfig};
-use crate::evaluator::{
-    app_server_model_key, evaluator_models, AppServerModelKey, EvaluatorResponseParseCache,
-};
+use crate::evaluator::{app_server_model_key, evaluator_models, EvaluatorResponseParseCache};
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::hash::full_scope;
 use crate::isolation::{NaiveIsolationGuard, NaiveIsolationPolicy};
 use crate::scope::{effective_ignore_patterns, visible_scope};
 use crate::staged::StagedWorktreeView;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn should_retry_full_scope_after_error(error: Option<&str>, scope: &[String]) -> bool {
@@ -196,7 +194,6 @@ pub(crate) struct InterrogationRunState {
     pub(crate) thread_sessions_by_reuse_key: BTreeMap<String, String>,
     pub(crate) session_instructions: BTreeMap<String, String>,
     pub(crate) session_roots_by_id: BTreeMap<String, PathBuf>,
-    pub(crate) unavailable_models: BTreeSet<AppServerModelKey>,
     pub(crate) visible_tree_oid_cache: VisibleTreeOidCache,
     pub(crate) parse_cache: EvaluatorResponseParseCache,
     isolation_policy: Option<NaiveIsolationPolicy>,
@@ -214,27 +211,14 @@ impl InterrogationRunState {
             thread_sessions_by_reuse_key: BTreeMap::new(),
             session_instructions: BTreeMap::new(),
             session_roots_by_id: BTreeMap::new(),
-            unavailable_models: BTreeSet::new(),
             visible_tree_oid_cache: VisibleTreeOidCache::new(),
             parse_cache: EvaluatorResponseParseCache::new(),
             isolation_policy,
         })
     }
 
-    pub(crate) fn available_models(&self, agent: &AgentConfig) -> Vec<Option<String>> {
+    pub(crate) fn models_in_retry_order(&self, agent: &AgentConfig) -> Vec<Option<String>> {
         evaluator_models(agent)
-            .into_iter()
-            .filter(|model| !self.model_is_unavailable(model.as_deref()))
-            .collect()
-    }
-
-    pub(crate) fn model_is_unavailable(&self, model: Option<&str>) -> bool {
-        self.unavailable_models
-            .contains(&app_server_model_key(model))
-    }
-
-    pub(crate) fn mark_model_unavailable(&mut self, model: Option<&str>) {
-        self.unavailable_models.insert(app_server_model_key(model));
     }
 
     pub(crate) fn clear_thread_sessions(&mut self) {
