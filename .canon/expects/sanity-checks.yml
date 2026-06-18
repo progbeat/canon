@@ -30,3 +30,8 @@
   diff-from: master
   thinking: low
   ignore: []
+
+- q: "Can a last-<status>.json file be removed for a collected expectation?"
+  a: "no"
+  target: diff
+  thinking: low
