@@ -40,6 +40,9 @@ pub(crate) fn cached_result_for_expectation(
     if !lookup.include_same_tree && !lookup.include_cooldown {
         return Ok(None);
     }
+    // A cache hit is converted straight into the CheckRecord that the check
+    // output layer prints. It does not render evaluator prompts; prompt-only
+    // inputs such as `diff-from` apply only to fresh evaluator turns.
     let Some(hit) = cached_last_result_for_expectation(
         root,
         source,
@@ -55,7 +58,7 @@ pub(crate) fn cached_result_for_expectation(
     else {
         return Ok(None);
     };
-    let hit = refresh_reused_same_tree_last_result(root, expectation, xpec_state, hit)?;
+    let hit = refresh_reused_same_tree_last_result(root, source, expectation, xpec_state, hit)?;
     let record = check_record_from_cached_result(expectation, &hit);
     let kind = match hit.kind {
         CachedLastResultKind::SameTree => CachedResultKind::SameTree,
@@ -81,5 +84,8 @@ pub(crate) fn write_cache_hit(
         )
         .map_err(|err| err.to_string())?;
     let mut diagnostic_log = Some(writer);
+    // Cached expectations still produce the same expectation.result and
+    // optional expectation.review_required runtime-log events as evaluated
+    // expectations, so logs expose every emitted expectation outcome.
     write_expectation_result_event(&mut diagnostic_log, &hit.record)
 }

@@ -51,6 +51,8 @@ impl LastResultStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct LastResult {
+    // This struct is the persisted last-result schema. Prompt-rendering inputs
+    // such as `diff-from` are intentionally not part of this state record.
     #[serde(rename = "responseTimestamp")]
     pub(crate) response_timestamp: String,
     #[serde(rename = "updatedTimestamp")]
@@ -108,6 +110,45 @@ impl LastResult {
 }
 
 impl XpecStateCache {
+    pub(crate) fn read_stored_q_scope_file(
+        &mut self,
+        root: &Path,
+        expectation: &SelectedExpectation,
+    ) -> Result<Option<Option<Vec<String>>>, String> {
+        let path = self.stored_q_scope_path(root, expectation)?;
+        reject_symlink(&path)?;
+        let content = match fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(format!("failed to read {}: {}", path.display(), err)),
+        };
+        let record = serde_json::from_str::<StoredQScopeRecord>(&content)
+            .map_err(|err| format!("invalid stored q-scope JSON in {}: {}", path.display(), err))?;
+        Ok(Some(record.q_scope))
+    }
+
+    pub(crate) fn read_stored_q_scope(
+        &mut self,
+        root: &Path,
+        expectation: &SelectedExpectation,
+    ) -> Result<Option<Vec<String>>, String> {
+        if let Some(stored_q_scope) = self.read_stored_q_scope_file(root, expectation)? {
+            return Ok(stored_q_scope);
+        }
+        Ok([
+            LastResultStatus::Pass,
+            LastResultStatus::Fail,
+            LastResultStatus::Error,
+        ]
+        .into_iter()
+        .map(|status| self.read_last_result(root, expectation, status))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .max_by_key(|result| parse_record_timestamp(&result.updated_timestamp).unwrap_or(0))
+        .map(|result| result.q_scope))
+    }
+
     pub(crate) fn read_last_pass(
         &mut self,
         root: &Path,
@@ -155,6 +196,31 @@ impl XpecStateCache {
         expectation: &SelectedExpectation,
         record: &CheckRecord,
     ) -> Result<LastResult, String> {
+        let result =
+            self.write_last_result_for_record_inner(root, checked_tree_oid, expectation, record)?;
+        self.write_stored_q_scope_file(root, expectation, Some(&record.scope))?;
+        Ok(result)
+    }
+
+    pub(crate) fn write_last_result_for_record_without_stored_q_scope_seed(
+        &mut self,
+        root: &Path,
+        checked_tree_oid: &str,
+        expectation: &SelectedExpectation,
+        record: &CheckRecord,
+    ) -> Result<LastResult, String> {
+        let current_stored_q_scope = self.read_stored_q_scope(root, expectation)?;
+        self.write_stored_q_scope_file(root, expectation, current_stored_q_scope.as_deref())?;
+        self.write_last_result_for_record_inner(root, checked_tree_oid, expectation, record)
+    }
+
+    fn write_last_result_for_record_inner(
+        &mut self,
+        root: &Path,
+        checked_tree_oid: &str,
+        expectation: &SelectedExpectation,
+        record: &CheckRecord,
+    ) -> Result<LastResult, String> {
         let status = last_result_status_for_record(expectation, record);
         let now = format_record_timestamp(unix_timestamp()?);
         let q_scope = record.scope.clone();
@@ -184,14 +250,17 @@ impl XpecStateCache {
         Ok(result)
     }
 
-    pub(crate) fn refresh_last_result(
+    pub(crate) fn refresh_last_result_for_checked_tree(
         &mut self,
         root: &Path,
+        current_checked_tree_oid: &str,
         expectation: &SelectedExpectation,
         result: &LastResult,
     ) -> Result<LastResult, String> {
         let mut refreshed = result.clone();
         refreshed.updated_timestamp = format_record_timestamp(unix_timestamp()?);
+        refreshed.checked_tree_oid = (refreshed.status == LastResultStatus::Pass)
+            .then(|| current_checked_tree_oid.to_string());
         self.write_last_result(root, expectation, &refreshed)?;
         Ok(refreshed)
     }
@@ -230,6 +299,41 @@ impl XpecStateCache {
     ) -> Result<PathBuf, String> {
         Ok(self.xpec_dir(root, expectation)?.join(status.file_name()))
     }
+
+    fn stored_q_scope_path(
+        &mut self,
+        root: &Path,
+        expectation: &SelectedExpectation,
+    ) -> Result<PathBuf, String> {
+        Ok(self
+            .xpec_dir(root, expectation)?
+            .join("stored-q-scope.json"))
+    }
+
+    fn write_stored_q_scope_file(
+        &mut self,
+        root: &Path,
+        expectation: &SelectedExpectation,
+        q_scope: Option<&[String]>,
+    ) -> Result<(), String> {
+        let path = self.stored_q_scope_path(root, expectation)?;
+        let temp_path = temp_path_for(&path)?;
+        let record = StoredQScopeRecord {
+            q_scope: q_scope.map(<[String]>::to_vec),
+        };
+        write_temp_file_then_replace(&temp_path, &path, |file| {
+            serde_json::to_writer(&mut *file, &record)
+                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
+            std::io::Write::write_all(file, b"\n")
+                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))
+        })
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct StoredQScopeRecord {
+    #[serde(rename = "qScope")]
+    q_scope: Option<Vec<String>>,
 }
 
 pub(super) fn check_record_from_last_result(
@@ -284,9 +388,8 @@ fn last_result_status_for_record(
     expectation: &SelectedExpectation,
     record: &CheckRecord,
 ) -> LastResultStatus {
-    // Records with `error` are the human-review path. They are stored in the
-    // error status file so ordering and summaries can include them as non-pass
-    // results without a separate persisted status.
+    // Last-result status follows the final response shape: error responses and
+    // technical failures have `error`; every present answer is pass or fail.
     if record.error.is_some() {
         LastResultStatus::Error
     } else if record.observed == expectation.expected_answer {

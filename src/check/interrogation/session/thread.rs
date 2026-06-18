@@ -4,7 +4,7 @@ use crate::check::interrogation::finalize_interrogation_response;
 use crate::check::interrogation::state::{
     evaluator_thread_reuse_key, CheckRuntime, InterrogationRunState,
 };
-use crate::config_types::AgentConfig;
+use crate::config_types::{AgentConfig, AGAINST_TREE_DIFF_FROM, DEFAULT_DIFF_FROM};
 use crate::evaluator::{
     ask_once as ask_evaluator_once, create_prompt_template_output_dir, developer_instructions,
     effective_thinking, evaluator_turn_prompt, is_context_window_failure,
@@ -26,6 +26,7 @@ pub(crate) struct ThreadTurnRequest<'a> {
     pub(crate) thinking: &'a str,
     pub(crate) expectation_id: Option<&'a str>,
     pub(crate) expectation_instructions: &'a str,
+    pub(crate) diff_from_tree_oid: &'a str,
     pub(crate) prompt: &'a str,
     pub(crate) template_output_dir: &'a Path,
     pub(crate) last_pass: Option<&'a LastResult>,
@@ -57,12 +58,12 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         request.model,
         reuse_visible_tree_oid,
         request.expectation_instructions,
+        request.diff_from_tree_oid,
+        &runtime.tree_context.checked_tree_oid,
     )
     .map_err(EvaluatorError::message)?;
-    // The lookup key begins with evaluator model, visibleTreeOid, and
-    // expectation instructions. A restricted retry or q-scope verification with
-    // a different visible tree therefore misses this pool and starts a separate
-    // evaluator thread.
+    // A restricted retry, q-scope verification, or different rendered diff
+    // transcript misses this pool and starts a separate evaluator thread.
     let existing_session = state
         .thread_sessions_by_reuse_key
         .get(&session_key)
@@ -80,6 +81,9 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         )?,
     };
     let mut session_id = lifecycle_log.session_id.clone();
+    // Runtime logs expose the effective instructions for every thread start or
+    // reuse, so thread behavior can be audited from the log without reading
+    // derived state.
     write_thread_lifecycle_event(
         diagnostic_log,
         &lifecycle_log,
@@ -221,7 +225,7 @@ fn start_thread_session<R: EvaluatorRunner>(
     let developer_instructions = developer_instructions(DeveloperInstructionsContext {
         root: runtime.root,
         template_output_dir: request.template_output_dir,
-        against_tree_oid: &runtime.tree_context.against_tree_oid,
+        diff_from_tree_oid: request.diff_from_tree_oid,
         checked_tree_oid: &runtime.tree_context.checked_tree_oid,
         expectation_instructions: request.expectation_instructions,
         visible_scope: &visible_scope,
@@ -364,11 +368,13 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
 ) -> Result<InterrogationResult, EvaluatorError> {
     let template_output_dir =
         create_prompt_template_output_dir().map_err(EvaluatorError::message)?;
+    let diff_from_tree_oid = resolve_diff_from_tree_oid(runtime, expectation, last_pass)?;
     let prompt = evaluator_turn_prompt(
         runtime.root,
         &template_output_dir,
         &expectation.question,
         &expectation.expected_answer,
+        &expectation.diff_from,
         expectation.target.as_ref().map(|target| target.as_str()),
         last_pass,
     )
@@ -386,6 +392,7 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
             thinking,
             expectation_id: Some(&expectation.id),
             expectation_instructions: &expectation.instructions,
+            diff_from_tree_oid: &diff_from_tree_oid,
             prompt: &prompt,
             template_output_dir: &template_output_dir,
             last_pass,
@@ -399,4 +406,38 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
         enforced_scope,
         response,
     )
+}
+
+pub(crate) fn resolve_diff_from_tree_oid(
+    runtime: &CheckRuntime<'_>,
+    expectation: &SelectedExpectation,
+    last_pass: Option<&LastResult>,
+) -> Result<String, EvaluatorError> {
+    // Canon `diff-from` resolution: `:checkpoint` prefers the last pass
+    // checked tree and falls back to the against tree; `:against-tree` uses
+    // the against tree; any other value is resolved as a tree source.
+    match expectation.diff_from.as_str() {
+        DEFAULT_DIFF_FROM => Ok(checkpoint_diff_base_tree_oid(
+            last_pass,
+            &runtime.tree_context.against_tree_oid,
+        )
+        .to_string()),
+        AGAINST_TREE_DIFF_FROM => Ok(runtime.tree_context.against_tree_oid.clone()),
+        tree => explicit_diff_base_tree_oid(runtime.root, tree),
+    }
+}
+
+fn checkpoint_diff_base_tree_oid<'a>(
+    last_pass: Option<&'a LastResult>,
+    against_tree_oid: &'a str,
+) -> &'a str {
+    last_pass
+        .and_then(|last_pass| last_pass.checked_tree_oid.as_deref())
+        .unwrap_or(against_tree_oid)
+}
+
+fn explicit_diff_base_tree_oid(root: &Path, tree: &str) -> Result<String, EvaluatorError> {
+    crate::git::TreeSource::resolve(root, tree, "diff-from")
+        .and_then(|source| source.tree_oid_for_prompt_diff(root))
+        .map_err(EvaluatorError::message)
 }

@@ -12,6 +12,7 @@ For `qScopeSuggestion`, choose project paths as narrow as possible while still e
 When returning a response provided in the turn prompt, keep its `qScopeSuggestion`.
 Include all files on the relevant code path that could change the answer, not only the files cited as evidence.
 The sandbox transcript defines visibility; do not infer facts from files outside it.
+Missing transcript excerpts are not missing visibility; read visible files and any transcript full-output files needed before returning `ScopeTooNarrow`.
 Relevant direct reads/searches can be sufficient evidence.
 For questions about any matching file or code path, visible path/text searches that find no candidate can prove `no`; do not require a literal exhaustive audit.
 

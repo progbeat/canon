@@ -1,8 +1,6 @@
 use crate::check::core::errors::error_record_from_interrogation_error;
-use crate::check::core::{CheckRecord, InterrogationResult, SelectedExpectation};
-use crate::check::interrogation::state::{
-    should_retry_full_scope_after_error, CheckRuntime, InterrogationRunState,
-};
+use crate::check::core::{CheckRecord, CheckResult, InterrogationResult, SelectedExpectation};
+use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::interrogation::{
     interrogate_expectation_with_model_fallbacks, scope_narrowing_log_fields,
 };
@@ -20,18 +18,22 @@ pub(crate) struct InterrogationCall<'a> {
     pub(crate) scope: &'a [String],
 }
 
-pub(crate) struct ScopedInterrogation<'a> {
-    pub(crate) runtime: &'a CheckRuntime<'a>,
-    pub(crate) expectation: &'a SelectedExpectation,
-    pub(crate) enforced_scope: &'a mut Vec<String>,
-}
-
 pub(crate) struct PolicyInterrogationResult {
     interrogation: InterrogationResult,
     follow_up_used: bool,
 }
 
 impl PolicyInterrogationResult {
+    pub(crate) fn new(
+        interrogation: InterrogationResult,
+        follow_up_used: bool,
+    ) -> PolicyInterrogationResult {
+        PolicyInterrogationResult {
+            interrogation,
+            follow_up_used,
+        }
+    }
+
     pub(crate) fn interrogation(&self) -> &InterrogationResult {
         &self.interrogation
     }
@@ -43,68 +45,6 @@ impl PolicyInterrogationResult {
     fn follow_up_used(&self) -> bool {
         self.follow_up_used
     }
-}
-
-impl<'a> ScopedInterrogation<'a> {
-    fn call(&self) -> InterrogationCall<'_> {
-        InterrogationCall {
-            runtime: self.runtime,
-            expectation: self.expectation,
-            scope: self.enforced_scope,
-        }
-    }
-}
-
-pub(crate) fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
-    call: ScopedInterrogation<'_>,
-    runner: &mut R,
-    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    interrogation_run_state: &mut InterrogationRunState,
-    xpec_state: &mut XpecStateCache,
-    visible_tree_oid_cache: &mut VisibleTreeOidCache,
-    break_after_tokens: Option<u64>,
-) -> Result<PolicyInterrogationResult, String> {
-    let mut interrogation = interrogate_or_error_record(
-        call.call(),
-        runner,
-        diagnostic_log,
-        interrogation_run_state,
-        xpec_state,
-        visible_tree_oid_cache,
-    )?;
-    let should_stop_after_current_expectation =
-        turn_exceeds_break_after_tokens(&interrogation, break_after_tokens)
-            || turn_has_context_compaction(&interrogation);
-    if should_retry_full_scope_after_error(
-        interrogation.record.error.as_deref(),
-        call.enforced_scope,
-    ) {
-        // Restricted ScopeTooNarrow is not final. The single policy follow-up
-        // retries it once at full scope.
-        *call.enforced_scope = full_scope();
-        interrogation = interrogate_or_error_record(
-            call.call(),
-            runner,
-            diagnostic_log,
-            interrogation_run_state,
-            xpec_state,
-            visible_tree_oid_cache,
-        )?;
-        interrogation.stop_after_current_expectation |= should_stop_after_current_expectation;
-        return Ok(PolicyInterrogationResult {
-            interrogation,
-            follow_up_used: true,
-        });
-    } else if should_stop_after_current_expectation {
-        return Ok(PolicyInterrogationResult {
-            interrogation,
-            follow_up_used: false,
-        });
-    }
-    Ok(PolicyInterrogationResult {
-        interrogation,
-        follow_up_used: false,
-    })
 }
 
 pub(crate) fn interrogate_or_error_record<R: EvaluatorRunner>(
@@ -220,13 +160,12 @@ pub(crate) fn question_scope_suggestion_scope_for_independent_verification(
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<Option<Vec<String>>, String> {
     // Glossary-level q-scope suggestions are evaluator-provided claims. This
-    // helper implements only the Interrogation Policy gate for whether such a
-    // claim is worth an independent verification turn: at least 25% fewer
-    // visible files. The response JSON Schema does not require repo-relative
-    // or semantically sufficient paths; sufficiency is established only when
-    // the independent verification produces an answer. Returning `None` leaves
-    // the evaluator's claim unverified; it does not redefine what a q-scope
-    // suggestion is.
+    // helper rejects syntactically invalid suggestions before the
+    // Interrogation Policy's 25%-smaller verification gate. The response JSON
+    // Schema does not require semantically sufficient paths; sufficiency is
+    // established only when the independent verification produces an answer.
+    // Returning `None` leaves the evaluator's claim unverified; it does not
+    // redefine what a q-scope suggestion is.
     let Some(suggestion) = suggestion else {
         return Ok(None);
     };
@@ -261,11 +200,25 @@ fn suggested_scope_is_at_least_25_percent_smaller(
         && suggested_count.saturating_mul(4) <= current_count.saturating_mul(3)
 }
 
-pub(crate) fn narrowed_scope_is_accepted(narrowed: &CheckRecord) -> bool {
+pub(crate) fn narrowed_scope_is_accepted(
+    initial_result: CheckResult,
+    narrowed: &CheckRecord,
+) -> bool {
     // Acceptance means the q-scope suggestion graduated from evaluator claim
-    // to verified reusable q-scope. Interrogation Policy requires the
-    // independent verification turn to produce a schema-valid answer.
-    narrowed.error.is_none()
+    // to verified reusable q-scope. A valid fail from a smaller scope is a
+    // local counterexample: while that scope stays unchanged, outside files
+    // cannot make the recorded failure disappear. A fail that turns into pass
+    // has the opposite shape, so the proposed scope omitted necessary failure
+    // evidence and is too narrow to trust.
+    if narrowed.error.is_some() {
+        return false;
+    }
+    match (initial_result, narrowed.result) {
+        (CheckResult::Fail, CheckResult::Pass) => false,
+        (CheckResult::Pass, CheckResult::Pass)
+        | (CheckResult::Pass, CheckResult::Fail)
+        | (CheckResult::Fail, CheckResult::Fail) => true,
+    }
 }
 
 pub(crate) fn write_scope_narrowing_event(
@@ -322,7 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn narrowed_scope_acceptance_requires_answer() {
+    fn narrowed_scope_acceptance_rejects_only_fail_to_pass_answer_change() {
         let pass = test_record("yes", CheckResult::Pass, None);
         let fail = test_record("no", CheckResult::Fail, None);
         let error = test_record(
@@ -330,9 +283,11 @@ mod tests {
             CheckResult::Fail,
             Some(ERROR_SCOPE_TOO_NARROW),
         );
-        assert!(narrowed_scope_is_accepted(&pass));
-        assert!(narrowed_scope_is_accepted(&fail));
-        assert!(!narrowed_scope_is_accepted(&error));
+        assert!(narrowed_scope_is_accepted(CheckResult::Pass, &pass));
+        assert!(narrowed_scope_is_accepted(CheckResult::Pass, &fail));
+        assert!(narrowed_scope_is_accepted(CheckResult::Fail, &fail));
+        assert!(!narrowed_scope_is_accepted(CheckResult::Fail, &pass));
+        assert!(!narrowed_scope_is_accepted(CheckResult::Pass, &error));
     }
 
     #[test]

@@ -7,7 +7,6 @@ mod render;
 mod rotation;
 mod writer;
 
-pub(crate) use config::{thread_reuse_config, ThreadReuseConfig};
 pub(crate) use error::{DiagnosticLogError, DiagnosticLogResult};
 pub(crate) use events::{
     write_agent_failure_event, write_agent_missing_usage_event, write_agent_request_event,

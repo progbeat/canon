@@ -11,6 +11,7 @@ use std::time::Instant;
 pub(super) struct CompletedCheckRun {
     pub(super) report: CheckRunReport,
     pub(super) error: Option<String>,
+    pub(super) interrupted: bool,
 }
 
 pub(super) fn check_report_passed(report: &CheckRunReport) -> bool {
@@ -24,13 +25,7 @@ pub(super) fn check_command_writes_agent_message(
     against_tree: &TreeSource,
 ) -> bool {
     let options = &command.options;
-    // The post-summary agent-message spec is for the default check run:
-    // no selectors, default config/trees, and no behavior-changing check flags.
     options.selectors.is_empty()
-        && !options.keep_going
-        && !options.ignore_cooldown
-        && options.break_after_tokens.is_none()
-        && !command.no_sandbox
         && command.config_path == Path::new(CHECK_PATH)
         && checked_tree.is_default_checked_tree()
         && against_tree.is_default_against_tree()

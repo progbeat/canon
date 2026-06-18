@@ -4,11 +4,8 @@ mod codec;
 mod model_catalog;
 mod permissions;
 
-pub(crate) use app_server::{
-    app_server_args_with_no_sandbox, app_server_model_key, AppServerModelKey,
-};
+pub(crate) use app_server::{app_server_args_with_no_sandbox, app_server_model_key, AppServerArgs};
 pub(crate) use base::evaluator_thread_config_with_no_sandbox;
-pub(crate) use model_catalog::ModelCatalogFile;
 use std::fmt;
 use std::path::Path;
 

@@ -260,6 +260,7 @@ mod tests {
                 q: "Does it pass?".to_string(),
                 a: "yes".to_string(),
                 instructions: String::new(),
+                diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
                 target: None,
                 question_answer_only: false,
                 agent: agent.clone(),

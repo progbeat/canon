@@ -3,8 +3,8 @@ use super::report::{check_run_report, skipped_count, CheckRunReportCounts};
 use super::CheckRunSideEffects;
 use crate::check::command::output::write_cached_non_pass_output;
 use crate::check::core::{
-    check_run_error, CachedExpectation, CheckOptions, CheckRecord, CheckRunError, CheckRunReport,
-    SelectedExpectation,
+    check_run_error, interrupted_check_run_error, CachedExpectation, CheckOptions, CheckRecord,
+    CheckRunError, CheckRunReport, SelectedExpectation,
 };
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::run::selection::{
@@ -113,7 +113,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 records.push(outcome.record);
                 if outcome.stop_run {
                     if !outcome.interrupted {
-                        write_remaining_cached_work_items(
+                        write_remaining_cached_failures_without_evaluation(
                             &mut check_work_queue,
                             &mut cached,
                             &mut result_output,
@@ -126,7 +126,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                         // runs without Ctrl-C or other interruption. Resource/control
                         // stop signals finish through the error-report path so no
                         // commit/fix instruction is printed for a partial run.
-                        return Err(check_run_error(
+                        return Err(interrupted_check_run_error(
                             "check interrupted after the current expectation".to_string(),
                             report,
                         ));
@@ -139,11 +139,14 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     Ok(current_report(records, cached, total_expectations))
 }
 
-fn write_remaining_cached_work_items(
+fn write_remaining_cached_failures_without_evaluation(
     items: &mut impl Iterator<Item = CheckWorkItem>,
     cached: &mut Vec<CachedExpectation>,
     result_output: &mut Option<&mut dyn std::io::Write>,
 ) -> Result<(), String> {
+    // The order spec stops evaluator work after the first evaluated non-pass.
+    // Remaining cached failures are already-known results, so writing their
+    // public blocks does not evaluate another selected expectation.
     for item in items {
         if let CheckWorkItem::Cached(hit) = item {
             write_cached_failures(vec![*hit], cached, result_output)?;
@@ -185,11 +188,11 @@ fn write_cached_failures(
 ) -> Result<(), String> {
     for CachedExpectationHit { expectation, hit } in cached_hits {
         let record = hit.record;
-        // Cached passes are summary-only results; they do not start a displayed
-        // expectation report because no `<short ID>.` prefix is printed for
-        // them. Cache selection excludes human-review last-error records, so
-        // the only cached results with a printed short ID are failed answers,
-        // and this branch writes their complete public block.
+        // Cached passes are counted in the summary only; they are not emitted
+        // as per-expectation stdout result entries and therefore have no
+        // progress timeline. Cache selection excludes human-review last-error
+        // records, so the only cached results with a printed short ID are
+        // failed answers, and this branch writes their complete public block.
         let cached_result_prints_short_id = !record.passed();
         if cached_result_prints_short_id {
             write_cached_non_pass_output(result_output, &record)?;

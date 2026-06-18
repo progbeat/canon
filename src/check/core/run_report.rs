@@ -67,6 +67,7 @@ pub(crate) fn for_each_unique_report_record(
 pub(crate) struct CheckRunError {
     pub(crate) error: String,
     pub(crate) report: Box<CheckRunReport>,
+    pub(crate) interrupted: bool,
 }
 
 // `check::run` uses this constructor to attach the partial report to every
@@ -75,5 +76,14 @@ pub(crate) fn check_run_error(error: String, report: CheckRunReport) -> CheckRun
     CheckRunError {
         error,
         report: Box::new(report),
+        interrupted: false,
+    }
+}
+
+pub(crate) fn interrupted_check_run_error(error: String, report: CheckRunReport) -> CheckRunError {
+    CheckRunError {
+        error,
+        report: Box::new(report),
+        interrupted: true,
     }
 }

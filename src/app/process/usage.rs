@@ -75,7 +75,10 @@ impl AppServerRunner {
     pub(crate) fn drain_token_usage_updates(&mut self) -> Result<(), EvaluatorError> {
         loop {
             match self.messages.recv_timeout(Duration::from_millis(50)) {
-                Ok(Ok(message)) => self.record_app_server_events(&message),
+                Ok(Ok(message)) => {
+                    self.record_app_server_activity_progress();
+                    self.record_app_server_events(&message);
+                }
                 Ok(Err(err)) => return Err(EvaluatorError::message(err)),
                 Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => {
                     return Ok(());

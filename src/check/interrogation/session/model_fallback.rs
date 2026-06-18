@@ -49,7 +49,7 @@ pub(crate) fn run_with_model_fallbacks<T>(
     ) -> Result<T, EvaluatorError>,
 ) -> Result<T, String> {
     let mut failures = Vec::new();
-    let models = state.available_models(agent);
+    let models = state.models_in_retry_order(agent);
     for (model_index, model) in models.iter().enumerate() {
         if check_interrupted() {
             return Err("interrupted".to_string());
@@ -64,7 +64,6 @@ pub(crate) fn run_with_model_fallbacks<T>(
                     // model may have caused the app server to retire every live
                     // thread, so the next model must start from fresh sessions.
                     state.clear_thread_sessions();
-                    state.mark_model_unavailable(model.as_deref());
                 }
                 write_model_fallback_events(
                     diagnostic_log,

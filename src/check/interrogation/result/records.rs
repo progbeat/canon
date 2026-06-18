@@ -95,10 +95,11 @@ pub(crate) fn write_query_result_event(
     Ok(())
 }
 
-// Result records are only one runtime-log family. Evaluator boundary events
-// such as thread creation/reuse, restart, agent request/response/failure, and
-// per-turn token usage are emitted by `check::interrogation::session` through
-// the same `DiagnosticLogWriter`.
+// Result records are only one runtime-log family. `canon check` calls these
+// writers from the evaluated-expectation path, the cached-expectation path, and
+// query mode; evaluator boundary events such as thread creation/reuse, restart,
+// agent request/response/failure, and per-turn token usage are emitted by
+// `check::interrogation::session` through the same `DiagnosticLogWriter`.
 pub(crate) fn write_expectation_result_event(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     record: &CheckRecord,

@@ -26,7 +26,7 @@ If a request contradicts the canon or the canon is internally inconsistent, stop
 
 Do not edit files under `.canon/` proactively. Edit them only when a human explicitly insists.
 
-**Every edit may potentially violate the canon**, so before editing project files, **always** identify the relevant expectations under `.canon/`. Do not start editing until you can explain why the planned change is compatible with those expectations.
+**Every edit may potentially violate the canon**, so before editing project files, **always** run `canon show -- <PATHSPEC>...` for the planned edit paths to identify the relevant expectations under `.canon/`. Do not start editing until you can explain why the planned change is compatible with those expectations.
 
 ### Canon Enforcement
 

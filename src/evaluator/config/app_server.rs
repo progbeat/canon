@@ -5,12 +5,11 @@ use super::{
     EvaluatorConfigResult, EVALUATOR_DISABLED_FEATURES, EVALUATOR_EXTRA_DISABLED_FEATURES,
 };
 use crate::config_types::AgentConfig;
-use crate::logs::{thread_reuse_config, ThreadReuseConfig};
 use std::path::Path;
 
 pub(crate) struct AppServerArgs {
-    pub(crate) args: Vec<String>,
-    pub(crate) model_catalog_file: Option<ModelCatalogFile>,
+    args: Vec<String>,
+    _model_catalog_file: Option<ModelCatalogFile>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -41,8 +40,14 @@ pub(crate) fn app_server_args_with_no_sandbox(
     args.push("stdio://".to_string());
     Ok(AppServerArgs {
         args,
-        model_catalog_file: startup_config.model_catalog_file,
+        _model_catalog_file: startup_config.model_catalog_file,
     })
+}
+
+impl AppServerArgs {
+    pub(crate) fn args(&self) -> &[String] {
+        &self.args
+    }
 }
 
 fn evaluator_disabled_app_server_features(load_plugins: bool) -> Vec<&'static str> {
@@ -56,11 +61,10 @@ fn evaluator_disabled_app_server_features(load_plugins: bool) -> Vec<&'static st
 }
 
 fn app_server_startup_config_args_with_no_sandbox(
-    root: &Path,
+    _root: &Path,
     agent: &AgentConfig,
     no_sandbox: bool,
 ) -> EvaluatorConfigResult<StartupConfigArgs> {
-    let thread_reuse = thread_reuse_config(root)?;
     let mut args = Vec::new();
     let mut model_catalog_file = None;
     if no_sandbox {
@@ -75,21 +79,10 @@ fn app_server_startup_config_args_with_no_sandbox(
         push_config_arg(&mut args, &model_catalog_arg.arg);
         model_catalog_file = Some(model_catalog_arg.file);
     }
-    push_config_arg(
-        &mut args,
-        &thread_reuse_carryover_token_target_arg(&thread_reuse),
-    );
     Ok(StartupConfigArgs {
         args,
         model_catalog_file,
     })
-}
-
-fn thread_reuse_carryover_token_target_arg(config: &ThreadReuseConfig) -> String {
-    format!(
-        "thread_reuse.carryover_token_target=[{},{}]",
-        config.carryover_token_target.min, config.carryover_token_target.max
-    )
 }
 
 pub(crate) fn app_server_model_key(model: Option<&str>) -> AppServerModelKey {

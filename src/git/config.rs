@@ -11,7 +11,6 @@ pub(crate) enum GitConfigGetError {
         message: String,
     },
     ReadFailed {
-        key: String,
         status: String,
         stderr: String,
     },
@@ -47,7 +46,6 @@ pub(crate) fn git_config_get(root: &Path, key: &str) -> Result<Option<String>, G
         return Ok(None);
     }
     Err(GitConfigGetError::ReadFailed {
-        key: key.to_string(),
         status: exit_status_text(&output.status),
         stderr: stderr.to_string(),
     })
@@ -58,17 +56,4 @@ fn exit_status_text(status: &ExitStatus) -> String {
         .code()
         .map(|code| format!("exit status {}", code))
         .unwrap_or_else(|| "terminated by signal".to_string())
-}
-
-pub(crate) fn git_config_get_or_else<T, E>(
-    root: &Path,
-    key: &str,
-    default: impl FnOnce() -> T,
-    parse: impl FnOnce(&str) -> Result<T, E>,
-    map_error: impl FnOnce(GitConfigGetError) -> E,
-) -> Result<T, E> {
-    match git_config_get(root, key).map_err(map_error)? {
-        Some(value) => parse(&value),
-        None => Ok(default()),
-    }
 }

@@ -2,7 +2,7 @@ use super::{AppServerRunner, AppServerTurnRequest};
 use crate::check::{codex_reasoning_effort, evaluator_response_output_schema};
 use crate::config_types::AgentConfig;
 use crate::evaluator::{
-    evaluator_thread_config_with_no_sandbox, EvaluatorError, EvaluatorRunner,
+    evaluator_thread_config_with_no_sandbox, EvaluatorError, EvaluatorProgress, EvaluatorRunner,
     EVALUATOR_BASE_INSTRUCTIONS,
 };
 use crate::token_usage_types::EvaluatorTurnUsage;
@@ -92,6 +92,10 @@ impl EvaluatorRunner for AppServerRunner {
 
     fn take_retired_sessions(&mut self) -> Vec<String> {
         self.drain_retired_sessions()
+    }
+
+    fn set_progress_reporter(&mut self, progress: Option<EvaluatorProgress>) {
+        AppServerRunner::set_progress_reporter(self, progress);
     }
 }
 

@@ -243,6 +243,7 @@ fn gate_cache_result_for_tree_at(
     let hit = match hit {
         Some(hit) => Some(refresh_reused_same_tree_last_result(
             root,
+            &source,
             expectation,
             xpec_state,
             hit,

@@ -1,33 +1,38 @@
 use super::escape::escape_check_output_text;
 use super::shared::{write_stdout_record, SharedCheckOutput};
 use crate::check::core::CheckRecord;
+use crate::evaluator::{EvaluatorProgress, EvaluatorProgressMarker, EvaluatorProgressSnapshot};
 use crate::json_util::compact_json_string_array;
 use std::io::Write;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, Mutex,
 };
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-const LIVE_REPORT_DOT_INTERVAL: Duration = Duration::from_secs(60);
+const PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL: Duration = Duration::from_secs(60);
 
 pub(crate) struct StartedExpectationReportOutput {
     output: SharedCheckOutput,
     stop: Sender<()>,
     active: Arc<AtomicBool>,
+    progress: EvaluatorProgress,
+    timeline: Arc<Mutex<ElapsedProgressTimelineState>>,
     worker: Option<JoinHandle<Result<(), String>>>,
     prefix_completed: bool,
+}
+
+struct ElapsedProgressTimelineState {
+    last_snapshot: EvaluatorProgressSnapshot,
+    next_marker_at: Instant,
 }
 
 pub(crate) fn start_expectation_report_output(
     output: SharedCheckOutput,
     display_id: &str,
 ) -> StartedExpectationReportOutput {
-    // Evaluated expectations call this before evaluator work starts. The first
-    // report byte is the documented `<short ID>.` prefix; the worker appends
-    // later dots while the evaluator is still running.
     let mut immediate_output = output.clone();
     let prefix_completed = write_stdout_record(
         &mut immediate_output,
@@ -39,15 +44,38 @@ pub(crate) fn start_expectation_report_output(
     let (stop, stop_requested) = mpsc::channel();
     let active = Arc::new(AtomicBool::new(true));
     let worker_active = active.clone();
-    let mut dot_output = output.clone();
+    let progress = EvaluatorProgress::new();
+    let worker_progress = progress.clone();
+    let initial_snapshot = progress.snapshot();
+    let first_elapsed_marker_at = Instant::now() + PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL;
+    let elapsed_timeline = Arc::new(Mutex::new(ElapsedProgressTimelineState {
+        last_snapshot: initial_snapshot,
+        next_marker_at: first_elapsed_marker_at,
+    }));
+    let worker_timeline = elapsed_timeline.clone();
+    let mut progress_output = output.clone();
     let worker = thread::spawn(move || loop {
-        match stop_requested.recv_timeout(LIVE_REPORT_DOT_INTERVAL) {
+        match stop_requested.recv_timeout(PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL) {
             Ok(()) | Err(RecvTimeoutError::Disconnected) => return Ok(()),
             Err(RecvTimeoutError::Timeout) => {
                 if !worker_active.load(Ordering::Acquire) {
                     return Ok(());
                 }
-                write_stdout_record(&mut dot_output, b".", "check live report dot")?;
+                let marker = worker_progress.with_snapshot(|snapshot| {
+                    let mut timeline = worker_timeline
+                        .lock()
+                        .map_err(|_| "check live report progress state poisoned")?;
+                    let marker = snapshot.marker_since(timeline.last_snapshot);
+                    timeline.last_snapshot = snapshot;
+                    timeline.next_marker_at =
+                        Instant::now() + PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL;
+                    Ok::<EvaluatorProgressMarker, String>(marker)
+                })??;
+                write_stdout_record(
+                    &mut progress_output,
+                    marker.as_str().as_bytes(),
+                    "check live report progress marker",
+                )?;
             }
         }
     });
@@ -56,37 +84,48 @@ pub(crate) fn start_expectation_report_output(
         output,
         stop,
         active,
+        progress,
+        timeline: elapsed_timeline,
         worker: Some(worker),
         prefix_completed,
     }
 }
 
 impl StartedExpectationReportOutput {
+    pub(crate) fn progress(&self) -> EvaluatorProgress {
+        self.progress.clone()
+    }
+
     pub(crate) fn finish_with_record(mut self, record: &CheckRecord) -> bool {
         // Once the report prefix is visible, final result output has priority
-        // over delayed dot-worker cleanup errors.
-        let _ = self.stop_dot_worker();
-        let completion = if self.prefix_completed {
-            render_check_output_record_completion(record)
+        // over delayed progress-worker cleanup errors.
+        let _ = self.stop_progress_worker();
+        let result_suffix = if self.prefix_completed {
+            let mut result_suffix = String::new();
+            if let Some(marker) = self.due_elapsed_progress_marker() {
+                result_suffix.push_str(marker.as_str());
+            }
+            result_suffix.push_str(&render_check_output_record_status_and_details(record));
+            result_suffix
         } else {
-            render_check_output_record_with_initial_dot(record)
+            render_check_output_record_with_initial_marker_timeline(record)
         };
         let mut output = self.output.clone();
-        if write_stdout_record(&mut output, completion.as_bytes(), "check result").is_err() {
+        if write_stdout_record(&mut output, result_suffix.as_bytes(), "check result").is_err() {
             // Human byte sinks can reject all writes; no CLI can force bytes
             // into closed stdout/stderr. The report invariant here is that
             // human-output failure cannot erase the CheckRecord returned for
             // summary accounting, last-result state, or diagnostic logs.
             return write_live_completion_fallback_to_stderr(
                 record,
-                &completion,
+                &result_suffix,
                 self.prefix_completed,
             );
         }
         true
     }
 
-    fn stop_dot_worker(&mut self) -> Result<(), String> {
+    fn stop_progress_worker(&mut self) -> Result<(), String> {
         self.active.store(false, Ordering::Release);
         let _ = self.stop.send(());
         let Some(worker) = self.worker.take() else {
@@ -94,7 +133,24 @@ impl StartedExpectationReportOutput {
         };
         worker
             .join()
-            .map_err(|_| "check live report dot thread panicked".to_string())?
+            .map_err(|_| "check live report progress thread panicked".to_string())?
+    }
+
+    fn due_elapsed_progress_marker(&self) -> Option<EvaluatorProgressMarker> {
+        let now = Instant::now();
+        self.progress
+            .with_snapshot(|snapshot| {
+                let mut timeline = self.timeline.lock().ok()?;
+                if now < timeline.next_marker_at {
+                    return None;
+                }
+                let marker = snapshot.marker_since(timeline.last_snapshot);
+                timeline.last_snapshot = snapshot;
+                timeline.next_marker_at = now + PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL;
+                Some(marker)
+            })
+            .ok()
+            .flatten()
     }
 }
 
@@ -117,14 +173,14 @@ fn write_live_completion_fallback_to_stderr(
         .is_ok()
 }
 
-// Callers without a started report still write the documented minimum prefix.
-// They do not represent an evaluator currently running, so a single dot is enough.
+// Results without a live evaluated report still have a progress timeline: the
+// complete timeline is the initial marker.
 pub(crate) fn write_result_output_without_started_report(
     result_output: &mut Option<&mut dyn Write>,
     record: &CheckRecord,
 ) -> Result<(), String> {
     if let Some(writer) = result_output.as_mut() {
-        let line = render_check_output_record_with_initial_dot(record);
+        let line = render_check_output_record_with_initial_marker_timeline(record);
         write_stdout_record(*writer, line.as_bytes(), "check result")?;
     }
     Ok(())
@@ -134,24 +190,24 @@ pub(crate) fn write_cached_non_pass_output(
     result_output: &mut Option<&mut dyn Write>,
     record: &CheckRecord,
 ) -> Result<(), String> {
-    // Cached non-passes are displayed issue reports. This helper writes the
-    // `<short ID>.` prefix and the full non-pass block together.
+    // Cached non-passes are displayed issue reports. They are not evaluated in
+    // this run, so their complete progress timeline is the initial marker.
     debug_assert!(!record.passed());
     if let Some(writer) = result_output.as_mut() {
-        let line = render_check_output_record_with_initial_dot(record);
+        let line = render_check_output_record_with_initial_marker_timeline(record);
         write_stdout_record(*writer, line.as_bytes(), "cached check result")?;
     }
     Ok(())
 }
 
-fn render_check_output_record_with_initial_dot(record: &CheckRecord) -> String {
+fn render_check_output_record_with_initial_marker_timeline(record: &CheckRecord) -> String {
     let mut output = record.display_id.clone();
     output.push('.');
-    output.push_str(&render_check_output_record_completion(record));
+    output.push_str(&render_check_output_record_status_and_details(record));
     output
 }
 
-pub(super) fn render_check_output_record_completion(record: &CheckRecord) -> String {
+pub(super) fn render_check_output_record_status_and_details(record: &CheckRecord) -> String {
     if record.passed() {
         return " OK\n".to_string();
     }

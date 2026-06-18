@@ -3,23 +3,24 @@ use super::CheckRunCaches;
 use crate::check::command::output::{
     write_result_output_without_started_report, SharedCheckOutput,
 };
-use crate::check::core::errors::error_record_from_visible_tree_oid_at;
+use crate::check::core::errors::error_record_from_visible_tree_oid;
 use crate::check::core::{CheckOptions, CheckRecord, SelectedExpectation};
 use crate::check::interrogation::policy::{
-    initial_visible_scope_for_expectation, interrogate_or_error_record,
-    interrogate_with_full_scope_retry, narrowed_scope_is_accepted,
+    initial_visible_scope_for_expectation, interrogate_or_error_record, narrowed_scope_is_accepted,
     question_scope_suggestion_scope_for_unused_follow_up, turn_exceeds_break_after_tokens,
     turn_has_context_compaction, write_scope_narrowing_event, InterrogationCall,
-    ScopedInterrogation,
+    PolicyInterrogationResult,
 };
-use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
+use crate::check::interrogation::state::{
+    should_retry_full_scope_after_error, CheckRuntime, InterrogationRunState,
+};
 use crate::check::interrogation::write_expectation_result_event;
+use crate::evaluator::EvaluatorProgress;
 use crate::evaluator::EvaluatorRunner;
 use crate::hash::full_scope;
 use crate::logs::DiagnosticLogWriter;
 use crate::platform::check_interrupted;
 use crate::scope::scope_is_within;
-use crate::time::{format_record_timestamp, unix_timestamp};
 use std::io::Write;
 
 pub(super) struct ExpectationRunContext<'a, 'out, 'log, R: EvaluatorRunner> {
@@ -77,7 +78,7 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
             );
         }
     };
-    // Prepare the metadata needed to render an errored expectation before
+    // Prepare the tree metadata needed to render an errored expectation before
     // printing the live report prefix. After `<short ID>.` is visible, later
     // fallible steps can build an ERROR record without doing more fallible
     // tree inspection.
@@ -92,17 +93,6 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
                 context,
                 expectation,
                 full_scope(),
-                error,
-            );
-        }
-    };
-    let started_report_error_timestamp = match unix_timestamp().map(format_record_timestamp) {
-        Ok(timestamp) => timestamp,
-        Err(error) => {
-            return finish_unstarted_expectation_with_error_record(
-                context,
-                expectation,
-                verified_q_scope.clone(),
                 error,
             );
         }
@@ -122,7 +112,6 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
                 expectation,
                 &verified_q_scope,
                 &started_report_error_visible_tree_oid,
-                &started_report_error_timestamp,
                 &mut started_report,
                 error,
             );
@@ -133,21 +122,28 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     // failures through a cancel-only progress helper: this match converts any
     // post-prefix error into the same public ERROR block shape as a normal
     // result.
-    let completed_interrogation =
-        match run_started_expectation_interrogation(context, expectation, &mut verified_q_scope) {
-            Ok(completed) => completed,
-            Err(error) => {
-                return finish_started_expectation_with_error_record(
-                    context,
-                    expectation,
-                    &verified_q_scope,
-                    &started_report_error_visible_tree_oid,
-                    &started_report_error_timestamp,
-                    &mut started_report,
-                    error.to_string(),
-                );
-            }
-        };
+    let progress = started_report.as_ref().map(|report| report.progress());
+    context.runner.set_progress_reporter(progress.clone());
+    let completed_interrogation = match run_started_expectation_interrogation(
+        context,
+        expectation,
+        &mut verified_q_scope,
+        progress.as_ref(),
+    ) {
+        Ok(completed) => completed,
+        Err(error) => {
+            context.runner.set_progress_reporter(None);
+            return finish_started_expectation_with_error_record(
+                context,
+                expectation,
+                &verified_q_scope,
+                &started_report_error_visible_tree_oid,
+                &mut started_report,
+                error.to_string(),
+            );
+        }
+    };
+    context.runner.set_progress_reporter(None);
     let CompletedInterrogation {
         record,
         break_after_tokens_hit,
@@ -193,7 +189,9 @@ fn record_finished_expectation<R: EvaluatorRunner>(
     // This is the durable result-reporting path used after a CheckRecord is
     // formed. Live output has already attempted its human-facing completion;
     // this path keeps the completed result available for later inspection and
-    // cache decisions.
+    // cache decisions. The final call emits the evaluated expectation's
+    // expectation.result and, when needed, expectation.review_required runtime
+    // log events through DiagnosticLogWriter::write_record_event.
     context.caches.xpec_state.write_last_result_for_record(
         context.runtime.root,
         &context.runtime.tree_context.checked_tree_oid,
@@ -215,22 +213,12 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
     expectation: &SelectedExpectation,
     verified_q_scope: &mut Vec<String>,
+    progress: Option<&EvaluatorProgress>,
 ) -> Result<CompletedInterrogation, String> {
     // `run_expectation` catches every error from this helper and finishes the
     // already-started report entry with an ERROR record before returning.
-    let initial = interrogate_with_full_scope_retry(
-        ScopedInterrogation {
-            runtime: context.runtime,
-            expectation,
-            enforced_scope: verified_q_scope,
-        },
-        context.runner,
-        context.diagnostic_log,
-        context.interrogation_run_state,
-        &mut context.caches.xpec_state,
-        &mut context.caches.visible_tree_oid,
-        context.options.break_after_tokens,
-    )?;
+    let initial =
+        interrogate_with_full_scope_retry(context, expectation, verified_q_scope, progress)?;
     let initial_interrogation = initial.interrogation();
     let mut break_after_tokens_hit =
         turn_exceeds_break_after_tokens(initial_interrogation, context.options.break_after_tokens);
@@ -243,7 +231,13 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
         *verified_q_scope = record_scope.clone();
     }
     debug_assert!(scope_is_within(&record_scope, verified_q_scope));
-    let proposed_q_scope = question_scope_suggestion_scope_for_unused_follow_up(
+    let initial_result = initial_interrogation.record.result;
+    // This is the Interrogation Policy q-scope verification follow-up. It is
+    // the only check-run decision point that consumes an evaluator
+    // `qScopeSuggestion`; the rest of this function only executes the
+    // verification turn planned by policy. It is unrelated to check-config
+    // expectation item expansion.
+    let q_scope_verification_scope = question_scope_suggestion_scope_for_unused_follow_up(
         context.runtime,
         &expectation.agent,
         &initial,
@@ -251,7 +245,10 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
         &mut context.caches.visible_tree_oid,
     )?;
     let mut interrogation = initial.into_interrogation();
-    if let Some(proposed_scope) = proposed_q_scope {
+    if let Some(proposed_scope) = q_scope_verification_scope {
+        if let Some(progress) = progress {
+            progress.record_q_scope_verification_started();
+        }
         let verification_scope = proposed_scope.clone();
         let narrowed = interrogate_or_error_record(
             InterrogationCall {
@@ -270,7 +267,7 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
         context_compaction_hit |= turn_has_context_compaction(&narrowed);
         stop_after_current_expectation |= narrowed.stop_after_current_expectation;
         interrupted |= narrowed.interrupted;
-        let accepted = narrowed_scope_is_accepted(&narrowed.record);
+        let accepted = narrowed_scope_is_accepted(initial_result, &narrowed.record);
         write_scope_narrowing_event(
             context.diagnostic_log,
             &expectation.id,
@@ -291,6 +288,53 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
     })
 }
 
+fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
+    context: &mut ExpectationRunContext<'_, '_, '_, R>,
+    expectation: &SelectedExpectation,
+    verified_q_scope: &mut Vec<String>,
+    progress: Option<&EvaluatorProgress>,
+) -> Result<PolicyInterrogationResult, String> {
+    let mut interrogation = interrogate_or_error_record(
+        InterrogationCall {
+            runtime: context.runtime,
+            expectation,
+            scope: verified_q_scope,
+        },
+        context.runner,
+        context.diagnostic_log,
+        context.interrogation_run_state,
+        &mut context.caches.xpec_state,
+        &mut context.caches.visible_tree_oid,
+    )?;
+    let should_stop_after_current_expectation =
+        turn_exceeds_break_after_tokens(&interrogation, context.options.break_after_tokens)
+            || turn_has_context_compaction(&interrogation);
+    if should_retry_full_scope_after_error(interrogation.record.error.as_deref(), verified_q_scope)
+    {
+        // Restricted ScopeTooNarrow is not final. The single policy follow-up
+        // retries it once at full scope.
+        if let Some(progress) = progress {
+            progress.record_full_scope_retry_started();
+        }
+        *verified_q_scope = full_scope();
+        interrogation = interrogate_or_error_record(
+            InterrogationCall {
+                runtime: context.runtime,
+                expectation,
+                scope: verified_q_scope,
+            },
+            context.runner,
+            context.diagnostic_log,
+            context.interrogation_run_state,
+            &mut context.caches.xpec_state,
+            &mut context.caches.visible_tree_oid,
+        )?;
+        interrogation.stop_after_current_expectation |= should_stop_after_current_expectation;
+        return Ok(PolicyInterrogationResult::new(interrogation, true));
+    }
+    Ok(PolicyInterrogationResult::new(interrogation, false))
+}
+
 fn finish_unstarted_expectation_with_error_record<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
     expectation: &SelectedExpectation,
@@ -302,14 +346,12 @@ fn finish_unstarted_expectation_with_error_record<R: EvaluatorRunner>(
         &expectation.agent,
         &scope,
     )?;
-    let timestamp = format_record_timestamp(unix_timestamp()?);
     let mut started_report = None;
     finish_started_expectation_with_error_record(
         context,
         expectation,
         &scope,
         &visible_tree_oid,
-        &timestamp,
         &mut started_report,
         error,
     )
@@ -320,17 +362,15 @@ fn finish_started_expectation_with_error_record<R: EvaluatorRunner>(
     expectation: &SelectedExpectation,
     scope: &[String],
     visible_tree_oid: &str,
-    timestamp: &str,
     started_report: &mut Option<StateBackedLiveExpectationReport>,
     error: String,
 ) -> Result<ExpectationRunOutcome, String> {
-    let record = error_record_from_visible_tree_oid_at(
+    let record = error_record_from_visible_tree_oid(
         expectation,
         scope,
         &error,
         visible_tree_oid.to_string(),
-        timestamp.to_string(),
-    );
+    )?;
     if let Some(report) = started_report.take() {
         report.finish_public_output_or_keep_state_report(&record);
     } else {

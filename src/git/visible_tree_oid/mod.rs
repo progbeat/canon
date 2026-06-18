@@ -43,7 +43,6 @@ pub(crate) struct VisibleTreeOidCache {
 }
 
 pub(crate) struct VisibleTreeOidReuseResolver {
-    agent: AgentConfig,
     files: Vec<StagedTrackedFile>,
     object_hash_algorithm: GitObjectHashAlgorithm,
 }
@@ -79,14 +78,12 @@ impl VisibleTreeOidCache {
         &mut self,
         root: &Path,
         source: &TreeSource,
-        agent: &AgentConfig,
     ) -> Result<VisibleTreeOidReuseResolver, String> {
         // History reuse can scan many records with many stored scopes. Snapshot
         // the source file list and hash algorithm once; each per-record scope
         // is filtered and hashed in-process, so distinct history scopes do not
         // start additional Git subprocesses.
         Ok(VisibleTreeOidReuseResolver {
-            agent: agent.clone(),
             files: self.files_for_source(root, source)?,
             object_hash_algorithm: self.object_hash_algorithm(root)?,
         })
@@ -228,14 +225,13 @@ impl VisibleTreeOidCache {
 }
 
 impl VisibleTreeOidReuseResolver {
-    pub(crate) fn visible_tree_oid_for_scope(
+    pub(crate) fn visible_tree_oid_for_visible_scope_pathspec(
         &self,
-        scope: &[String],
+        visible_scope_pathspec: &[String],
     ) -> Result<Option<String>, String> {
-        let visible_scope_pathspec = visible_scope(&self.agent, scope)?;
         visible_tree_oid_from_files_if_scope_present(
             &self.files,
-            &visible_scope_pathspec,
+            visible_scope_pathspec,
             self.object_hash_algorithm,
         )
     }

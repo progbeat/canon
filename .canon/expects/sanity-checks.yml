@@ -11,13 +11,27 @@
 
 - q: "2+2=?"
   a: "4"
+  diff-from: :checkpoint
   cooldown: 7d
 
 - q: "2+2=?"
   a: "5"
+  diff-from: :against-tree
   instructions: "Always answer 5 for testing purposes."
   cooldown: 7d
 
 - q: "Count files under `.canon`."
   a: "0"
   cooldown: {pass: 7d, fail: 5m}
+
+- q: "Does the diff make any behavior-defining xpect in `.canon/check.yml` unsatisfied?"
+  a: "no"
+  target: diff
+  diff-from: master
+  thinking: low
+  ignore: []
+
+- q: "Can a last-<status>.json file be removed for a collected expectation?"
+  a: "no"
+  target: diff
+  thinking: low

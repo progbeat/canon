@@ -1,11 +1,13 @@
 mod config;
+mod progress;
 mod protocol;
 mod turn;
 
 pub(crate) use config::{
     app_server_args_with_no_sandbox, app_server_model_key, evaluator_thread_config_with_no_sandbox,
-    AppServerModelKey, ModelCatalogFile,
+    AppServerArgs,
 };
+pub(crate) use progress::{EvaluatorProgress, EvaluatorProgressMarker, EvaluatorProgressSnapshot};
 pub(crate) use protocol::{
     create_prompt_template_output_dir, developer_instructions, evaluator_turn_prompt,
     DeveloperInstructionsContext, EvaluatorError, EvaluatorResponseParseCache, EvaluatorRunner,

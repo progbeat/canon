@@ -77,11 +77,10 @@ expectation may also provide per-expectation instructions.
 
 ## Evaluator thread
 
-An ephemeral evaluator interaction context reused within one `canon check` run
-only if the evaluator model, visible tree, and expectation instructions all
-match. The implementation may split reuse further for other developer
-instruction inputs such as plugins, effective ignore patterns, and enforced
-scope.
+An ephemeral evaluator interaction context whose history is not persisted across
+`canon check` invocations. Within one check run, an evaluator thread may only be
+reused for an interrogation with the same evaluator model and the same rendered
+developer instructions.
 
 ## Generator item
 
@@ -216,8 +215,8 @@ the `json`, `shq`, `shargs`, and `sh` filters and runs `sh` blocks from the
 repository root.
 
 `check::interrogation::ask_with_reused_thread` enforces evaluator-thread reuse.
-Its lookup key includes evaluator model, `visibleTreeOid`, and expectation
-instructions, so a different model, visible tree, or expectation instructions
-cannot reuse an existing evaluator thread. It also includes stricter
-developer-instruction inputs such as plugins, effective ignore patterns, and the
-enforced scope.
+Its lookup key includes the evaluator model and the runtime inputs that render
+the developer-instructions transcript for the current prompt template. It also
+splits on live thread-start context outside that rendered string, such as
+plugins and the visible-scope/session-tree inputs that determine the evaluator
+working tree.

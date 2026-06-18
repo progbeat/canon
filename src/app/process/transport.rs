@@ -37,7 +37,8 @@ impl AppServerRunner {
                 return Err("interrupted".into());
             }
             let Some(message) = self.read_message_or_timeout()? else {
-                if turn_idle_timed_out(last_activity, Instant::now()) {
+                let now = Instant::now();
+                if turn_idle_timed_out(last_activity, now) {
                     return Err(EvaluatorError::failure(
                         EvaluatorFailureKind::TurnTimeout,
                         format!(
@@ -46,9 +47,11 @@ impl AppServerRunner {
                         ),
                     ));
                 }
+                self.record_no_progress_timeout_accumulating_progress();
                 continue;
             };
             last_activity = Instant::now();
+            self.record_app_server_activity_progress();
             self.record_app_server_events(&message);
             let envelope = app_server_message(&message).map_err(|error| {
                 EvaluatorError::failure(EvaluatorFailureKind::UnknownAppServer, error)
@@ -73,7 +76,13 @@ impl AppServerRunner {
         request: AppServerTurnRequest,
     ) -> Result<String, EvaluatorError> {
         self.last_turn_usage = None;
-        let id = self.send_json_rpc_request(method, &request.params, "request")?;
+        let id = match self.send_json_rpc_request(method, &request.params, "request") {
+            Ok(id) => id,
+            Err(err) => {
+                self.record_turn_timeout_if_error_kind(&err);
+                return Err(err);
+            }
+        };
         let thread_id = request.thread_id;
 
         let mut saw_response = false;
@@ -86,14 +95,26 @@ impl AppServerRunner {
         let mut interrupted = false;
         let mut interrupt_sent = false;
         loop {
-            self.maybe_interrupt_turn(
+            if let Err(err) = self.maybe_interrupt_turn(
                 &mut interrupted,
                 &mut interrupt_sent,
                 Some(thread_id.as_str()),
                 turn_id.as_deref(),
-            )?;
-            let Some(message) = self.read_message_or_timeout()? else {
-                if turn_idle_timed_out(last_activity, Instant::now()) {
+            ) {
+                self.record_turn_timeout_if_error_kind(&err);
+                return Err(err);
+            }
+            let message = match self.read_message_or_timeout() {
+                Ok(message) => message,
+                Err(err) => {
+                    self.record_turn_timeout_if_error_kind(&err);
+                    return Err(err);
+                }
+            };
+            let Some(message) = message else {
+                let now = Instant::now();
+                if turn_idle_timed_out(last_activity, now) {
+                    self.record_turn_timeout_progress();
                     return Err(EvaluatorError::failure(
                         EvaluatorFailureKind::TurnTimeout,
                         format!(
@@ -102,21 +123,32 @@ impl AppServerRunner {
                         ),
                     ));
                 }
+                self.record_no_progress_timeout_accumulating_progress();
                 continue;
             };
             last_activity = Instant::now();
+            self.record_app_server_activity_progress();
             self.record_app_server_events(&message);
-            let envelope = app_server_message(&message).map_err(|error| {
-                EvaluatorError::failure(EvaluatorFailureKind::UnknownAppServer, error)
-            })?;
+            let envelope = match app_server_message(&message) {
+                Ok(envelope) => envelope,
+                Err(error) => {
+                    return Err(EvaluatorError::failure(
+                        EvaluatorFailureKind::UnknownAppServer,
+                        error,
+                    ));
+                }
+            };
             if let Some(started_turn_id) = turn_started_id(&message) {
                 turn_id = Some(started_turn_id);
-                self.maybe_interrupt_turn(
+                if let Err(err) = self.maybe_interrupt_turn(
                     &mut interrupted,
                     &mut interrupt_sent,
                     Some(thread_id.as_str()),
                     turn_id.as_deref(),
-                )?;
+                ) {
+                    self.record_turn_timeout_if_error_kind(&err);
+                    return Err(err);
+                }
             }
             if envelope.id == Some(id) {
                 if let Some(error) = envelope
@@ -134,7 +166,12 @@ impl AppServerRunner {
                 }
                 saw_response = true;
                 if saw_completed {
-                    return self.finish_turn_request(text, completed_text, &thread_id, turn_id);
+                    return self.finish_turn_request_with_progress(
+                        text,
+                        completed_text,
+                        &thread_id,
+                        turn_id,
+                    );
                 }
                 continue;
             }
@@ -163,7 +200,12 @@ impl AppServerRunner {
                     }
                     saw_completed = true;
                     if saw_response {
-                        return self.finish_turn_request(text, completed_text, &thread_id, turn_id);
+                        return self.finish_turn_request_with_progress(
+                            text,
+                            completed_text,
+                            &thread_id,
+                            turn_id,
+                        );
                     }
                 }
                 Some("error") => {
@@ -184,6 +226,16 @@ impl AppServerRunner {
                 _ => {}
             }
         }
+    }
+
+    fn finish_turn_request_with_progress(
+        &mut self,
+        text: String,
+        completed_text: String,
+        thread_id: &str,
+        turn_id: Option<String>,
+    ) -> Result<String, EvaluatorError> {
+        self.finish_turn_request(text, completed_text, thread_id, turn_id)
     }
 
     fn finish_turn_request(
@@ -216,5 +268,11 @@ impl AppServerRunner {
         }
         self.last_turn_usage = turn_id.map(|turn_id| self.turn_usage_for_turn(thread_id, turn_id));
         app_server_failure_from_value(method, error)
+    }
+
+    fn record_turn_timeout_if_error_kind(&self, err: &EvaluatorError) {
+        if err.kind() == Some(EvaluatorFailureKind::TurnTimeout) {
+            self.record_turn_timeout_progress();
+        }
     }
 }

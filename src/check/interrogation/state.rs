@@ -1,14 +1,12 @@
 use crate::check::core::ERROR_SCOPE_TOO_NARROW;
 use crate::config_types::{AgentConfig, CheckConfig};
-use crate::evaluator::{
-    app_server_model_key, evaluator_models, AppServerModelKey, EvaluatorResponseParseCache,
-};
+use crate::evaluator::{app_server_model_key, evaluator_models, EvaluatorResponseParseCache};
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::hash::full_scope;
 use crate::isolation::{NaiveIsolationGuard, NaiveIsolationPolicy};
 use crate::scope::{effective_ignore_patterns, visible_scope};
 use crate::staged::StagedWorktreeView;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn should_retry_full_scope_after_error(error: Option<&str>, scope: &[String]) -> bool {
@@ -27,23 +25,22 @@ pub(crate) fn evaluator_thread_reuse_key(
     model: Option<&str>,
     visible_tree_oid: &str,
     expectation_instructions: &str,
+    diff_base_tree_oid: &str,
+    checked_tree_oid: &str,
 ) -> Result<String, String> {
     // Evaluator thread reuse is context reuse, not a deterministic result cache.
-    // The canon glossary defines its stable reuse boundary as model,
-    // last-pass visibleTreeOid, and expectation instructions. checkedTreeOid is
-    // intentionally not a key component: for a valid stored q-scope, changes
-    // outside the visible tree do not change the answer. The remaining key
-    // parts below are stable configuration inputs that further restrict reuse
-    // without changing that glossary invariant.
-    // The glossary's thread invariant is one-way: a reused thread must keep
-    // the same evaluator model, visible tree, and expectation instructions.
-    // Extra key parts below are stricter developer-instruction inputs that
-    // prevent unsafe reuse without allowing cross-model, cross-visible-tree, or
-    // cross-instruction reuse.
+    // A reused thread keeps its original developer instructions and live
+    // thread-start context, so the key includes the model, the inputs that
+    // render the current developer-instructions template, and the non-rendered
+    // context that changes the evaluator cwd or tools.
     let mut key = String::new();
     app_server_model_key(model).push_cache_key_part(&mut key);
     key.push('\0');
     key.push_str(visible_tree_oid);
+    key.push('\0');
+    key.push_str(diff_base_tree_oid);
+    key.push('\0');
+    key.push_str(checked_tree_oid);
     key.push('\0');
     key.push_str(&expectation_instructions.len().to_string());
     key.push('\0');
@@ -148,12 +145,11 @@ impl<'a> CheckRuntime<'a> {
 pub(crate) struct InterrogationRunState {
     pub(crate) session_isolations: BTreeMap<String, NaiveIsolationGuard>,
     // This is a run-level pool of evaluator threads, not one thread. The
-    // reuse key enforces the glossary's model/visible-tree/instructions
-    // invariant and also splits on stricter developer-instruction inputs.
+    // reuse key enforces the glossary's model/rendered-developer-instructions
+    // invariant and also splits on stricter live thread-start context.
     pub(crate) thread_sessions_by_reuse_key: BTreeMap<String, String>,
     pub(crate) session_instructions: BTreeMap<String, String>,
     pub(crate) session_roots_by_id: BTreeMap<String, PathBuf>,
-    pub(crate) unavailable_models: BTreeSet<AppServerModelKey>,
     pub(crate) visible_tree_oid_cache: VisibleTreeOidCache,
     pub(crate) parse_cache: EvaluatorResponseParseCache,
     isolation_policy: Option<NaiveIsolationPolicy>,
@@ -171,27 +167,14 @@ impl InterrogationRunState {
             thread_sessions_by_reuse_key: BTreeMap::new(),
             session_instructions: BTreeMap::new(),
             session_roots_by_id: BTreeMap::new(),
-            unavailable_models: BTreeSet::new(),
             visible_tree_oid_cache: VisibleTreeOidCache::new(),
             parse_cache: EvaluatorResponseParseCache::new(),
             isolation_policy,
         })
     }
 
-    pub(crate) fn available_models(&self, agent: &AgentConfig) -> Vec<Option<String>> {
+    pub(crate) fn models_in_retry_order(&self, agent: &AgentConfig) -> Vec<Option<String>> {
         evaluator_models(agent)
-            .into_iter()
-            .filter(|model| !self.model_is_unavailable(model.as_deref()))
-            .collect()
-    }
-
-    pub(crate) fn model_is_unavailable(&self, model: Option<&str>) -> bool {
-        self.unavailable_models
-            .contains(&app_server_model_key(model))
-    }
-
-    pub(crate) fn mark_model_unavailable(&mut self, model: Option<&str>) {
-        self.unavailable_models.insert(app_server_model_key(model));
     }
 
     pub(crate) fn clear_thread_sessions(&mut self) {
@@ -209,5 +192,49 @@ impl InterrogationRunState {
             .as_mut()
             .map(|policy| policy.isolate(session_root))
             .transpose()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thread_reuse_key_includes_developer_instruction_tree_inputs() {
+        let agent = AgentConfig::default();
+        let scope = full_scope();
+        let base = evaluator_thread_reuse_key(
+            &agent,
+            &scope,
+            Some("model"),
+            "visible-tree",
+            "instructions",
+            "base-a",
+            "checked-a",
+        )
+        .unwrap();
+        let different_base = evaluator_thread_reuse_key(
+            &agent,
+            &scope,
+            Some("model"),
+            "visible-tree",
+            "instructions",
+            "base-b",
+            "checked-a",
+        )
+        .unwrap();
+        let different_checked = evaluator_thread_reuse_key(
+            &agent,
+            &scope,
+            Some("model"),
+            "visible-tree",
+            "instructions",
+            "base-a",
+            "checked-b",
+        )
+        .unwrap();
+
+        assert_ne!(base, different_base);
+        assert_ne!(base, different_checked);
     }
 }
