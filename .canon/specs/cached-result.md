@@ -1,10 +1,15 @@
 # Cached Result
 
-If `$XPECS_DIR/$ID/last-fail.json` has `visibleTreeOid` equal to the scoped tree OID of its `visibleScope` in the checked tree, the **same-tree result** for that expectation is `fail`.
+If the last fail record has `visibleTreeOid` equal to the scoped tree OID of its `visibleScope` in the checked tree, the **same-tree result** for that expectation is `fail`.
 
-Otherwise, if `$XPECS_DIR/$ID/last-pass.json` has `visibleTreeOid` equal to the scoped tree OID of its `visibleScope` in the checked tree, the **same-tree result** for that expectation is `pass`.
+Otherwise, if the last pass record has `visibleTreeOid` equal to the scoped tree OID of its `visibleScope` in the checked tree, the **same-tree result** for that expectation is `pass`.
 
-A **cooldown result** for an expectation exists when the expectation has a `cooldown`, the most recently updated of `$XPECS_DIR/$ID/last-pass.json` and `$XPECS_DIR/$ID/last-fail.json` has a status with a configured cooldown duration, and its `responseTimestamp` is younger than that duration. The cooldown result is `pass`.
+A **cooldown result** for an expectation exists when at least one of the following is true:
+
+- the expectation has a `pass` cooldown duration, and the last pass record's `responseTimestamp` is younger than that duration;
+- the expectation has a `fail` cooldown duration, and the last fail record's `responseTimestamp` is younger than that duration.
+
+The cooldown result is `pass`.
 
 A **cached result** for an expectation and Git state is the expectation's **same-tree result**, if one exists. Otherwise, it is the expectation's **cooldown result**, if one exists.
 
