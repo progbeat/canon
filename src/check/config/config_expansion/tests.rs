@@ -230,6 +230,42 @@ expectations:
     assert_eq!(config.presets.get("default"), Some(&config.agent));
 }
 
+#[test]
+fn preset_inherits_from_named_preset_with_preset_key() {
+    let raw: RawCheckConfig = serde_saphyr::from_str(
+        r#"
+version: 1
+presets:
+  default:
+    models: ["default-model"]
+    thinking: medium
+    ignore: ["tmp/**"]
+  smart:
+    preset: default
+    thinking: high
+expectations:
+  - q: "Does the smart preset inherit?"
+    a: "yes"
+    preset: smart
+"#,
+    )
+    .expect("parse raw check config");
+
+    let config = expand_raw_check_config(
+        None,
+        Path::new("check.yml"),
+        raw,
+        None,
+        CheckConfigSource::Tree(TreeSource::Staged),
+    )
+    .expect("expand config");
+
+    let expectation = &config.expectations[0];
+    assert_eq!(expectation.agent.models, vec!["default-model".to_string()]);
+    assert_eq!(expectation.agent.thinking, "high");
+    assert_eq!(expectation.agent.ignore, vec!["tmp/**".to_string()]);
+}
+
 fn test_root(name: &str) -> PathBuf {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)

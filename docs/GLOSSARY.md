@@ -194,10 +194,11 @@ repository's object hash algorithm. `staged::worktree` uses that same OID when
 materializing evaluator-visible trees.
 
 `check::interrogation::policy::initial_visible_scope_for_expectation` forms the
-base q-scope from the stored q-scope, or full project scope when no q-scope has
-been stored. `xpec_state::XpecStateCache::read_stored_q_scope` reads that stored
-q-scope from the newest status-specific last-result file, including pass, fail,
-and error results. `staged::worktree::StagedWorktreeView::materialize_visible_scope`
+base q-scope from `xpec_state::XpecStateCache::read_stored_q_scope`, or full
+project scope when no q-scope has been stored. `xpec_state::last_result`
+implements that method by reading `stored-q-scope.json` when present, otherwise
+falling back to the newest status-specific last-result file, including pass,
+fail, and error results. `staged::worktree::StagedWorktreeView::materialize_visible_scope`
 then applies the visible scope before creating the evaluator working tree.
 
 `check::core::EvaluatorResponseJson` parses evaluator evidence and the required

@@ -63,7 +63,7 @@ fn raw_preset_from_legacy_agent(agent: RawLegacyAgentConfig) -> RawPresetConfig 
     }
     models.extend(agent.model.fallbacks);
     RawPresetConfig {
-        extends: None,
+        preset: None,
         models: (!models.is_empty()).then_some(models),
         thinking: agent.thinking,
         ignore: agent.ignore,
@@ -86,7 +86,7 @@ fn resolve_preset(
     let raw = raw_presets
         .get(name)
         .ok_or_else(|| format!("unknown preset: {}", name))?;
-    let mut agent = if let Some(parent) = raw.extends.as_deref() {
+    let mut agent = if let Some(parent) = raw.preset.as_deref() {
         resolve_preset(parent, raw_presets, resolved, resolving)?
     } else {
         AgentConfig::implementation_default()

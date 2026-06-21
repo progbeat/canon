@@ -7,9 +7,10 @@ presets:
     ignore:
       - ".canon/**"  # prevents evaluator agents from reading expected answers and avoids reevaluating full-scope expectations when canon changes
       - ".github/**"
-      - 'docker/**'
-      - 'skills/**'
-      - '.dockerignore'
+      - "docker/**"
+      - "docs/ai/**"
+      - "skills/**"
+      - ".dockerignore"
       - "AGENTS.md"
       - "Cargo.lock"
       - "Dockerfile"
@@ -27,6 +28,7 @@ presets:
     ignore:  # overrides default_preset.ignore
       - ".canon/**"
       - ".github/**"
+      - "docs/ai/**"
       - "skills/**"
       - "src/**"
       - "AGENTS.md"

@@ -55,7 +55,7 @@ impl Default for AgentConfig {
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawPresetConfig {
     #[serde(default)]
-    pub(crate) extends: Option<String>,
+    pub(crate) preset: Option<String>,
     #[serde(default)]
     pub(crate) models: Option<Vec<String>>,
     #[serde(default)]
