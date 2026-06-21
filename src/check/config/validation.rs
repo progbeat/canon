@@ -3,7 +3,7 @@ use crate::check::core::{
     ERROR_INVALID_QUESTION, ERROR_SCOPE_TOO_NARROW, INTERNAL_ERROR_UNPARSABLE,
 };
 use crate::check::run::selection::{minimal_unique_expectation_prefix, parse_cooldown};
-use crate::config_types::{AgentConfig, CheckConfig};
+use crate::config_types::{AgentConfig, CheckConfig, Expectation, ResolvedPresetConfig};
 use crate::hash::expectation_id;
 use crate::logs::push_json_control_escape;
 use crate::scope::normalize_repo_path;
@@ -17,7 +17,7 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
         return Err("check.yml presets must contain default".to_string());
     }
     for (name, preset) in &config.presets {
-        validate_agent_config(preset, &format!("presets.{}", name))?;
+        validate_agent_config(&preset.agent_config(), &format!("presets.{}", name))?;
     }
     validate_agent_config(&config.agent, "presets.default")?;
     if config.expectations.is_empty() {
@@ -34,18 +34,10 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
                 number
             ));
         }
-        if !matches_answer_pattern(&expectation.a) {
-            return Err(render_expectation_validation_error(
-                &display_ids[index],
-                &expectation.q,
-                "invalid-expected-answer",
-                &format!(
-                    "configured expected answer `{}` does not match answer pattern {}",
-                    escape_config_error_block_text(&expectation.a),
-                    ANSWER_PATTERN
-                ),
-            ));
-        }
+        validate_expected_answer_matches_interrogation_response_schema_answer_pattern(
+            &display_ids[index],
+            expectation,
+        )?;
         // Expected answers cannot collide with either evaluator schema errors
         // or Canon's internal unparsable-response marker.
         if matches!(
@@ -69,6 +61,25 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
         validate_agent_config(&expectation.agent, &format!("expectation {}", number))?;
     }
     Ok(())
+}
+
+fn validate_expected_answer_matches_interrogation_response_schema_answer_pattern(
+    display_id: &str,
+    expectation: &Expectation,
+) -> Result<(), String> {
+    if matches_answer_pattern(&expectation.a) {
+        return Ok(());
+    }
+    Err(render_expectation_validation_error(
+        display_id,
+        &expectation.q,
+        "invalid-expected-answer",
+        &format!(
+            "configured expected answer `{}` does not match answer pattern {}",
+            escape_config_error_block_text(&expectation.a),
+            ANSWER_PATTERN
+        ),
+    ))
 }
 
 fn render_expectation_validation_error(
@@ -302,10 +313,16 @@ pub(crate) fn check_config_loads_plugins(config: &CheckConfig) -> bool {
             .expectations
             .iter()
             .any(|expectation| !expectation.agent.plugins.is_empty())
-        || config
-            .presets
-            .values()
-            .any(|preset| !preset.plugins.is_empty())
+        || config.presets.values().any(resolved_preset_loads_plugins)
+}
+
+fn resolved_preset_loads_plugins(preset: &ResolvedPresetConfig) -> bool {
+    preset
+        .common
+        .settings
+        .plugins
+        .as_ref()
+        .is_some_and(|plugins| !plugins.is_empty())
 }
 
 pub(crate) fn validate_relative_config_path(value: &str, label: &str) -> Result<(), String> {
@@ -325,7 +342,9 @@ pub(crate) fn normalize_agent_ignore_pattern_for_config(value: &str) -> Result<S
 mod tests {
     use super::push_config_error_unicode_escape;
     use super::validate_check_config;
-    use crate::config_types::{AgentConfig, CheckConfig, Expectation, ExpectationTarget};
+    use crate::config_types::{
+        AgentConfig, CheckConfig, Expectation, ExpectationTarget, ResolvedPresetConfig,
+    };
     use std::collections::BTreeMap;
 
     #[test]
@@ -333,7 +352,7 @@ mod tests {
         let question = "What is this project implemented in?";
         let agent = AgentConfig::default();
         let mut presets = BTreeMap::new();
-        presets.insert("default".to_string(), agent.clone());
+        presets.insert("default".to_string(), preset(&agent));
         let config = CheckConfig {
             version: 1,
             presets,
@@ -369,7 +388,7 @@ mod tests {
     fn duplicate_expectation_ids_are_rejected_even_when_targets_differ() {
         let agent = AgentConfig::default();
         let mut presets = BTreeMap::new();
-        presets.insert("default".to_string(), agent.clone());
+        presets.insert("default".to_string(), preset(&agent));
         let expectation = |target| Expectation {
             q: "Does this behavior work?".to_string(),
             a: "yes".to_string(),
@@ -402,5 +421,14 @@ mod tests {
         push_config_error_unicode_escape(&mut escaped, '\u{1f600}');
 
         assert_eq!(escaped, "\\ud83d\\ude00");
+    }
+
+    fn preset(agent: &AgentConfig) -> ResolvedPresetConfig {
+        let mut preset = ResolvedPresetConfig::default();
+        preset.common.settings.models = Some(agent.models.clone());
+        preset.common.settings.thinking = Some(agent.thinking.clone());
+        preset.common.settings.ignore = Some(agent.ignore.clone());
+        preset.common.settings.plugins = Some(agent.plugins.clone());
+        preset
     }
 }

@@ -1,11 +1,10 @@
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
-#[derive(Debug, Deserialize, Clone)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 pub(crate) struct CheckConfig {
     pub(crate) version: u32,
-    pub(crate) presets: BTreeMap<String, AgentConfig>,
+    pub(crate) presets: BTreeMap<String, ResolvedPresetConfig>,
     pub(crate) agent: AgentConfig,
     pub(crate) expectations: Vec<Expectation>,
 }
@@ -55,6 +54,15 @@ impl Default for AgentConfig {
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawPresetConfig {
     #[serde(default)]
+    pub(crate) instructions: Option<String>,
+    #[serde(default)]
+    #[serde(rename = "diff-from")]
+    pub(crate) diff_from: Option<String>,
+    #[serde(default)]
+    pub(crate) target: Option<String>,
+    #[serde(default)]
+    pub(crate) cooldown: Option<CooldownConfig>,
+    #[serde(default)]
     pub(crate) preset: Option<String>,
     #[serde(default)]
     pub(crate) models: Option<Vec<String>>,
@@ -64,6 +72,31 @@ pub(crate) struct RawPresetConfig {
     pub(crate) ignore: Option<Vec<String>>,
     #[serde(default)]
     pub(crate) plugins: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ResolvedPresetConfig {
+    pub(crate) common: RawExpectationCommonConfig,
+}
+
+impl ResolvedPresetConfig {
+    pub(crate) fn agent_config(&self) -> AgentConfig {
+        let mut agent = AgentConfig::implementation_default();
+        let settings = &self.common.settings;
+        if let Some(models) = &settings.models {
+            agent.models = models.clone();
+        }
+        if let Some(thinking) = &settings.thinking {
+            agent.thinking = thinking.clone();
+        }
+        if let Some(ignore) = &settings.ignore {
+            agent.ignore = ignore.clone();
+        }
+        if let Some(plugins) = &settings.plugins {
+            agent.plugins = plugins.clone();
+        }
+        agent
+    }
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
