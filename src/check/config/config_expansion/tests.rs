@@ -1,5 +1,5 @@
 use super::{expand_raw_check_config, CheckConfigSource};
-use crate::config_types::{CooldownConfig, RawCheckConfig};
+use crate::config_types::{CooldownConfig, ExpectationTarget, RawCheckConfig};
 use crate::git::TreeSource;
 use crate::repo_inspection::RepoInspectionCache;
 use std::fs;
@@ -304,15 +304,47 @@ expectations:
     let expectation = &config.expectations[0];
     assert_eq!(expectation.instructions, "Use the preset instructions.");
     assert_eq!(expectation.diff_from, "master");
-    assert_eq!(
-        expectation.target,
-        Some(crate::config_types::ExpectationTarget::Diff)
-    );
+    assert_eq!(expectation.target, Some(ExpectationTarget::Diff));
     assert_eq!(
         expectation.cooldown,
         Some(CooldownConfig::Compact("7d".to_string()))
     );
     assert_eq!(expectation.agent.models, vec!["preset-model".to_string()]);
+    assert_eq!(expectation.agent.thinking, "high");
+}
+
+#[test]
+fn question_answer_only_uses_raw_item_before_preset_defaults() {
+    let raw: RawCheckConfig = serde_saphyr::from_str(
+        r#"
+version: 1
+presets:
+  default:
+    instructions: "Use the preset instructions."
+    diff-from: master
+    target: diff
+    thinking: high
+expectations:
+  - q: "Does q matching keep preset context?"
+    a: "yes"
+"#,
+    )
+    .expect("parse raw check config");
+
+    let config = expand_raw_check_config(
+        None,
+        Path::new("check.yml"),
+        raw,
+        None,
+        CheckConfigSource::Tree(TreeSource::Staged),
+    )
+    .expect("expand config");
+
+    let expectation = &config.expectations[0];
+    assert!(expectation.question_answer_only);
+    assert_eq!(expectation.instructions, "Use the preset instructions.");
+    assert_eq!(expectation.diff_from, "master");
+    assert_eq!(expectation.target, Some(ExpectationTarget::Diff));
     assert_eq!(expectation.agent.thinking, "high");
 }
 

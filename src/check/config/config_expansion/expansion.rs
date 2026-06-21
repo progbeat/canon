@@ -62,6 +62,7 @@ impl RawExpectationExpansion<'_> {
         for (index, item) in items.into_iter().enumerate() {
             match item {
                 RawExpectationItem::Explicit(item) => {
+                    let question_answer_only = explicit_item_is_question_answer_only(&item.common);
                     let RawExpectationCommonConfig {
                         instructions,
                         diff_from,
@@ -74,11 +75,6 @@ impl RawExpectationExpansion<'_> {
                     let diff_from = resolved_expectation_diff_from(diff_from);
                     let target = resolve_expectation_target(target)
                         .map_err(|err| format!("expectation {} target: {}", item_number, err))?;
-                    let question_answer_only = cooldown.is_none()
-                        && settings.is_empty()
-                        && instructions.is_empty()
-                        && diff_from == DEFAULT_DIFF_FROM
-                        && target.is_none();
                     let agent = self.resolve_expectation_agent(&settings)?;
                     self.expectations.push(Expectation {
                         q: item.q,
@@ -225,6 +221,14 @@ impl RawExpectationExpansion<'_> {
         apply_preset_defaults(&mut common, &preset.common);
         Ok(common)
     }
+}
+
+fn explicit_item_is_question_answer_only(common: &RawExpectationCommonConfig) -> bool {
+    common.cooldown.is_none()
+        && common.settings.is_empty()
+        && resolved_expectation_instructions(common.instructions.clone()).is_empty()
+        && resolved_expectation_diff_from(common.diff_from.clone()) == DEFAULT_DIFF_FROM
+        && common.target.is_none()
 }
 
 fn apply_preset_defaults(
