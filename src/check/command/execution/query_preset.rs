@@ -7,7 +7,7 @@ pub(super) fn check_config_with_query_preset(
     let agent = config
         .presets
         .get(preset)
-        .cloned()
+        .map(|preset| preset.agent_config())
         .ok_or_else(|| format!("unknown preset: {}", preset))?;
     let mut query_config = config.clone();
     query_config.agent = agent;
@@ -17,7 +17,7 @@ pub(super) fn check_config_with_query_preset(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config_types::AgentConfig;
+    use crate::config_types::{AgentConfig, ResolvedPresetConfig};
     use std::collections::BTreeMap;
 
     fn agent(model: &str, thinking: &str) -> AgentConfig {
@@ -29,13 +29,22 @@ mod tests {
         }
     }
 
+    fn preset(agent: &AgentConfig) -> ResolvedPresetConfig {
+        let mut preset = ResolvedPresetConfig::default();
+        preset.common.settings.models = Some(agent.models.clone());
+        preset.common.settings.thinking = Some(agent.thinking.clone());
+        preset.common.settings.ignore = Some(agent.ignore.clone());
+        preset.common.settings.plugins = Some(agent.plugins.clone());
+        preset
+    }
+
     #[test]
     fn query_preset_overrides_default_agent() {
         let default_agent = agent("default-model", "low");
         let smart_agent = agent("smart-model", "high");
         let mut presets = BTreeMap::new();
-        presets.insert("default".to_string(), default_agent.clone());
-        presets.insert("smart".to_string(), smart_agent.clone());
+        presets.insert("default".to_string(), preset(&default_agent));
+        presets.insert("smart".to_string(), preset(&smart_agent));
         let config = CheckConfig {
             version: 1,
             presets,
@@ -53,7 +62,7 @@ mod tests {
     fn query_preset_rejects_unknown_name() {
         let default_agent = agent("default-model", "low");
         let mut presets = BTreeMap::new();
-        presets.insert("default".to_string(), default_agent.clone());
+        presets.insert("default".to_string(), preset(&default_agent));
         let config = CheckConfig {
             version: 1,
             presets,

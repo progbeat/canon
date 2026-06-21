@@ -5,7 +5,7 @@ use super::source::CheckConfigSource;
 use crate::config_types::{
     AgentConfig, CheckConfig, Expectation, ExpectationTarget, RawCheckConfig,
     RawExpectationCommonConfig, RawExpectationItem, RawExpectationSettings,
-    RawGeneratorExpectation, RawIncludeExpectation, DEFAULT_DIFF_FROM,
+    RawGeneratorExpectation, RawIncludeExpectation, ResolvedPresetConfig, DEFAULT_DIFF_FROM,
 };
 use crate::repo_inspection::RepoInspectionCache;
 use std::collections::BTreeMap;
@@ -19,17 +19,17 @@ pub(crate) fn expand_raw_check_config(
     source: CheckConfigSource,
 ) -> Result<CheckConfig, String> {
     let raw_presets = raw_presets_from_config(raw.presets, raw.agent)?;
-    let presets = resolve_presets(raw_presets)?;
-    let default_agent = presets
+    let resolved_presets = resolve_presets(raw_presets)?;
+    let default_agent = resolved_presets
         .get("default")
-        .cloned()
+        .map(ResolvedPresetConfig::agent_config)
         .ok_or_else(|| "check.yml presets must contain default".to_string())?;
     let expectations = {
         let mut expansion = RawExpectationExpansion {
             root,
             cache,
             source,
-            presets: &presets,
+            presets: &resolved_presets,
             include_stack: Vec::new(),
             expectations: Vec::new(),
         };
@@ -38,7 +38,7 @@ pub(crate) fn expand_raw_check_config(
     };
     Ok(CheckConfig {
         version: raw.version,
-        presets,
+        presets: resolved_presets,
         agent: default_agent,
         expectations,
     })
@@ -48,7 +48,7 @@ struct RawExpectationExpansion<'a> {
     root: Option<&'a Path>,
     cache: Option<&'a mut RepoInspectionCache>,
     source: CheckConfigSource,
-    presets: &'a BTreeMap<String, AgentConfig>,
+    presets: &'a BTreeMap<String, ResolvedPresetConfig>,
     include_stack: Vec<String>,
     expectations: Vec<Expectation>,
 }
@@ -62,23 +62,19 @@ impl RawExpectationExpansion<'_> {
         for (index, item) in items.into_iter().enumerate() {
             match item {
                 RawExpectationItem::Explicit(item) => {
+                    let question_answer_only = explicit_item_is_question_answer_only(&item.common);
                     let RawExpectationCommonConfig {
                         instructions,
                         diff_from,
                         target,
                         cooldown,
                         settings,
-                    } = item.common;
+                    } = self.resolve_expectation_common(item.common)?;
                     let item_number = index + 1;
                     let instructions = resolved_expectation_instructions(instructions);
                     let diff_from = resolved_expectation_diff_from(diff_from);
                     let target = resolve_expectation_target(target)
                         .map_err(|err| format!("expectation {} target: {}", item_number, err))?;
-                    let question_answer_only = cooldown.is_none()
-                        && settings.is_empty()
-                        && instructions.is_empty()
-                        && diff_from == DEFAULT_DIFF_FROM
-                        && target.is_none();
                     let agent = self.resolve_expectation_agent(&settings)?;
                     self.expectations.push(Expectation {
                         q: item.q,
@@ -113,7 +109,7 @@ impl RawExpectationExpansion<'_> {
         let item_number = index + 1;
         let files = self.expand_paths(config_path, &item.path, item_number, "path")?;
         let uses_content = item.generated_question_format.contains("{{content}}");
-        let common = item.common;
+        let common = self.resolve_expectation_common(item.common)?;
         let target = resolve_expectation_target(common.target.clone())
             .map_err(|err| format!("expectation {} target: {}", item_number, err))?;
         for file in files {
@@ -208,14 +204,60 @@ impl RawExpectationExpansion<'_> {
         &self,
         settings: &RawExpectationSettings,
     ) -> Result<AgentConfig, String> {
-        let preset = settings.preset.as_deref().unwrap_or("default");
-        let mut agent = self
-            .presets
-            .get(preset)
-            .cloned()
-            .ok_or_else(|| format!("unknown preset: {}", preset))?;
+        let mut agent = AgentConfig::implementation_default();
         apply_expectation_settings(&mut agent, settings)?;
         Ok(agent)
+    }
+
+    fn resolve_expectation_common(
+        &self,
+        mut common: RawExpectationCommonConfig,
+    ) -> Result<RawExpectationCommonConfig, String> {
+        let preset = common.settings.preset.as_deref().unwrap_or("default");
+        let preset = self
+            .presets
+            .get(preset)
+            .ok_or_else(|| format!("unknown preset: {}", preset))?;
+        apply_preset_defaults(&mut common, &preset.common);
+        Ok(common)
+    }
+}
+
+fn explicit_item_is_question_answer_only(common: &RawExpectationCommonConfig) -> bool {
+    common.cooldown.is_none()
+        && common.settings.is_empty()
+        && resolved_expectation_instructions(common.instructions.clone()).is_empty()
+        && resolved_expectation_diff_from(common.diff_from.clone()) == DEFAULT_DIFF_FROM
+        && common.target.is_none()
+}
+
+fn apply_preset_defaults(
+    common: &mut RawExpectationCommonConfig,
+    preset: &RawExpectationCommonConfig,
+) {
+    if common.instructions.is_none() {
+        common.instructions = preset.instructions.clone();
+    }
+    if common.diff_from.is_none() {
+        common.diff_from = preset.diff_from.clone();
+    }
+    if common.target.is_none() {
+        common.target = preset.target.clone();
+    }
+    if common.cooldown.is_none() {
+        common.cooldown = preset.cooldown.clone();
+    }
+    if common.settings.models.is_none() {
+        common.settings.models = preset.settings.models.clone();
+    }
+    if common.settings.thinking.is_none() {
+        common.settings.thinking = preset.settings.thinking.clone();
+    }
+    if common.settings.ignore.is_none() {
+        common.settings.ignore = preset.settings.ignore.clone();
+    }
+    if common.settings.plugins.is_none() {
+        common.settings.plugins = preset.settings.plugins.clone();
     }
 }
 

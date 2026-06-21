@@ -1,5 +1,5 @@
 use super::{expand_raw_check_config, CheckConfigSource};
-use crate::config_types::{CooldownConfig, RawCheckConfig};
+use crate::config_types::{CooldownConfig, ExpectationTarget, RawCheckConfig};
 use crate::git::TreeSource;
 use crate::repo_inspection::RepoInspectionCache;
 use std::fs;
@@ -227,7 +227,13 @@ expectations:
     );
     assert_eq!(config.agent.thinking, "high");
     assert_eq!(config.agent.ignore, vec!["tmp/**".to_string()]);
-    assert_eq!(config.presets.get("default"), Some(&config.agent));
+    assert_eq!(
+        config
+            .presets
+            .get("default")
+            .map(|preset| preset.agent_config()),
+        Some(config.agent)
+    );
 }
 
 #[test]
@@ -264,6 +270,123 @@ expectations:
     assert_eq!(expectation.agent.models, vec!["default-model".to_string()]);
     assert_eq!(expectation.agent.thinking, "high");
     assert_eq!(expectation.agent.ignore, vec!["tmp/**".to_string()]);
+}
+
+#[test]
+fn preset_supplies_expectation_field_defaults() {
+    let raw: RawCheckConfig = serde_saphyr::from_str(
+        r#"
+version: 1
+presets:
+  default:
+    instructions: "Use the preset instructions."
+    diff-from: master
+    target: diff
+    cooldown: 7d
+    models: ["preset-model"]
+    thinking: high
+expectations:
+  - q: "Does the preset supply defaults?"
+    a: "yes"
+"#,
+    )
+    .expect("parse raw check config");
+
+    let config = expand_raw_check_config(
+        None,
+        Path::new("check.yml"),
+        raw,
+        None,
+        CheckConfigSource::Tree(TreeSource::Staged),
+    )
+    .expect("expand config");
+
+    let expectation = &config.expectations[0];
+    assert_eq!(expectation.instructions, "Use the preset instructions.");
+    assert_eq!(expectation.diff_from, "master");
+    assert_eq!(expectation.target, Some(ExpectationTarget::Diff));
+    assert_eq!(
+        expectation.cooldown,
+        Some(CooldownConfig::Compact("7d".to_string()))
+    );
+    assert_eq!(expectation.agent.models, vec!["preset-model".to_string()]);
+    assert_eq!(expectation.agent.thinking, "high");
+}
+
+#[test]
+fn question_answer_only_uses_raw_item_before_preset_defaults() {
+    let raw: RawCheckConfig = serde_saphyr::from_str(
+        r#"
+version: 1
+presets:
+  default:
+    instructions: "Use the preset instructions."
+    diff-from: master
+    target: diff
+    thinking: high
+expectations:
+  - q: "Does q matching keep preset context?"
+    a: "yes"
+"#,
+    )
+    .expect("parse raw check config");
+
+    let config = expand_raw_check_config(
+        None,
+        Path::new("check.yml"),
+        raw,
+        None,
+        CheckConfigSource::Tree(TreeSource::Staged),
+    )
+    .expect("expand config");
+
+    let expectation = &config.expectations[0];
+    assert!(expectation.question_answer_only);
+    assert_eq!(expectation.instructions, "Use the preset instructions.");
+    assert_eq!(expectation.diff_from, "master");
+    assert_eq!(expectation.target, Some(ExpectationTarget::Diff));
+    assert_eq!(expectation.agent.thinking, "high");
+}
+
+#[test]
+fn expectation_fields_override_preset_defaults() {
+    let raw: RawCheckConfig = serde_saphyr::from_str(
+        r#"
+version: 1
+presets:
+  default:
+    instructions: "Preset instructions."
+    diff-from: master
+    cooldown: 7d
+    thinking: medium
+expectations:
+  - q: "Does the item win?"
+    a: "yes"
+    instructions: "Item instructions."
+    diff-from: HEAD~1
+    cooldown: 1d
+    thinking: high
+"#,
+    )
+    .expect("parse raw check config");
+
+    let config = expand_raw_check_config(
+        None,
+        Path::new("check.yml"),
+        raw,
+        None,
+        CheckConfigSource::Tree(TreeSource::Staged),
+    )
+    .expect("expand config");
+
+    let expectation = &config.expectations[0];
+    assert_eq!(expectation.instructions, "Item instructions.");
+    assert_eq!(expectation.diff_from, "HEAD~1");
+    assert_eq!(
+        expectation.cooldown,
+        Some(CooldownConfig::Compact("1d".to_string()))
+    );
+    assert_eq!(expectation.agent.thinking, "high");
 }
 
 fn test_root(name: &str) -> PathBuf {

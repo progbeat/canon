@@ -1,6 +1,7 @@
 use crate::check::config::validation::normalize_agent_ignore_pattern_for_config;
 use crate::config_types::{
     AgentConfig, RawExpectationSettings, RawLegacyAgentConfig, RawPresetConfig,
+    ResolvedPresetConfig,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -24,7 +25,7 @@ pub(super) fn raw_presets_from_config(
 
 pub(super) fn resolve_presets(
     raw_presets: BTreeMap<String, RawPresetConfig>,
-) -> Result<BTreeMap<String, AgentConfig>, String> {
+) -> Result<BTreeMap<String, ResolvedPresetConfig>, String> {
     if !raw_presets.contains_key("default") {
         return Err("check.yml presets must contain default".to_string());
     }
@@ -63,6 +64,10 @@ fn raw_preset_from_legacy_agent(agent: RawLegacyAgentConfig) -> RawPresetConfig 
     }
     models.extend(agent.model.fallbacks);
     RawPresetConfig {
+        instructions: None,
+        diff_from: None,
+        target: None,
+        cooldown: None,
         preset: None,
         models: (!models.is_empty()).then_some(models),
         thinking: agent.thinking,
@@ -74,11 +79,11 @@ fn raw_preset_from_legacy_agent(agent: RawLegacyAgentConfig) -> RawPresetConfig 
 fn resolve_preset(
     name: &str,
     raw_presets: &BTreeMap<String, RawPresetConfig>,
-    resolved: &mut BTreeMap<String, AgentConfig>,
+    resolved: &mut BTreeMap<String, ResolvedPresetConfig>,
     resolving: &mut BTreeSet<String>,
-) -> Result<AgentConfig, String> {
-    if let Some(agent) = resolved.get(name) {
-        return Ok(agent.clone());
+) -> Result<ResolvedPresetConfig, String> {
+    if let Some(preset) = resolved.get(name) {
+        return Ok(preset.clone());
     }
     if !resolving.insert(name.to_string()) {
         return Err(format!("preset inheritance cycle includes {}", name));
@@ -89,28 +94,50 @@ fn resolve_preset(
     let mut agent = if let Some(parent) = raw.preset.as_deref() {
         resolve_preset(parent, raw_presets, resolved, resolving)?
     } else {
-        AgentConfig::implementation_default()
+        ResolvedPresetConfig::default()
     };
     apply_raw_preset(&mut agent, raw);
-    let agent = normalize_agent_config(agent)?;
+    normalize_preset_config(&mut agent)?;
     resolving.remove(name);
     resolved.insert(name.to_string(), agent.clone());
     Ok(agent)
 }
 
-fn apply_raw_preset(agent: &mut AgentConfig, raw: &RawPresetConfig) {
+fn apply_raw_preset(preset: &mut ResolvedPresetConfig, raw: &RawPresetConfig) {
+    let common = &mut preset.common;
+    if let Some(instructions) = &raw.instructions {
+        common.instructions = Some(instructions.clone());
+    }
+    if let Some(diff_from) = &raw.diff_from {
+        common.diff_from = Some(diff_from.clone());
+    }
+    if let Some(target) = &raw.target {
+        common.target = Some(target.clone());
+    }
+    if let Some(cooldown) = &raw.cooldown {
+        common.cooldown = Some(cooldown.clone());
+    }
     if let Some(models) = &raw.models {
-        agent.models = models.clone();
+        common.settings.models = Some(models.clone());
     }
     if let Some(thinking) = &raw.thinking {
-        agent.thinking = thinking.clone();
+        common.settings.thinking = Some(thinking.clone());
     }
     if let Some(ignore) = &raw.ignore {
-        agent.ignore = ignore.clone();
+        common.settings.ignore = Some(ignore.clone());
     }
     if let Some(plugins) = &raw.plugins {
-        agent.plugins = plugins.clone();
+        common.settings.plugins = Some(plugins.clone());
     }
+}
+
+fn normalize_preset_config(preset: &mut ResolvedPresetConfig) -> Result<(), String> {
+    if let Some(ignore) = &mut preset.common.settings.ignore {
+        for pattern in ignore {
+            *pattern = normalize_agent_ignore_pattern_for_config(pattern)?;
+        }
+    }
+    Ok(())
 }
 
 fn normalize_agent_config(mut agent: AgentConfig) -> Result<AgentConfig, String> {
