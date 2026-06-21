@@ -9,6 +9,14 @@
 - Treat any codex_app_server ERROR or permission-config warning during canon check as a blocker, even if the command exits successfully.
 - For reference, Codex GitHub: https://github.com/openai/codex
 
+## AI Docs
+
+Use `docs/ai/FAQ.md` for compact AI runbook notes: recurring failures, reliable fixes, project gotchas, navigation tips, and ideas that reduce future confusion.
+
+You may edit `docs/ai/**` when useful, including human-facing notes about canon pain points, questionable canon decisions, implementation concerns, or improvement ideas.
+
+Keep `docs/ai/**` small. Do not store raw logs, long outputs, transcripts, duplicate notes, or stale complaints.
+
 ## Canon
 
 The canon is the single source of truth for how the project should work.
