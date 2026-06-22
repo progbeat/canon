@@ -41,7 +41,7 @@ impl EvaluatorRunner for AppServerRunner {
                 scope,
                 model,
                 thinking,
-                self.app_server_root(),
+                self.app_server_state_root(),
                 session_cwd,
                 template_output_dir,
                 self.no_sandbox(),
@@ -107,6 +107,7 @@ pub(crate) fn turn_start_request(
     cwd: Option<&Path>,
     no_sandbox: bool,
 ) -> Result<Value, EvaluatorError> {
+    let enforced_output_schema = evaluator_response_output_schema();
     let mut request = json!({
         "threadId": session_id,
         "input": [
@@ -115,7 +116,7 @@ pub(crate) fn turn_start_request(
                 "text": prompt
             }
         ],
-        "outputSchema": evaluator_response_output_schema()
+        "outputSchema": enforced_output_schema
     });
     if let Some(cwd) = cwd {
         request["cwd"] = Value::String(path_to_json_string(cwd, "turn/start cwd")?);

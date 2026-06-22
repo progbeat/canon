@@ -1,5 +1,4 @@
 use super::{path_to_config_string, EvaluatorConfigError, EvaluatorConfigResult};
-use crate::git::resolve_git_path;
 use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsString;
@@ -45,14 +44,10 @@ pub(crate) fn evaluator_template_output_permissions(
     Ok(permissions)
 }
 
-pub(crate) fn evaluator_state_dir_permissions(
-    app_server_root: &Path,
+pub(crate) fn evaluator_resolved_state_dir_permissions(
+    state_root: &Path,
 ) -> EvaluatorConfigResult<BTreeMap<String, String>> {
     let mut permissions = BTreeMap::new();
-    let state_root = resolve_git_path(
-        app_server_root,
-        crate::state_paths::CANON_STATE_DIR_GIT_PATH,
-    )?;
     insert_tree_permission(&mut permissions, &state_root, FILESYSTEM_DENY)?;
     Ok(permissions)
 }
@@ -247,16 +242,17 @@ mod tests {
     fn state_dir_permissions_deny_canon_state_tree() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         let state_root =
-            resolve_git_path(root, crate::state_paths::CANON_STATE_DIR_GIT_PATH).unwrap();
-        let state_root = path_to_config_string(&state_root, "test state root").unwrap();
-        let permissions = evaluator_state_dir_permissions(root).unwrap();
+            crate::git::resolve_git_path(root, crate::state_paths::CANON_STATE_DIR_GIT_PATH)
+                .unwrap();
+        let state_root_key = path_to_config_string(&state_root, "test state root").unwrap();
+        let permissions = evaluator_resolved_state_dir_permissions(&state_root).unwrap();
 
         assert_eq!(
-            permissions.get(&state_root),
+            permissions.get(&state_root_key),
             Some(&FILESYSTEM_DENY.to_string())
         );
         assert_eq!(
-            permissions.get(&format!("{}/**", state_root)),
+            permissions.get(&format!("{}/**", state_root_key)),
             Some(&FILESYSTEM_DENY.to_string())
         );
     }

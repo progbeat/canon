@@ -1,6 +1,6 @@
 use super::codec::{config_entries_to_json, push_toml_arg, ConfigEntry, ConfigEntryValue};
 use super::permissions::{
-    evaluator_runtime_permissions, evaluator_state_dir_permissions,
+    evaluator_resolved_state_dir_permissions, evaluator_runtime_permissions,
     evaluator_template_output_permissions, evaluator_working_tree_permissions,
     merge_filesystem_permissions, EVALUATOR_FILESYSTEM_GLOB_SCAN_MAX_DEPTH, FILESYSTEM_DENY,
 };
@@ -87,7 +87,7 @@ pub(crate) fn evaluator_thread_config_with_no_sandbox(
     _scope: &[String],
     model: Option<&str>,
     thinking: &str,
-    app_server_root: &Path,
+    app_server_state_root: &Path,
     session_root: &Path,
     template_output_dir: &Path,
     no_sandbox: bool,
@@ -102,7 +102,7 @@ pub(crate) fn evaluator_thread_config_with_no_sandbox(
     )?;
     merge_filesystem_permissions(
         &mut extra_permissions,
-        evaluator_state_dir_permissions(app_server_root)?,
+        evaluator_resolved_state_dir_permissions(app_server_state_root)?,
     )?;
     merge_filesystem_permissions(
         &mut extra_permissions,

@@ -39,7 +39,7 @@ pub(crate) fn prepare_check_execution(
         check_config_loads_plugins(config),
         &config.agent,
         options.no_sandbox,
-    );
+    )?;
     Ok(PreparedCheckExecution {
         staged_view,
         tree_source: options.tree_source.clone(),

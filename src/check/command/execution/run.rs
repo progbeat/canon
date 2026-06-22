@@ -45,6 +45,10 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
     let write_agent_message =
         check_command_writes_agent_message(&command, &checked_tree, &against_tree);
     let mut repo_cache = RepoInspectionCache::new();
+    // Runtime-log entry point for `canon check`: this writer resolves
+    // `${CANON_STATE_DIR}/logs/0.jsonl`, then the check lifecycle, cache,
+    // evaluator request/response, thread lifecycle, review, token-usage, and
+    // final-result paths below append flushed JSONL events through it.
     let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
     let query_mode = command.query.is_some();
     let query_start_field = if query_mode { Some(true) } else { None };

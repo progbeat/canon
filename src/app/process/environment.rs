@@ -12,6 +12,7 @@ pub(crate) fn configure_app_server_environment(
     if let Some(path) = path {
         command.env("PATH", path);
     }
+    command.current_dir(&temp_root);
     command.env("CODEX_HOME", isolated_codex_home);
     if let Some(home) = isolated_codex_home.parent() {
         command.env("HOME", home);
@@ -40,6 +41,10 @@ mod tests {
 
         configure_app_server_environment(&mut command, codex_home).unwrap();
 
+        assert_eq!(
+            command.get_current_dir(),
+            Some(env::temp_dir().canonicalize().unwrap().as_path())
+        );
         assert_eq!(
             command_env_value(&command, "CODEX_HOME"),
             Some(codex_home.as_os_str().to_os_string())

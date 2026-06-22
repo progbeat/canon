@@ -215,13 +215,6 @@ fn start_thread_session<R: EvaluatorRunner>(
     let session_root = runtime
         .session_root_for_scope(request.agent, request.enforced_scope, visible_tree_oid)
         .map_err(EvaluatorError::message)?;
-    let session_isolation = state
-        .isolate_session_root(&session_root)
-        .map_err(EvaluatorError::message)?;
-    let session_cwd = session_isolation
-        .as_ref()
-        .map(|isolation| isolation.path())
-        .unwrap_or(session_root.as_path());
     let developer_instructions = developer_instructions(DeveloperInstructionsContext {
         root: runtime.root,
         template_output_dir: request.template_output_dir,
@@ -234,6 +227,13 @@ fn start_thread_session<R: EvaluatorRunner>(
         last_pass: request.last_pass,
     })
     .map_err(EvaluatorError::message)?;
+    let session_isolation = state
+        .isolate_session_root(&session_root)
+        .map_err(EvaluatorError::message)?;
+    let session_cwd = session_isolation
+        .as_ref()
+        .map(|isolation| isolation.path())
+        .unwrap_or(session_root.as_path());
     let created = match runner.start_session(
         session_cwd,
         request.template_output_dir,
@@ -413,18 +413,19 @@ pub(crate) fn resolve_diff_from_tree_oid(
     expectation: &SelectedExpectation,
     last_pass: Option<&LastResult>,
 ) -> Result<String, EvaluatorError> {
-    // Canon `diff-from` resolution: `:checkpoint` prefers the last pass
-    // checked tree and falls back to the against tree; `:against-tree` uses
-    // the against tree; any other value is resolved as a tree source.
-    match expectation.diff_from.as_str() {
-        DEFAULT_DIFF_FROM => Ok(checkpoint_diff_base_tree_oid(
-            last_pass,
-            &runtime.tree_context.against_tree_oid,
-        )
-        .to_string()),
-        AGAINST_TREE_DIFF_FROM => Ok(runtime.tree_context.against_tree_oid.clone()),
-        tree => explicit_diff_base_tree_oid(runtime.root, tree),
+    // Canon `diff-from` resolution is deliberately literal: `:checkpoint`
+    // uses the last pass checked tree when present, then the run's against
+    // tree; `:against-tree` uses the against tree; custom values use TreeSource.
+    let diff_from = expectation.diff_from.as_str();
+    if diff_from == DEFAULT_DIFF_FROM {
+        let checkpoint_tree_oid =
+            checkpoint_diff_base_tree_oid(last_pass, &runtime.tree_context.against_tree_oid);
+        return Ok(checkpoint_tree_oid.to_string());
     }
+    if diff_from == AGAINST_TREE_DIFF_FROM {
+        return Ok(runtime.tree_context.against_tree_oid.clone());
+    }
+    explicit_diff_base_tree_oid(runtime.root, diff_from)
 }
 
 fn checkpoint_diff_base_tree_oid<'a>(

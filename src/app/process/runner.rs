@@ -10,7 +10,7 @@ use std::sync::mpsc::Receiver;
 use std::thread::JoinHandle;
 
 pub(crate) struct AppServerRunner {
-    pub(super) app_server_root: PathBuf,
+    pub(super) app_server_state_root: PathBuf,
     pub(super) child: Child,
     pub(super) stdin: ChildStdin,
     pub(super) messages: Receiver<Result<Value, String>>,
@@ -30,8 +30,8 @@ pub(crate) struct AppServerRunner {
 }
 
 impl AppServerRunner {
-    pub(crate) fn app_server_root(&self) -> &Path {
-        &self.app_server_root
+    pub(crate) fn app_server_state_root(&self) -> &Path {
+        &self.app_server_state_root
     }
 
     pub(crate) fn no_sandbox(&self) -> bool {
