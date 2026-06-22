@@ -107,6 +107,7 @@ impl EvaluatorRunner for RunnerWithResponses {
         &mut self,
         _session_cwd: &Path,
         _template_output_dir: &Path,
+        _base_instructions: &str,
         _developer_instructions: &str,
         _agent: &AgentConfig,
         _model: Option<&str>,

@@ -142,3 +142,55 @@ pub(crate) fn write_model_fallback_events(
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::run_with_model_fallbacks;
+    use crate::check::interrogation::state::InterrogationRunState;
+    use crate::config_types::AgentConfig;
+    use crate::evaluator::{
+        EvaluatorError, EvaluatorFailureKind, EvaluatorProgress, EvaluatorProgressMarker,
+    };
+    use crate::logs::DiagnosticLogWriter;
+
+    #[test]
+    fn model_fallback_records_progress_timeline_marker() {
+        let agent = AgentConfig {
+            models: vec!["first".to_string(), "second".to_string()],
+            ..AgentConfig::default()
+        };
+        let mut state = InterrogationRunState::new(true).unwrap();
+        let progress = EvaluatorProgress::new();
+        let before = progress.snapshot();
+        let mut attempts = Vec::new();
+        let mut diagnostic_log: Option<&mut DiagnosticLogWriter> = None;
+
+        let result = run_with_model_fallbacks(
+            &agent,
+            &mut state,
+            &mut diagnostic_log,
+            Some("test-expectation"),
+            Some(&progress),
+            |_state, _diagnostic_log, model| {
+                attempts.push(model.map(str::to_string));
+                if attempts.len() == 1 {
+                    return Err(EvaluatorError::failure(
+                        EvaluatorFailureKind::ModelUnavailable,
+                        "first model unavailable",
+                    ));
+                }
+                Ok("ok")
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result, "ok");
+        assert_eq!(
+            attempts,
+            vec![Some("first".to_string()), Some("second".to_string())]
+        );
+        let marker = progress.snapshot().marker_since(before);
+        assert_eq!(marker, EvaluatorProgressMarker::ModelFallback);
+        assert_eq!(marker.as_str(), "⇄");
+    }
+}

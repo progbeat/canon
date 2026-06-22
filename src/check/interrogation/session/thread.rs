@@ -7,8 +7,9 @@ use crate::check::interrogation::state::{
 use crate::config_types::{AgentConfig, AGAINST_TREE_DIFF_FROM, DEFAULT_DIFF_FROM};
 use crate::evaluator::{
     ask_once as ask_evaluator_once, create_prompt_template_output_dir, developer_instructions,
-    effective_thinking, evaluator_turn_prompt, is_context_window_failure,
-    session_failure_invalidates_thread, write_thread_lifecycle_event, write_thread_restart_event,
+    effective_thinking, evaluator_base_instructions, evaluator_turn_prompt,
+    is_context_window_failure, q_scope_is_full_project, session_failure_invalidates_thread,
+    write_thread_lifecycle_event, write_thread_restart_event, BaseInstructionsContext,
     DeveloperInstructionsContext, EvaluatorError, EvaluatorResponseParseCache, EvaluatorRunner,
     EvaluatorTurnContext, ParsedTurnResponse, ThreadLifecycleLog,
 };
@@ -108,11 +109,10 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
                 );
                 write_thread_restart_event(
                     diagnostic_log,
-                    &session_id,
+                    &lifecycle_log,
                     request.expectation_id,
                     request.enforced_scope,
                     request.model,
-                    &lifecycle_log.developer_instructions,
                     err.message_str(),
                 );
                 let lifecycle_log = start_thread_session(
@@ -243,6 +243,11 @@ fn start_thread_session<R: EvaluatorRunner>(
         last_pass: request.last_pass,
     })
     .map_err(EvaluatorError::message)?;
+    let base_instructions = evaluator_base_instructions(BaseInstructionsContext {
+        in_place: runtime.is_in_place(),
+        full_scope: q_scope_is_full_project(request.enforced_scope),
+    })
+    .map_err(EvaluatorError::message)?;
     let session_isolation = state
         .isolate_session_root(&session_root)
         .map_err(EvaluatorError::message)?;
@@ -253,6 +258,7 @@ fn start_thread_session<R: EvaluatorRunner>(
     let created = match runner.start_session(
         session_cwd,
         request.template_output_dir,
+        &base_instructions,
         &developer_instructions,
         request.agent,
         request.model,
@@ -262,6 +268,9 @@ fn start_thread_session<R: EvaluatorRunner>(
         Ok(created) => created,
         Err(err) => return fail_after_session_error(state, err),
     };
+    state
+        .session_base_instructions
+        .insert(created.clone(), base_instructions.clone());
     state
         .session_instructions
         .insert(created.clone(), developer_instructions.clone());
@@ -277,6 +286,7 @@ fn start_thread_session<R: EvaluatorRunner>(
     Ok(ThreadLifecycleLog {
         event: "thread.start",
         session_id: created,
+        base_instructions,
         developer_instructions,
     })
 }
@@ -285,6 +295,12 @@ fn thread_reuse_log(
     state: &InterrogationRunState,
     session_id: String,
 ) -> Result<ThreadLifecycleLog, EvaluatorError> {
+    let Some(base_instructions) = state.session_base_instructions.get(&session_id).cloned() else {
+        return Err(EvaluatorError::message(format!(
+            "missing base instructions for reused session {}",
+            session_id
+        )));
+    };
     let Some(developer_instructions) = state.session_instructions.get(&session_id).cloned() else {
         return Err(EvaluatorError::message(format!(
             "missing developer instructions for reused session {}",
@@ -294,6 +310,7 @@ fn thread_reuse_log(
     Ok(ThreadLifecycleLog {
         event: "thread.reuse",
         session_id,
+        base_instructions,
         developer_instructions,
     })
 }
@@ -320,6 +337,9 @@ fn retire_thread_sessions_after_turn(
         .retain(|_, session_id| !retired_sessions.contains(session_id));
     state
         .session_instructions
+        .retain(|session_id, _| !retired_sessions.contains(session_id));
+    state
+        .session_base_instructions
         .retain(|session_id, _| !retired_sessions.contains(session_id));
     state
         .session_roots_by_id

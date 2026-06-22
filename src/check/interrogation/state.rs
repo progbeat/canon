@@ -10,8 +10,13 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub(crate) const IN_PLACE_VISIBLE_TREE_OID: &str = "in-place";
+const IN_PLACE_VISIBLE_FILE_COUNT: usize = 1;
 
 pub(crate) fn should_retry_full_scope_after_error(error: Option<&str>, scope: &[String]) -> bool {
+    // This is the Interrogation Policy retry predicate only. The check-run
+    // follow-up is executed in `src/check/run/execute/expectation.rs`, and
+    // query-mode applies the same predicate in
+    // `src/check/interrogation/query/mod.rs`.
     if scope == full_scope() {
         return false;
     }
@@ -120,6 +125,13 @@ impl<'a> CheckRuntime<'a> {
         config: &'a CheckConfig,
         no_sandbox: bool,
     ) -> CheckRuntime<'a> {
+        // This runtime mode owns the in-place evaluator view: no materialized
+        // Git tree, full-project visible scope, stable fake visible-tree
+        // metadata, and sessions rooted at the checked directory. Command
+        // execution owns the complementary in-place rules: expectation
+        // validation in `src/check/command/execution/in_place.rs`, cache-free
+        // run orchestration in `src/check/command/execution/run.rs`, and
+        // config expansion through `src/repo_inspection/mod.rs`.
         CheckRuntime {
             root,
             config,
@@ -160,7 +172,7 @@ impl<'a> CheckRuntime<'a> {
     pub(crate) fn checked_file_count(&self) -> usize {
         match &self.mode {
             CheckRuntimeMode::Materialized { tree_context, .. } => tree_context.checked_file_count,
-            CheckRuntimeMode::InPlace => 0,
+            CheckRuntimeMode::InPlace => IN_PLACE_VISIBLE_FILE_COUNT,
         }
     }
 
@@ -174,6 +186,9 @@ impl<'a> CheckRuntime<'a> {
             CheckRuntimeMode::Materialized { tree_source, .. } => {
                 cache.visible_tree_oid(self.root, tree_source, agent, scope)
             }
+            // In-place mode does not construct scoped visible trees. Every
+            // requested q-scope induces the same full-project evaluator view
+            // rooted at the checked directory.
             CheckRuntimeMode::InPlace => Ok(IN_PLACE_VISIBLE_TREE_OID.to_string()),
         }
     }
@@ -188,7 +203,13 @@ impl<'a> CheckRuntime<'a> {
             CheckRuntimeMode::Materialized { tree_source, .. } => {
                 cache.visible_file_count(self.root, tree_source, agent, scope)
             }
-            CheckRuntimeMode::InPlace => Ok(0),
+            // This is fake visible-tree metadata, not a filesystem count. It
+            // preserves the Interrogation Policy invariant that q-scope
+            // verification runs only when a suggestion induces a smaller
+            // visible tree: in in-place mode every q-scope induces the same
+            // full-project visible tree, so the exact positive count is
+            // irrelevant but must be stable across requested scopes.
+            CheckRuntimeMode::InPlace => Ok(IN_PLACE_VISIBLE_FILE_COUNT),
         }
     }
 
@@ -198,12 +219,23 @@ impl<'a> CheckRuntime<'a> {
         scope: &[String],
     ) -> Result<Vec<String>, String> {
         if self.is_in_place() {
-            // In-place mode has no Git-backed visible tree and no path hiding.
-            // CLI parsing rejects `--scope` in this mode, while stored q-scopes
-            // and narrowing retries are intentionally ignored.
+            // In-place q-scopes are normalized to full project scope. CLI
+            // parsing rejects `--scope` in this mode, while stored q-scopes
+            // and evaluator qScopeSuggestion values cannot hide files.
             return Ok(full_scope());
         }
         visible_scope(agent, scope)
+    }
+
+    pub(crate) fn fresh_scope_without_persistent_q_scope(&self) -> Option<Vec<String>> {
+        match &self.mode {
+            CheckRuntimeMode::Materialized { .. } => None,
+            // In-place mode never reads persistent check state, so there is no
+            // stored q-scope available in that runtime. This is the
+            // Interrogation Policy's "no q-scope is stored" case: fresh
+            // interrogations start at full project scope.
+            CheckRuntimeMode::InPlace => Some(full_scope()),
+        }
     }
 
     pub(crate) fn session_root_for_scope(
@@ -237,6 +269,7 @@ pub(crate) struct InterrogationRunState {
     // reuse key enforces the glossary's model/rendered-developer-instructions
     // invariant and also splits on stricter live thread-start context.
     pub(crate) thread_sessions_by_reuse_key: BTreeMap<String, String>,
+    pub(crate) session_base_instructions: BTreeMap<String, String>,
     pub(crate) session_instructions: BTreeMap<String, String>,
     pub(crate) session_roots_by_id: BTreeMap<String, PathBuf>,
     pub(crate) visible_tree_oid_cache: VisibleTreeOidCache,
@@ -254,6 +287,7 @@ impl InterrogationRunState {
         Ok(InterrogationRunState {
             session_isolations: BTreeMap::new(),
             thread_sessions_by_reuse_key: BTreeMap::new(),
+            session_base_instructions: BTreeMap::new(),
             session_instructions: BTreeMap::new(),
             session_roots_by_id: BTreeMap::new(),
             visible_tree_oid_cache: VisibleTreeOidCache::new(),
@@ -269,6 +303,7 @@ impl InterrogationRunState {
     pub(crate) fn clear_thread_sessions(&mut self) {
         self.session_isolations.clear();
         self.thread_sessions_by_reuse_key.clear();
+        self.session_base_instructions.clear();
         self.session_instructions.clear();
         self.session_roots_by_id.clear();
     }
@@ -346,10 +381,53 @@ mod tests {
             full_scope()
         );
         assert_eq!(
+            runtime.fresh_scope_without_persistent_q_scope().unwrap(),
+            full_scope()
+        );
+        assert_eq!(
             runtime
                 .session_root_for_scope(&AgentConfig::default(), &requested_scope, "in-place")
                 .unwrap(),
             root
+        );
+    }
+
+    #[test]
+    fn in_place_runtime_never_makes_requested_scope_smaller() {
+        let root = PathBuf::from("/tmp/canon-in-place-runtime");
+        let config = CheckConfig {
+            version: 1,
+            presets: Default::default(),
+            agent: AgentConfig::default(),
+            expectations: Vec::new(),
+        };
+        let runtime = CheckRuntime::in_place(&root, &config, false);
+        let mut cache = VisibleTreeOidCache::new();
+        let agent = AgentConfig::default();
+        let src_scope = vec!["src".to_string()];
+
+        assert_eq!(runtime.checked_file_count(), IN_PLACE_VISIBLE_FILE_COUNT);
+        assert_eq!(
+            runtime
+                .visible_file_count(&mut cache, &agent, &full_scope())
+                .unwrap(),
+            IN_PLACE_VISIBLE_FILE_COUNT
+        );
+        assert_eq!(
+            runtime
+                .visible_file_count(&mut cache, &agent, &src_scope)
+                .unwrap(),
+            IN_PLACE_VISIBLE_FILE_COUNT
+        );
+        assert_eq!(
+            runtime.visible_scope(&agent, &src_scope).unwrap(),
+            full_scope()
+        );
+        assert_eq!(
+            runtime
+                .visible_tree_oid(&mut cache, &agent, &["missing".to_string()])
+                .unwrap(),
+            IN_PLACE_VISIBLE_TREE_OID
         );
     }
 }

@@ -129,6 +129,15 @@ pub(crate) fn evaluator_response_json_schema(schema_scope: EvaluatorResponseSche
 }
 
 pub(crate) fn evaluator_response_output_schema_for_q_scope(q_scope: &[String]) -> Value {
+    // Interrogation Policy navigation: this module only builds and validates
+    // the response schema for one evaluator turn. Follow-up sequencing for
+    // check runs lives in `src/check/run/execute/expectation.rs`; query-mode
+    // sequencing lives in `src/check/interrogation/query/mod.rs`; the
+    // q-scope verification gate and acceptance matrix live in
+    // `src/check/interrogation/policy.rs`; model retry order and thinking
+    // selection flow through `src/check/interrogation/session/model_fallback.rs`,
+    // `src/check/interrogation/session/thread.rs`, and
+    // `src/check/interrogation/state.rs`.
     match EvaluatorResponseSchemaScope::for_q_scope(q_scope) {
         EvaluatorResponseSchemaScope::Restricted => restricted_evaluator_response_output_schema(),
         EvaluatorResponseSchemaScope::FullProject => {

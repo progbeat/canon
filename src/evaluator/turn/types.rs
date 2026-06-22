@@ -10,6 +10,7 @@ pub(crate) struct EvaluatorTurnContext<'a> {
 pub(crate) struct ThreadLifecycleLog {
     pub(crate) event: &'static str,
     pub(crate) session_id: String,
+    pub(crate) base_instructions: String,
     pub(crate) developer_instructions: String,
 }
 

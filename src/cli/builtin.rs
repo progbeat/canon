@@ -74,6 +74,14 @@ impl BuiltinCommand {
                 let git_root = git_project_root(&current_dir).ok();
                 let explicit_in_place = args.iter().any(|arg| arg == "--in-place");
                 let default_in_place = git_root.is_none();
+                // This is only the in-place root-selection rule. The rest of
+                // the in-place contract is split across check command parsing
+                // (`src/check/command/args.rs`), in-place expectation
+                // validation and orchestration
+                // (`src/check/command/execution/in_place.rs` and `run.rs`),
+                // runtime scope/session behavior
+                // (`src/check/interrogation/state.rs`), and config expansion
+                // (`src/repo_inspection/mod.rs`).
                 let root = if explicit_in_place || default_in_place {
                     current_dir
                 } else {

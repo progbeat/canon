@@ -11,6 +11,7 @@ pub(crate) trait EvaluatorRunner {
         &mut self,
         session_cwd: &Path,
         template_output_dir: &Path,
+        base_instructions: &str,
         developer_instructions: &str,
         agent: &AgentConfig,
         model: Option<&str>,

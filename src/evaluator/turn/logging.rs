@@ -4,7 +4,7 @@ use crate::check::{
     write_agent_turn_failure_event, write_agent_turn_missing_usage_event,
     write_agent_turn_request_event, write_agent_turn_response_event,
 };
-use crate::evaluator::{EvaluatorError, EvaluatorRunner, EVALUATOR_BASE_INSTRUCTIONS};
+use crate::evaluator::{EvaluatorError, EvaluatorRunner};
 use crate::logs::{
     AgentTurnLogRequest, DiagnosticLogResult, DiagnosticLogWriter, ThreadLifecycleEventFields,
     ThreadRestartEventFields,
@@ -137,7 +137,7 @@ pub(crate) fn write_thread_lifecycle_event(
                 scope: enforced_scope,
                 model,
                 thinking,
-                base_instructions: EVALUATOR_BASE_INSTRUCTIONS,
+                base_instructions: &lifecycle_log.base_instructions,
                 developer_instructions: &lifecycle_log.developer_instructions,
             },
         )
@@ -146,23 +146,22 @@ pub(crate) fn write_thread_lifecycle_event(
 
 pub(crate) fn write_thread_restart_event(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    session_id: &str,
+    lifecycle_log: &ThreadLifecycleLog,
     expectation_id: Option<&str>,
     enforced_scope: &[String],
     model: Option<&str>,
-    developer_instructions: &str,
     reason: &str,
 ) {
     write_optional_diagnostic_log(diagnostic_log, |writer| {
         crate::logs::write_thread_restart_event(
             writer,
             &ThreadRestartEventFields {
-                session_id,
+                session_id: &lifecycle_log.session_id,
                 expectation_id,
                 scope: enforced_scope,
                 model,
-                base_instructions: EVALUATOR_BASE_INSTRUCTIONS,
-                developer_instructions,
+                base_instructions: &lifecycle_log.base_instructions,
+                developer_instructions: &lifecycle_log.developer_instructions,
                 reason,
             },
         )

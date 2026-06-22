@@ -2,6 +2,7 @@ use super::failure::{
     fail_check_after_start, fail_check_before_selection, finish_check_error_report,
     CheckErrorReportFinish,
 };
+use super::in_place::invalid_in_place_expectation_records;
 use super::prepare::{prepare_check_execution, PrepareCheckExecutionOptions};
 use super::query::{run_check_query_command, CheckQueryCommand};
 use super::query_preset::check_config_with_query_preset;
@@ -10,13 +11,17 @@ use super::trailer::{
 };
 use crate::app::LazyAppServerRunner;
 use crate::check::command::args::parse_check_command_args;
-use crate::check::command::output::SharedCheckOutput;
+use crate::check::command::output::{
+    write_result_output_without_started_report, SharedCheckOutput,
+};
 use crate::check::command::{finish_check_report, CheckReportFinishContext};
 use crate::check::config::validation::check_config_loads_plugins;
-use crate::check::core::{CheckCommandArgs, SelectedExpectation};
+use crate::check::core::{CheckCommandArgs, CheckRunReport};
 use crate::check::interrogation::{state::CheckRuntime, write_check_lifecycle_start_event};
 use crate::check::run::selection::{expectation_identities, resolve_check_options_with_identities};
-use crate::check::{run_check_with_runner_and_caches, CheckRunCaches, CheckRunSideEffects};
+use crate::check::{
+    run_check_with_runner_and_caches, skipped_count, CheckRunCaches, CheckRunSideEffects,
+};
 use crate::cli::CommandError;
 use crate::git::TreeSource;
 use crate::logs::{write_cache_cleanup_event, DiagnosticLogWriter};
@@ -74,6 +79,10 @@ pub(crate) fn run_check_command(
         }
     };
     if let Some(question) = command.query.as_deref() {
+        // Query mode is the documented `canon check -q` one-off question
+        // path. It writes query output/token usage through `query.rs`; the
+        // check-run result blocks, summary, and post-summary agent message are
+        // for non-query runs that process selected expectations.
         return run_query_mode(
             root,
             &command,
@@ -241,9 +250,16 @@ fn run_in_place_check_command(
     started: Instant,
 ) -> Result<(), CommandError> {
     let mut repo_cache = RepoInspectionCache::new();
+    // In-place uses a fresh in-memory cache bundle only because the shared
+    // execution APIs accept cache handles. This command branch does not create
+    // diagnostic logs, does not clean persistent cache directories, and passes
+    // an in-place runtime whose lower layers skip xpec reads/writes.
     let mut check_caches = CheckRunCaches::new();
     let config = repo_cache.load_in_place_check_config(root, &command.config_path)?;
     if let Some(question) = command.query.as_deref() {
+        // In-place query mode remains the same one-off question path as
+        // ordinary `canon check -q`; it is not a check-run report and does not
+        // finish through the check-run summary/trailer path.
         return run_check_query_command(CheckQueryCommand {
             root,
             config: &config,
@@ -260,8 +276,10 @@ fn run_in_place_check_command(
         .map_err(CommandError::from);
     }
     let identities = expectation_identities(&config)?;
+    // This resolves only selector/keep-going controls from the expanded
+    // config. Persistent state is not consulted here; configured cooldowns are
+    // rejected by `invalid_in_place_expectation_records` before evaluation.
     let options = resolve_check_options_with_identities(&config, &identities, &command.options)?;
-    validate_in_place_selected_expectations(&options.selected)?;
     let mut runner = LazyAppServerRunner::new(
         root,
         check_config_loads_plugins(&config),
@@ -270,7 +288,43 @@ fn run_in_place_check_command(
     )?;
     let shared_output = SharedCheckOutput::stdout();
     let mut result_output = shared_output.clone();
+    let invalid_records = invalid_in_place_expectation_records(&options.selected)?;
+    if !invalid_records.is_empty() {
+        {
+            let mut output = Some(&mut result_output as &mut dyn Write);
+            for record in &invalid_records {
+                write_result_output_without_started_report(&mut output, record)
+                    .map_err(CommandError::from)?;
+            }
+        }
+        let records = invalid_records;
+        let cached = Vec::new();
+        let skipped = skipped_count(options.selected.len(), &records, &cached);
+        let completed = CompletedCheckRun {
+            report: CheckRunReport {
+                records,
+                cached,
+                skipped,
+            },
+            error: Some("invalid-in-place-expectation".to_string()),
+            interrupted: false,
+        };
+        return finish_completed_check(
+            None,
+            &mut result_output,
+            &mut check_caches,
+            &mut runner,
+            &completed,
+            started,
+            false,
+        );
+    }
     let runtime = CheckRuntime::in_place(root, &config, command.no_sandbox);
+    // The in-place runtime makes `run_check_with_runner_and_caches` build a
+    // direct Evaluate-only work queue: no pass snapshot, same-tree cache,
+    // cooldown cache, stored q-scope, xpec ordering, or cached-result output is
+    // read. Per-expectation completion also checks `runtime.is_in_place()`
+    // before writing xpec last-result state.
     let records_result = run_check_with_runner_and_caches(
         runtime,
         &options,
@@ -303,35 +357,6 @@ fn run_in_place_check_command(
         started,
         false,
     )
-}
-
-fn validate_in_place_selected_expectations(
-    expectations: &[SelectedExpectation],
-) -> Result<(), String> {
-    for expectation in expectations {
-        let mut invalid = Vec::new();
-        if expectation.diff_from != crate::config_types::DEFAULT_DIFF_FROM {
-            invalid.push("diff-from");
-        }
-        if expectation.target.is_some() {
-            invalid.push("target");
-        }
-        if expectation.cooldown.is_some() {
-            invalid.push("cooldown");
-        }
-        if !expectation.agent.ignore.is_empty() {
-            invalid.push("ignore");
-        }
-        if !invalid.is_empty() {
-            return Err(format!(
-                "{}. ERROR\n{}\nError: invalid-in-place-expectation\nEvidence: selected expectation configures {}",
-                expectation.display_id,
-                expectation.question,
-                invalid.join(", ")
-            ));
-        }
-    }
-    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

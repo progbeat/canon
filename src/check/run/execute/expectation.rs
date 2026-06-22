@@ -4,7 +4,7 @@ use crate::check::command::output::{
     write_result_output_without_started_report, SharedCheckOutput,
 };
 use crate::check::core::errors::error_record_from_visible_tree_oid;
-use crate::check::core::{CheckOptions, CheckRecord, SelectedExpectation};
+use crate::check::core::{CheckOptions, CheckRecord, SelectedExpectation, ERROR_SCOPE_TOO_NARROW};
 use crate::check::interrogation::policy::{
     initial_visible_scope_for_expectation, interrogate_or_error_record, narrowed_scope_is_accepted,
     question_scope_suggestion_scope_for_unused_follow_up, turn_exceeds_break_after_tokens,
@@ -61,31 +61,32 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         );
     }
 
-    let mut verified_q_scope = if context.runtime.is_in_place() {
-        full_scope()
-    } else {
-        let tree_source = context
-            .runtime
-            .tree_source()
-            .ok_or_else(|| "missing Git tree source".to_string())?;
-        match initial_visible_scope_for_expectation(
-            context.runtime.root,
-            tree_source,
-            expectation,
-            &mut context.caches.xpec_state,
-            &mut context.caches.visible_tree_oid,
-        ) {
-            Ok(scope) => scope,
-            Err(error) => {
-                return finish_unstarted_expectation_with_error_record(
-                    context,
-                    expectation,
-                    full_scope(),
-                    error,
-                );
+    let mut verified_q_scope =
+        if let Some(scope) = context.runtime.fresh_scope_without_persistent_q_scope() {
+            scope
+        } else {
+            let tree_source = context
+                .runtime
+                .tree_source()
+                .ok_or_else(|| "missing Git tree source".to_string())?;
+            match initial_visible_scope_for_expectation(
+                context.runtime.root,
+                tree_source,
+                expectation,
+                &mut context.caches.xpec_state,
+                &mut context.caches.visible_tree_oid,
+            ) {
+                Ok(scope) => scope,
+                Err(error) => {
+                    return finish_unstarted_expectation_with_error_record(
+                        context,
+                        expectation,
+                        full_scope(),
+                        error,
+                    );
+                }
             }
-        }
-    };
+        };
     // Prepare the tree metadata needed to render an errored expectation before
     // printing the live report prefix. After `<short ID>.` is visible, later
     // fallible steps can build an ERROR record without doing more fallible
@@ -227,8 +228,12 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
 ) -> Result<CompletedInterrogation, String> {
     // `run_expectation` catches every error from this helper and finishes the
     // already-started report entry with an ERROR record before returning.
-    let initial =
-        interrogate_with_full_scope_retry(context, expectation, verified_q_scope, progress)?;
+    let initial = interrogate_initial_with_full_scope_retry(
+        context,
+        expectation,
+        verified_q_scope,
+        progress,
+    )?;
     let initial_interrogation = initial.interrogation();
     let mut break_after_tokens_hit =
         turn_exceeds_break_after_tokens(initial_interrogation, context.options.break_after_tokens);
@@ -242,15 +247,6 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
     }
     debug_assert!(scope_is_within(&record_scope, verified_q_scope));
     let initial_result = initial_interrogation.record.result;
-    if context.runtime.is_in_place() {
-        return Ok(CompletedInterrogation {
-            record: initial.into_interrogation().record,
-            break_after_tokens_hit,
-            context_compaction_hit,
-            stop_after_current_expectation,
-            interrupted,
-        });
-    }
     // This is the Interrogation Policy q-scope verification follow-up. It is
     // the only check-run decision point that consumes an evaluator
     // `qScopeSuggestion`; the rest of this function only executes the
@@ -268,6 +264,12 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
         if let Some(progress) = progress {
             progress.record_q_scope_verification_started();
         }
+        // This verification turn is already the Interrogation Policy's single
+        // follow-up. It intentionally calls `interrogate_or_error_record`
+        // directly instead of the initial-turn full-scope retry helper.
+        // `ScopeTooNarrow` rejects the evaluator's proposed q-scope; other
+        // verification errors remain final human-review results. Pass/fail
+        // results use the acceptance matrix below.
         let verification_scope = proposed_scope.clone();
         let narrowed = interrogate_or_error_record(
             InterrogationCall {
@@ -295,7 +297,7 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
             &proposed_scope,
             accepted,
         )?;
-        if accepted {
+        if q_scope_verification_record_replaces_initial(initial_result, &narrowed.record) {
             interrogation = narrowed;
         }
     }
@@ -308,12 +310,25 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
     })
 }
 
-fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
+fn q_scope_verification_record_replaces_initial(
+    initial_result: crate::check::core::CheckResult,
+    narrowed: &CheckRecord,
+) -> bool {
+    if narrowed.error.as_deref() == Some(ERROR_SCOPE_TOO_NARROW) {
+        return false;
+    }
+    narrowed.error.is_some() || narrowed_scope_is_accepted(initial_result, narrowed)
+}
+
+fn interrogate_initial_with_full_scope_retry<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
     expectation: &SelectedExpectation,
     verified_q_scope: &mut Vec<String>,
     progress: Option<&EvaluatorProgress>,
 ) -> Result<PolicyInterrogationResult, String> {
+    // This helper is only for the initial interrogation. Its retry consumes
+    // the one follow-up turn allowed by Interrogation Policy, so q-scope
+    // verification must not call back into it.
     let mut interrogation = interrogate_or_error_record(
         InterrogationCall {
             runtime: context.runtime,
@@ -330,11 +345,7 @@ fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
     let should_stop_after_current_expectation =
         turn_exceeds_break_after_tokens(&interrogation, context.options.break_after_tokens)
             || turn_has_context_compaction(&interrogation);
-    if !context.runtime.is_in_place()
-        && should_retry_full_scope_after_error(
-            interrogation.record.error.as_deref(),
-            verified_q_scope,
-        )
+    if should_retry_full_scope_after_error(interrogation.record.error.as_deref(), verified_q_scope)
     {
         // Restricted ScopeTooNarrow is not final. The single policy follow-up
         // retries it once at full scope.
@@ -409,4 +420,66 @@ fn finish_started_expectation_with_error_record<R: EvaluatorRunner>(
         stop_run: !context.options.keep_going,
         interrupted: false,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::q_scope_verification_record_replaces_initial;
+    use crate::check::core::{
+        CheckRecord, CheckResult, ERROR_INVALID_QUESTION, ERROR_SCOPE_TOO_NARROW,
+    };
+    use crate::hash::full_scope;
+
+    #[test]
+    fn q_scope_verification_scope_too_narrow_does_not_replace_initial_result() {
+        let narrowed = test_record(CheckResult::Fail, Some(ERROR_SCOPE_TOO_NARROW));
+
+        assert!(!q_scope_verification_record_replaces_initial(
+            CheckResult::Pass,
+            &narrowed
+        ));
+    }
+
+    #[test]
+    fn q_scope_verification_invalid_question_replaces_initial_result() {
+        let narrowed = test_record(CheckResult::Fail, Some(ERROR_INVALID_QUESTION));
+
+        assert!(q_scope_verification_record_replaces_initial(
+            CheckResult::Pass,
+            &narrowed
+        ));
+    }
+
+    #[test]
+    fn q_scope_verification_pass_fail_matrix_still_applies_without_error() {
+        let fail = test_record(CheckResult::Fail, None);
+        let pass = test_record(CheckResult::Pass, None);
+
+        assert!(q_scope_verification_record_replaces_initial(
+            CheckResult::Pass,
+            &fail
+        ));
+        assert!(!q_scope_verification_record_replaces_initial(
+            CheckResult::Fail,
+            &pass
+        ));
+    }
+
+    fn test_record(result: CheckResult, error: Option<&str>) -> CheckRecord {
+        CheckRecord {
+            timestamp: crate::time::format_record_timestamp(0),
+            number: 1,
+            result,
+            question: Some("Does it pass?".to_string()),
+            expected_answer: Some("yes".to_string()),
+            observed: error.unwrap_or("yes").to_string(),
+            error: error.map(str::to_string),
+            evidence: "evidence".to_string(),
+            scope: full_scope(),
+            question_scope_suggestion: None,
+            visible_tree_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            id: "expectation-id".to_string(),
+            display_id: "e".to_string(),
+        }
+    }
 }

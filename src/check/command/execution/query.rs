@@ -1,3 +1,4 @@
+use super::in_place::validate_in_place_query_expectation;
 use crate::app::LazyAppServerRunner;
 use crate::check::command::output::write_query_output;
 use crate::check::command::{
@@ -14,6 +15,7 @@ use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::interrogation::{
     write_query_lifecycle_finish_event, write_query_lifecycle_start_event,
 };
+use crate::check::run::selection::parse_cooldown;
 use crate::check::{expectation_identities, CheckRecord, CheckRunCaches, SelectedExpectation};
 use crate::config_types::CheckConfig;
 use crate::git::TreeSource;
@@ -178,7 +180,12 @@ fn run_prepared_query(
 ) -> Result<(), String> {
     let query_expectation = query_expectation_context(config, question)?;
     if let Some(expectation) = query_expectation.as_ref() {
-        if !runtime.is_in_place() && !query_scope_provided {
+        if runtime.is_in_place() {
+            validate_in_place_query_expectation(expectation)?;
+            *enforced_scope = runtime
+                .fresh_scope_without_persistent_q_scope()
+                .expect("in-place query has no persistent q-scope");
+        } else if !query_scope_provided {
             *enforced_scope = initial_visible_scope_for_expectation(
                 root,
                 runtime
@@ -196,6 +203,9 @@ fn run_prepared_query(
     // caller rather than accepted by interrogation policy.
     let persist_expectation_record = query_expectation.is_some();
     let seed_stored_q_scope = !query_scope_provided;
+    // Query mode always asks the evaluator; it does not reuse cached results.
+    // A matched q/a expectation reads only the last pass so query prompts can
+    // preserve checkpoint context for that expectation.
     let query_last_pass = if runtime.is_in_place() {
         None
     } else {
@@ -388,6 +398,11 @@ fn query_expectation_context(
         .expectations
         .get(*index)
         .ok_or_else(|| "expectation identity count mismatch".to_string())?;
+    let cooldown = expectation
+        .cooldown
+        .as_ref()
+        .map(parse_cooldown)
+        .transpose()?;
     // This is not check-run selection. It only recovers the q/a-only
     // expectation context needed for plain `canon check -q <q>` to use the
     // same prompt and state inputs as `canon check <ID>`.
@@ -402,7 +417,7 @@ fn query_expectation_context(
         target: expectation.target.clone(),
         question_answer_only: expectation.question_answer_only,
         agent: expectation.agent.clone(),
-        cooldown: None,
+        cooldown,
     }))
 }
 
@@ -436,6 +451,22 @@ mod tests {
         let selected = query_expectation_context(&config, "Does alpha pass?").unwrap();
 
         assert!(selected.is_none());
+    }
+
+    #[test]
+    fn query_expectation_context_preserves_cooldown() {
+        let mut config = two_expectation_config();
+        config.expectations[0].cooldown = Some(crate::config_types::CooldownConfig::Compact(
+            "7d".to_string(),
+        ));
+
+        let selected = query_expectation_context(&config, "Does alpha pass?")
+            .unwrap()
+            .unwrap();
+
+        let cooldown = selected.cooldown.unwrap();
+        assert_eq!(cooldown.pass_seconds, Some(7 * 24 * 60 * 60));
+        assert_eq!(cooldown.fail_seconds, None);
     }
 
     #[test]

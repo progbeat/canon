@@ -30,7 +30,7 @@ mod tests {
         SharedCheckOutput,
     };
     use crate::check::core::{
-        CachedExpectation, CheckRecord, CheckResult, CheckRunReport, ERROR_SCOPE_TOO_NARROW,
+        CachedExpectation, CheckRecord, CheckResult, CheckRunReport, ERROR_INVALID_QUESTION,
     };
     use crate::check::SelectedExpectation;
     use crate::config_types::AgentConfig;
@@ -169,7 +169,7 @@ mod tests {
         record_with_identity(
             CheckResult::Fail,
             "",
-            Some(ERROR_SCOPE_TOO_NARROW),
+            Some(ERROR_INVALID_QUESTION),
             id,
             display_id,
         )

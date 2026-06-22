@@ -496,6 +496,27 @@ mod tests {
     use std::path::Path;
 
     #[test]
+    fn developer_instructions_include_transcript_outside_in_place_mode() {
+        let rendered = developer_instructions_for_mode(false);
+
+        assert!(rendered.contains("Use the transcript below only for context/navigation"));
+        assert!(rendered.contains("$ git diff --numstat"));
+        assert!(rendered.contains("$ git diff"));
+        assert!(rendered.contains("$ enter-sandbox --scope [\"src\"]"));
+    }
+
+    #[test]
+    fn developer_instructions_omit_transcript_in_in_place_mode() {
+        let rendered = developer_instructions_for_mode(true);
+
+        assert!(rendered.contains("Custom expectation instructions."));
+        assert!(!rendered.contains("Use the transcript below only for context/navigation"));
+        assert!(!rendered.contains("$ git diff --numstat"));
+        assert!(!rendered.contains("$ git diff"));
+        assert!(!rendered.contains("$ enter-sandbox"));
+    }
+
+    #[test]
     fn template_command_output_truncates_large_output() {
         let output = (0..6000)
             .map(|index| format!("line {index}\n"))
@@ -562,6 +583,30 @@ mod tests {
             .rsplit_once("full output: ")
             .unwrap()
             .1
+    }
+
+    fn developer_instructions_for_mode(in_place: bool) -> String {
+        let output_dir = test_output_dir(if in_place {
+            "developer-instructions-in-place"
+        } else {
+            "developer-instructions-normal"
+        });
+        let visible_scope = vec!["src".to_string()];
+        let rendered = developer_instructions(DeveloperInstructionsContext {
+            root: Path::new("."),
+            template_output_dir: &output_dir,
+            in_place,
+            diff_from_tree_oid: "HEAD",
+            checked_tree_oid: "HEAD",
+            expectation_instructions: "Custom expectation instructions.",
+            visible_scope: &visible_scope,
+            checked_file_count: 10,
+            visible_file_count: 5,
+            last_pass: None,
+        })
+        .unwrap();
+        let _ = fs::remove_dir_all(output_dir);
+        rendered
     }
 
     fn test_output_dir(label: &str) -> PathBuf {

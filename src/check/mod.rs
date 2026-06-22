@@ -30,6 +30,6 @@ pub(crate) use interrogation::{
 };
 pub(crate) use run::{
     expectation_identities, run_check_with_runner_and_caches, select_expectations_with_identities,
-    CheckRunCaches, CheckRunSideEffects, ExpectationIdentity,
+    skipped_count, CheckRunCaches, CheckRunSideEffects, ExpectationIdentity,
 };
 pub(crate) use show::{run_show_command, show_help_command};

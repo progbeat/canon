@@ -59,12 +59,12 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         runtime.no_sandbox() || runtime.is_in_place()
     ));
     let check_work_queue = if runtime.is_in_place() {
-        options
-            .selected
-            .clone()
-            .into_iter()
-            .map(|expectation| CheckWorkItem::Evaluate(Box::new(expectation)))
-            .collect::<Vec<_>>()
+        run_try!(order_check_work(
+            root,
+            Vec::new(),
+            options.selected.clone(),
+            &mut caches.xpec_state,
+        ))
     } else {
         caches.run_start_pass_ids = run_try!(snapshot_pass_ids(
             root,
@@ -126,6 +126,10 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 };
                 records.push(outcome.record);
                 if outcome.stop_run {
+                    // This is the shared default-order stop point for both
+                    // materialized and in-place runs. In-place mode changes
+                    // cache/state usage, not the stop-after-evaluated-non-pass
+                    // rule.
                     if !outcome.interrupted {
                         write_remaining_cached_failures_without_evaluation(
                             &mut check_work_queue,

@@ -4,6 +4,7 @@ use crate::check::command::{collect_check_token_usage, print_token_usage_summary
 use crate::check::core::{CheckCommandArgs, CheckRunReport};
 use crate::check::CHECK_PATH;
 use crate::git::TreeSource;
+use crate::scope::normalize_repo_path;
 use std::io::Write;
 use std::path::Path;
 use std::time::Instant;
@@ -26,9 +27,19 @@ pub(super) fn check_command_writes_agent_message(
 ) -> bool {
     let options = &command.options;
     options.selectors.is_empty()
-        && command.config_path == Path::new(CHECK_PATH)
+        && check_config_path_is_default(&command.config_path)
         && checked_tree.is_default_checked_tree()
         && against_tree.is_default_against_tree()
+}
+
+fn check_config_path_is_default(config_path: &Path) -> bool {
+    let Some(config_path) = config_path.to_str() else {
+        return false;
+    };
+    matches!(
+        normalize_repo_path(config_path),
+        Ok(normalized) if normalized == CHECK_PATH
+    )
 }
 
 pub(super) fn write_check_trailer(
@@ -40,4 +51,57 @@ pub(super) fn write_check_trailer(
     let usage = collect_check_token_usage(runner);
     print_token_usage_summary(usage)?;
     write_summary_line(result_output, report, started.elapsed())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::check::core::RawCheckOptions;
+    use crate::git::DEFAULT_AGAINST_TREE_ARG;
+    use std::path::PathBuf;
+
+    #[test]
+    fn agent_message_allows_normalized_default_config_path() {
+        let command = command_with_config_path("./.canon/check.yml");
+
+        assert!(check_command_writes_agent_message(
+            &command,
+            &TreeSource::Staged,
+            &default_against_tree()
+        ));
+    }
+
+    #[test]
+    fn agent_message_rejects_non_default_config_path() {
+        let command = command_with_config_path(".canon/other.yml");
+
+        assert!(!check_command_writes_agent_message(
+            &command,
+            &TreeSource::Staged,
+            &default_against_tree()
+        ));
+    }
+
+    fn command_with_config_path(config_path: &str) -> CheckCommandArgs {
+        CheckCommandArgs {
+            config_path: PathBuf::from(config_path),
+            tree: crate::git::STAGED_TREE_ARG.to_string(),
+            against_tree: DEFAULT_AGAINST_TREE_ARG.to_string(),
+            against_tree_explicit: false,
+            in_place: false,
+            no_sandbox: false,
+            query: None,
+            query_preset: None,
+            query_scope: Vec::new(),
+            query_scope_provided: false,
+            options: RawCheckOptions::default(),
+        }
+    }
+
+    fn default_against_tree() -> TreeSource {
+        TreeSource::Git {
+            treeish: DEFAULT_AGAINST_TREE_ARG.to_string(),
+            tree_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+        }
+    }
 }

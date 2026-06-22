@@ -76,6 +76,11 @@ pub(crate) fn parse_check_command_args(
     let in_place = default_in_place || matches.get_flag("in_place");
 
     if in_place {
+        // This parser rejects CLI options whose meaning depends on a Git tree
+        // or caller-provided query scope. Expectation-level in-place
+        // validation for diff-from/target/cooldown/ignore happens after config
+        // expansion in `src/check/command/execution/in_place.rs`, and
+        // generators/includes are expanded before that by `repo_inspection`.
         validate_in_place_options(tree_explicit, against_tree_explicit, query_scope_provided)?;
     }
 

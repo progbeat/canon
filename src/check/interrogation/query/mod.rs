@@ -1,6 +1,6 @@
 use crate::check::core::{
-    ParsedAnswer, QueryResult, SelectedExpectation, ERROR_INVALID_QUESTION, ERROR_SCOPE_TOO_NARROW,
-    INTERNAL_ERROR_UNPARSABLE,
+    CheckResult, ParsedAnswer, QueryResult, SelectedExpectation, ERROR_INVALID_QUESTION,
+    ERROR_SCOPE_TOO_NARROW, INTERNAL_ERROR_UNPARSABLE,
 };
 use crate::check::interrogation::policy::question_scope_suggestion_scope_for_independent_verification;
 use crate::check::interrogation::state::{
@@ -82,14 +82,12 @@ fn ask_query<R: EvaluatorRunner>(
         },
     };
     // Query mode uses the same Interrogation Policy q-scope verification
-    // follow-up as expectation mode. All query-mode dependence on
-    // `qScopeSuggestion` is contained in this verification planning helper.
-    let q_scope_verification_scope = if runtime.is_in_place() {
-        None
-    } else {
+    // follow-up as expectation mode. Matched q/a queries use pass/fail records
+    // for the acceptance matrix; one-off queries can exercise the verification
+    // flow but cannot graduate a narrowed result without pass/fail records.
+    let q_scope_verification_scope =
         q_scope_verification_scope_for_query_answer(runtime, query, state, &active_scope, &attempt)
-            .map_err(|err| err.to_string())?
-    };
+            .map_err(|err| err.to_string())?;
     let mut result = attempt.result;
     if let Some(proposed_scope) = q_scope_verification_scope {
         let narrowed = match ask_once(
@@ -112,7 +110,9 @@ fn ask_query<R: EvaluatorRunner>(
                 return finish_query_result(query, diagnostic_log, result);
             }
         };
-        if answer_is_accepted(&narrowed.answer) {
+        if query_verification_error_is_final(&narrowed) {
+            result = narrowed;
+        } else if query_narrowed_scope_is_accepted(&result, &narrowed) {
             result = narrowed;
             result.answer.question_scope_suggestion = None;
         }
@@ -125,6 +125,7 @@ fn finish_query_result(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     result: QueryResult,
 ) -> Result<QueryResult, String> {
+    assert_final_query_result_has_no_scope_too_narrow(&result)?;
     if let Some(reason) = query_human_review_reason(&result) {
         // The command layer may persist a matched expectation record before it
         // turns this result into a human-review command error.
@@ -137,6 +138,18 @@ fn finish_query_result(
     write_query_result_event(query.question, diagnostic_log, &result.answer)
         .map_err(|err| err.to_string())?;
     Ok(result)
+}
+
+fn assert_final_query_result_has_no_scope_too_narrow(result: &QueryResult) -> Result<(), String> {
+    // A final ScopeTooNarrow would be a policy bug: initial restricted
+    // query-mode interrogations retry at full scope, full-scope schemas reject
+    // ScopeTooNarrow, and q-scope verification errors cannot replace the
+    // initial result. Do not rewrite the evaluator-provided error value here;
+    // stop before query result output or human-review handling can expose it.
+    if result.answer.error.as_deref() == Some(ERROR_SCOPE_TOO_NARROW) {
+        return Err("internal error: forbidden final query scope error".to_string());
+    }
+    Ok(())
 }
 
 fn query_result_from_interrogation_error(
@@ -308,8 +321,30 @@ fn q_scope_verification_scope_for_query_answer(
     .map_err(EvaluatorError::from)
 }
 
-fn answer_is_accepted(narrowed: &ParsedAnswer) -> bool {
-    narrowed.error.is_none()
+fn query_narrowed_scope_is_accepted(initial: &QueryResult, narrowed: &QueryResult) -> bool {
+    // Query-mode q-scope verification mirrors the check-run acceptance matrix
+    // only when the query is matched to a q/a expectation and therefore has
+    // CheckRecord pass/fail results to compare. Check-run sequencing lives in
+    // `src/check/run/execute/expectation.rs`, and the shared 25%-smaller gate
+    // lives in `src/check/interrogation/policy.rs`.
+    if narrowed.answer.error.is_some() {
+        return false;
+    }
+    match (&initial.record, &narrowed.record) {
+        (Some(initial), Some(narrowed)) => match (initial.record.result, narrowed.record.result) {
+            (CheckResult::Fail, CheckResult::Pass) => false,
+            (CheckResult::Pass, CheckResult::Pass)
+            | (CheckResult::Pass, CheckResult::Fail)
+            | (CheckResult::Fail, CheckResult::Fail) => true,
+        },
+        (None, None) => initial.answer.answer == narrowed.answer.answer,
+        _ => false,
+    }
+}
+
+fn query_verification_error_is_final(narrowed: &QueryResult) -> bool {
+    narrowed.answer.error.is_some()
+        && narrowed.answer.error.as_deref() != Some(ERROR_SCOPE_TOO_NARROW)
 }
 
 fn q_scope_verification_follow_up_is_available(
@@ -321,7 +356,9 @@ fn q_scope_verification_follow_up_is_available(
 
 pub(crate) fn query_human_review_reason(result: &QueryResult) -> Option<&'static str> {
     match result.answer.error.as_deref() {
-        Some(ERROR_SCOPE_TOO_NARROW) => Some("scope too narrow"),
+        Some(ERROR_SCOPE_TOO_NARROW) => {
+            unreachable!("final query result cannot expose scope-too-narrow")
+        }
         Some(ERROR_INVALID_QUESTION) => Some("invalid question"),
         Some(INTERNAL_ERROR_UNPARSABLE) => Some("unparsable evaluator response"),
         None => None,
@@ -394,7 +431,7 @@ impl<'a> QueryRequest<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::check::core::Cooldown;
+    use crate::check::core::{CheckRecord, CheckResult, Cooldown, QueryExpectationRecord};
     use crate::config_types::ExpectationTarget;
 
     #[test]
@@ -409,6 +446,86 @@ mod tests {
         assert!(q_scope_verification_follow_up_is_available(false, &answer));
         assert!(!q_scope_verification_follow_up_is_available(true, &answer));
         assert!(!q_scope_verification_follow_up_is_available(false, &error));
+    }
+
+    #[test]
+    fn matched_query_rejects_fail_to_pass_q_scope_verification() {
+        let expectation = test_expectation();
+        let initial_fail = test_query_result(&expectation, "no", CheckResult::Fail, None);
+        let narrowed_pass = test_query_result(&expectation, "yes", CheckResult::Pass, None);
+        let narrowed_fail = test_query_result(&expectation, "no", CheckResult::Fail, None);
+        let narrowed_error = test_query_result(
+            &expectation,
+            ERROR_SCOPE_TOO_NARROW,
+            CheckResult::Fail,
+            Some(ERROR_SCOPE_TOO_NARROW),
+        );
+
+        assert!(!query_narrowed_scope_is_accepted(
+            &initial_fail,
+            &narrowed_pass
+        ));
+        assert!(query_narrowed_scope_is_accepted(
+            &initial_fail,
+            &narrowed_fail
+        ));
+        assert!(!query_narrowed_scope_is_accepted(
+            &initial_fail,
+            &narrowed_error
+        ));
+    }
+
+    #[test]
+    fn one_off_query_accepts_only_stable_q_scope_verification_answer() {
+        let initial = QueryResult {
+            answer: ParsedAnswer::answer("no".to_string(), "evidence".to_string(), None),
+            record: None,
+        };
+        let changed_narrowed = QueryResult {
+            answer: ParsedAnswer::answer("yes".to_string(), "evidence".to_string(), None),
+            record: None,
+        };
+        let stable_narrowed = QueryResult {
+            answer: ParsedAnswer::answer("no".to_string(), "evidence".to_string(), None),
+            record: None,
+        };
+        let error_narrowed = QueryResult {
+            answer: ParsedAnswer::error(ERROR_INVALID_QUESTION.to_string(), "evidence".to_string()),
+            record: None,
+        };
+        let scope_too_narrow = QueryResult {
+            answer: ParsedAnswer::error(ERROR_SCOPE_TOO_NARROW.to_string(), "evidence".to_string()),
+            record: None,
+        };
+
+        assert!(!query_narrowed_scope_is_accepted(
+            &initial,
+            &changed_narrowed
+        ));
+        assert!(query_narrowed_scope_is_accepted(&initial, &stable_narrowed));
+        assert!(!query_narrowed_scope_is_accepted(&initial, &error_narrowed));
+        assert!(!query_narrowed_scope_is_accepted(
+            &initial,
+            &scope_too_narrow
+        ));
+        assert!(!query_verification_error_is_final(&scope_too_narrow));
+        assert!(query_verification_error_is_final(&error_narrowed));
+    }
+
+    #[test]
+    fn final_query_result_rejects_scope_too_narrow_before_review_handling() {
+        let expectation = test_expectation();
+        let result = test_query_result(
+            &expectation,
+            ERROR_SCOPE_TOO_NARROW,
+            CheckResult::Fail,
+            Some(ERROR_SCOPE_TOO_NARROW),
+        );
+
+        let error = assert_final_query_result_has_no_scope_too_narrow(&result)
+            .expect_err("final ScopeTooNarrow must be rejected before output");
+
+        assert!(error.contains("forbidden final query scope error"));
     }
 
     #[test]
@@ -472,5 +589,54 @@ mod tests {
         assert_eq!(request.target(), None);
         assert_eq!(request.expectation_id(), None);
         assert_eq!(request.expectation_instructions(), "");
+    }
+
+    fn test_expectation() -> SelectedExpectation {
+        SelectedExpectation {
+            number: 1,
+            id: "expectation-id".to_string(),
+            display_id: "e".to_string(),
+            question: "Does matched expectation pass?".to_string(),
+            expected_answer: "yes".to_string(),
+            instructions: String::new(),
+            diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
+            target: None,
+            question_answer_only: true,
+            agent: AgentConfig::default(),
+            cooldown: None,
+        }
+    }
+
+    fn test_query_result(
+        expectation: &SelectedExpectation,
+        observed: &str,
+        result: CheckResult,
+        error: Option<&str>,
+    ) -> QueryResult {
+        QueryResult {
+            answer: if let Some(error) = error {
+                ParsedAnswer::error(error.to_string(), "evidence".to_string())
+            } else {
+                ParsedAnswer::answer(observed.to_string(), "evidence".to_string(), None)
+            },
+            record: Some(QueryExpectationRecord {
+                expectation: expectation.clone(),
+                record: CheckRecord {
+                    timestamp: "1970-01-01T00:00:00Z".to_string(),
+                    number: expectation.number,
+                    result,
+                    question: Some(expectation.question.clone()),
+                    expected_answer: Some(expectation.expected_answer.clone()),
+                    observed: observed.to_string(),
+                    error: error.map(str::to_string),
+                    evidence: "evidence".to_string(),
+                    scope: full_scope(),
+                    question_scope_suggestion: None,
+                    visible_tree_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                    id: expectation.id.clone(),
+                    display_id: expectation.display_id.clone(),
+                },
+            }),
+        }
     }
 }

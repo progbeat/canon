@@ -3,7 +3,6 @@ use crate::check::{codex_reasoning_effort, evaluator_response_output_schema_for_
 use crate::config_types::AgentConfig;
 use crate::evaluator::{
     evaluator_thread_config_with_no_sandbox, EvaluatorError, EvaluatorProgress, EvaluatorRunner,
-    EVALUATOR_BASE_INSTRUCTIONS,
 };
 use crate::token_usage_types::EvaluatorTurnUsage;
 use serde::{Deserialize, Serialize};
@@ -18,6 +17,7 @@ impl EvaluatorRunner for AppServerRunner {
         &mut self,
         session_cwd: &Path,
         template_output_dir: &Path,
+        base_instructions: &str,
         developer_instructions: &str,
         agent: &AgentConfig,
         model: Option<&str>,
@@ -31,7 +31,7 @@ impl EvaluatorRunner for AppServerRunner {
         // Canon runtime state and app-server configuration.
         let params = ThreadStartParams {
             cwd: session_cwd_json,
-            base_instructions: EVALUATOR_BASE_INSTRUCTIONS,
+            base_instructions,
             developer_instructions,
             approval_policy: "never",
             sandbox: Some(thread_start_sandbox_mode(self.no_sandbox())),
@@ -112,7 +112,11 @@ pub(crate) fn turn_start_request(
 ) -> Result<Value, EvaluatorError> {
     // Enforce the Interrogation Policy response schema selected by this
     // interrogation's q-scope. For q-scope ["."], the schema excludes
-    // ScopeTooNarrow before the evaluator turn is started.
+    // ScopeTooNarrow before the evaluator turn is started. This is the
+    // one-turn request boundary; retry and q-scope verification orchestration
+    // lives in `src/check/run/execute/expectation.rs` for check runs and
+    // `src/check/interrogation/query/mod.rs` for query mode. The shared
+    // q-scope verification gate lives in `src/check/interrogation/policy.rs`.
     let q_scope_specific_output_schema = evaluator_response_output_schema_for_q_scope(q_scope);
     let mut request = json!({
         "threadId": session_id,

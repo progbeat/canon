@@ -1,2 +1,59 @@
-pub(crate) const EVALUATOR_BASE_INSTRUCTIONS: &str =
+use minijinja::Environment;
+use serde_json::json;
+
+const EVALUATOR_BASE_INSTRUCTIONS_TEMPLATE: &str =
     include_str!("../../../resources/prompts/evaluator_base_instructions.txt");
+
+pub(crate) struct BaseInstructionsContext {
+    pub(crate) in_place: bool,
+    pub(crate) full_scope: bool,
+}
+
+pub(crate) fn evaluator_base_instructions(
+    context: BaseInstructionsContext,
+) -> Result<String, String> {
+    let environment = Environment::new();
+    let template = environment
+        .template_from_str(EVALUATOR_BASE_INSTRUCTIONS_TEMPLATE)
+        .map_err(|err| format!("failed to parse evaluator base instructions: {}", err))?;
+    template
+        .render(json!({
+            "in_place": context.in_place,
+            "full_scope": context.full_scope,
+        }))
+        .map(|rendered| rendered.trim().to_string())
+        .map_err(|err| format!("failed to render evaluator base instructions: {}", err))
+}
+
+pub(crate) fn q_scope_is_full_project(scope: &[String]) -> bool {
+    scope.len() == 1 && scope[0] == "."
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{evaluator_base_instructions, BaseInstructionsContext};
+
+    #[test]
+    fn full_scope_base_instructions_do_not_mention_scope_too_narrow() {
+        let rendered = evaluator_base_instructions(BaseInstructionsContext {
+            in_place: false,
+            full_scope: true,
+        })
+        .unwrap();
+
+        assert!(!rendered.contains("ScopeTooNarrow"));
+        assert!(rendered.contains("InvalidQuestion"));
+    }
+
+    #[test]
+    fn restricted_scope_base_instructions_allow_scope_too_narrow() {
+        let rendered = evaluator_base_instructions(BaseInstructionsContext {
+            in_place: false,
+            full_scope: false,
+        })
+        .unwrap();
+
+        assert!(rendered.contains("ScopeTooNarrow"));
+        assert!(rendered.contains("InvalidQuestion"));
+    }
+}
