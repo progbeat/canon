@@ -1,6 +1,6 @@
 use super::logging::ask_and_log;
 use super::parse::{
-    parse_visible_evaluator_response, unparsable_response_answer, RESPONSE_REPAIR_PROMPT,
+    parse_visible_evaluator_response, response_repair_prompt, unparsable_response_answer,
 };
 use super::{EvaluatorTurnContext, ParsedTurnResponse};
 use crate::config_types::AgentConfig;
@@ -15,6 +15,7 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
     turn: &EvaluatorTurnContext<'_>,
     prompt: &str,
     agent: &AgentConfig,
+    q_scope: &[String],
     visible_scope: &[String],
     session_root: &Path,
     parser_cache: &mut EvaluatorResponseParseCache,
@@ -29,6 +30,7 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
         expectation_id,
         1,
         "initial",
+        q_scope,
     )?;
     let mut usage = response.usage;
     let mut context_compacted = response.context_compacted;
@@ -36,6 +38,7 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
         parser_cache,
         &response.text,
         agent,
+        q_scope,
         visible_scope,
         session_root,
     ) {
@@ -44,11 +47,12 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
             let repair = ask_and_log(
                 runner,
                 turn,
-                RESPONSE_REPAIR_PROMPT,
+                response_repair_prompt(q_scope),
                 diagnostic_log,
                 expectation_id,
                 2,
                 "repair",
+                q_scope,
             )?;
             usage = combined_turn_usage(usage, repair.usage);
             context_compacted |= repair.context_compacted;
@@ -56,6 +60,7 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
                 parser_cache,
                 &repair.text,
                 agent,
+                q_scope,
                 visible_scope,
                 session_root,
             ) {

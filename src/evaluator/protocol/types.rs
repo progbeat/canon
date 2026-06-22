@@ -23,6 +23,7 @@ pub(crate) trait EvaluatorRunner {
         prompt: &str,
         model: Option<&str>,
         thinking: &str,
+        q_scope: &[String],
     ) -> Result<String, EvaluatorError>;
 
     // Returns usage for the last app-server turn when a turn id was created.

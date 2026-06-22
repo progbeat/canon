@@ -189,6 +189,7 @@ fn ask_in_thread<R: EvaluatorRunner>(
         &turn,
         request.prompt,
         agent,
+        request.enforced_scope,
         &visible_scope,
         session_root,
         parse_cache,
@@ -414,13 +415,17 @@ pub(crate) fn resolve_diff_from_tree_oid(
     last_pass: Option<&LastResult>,
 ) -> Result<String, EvaluatorError> {
     // Canon `diff-from` resolution is deliberately literal: `:checkpoint`
-    // uses the last pass checked tree when present, then the run's against
-    // tree; `:against-tree` uses the against tree; custom values use TreeSource.
+    // uses the last pass checked tree only while that tree object is still
+    // present, then the run's against tree; `:against-tree` uses the against
+    // tree; custom values use TreeSource.
     let diff_from = expectation.diff_from.as_str();
     if diff_from == DEFAULT_DIFF_FROM {
-        let checkpoint_tree_oid =
-            checkpoint_diff_base_tree_oid(last_pass, &runtime.tree_context.against_tree_oid);
-        return Ok(checkpoint_tree_oid.to_string());
+        let checkpoint_tree_oid = checkpoint_diff_base_tree_oid(
+            runtime.root,
+            last_pass,
+            &runtime.tree_context.against_tree_oid,
+        )?;
+        return Ok(checkpoint_tree_oid);
     }
     if diff_from == AGAINST_TREE_DIFF_FROM {
         return Ok(runtime.tree_context.against_tree_oid.clone());
@@ -429,16 +434,107 @@ pub(crate) fn resolve_diff_from_tree_oid(
 }
 
 fn checkpoint_diff_base_tree_oid<'a>(
+    root: &Path,
     last_pass: Option<&'a LastResult>,
     against_tree_oid: &'a str,
-) -> &'a str {
-    last_pass
-        .and_then(|last_pass| last_pass.checked_tree_oid.as_deref())
-        .unwrap_or(against_tree_oid)
+) -> Result<String, EvaluatorError> {
+    if let Some(checked_tree_oid) =
+        last_pass.and_then(|last_pass| last_pass.checked_tree_oid.as_deref())
+    {
+        if crate::git::tree_object_exists(root, checked_tree_oid)
+            .map_err(EvaluatorError::message)?
+        {
+            return Ok(checked_tree_oid.to_string());
+        }
+    }
+    Ok(against_tree_oid.to_string())
 }
 
 fn explicit_diff_base_tree_oid(root: &Path, tree: &str) -> Result<String, EvaluatorError> {
     crate::git::TreeSource::resolve(root, tree, "diff-from")
         .and_then(|source| source.tree_oid_for_prompt_diff(root))
         .map_err(EvaluatorError::message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::checkpoint_diff_base_tree_oid;
+    use crate::xpec_state::{LastResult, LastResultStatus};
+    use serde_json::json;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::{self, Command};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn checkpoint_diff_base_uses_existing_checkpoint_tree() {
+        let root = git_project("checkpoint-existing");
+        let checked_tree_oid = crate::git::staged_tree_oid(&root).unwrap();
+        let last_pass = last_pass_with_checked_tree_oid(&checked_tree_oid);
+
+        let resolved =
+            checkpoint_diff_base_tree_oid(&root, Some(&last_pass), "against-tree").unwrap();
+
+        assert_eq!(resolved, checked_tree_oid);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn checkpoint_diff_base_ignores_missing_checkpoint_tree() {
+        let root = git_project("checkpoint-missing");
+        let missing_tree_oid = "ffffffffffffffffffffffffffffffffffffffff";
+        let last_pass = last_pass_with_checked_tree_oid(missing_tree_oid);
+
+        let resolved =
+            checkpoint_diff_base_tree_oid(&root, Some(&last_pass), "against-tree").unwrap();
+
+        assert_eq!(resolved, "against-tree");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn last_pass_with_checked_tree_oid(checked_tree_oid: &str) -> LastResult {
+        LastResult {
+            response_timestamp: "1970-01-01T00:00:00Z".to_string(),
+            updated_timestamp: "1970-01-01T00:00:00Z".to_string(),
+            status: LastResultStatus::Pass,
+            response: json!({
+                "answer": "yes",
+                "evidence": "`src/main.rs`",
+                "qScopeSuggestion": ["."]
+            }),
+            q_scope: vec![".".to_string()],
+            visible_scope: vec![".".to_string()],
+            checked_tree_oid: Some(checked_tree_oid.to_string()),
+            visible_tree_oid: None,
+        }
+    }
+
+    fn git_project(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("canon-{name}-{}-{unique}", process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).unwrap();
+        git(&root, &["init"]);
+        fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        git(&root, &["add", "src/main.rs"]);
+        root
+    }
+
+    fn git(root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }

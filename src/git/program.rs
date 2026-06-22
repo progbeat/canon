@@ -122,6 +122,16 @@ pub(crate) fn resolve_tree_oid(root: &Path, treeish: &str) -> Result<String, Str
     command_output_trimmed(&output.stdout, "git rev-parse stdout").map(str::to_string)
 }
 
+pub(crate) fn tree_object_exists(root: &Path, tree_oid: &str) -> Result<bool, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["cat-file", "-e", &format!("{tree_oid}^{{tree}}")])
+        .output()
+        .map_err(|err| format!("failed to run git cat-file: {}", err))?;
+    Ok(output.status.success())
+}
+
 pub(crate) fn tree_tracked_files(
     root: &Path,
     treeish: &str,

@@ -18,6 +18,7 @@ pub(super) fn ask_and_log<R: EvaluatorRunner>(
     expectation_id: Option<&str>,
     attempt: usize,
     reason: &str,
+    q_scope: &[String],
 ) -> Result<RawTurnResponse, EvaluatorError> {
     write_optional_diagnostic_log(diagnostic_log, |writer| {
         write_agent_turn_request_event(
@@ -33,7 +34,7 @@ pub(super) fn ask_and_log<R: EvaluatorRunner>(
             },
         )
     });
-    let response = match runner.ask(turn.session_id, prompt, turn.model, turn.thinking) {
+    let response = match runner.ask(turn.session_id, prompt, turn.model, turn.thinking, q_scope) {
         Ok(response) => response,
         Err(err) => {
             let turn_usage = runner.take_last_turn_usage();

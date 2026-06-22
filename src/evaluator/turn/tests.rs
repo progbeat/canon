@@ -21,6 +21,7 @@ fn schema_valid_evidence_file_refs_do_not_trigger_repair() {
         "question",
         &AgentConfig::default(),
         &["src/visible.rs".to_string()],
+        &["src/visible.rs".to_string()],
         &root,
         &mut parser_cache,
         &mut diagnostic_log,
@@ -48,6 +49,7 @@ fn malformed_repair_response_stays_unparsable() {
         &turn_context(),
         "question",
         &AgentConfig::default(),
+        &[".".to_string()],
         &[".".to_string()],
         &root,
         &mut parser_cache,
@@ -119,6 +121,7 @@ impl EvaluatorRunner for RunnerWithResponses {
         _prompt: &str,
         _model: Option<&str>,
         _thinking: &str,
+        _q_scope: &[String],
     ) -> Result<String, EvaluatorError> {
         Ok(self.responses.remove(0))
     }
