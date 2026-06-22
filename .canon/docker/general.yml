@@ -6,7 +6,7 @@
   a: "yes"
 
 - q: "Does the Docker entrypoint leave Canon-owned command and argument validation to be handled by the `canon` binary?"
-  a: "yes""
+  a: "yes"
 
 - q: "Does the Docker entrypoint force `canon check` invocations to run with `--no-sandbox` while forwarding all user-supplied arguments unchanged?"
   a: "yes"
