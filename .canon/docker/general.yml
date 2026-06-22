@@ -7,3 +7,6 @@
 
 - q: "Does the Docker entrypoint avoid dispatching or rejecting command-line arguments itself, so arguments are ultimately handled by the `canon` binary after container setup?"
   a: "yes"
+
+- q: "Does the Docker entrypoint override Git object database environment variables?"
+  a: "no"
