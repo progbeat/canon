@@ -3,8 +3,10 @@ use crate::check::core::{CheckRecord, CheckResult, InterrogationResult, Selected
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::interrogation::{
     interrogate_expectation_with_model_fallbacks, scope_narrowing_log_fields,
+    ModelFallbackInterrogation,
 };
 use crate::config_types::AgentConfig;
+use crate::evaluator::EvaluatorProgress;
 use crate::evaluator::EvaluatorRunner;
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::hash::full_scope;
@@ -16,6 +18,7 @@ pub(crate) struct InterrogationCall<'a> {
     pub(crate) runtime: &'a CheckRuntime<'a>,
     pub(crate) expectation: &'a SelectedExpectation,
     pub(crate) scope: &'a [String],
+    pub(crate) progress: Option<&'a EvaluatorProgress>,
 }
 
 pub(crate) struct PolicyInterrogationResult {
@@ -56,13 +59,16 @@ pub(crate) fn interrogate_or_error_record<R: EvaluatorRunner>(
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<InterrogationResult, String> {
     match interrogate_expectation_with_model_fallbacks(
-        call.runtime,
-        call.expectation,
+        ModelFallbackInterrogation {
+            runtime: call.runtime,
+            expectation: call.expectation,
+            enforced_scope: call.scope,
+            progress: call.progress,
+        },
         runner,
         diagnostic_log,
         interrogation_run_state,
         xpec_state,
-        call.scope,
     ) {
         Ok(interrogation) => Ok(interrogation),
         Err(err) => {

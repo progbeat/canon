@@ -127,13 +127,22 @@ fn move_directory_across_devices(source: &Path, target: &Path, mode: u32) -> Pla
 }
 
 fn remove_directory_tree(path: &Path) -> PlatformResult<()> {
-    make_directory_tree_removable(path)?;
-    fs::remove_dir_all(path).map_err(|err| {
-        PlatformError::io(
+    match fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+            make_directory_tree_removable(path)?;
+            fs::remove_dir_all(path).map_err(|err| {
+                PlatformError::io(
+                    format!("failed to remove directory {}", path.display()),
+                    err,
+                )
+            })
+        }
+        Err(err) => Err(PlatformError::io(
             format!("failed to remove directory {}", path.display()),
             err,
-        )
-    })
+        )),
+    }
 }
 
 fn make_directory_tree_removable(path: &Path) -> PlatformResult<()> {

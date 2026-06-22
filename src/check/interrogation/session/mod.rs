@@ -4,6 +4,7 @@ mod thread;
 
 pub(crate) use model_fallback::{
     interrogate_expectation_with_model_fallbacks, run_with_model_fallbacks,
+    ModelFallbackInterrogation,
 };
 pub(crate) use runtime_logs::{
     write_agent_turn_failure_event, write_agent_turn_missing_usage_event,

@@ -33,18 +33,6 @@ impl EvaluatorResponseSchemaScope {
         }
     }
 
-    fn output_error_enum(self) -> Value {
-        match self {
-            EvaluatorResponseSchemaScope::Restricted => {
-                json!([ERROR_SCOPE_TOO_NARROW, ERROR_INVALID_QUESTION, null])
-            }
-            // This value is sent as turn/start.params.outputSchema for
-            // q-scope ["."], so the app server cannot return ScopeTooNarrow
-            // as a schema-valid full-project-scope response.
-            EvaluatorResponseSchemaScope::FullProject => json!([ERROR_INVALID_QUESTION, null]),
-        }
-    }
-
     fn allows_error(self, error: &str) -> bool {
         match self {
             EvaluatorResponseSchemaScope::Restricted => {
@@ -141,12 +129,46 @@ pub(crate) fn evaluator_response_json_schema(schema_scope: EvaluatorResponseSche
 }
 
 pub(crate) fn evaluator_response_output_schema_for_q_scope(q_scope: &[String]) -> Value {
-    let schema_scope = EvaluatorResponseSchemaScope::for_q_scope(q_scope);
-    evaluator_response_output_schema(schema_scope)
+    match EvaluatorResponseSchemaScope::for_q_scope(q_scope) {
+        EvaluatorResponseSchemaScope::Restricted => restricted_evaluator_response_output_schema(),
+        EvaluatorResponseSchemaScope::FullProject => {
+            full_project_evaluator_response_output_schema()
+        }
+    }
 }
 
-pub(crate) fn evaluator_response_output_schema(
+#[cfg(test)]
+fn evaluator_response_output_schema_for_schema_scope(
     schema_scope: EvaluatorResponseSchemaScope,
+) -> Value {
+    match schema_scope {
+        EvaluatorResponseSchemaScope::Restricted => restricted_evaluator_response_output_schema(),
+        EvaluatorResponseSchemaScope::FullProject => {
+            full_project_evaluator_response_output_schema()
+        }
+    }
+}
+
+fn restricted_evaluator_response_output_schema() -> Value {
+    evaluator_response_output_schema_with_error_enum(
+        EvaluatorResponseSchemaScope::Restricted,
+        json!([ERROR_SCOPE_TOO_NARROW, ERROR_INVALID_QUESTION, null]),
+    )
+}
+
+fn full_project_evaluator_response_output_schema() -> Value {
+    // This value is sent as turn/start.params.outputSchema for q-scope ["."],
+    // so the app server cannot return ScopeTooNarrow as a schema-valid
+    // full-project-scope response.
+    evaluator_response_output_schema_with_error_enum(
+        EvaluatorResponseSchemaScope::FullProject,
+        json!([ERROR_INVALID_QUESTION, null]),
+    )
+}
+
+fn evaluator_response_output_schema_with_error_enum(
+    schema_scope: EvaluatorResponseSchemaScope,
+    output_error_enum: Value,
 ) -> Value {
     // Codex app-server structured output requires every object property to be
     // listed in `required` and represents optional fields as nullable types.
@@ -172,7 +194,7 @@ pub(crate) fn evaluator_response_output_schema(
         .get_mut("error")
         .expect("evaluator response schema has error");
     error["type"] = json!(["string", "null"]);
-    error["enum"] = schema_scope.output_error_enum();
+    error["enum"] = output_error_enum;
     schema
 }
 
@@ -357,9 +379,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        evaluator_response_json_schema, evaluator_response_output_schema, parse_evaluator_response,
-        parse_evaluator_response_json, EvaluatorResponseJson, EvaluatorResponseSchemaScope,
-        ANSWER_PATTERN, ERROR_INVALID_QUESTION, ERROR_SCOPE_TOO_NARROW,
+        evaluator_response_json_schema, evaluator_response_output_schema_for_schema_scope,
+        parse_evaluator_response, parse_evaluator_response_json, EvaluatorResponseJson,
+        EvaluatorResponseSchemaScope, ANSWER_PATTERN, ERROR_INVALID_QUESTION,
+        ERROR_SCOPE_TOO_NARROW,
     };
     use serde_json::json;
 
@@ -395,7 +418,9 @@ mod tests {
 
     #[test]
     fn restricted_evaluator_response_output_schema_uses_app_server_dialect() {
-        let schema = evaluator_response_output_schema(EvaluatorResponseSchemaScope::Restricted);
+        let schema = evaluator_response_output_schema_for_schema_scope(
+            EvaluatorResponseSchemaScope::Restricted,
+        );
 
         assert_eq!(
             schema["required"],
@@ -418,7 +443,9 @@ mod tests {
 
     #[test]
     fn full_project_evaluator_response_output_schema_disables_scope_too_narrow() {
-        let schema = evaluator_response_output_schema(EvaluatorResponseSchemaScope::FullProject);
+        let schema = evaluator_response_output_schema_for_schema_scope(
+            EvaluatorResponseSchemaScope::FullProject,
+        );
 
         assert_eq!(
             schema["properties"]["error"]["enum"],

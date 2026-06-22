@@ -1,9 +1,10 @@
 use std::sync::{Arc, Mutex};
 
 // Shared progress handle for one evaluated expectation. Check execution owns the
-// handle, installs it on the evaluator runner, and records q-scope/full-scope
-// follow-up starts. App-server transport records activity, no-progress timeout
-// accumulation, and exhausted no-progress turn timeouts through the same handle.
+// handle, installs it on the evaluator runner, and records model fallback plus
+// q-scope/full-scope follow-up starts. App-server transport records activity,
+// no-progress timeout accumulation, and exhausted no-progress turn timeouts
+// through the same handle.
 #[derive(Clone, Default)]
 pub(crate) struct EvaluatorProgress {
     state: Arc<Mutex<EvaluatorProgressState>>,
@@ -15,6 +16,7 @@ struct EvaluatorProgressState {
     turn_timeout: u64,
     idle_accumulating: bool,
     idle_accumulation: u64,
+    model_fallback: u64,
     full_scope_retry: u64,
     q_scope_verification: u64,
 }
@@ -25,6 +27,7 @@ pub(crate) struct EvaluatorProgressSnapshot {
     turn_timeout: u64,
     idle_accumulating: bool,
     idle_accumulation: u64,
+    model_fallback: u64,
     full_scope_retry: u64,
     q_scope_verification: u64,
 }
@@ -33,6 +36,7 @@ pub(crate) struct EvaluatorProgressSnapshot {
 pub(crate) enum EvaluatorProgressMarker {
     TurnTimeout,
     Idle,
+    ModelFallback,
     FullScopeRetry,
     QScopeVerification,
     AppServerActivity,
@@ -64,14 +68,23 @@ impl EvaluatorProgress {
         }
     }
 
+    pub(crate) fn record_model_fallback_started(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.idle_accumulating = false;
+            state.model_fallback = state.model_fallback.saturating_add(1);
+        }
+    }
+
     pub(crate) fn record_full_scope_retry_started(&self) {
         if let Ok(mut state) = self.state.lock() {
+            state.idle_accumulating = false;
             state.full_scope_retry = state.full_scope_retry.saturating_add(1);
         }
     }
 
     pub(crate) fn record_q_scope_verification_started(&self) {
         if let Ok(mut state) = self.state.lock() {
+            state.idle_accumulating = false;
             state.q_scope_verification = state.q_scope_verification.saturating_add(1);
         }
     }
@@ -99,6 +112,7 @@ impl EvaluatorProgressState {
             turn_timeout: self.turn_timeout,
             idle_accumulating: self.idle_accumulating,
             idle_accumulation: self.idle_accumulation,
+            model_fallback: self.model_fallback,
             full_scope_retry: self.full_scope_retry,
             q_scope_verification: self.q_scope_verification,
         }
@@ -118,6 +132,9 @@ impl EvaluatorProgressSnapshot {
         {
             return EvaluatorProgressMarker::Idle;
         }
+        if self.model_fallback != previous.model_fallback {
+            return EvaluatorProgressMarker::ModelFallback;
+        }
         if self.full_scope_retry != previous.full_scope_retry {
             return EvaluatorProgressMarker::FullScopeRetry;
         }
@@ -133,6 +150,7 @@ impl EvaluatorProgressMarker {
         match self {
             EvaluatorProgressMarker::TurnTimeout => "×",
             EvaluatorProgressMarker::Idle => "~",
+            EvaluatorProgressMarker::ModelFallback => "⇄",
             EvaluatorProgressMarker::FullScopeRetry => "↗",
             EvaluatorProgressMarker::QScopeVerification => "↘",
             EvaluatorProgressMarker::AppServerActivity => ".",
@@ -185,6 +203,29 @@ mod tests {
             EvaluatorProgressMarker::AppServerActivity
         );
 
+        progress.record_no_progress_timeout_accumulating();
+        let idle_before_fallback = progress.snapshot();
+        progress.record_model_fallback_started();
+        assert_eq!(
+            progress.snapshot().marker_since(idle_before_fallback),
+            EvaluatorProgressMarker::ModelFallback
+        );
+        let before = progress.snapshot();
+
+        progress.record_app_server_activity();
+        progress.record_model_fallback_started();
+        assert_eq!(
+            progress.snapshot().marker_since(before),
+            EvaluatorProgressMarker::ModelFallback
+        );
+
+        progress.record_full_scope_retry_started();
+        assert_eq!(
+            progress.snapshot().marker_since(before),
+            EvaluatorProgressMarker::ModelFallback
+        );
+
+        let before = progress.snapshot();
         progress.record_app_server_activity();
         progress.record_full_scope_retry_started();
         assert_eq!(

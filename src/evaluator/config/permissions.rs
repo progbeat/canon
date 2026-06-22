@@ -48,7 +48,7 @@ pub(crate) fn evaluator_resolved_state_dir_permissions(
     state_root: &Path,
 ) -> EvaluatorConfigResult<BTreeMap<String, String>> {
     let mut permissions = BTreeMap::new();
-    insert_tree_permission(&mut permissions, &state_root, FILESYSTEM_DENY)?;
+    insert_tree_permission(&mut permissions, state_root, FILESYSTEM_DENY)?;
     Ok(permissions)
 }
 

@@ -1,4 +1,4 @@
-use super::logging::ask_and_log;
+use super::logging::{ask_and_log, LoggedTurnRequest};
 use super::parse::{parse_visible_evaluator_response, unparsable_response_answer};
 use super::{EvaluatorTurnContext, ParsedTurnResponse};
 use crate::config_types::AgentConfig;
@@ -21,13 +21,15 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
 ) -> Result<ParsedTurnResponse, EvaluatorError> {
     let response = ask_and_log(
         runner,
-        turn,
-        prompt,
         diagnostic_log,
-        expectation_id,
-        1,
-        "initial",
-        q_scope,
+        LoggedTurnRequest {
+            turn,
+            prompt,
+            expectation_id,
+            attempt: 1,
+            reason: "initial",
+            q_scope,
+        },
     )?;
     let parsed = match parse_visible_evaluator_response(
         parser_cache,
@@ -38,6 +40,9 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
         session_root,
     ) {
         Ok(answer) => answer,
+        // Parse failures become a human-review answer. They do not trigger a
+        // second evaluator request, so there is no repair request kind for the
+        // progress timeline to mark.
         Err(err) => unparsable_response_answer(&err, &response.text),
     };
 

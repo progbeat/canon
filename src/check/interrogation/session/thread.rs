@@ -188,7 +188,7 @@ fn ask_in_thread<R: EvaluatorRunner>(
     let visible_scope =
         visible_scope(agent, request.enforced_scope).map_err(EvaluatorError::message)?;
     // The evaluator turn boundary owns agent.request/agent.response runtime
-    // log events for the initial turn and any repair turn.
+    // log events for the single evaluator request made by this turn.
     ask_evaluator_once(
         runner,
         &turn,
@@ -451,8 +451,9 @@ fn checkpoint_diff_base<'a>(
     if let Some(checked_tree_oid) =
         last_pass.and_then(|last_pass| last_pass.checked_tree_oid.as_deref())
     {
-        if crate::git::tree_object_exists(root, checked_tree_oid)
-            .map_err(EvaluatorError::message)?
+        if crate::git::git_object_oid_has_known_shape(checked_tree_oid)
+            && crate::git::tree_object_exists(root, checked_tree_oid)
+                .map_err(EvaluatorError::message)?
         {
             return Ok(ResolvedDiffFrom {
                 tree_oid: checked_tree_oid.to_string(),
@@ -500,6 +501,18 @@ mod tests {
         let root = git_project("checkpoint-missing");
         let missing_tree_oid = "ffffffffffffffffffffffffffffffffffffffff";
         let last_pass = last_pass_with_checked_tree_oid(missing_tree_oid);
+
+        let resolved = checkpoint_diff_base(&root, Some(&last_pass), "against-tree").unwrap();
+
+        assert_eq!(resolved.tree_oid, "against-tree");
+        assert!(resolved.last_pass.is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn checkpoint_diff_base_ignores_non_oid_checkpoint_tree() {
+        let root = git_project("checkpoint-revspec");
+        let last_pass = last_pass_with_checked_tree_oid("HEAD^{tree}");
 
         let resolved = checkpoint_diff_base(&root, Some(&last_pass), "against-tree").unwrap();
 
