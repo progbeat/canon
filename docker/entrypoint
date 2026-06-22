@@ -35,4 +35,8 @@ fi
 # The container uses Codex's read-only evaluator sandbox plus /scratch/sandbox
 # materialization instead.
 unset CANON_SECRET_DIR
+if [ "${1:-}" = "check" ]; then
+  shift
+  exec canon check --no-sandbox "$@"
+fi
 exec canon "$@"
