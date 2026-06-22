@@ -11,15 +11,10 @@ Files in the checked directory are not hidden by q-scope, stored q-scope, expect
 
 The evaluator is started in the checked directory.
 
-Persistent check state is not used in in-place mode.
-Cached results, stored q-scopes, checkpoints, cooldowns, and xpec last-result state are ignored.
-Runtime diagnostic logs may be written, but existing diagnostic logs must not affect check behavior.
+Except for writing logs, in-place mode does not read or write persistent check state.
+Persisted xpec last-result history is treated as absent.
 
 `--tree`, `--against-tree`, and `-s`/`--scope` are rejected in in-place mode.
 
 Selected expectations must be valid without Git-tree, diff, cache, or path-hiding behavior.
 Configured `diff-from`, `target`, `cooldown`, and `ignore` are invalid in in-place mode.
-Ordinary q/a expectations and evaluator settings such as `instructions`, `models`, `thinking`, and `plugins` remain valid.
-
-Generator and include items remain valid in in-place mode.
-Their `path` and `include` patterns are treated only as config-expansion inputs.
