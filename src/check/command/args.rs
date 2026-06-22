@@ -145,8 +145,10 @@ pub(crate) fn check_help_command() -> Command {
                 .help("Disable canon-managed sandboxing; caller is responsible for isolation")
                 .action(ArgAction::SetTrue),
         );
-    // `add_check_option_args` supplies the selector argument used by the
-    // examples below, including `not:<ID-PREFIX>` exclusions.
+    // `add_check_option_args` supplies the documented public `--keep-going`
+    // option and the selector argument used by the examples below, including
+    // `not:<ID-PREFIX>` exclusions. It also registers hidden internal controls
+    // that are intentionally absent from `canon check --help`.
     add_check_option_args(command).after_help(
             "Examples:\n  canon check\n      Check staged content against all canon expectations.\n\n  canon check a7F K9m\n      Check canon expectations selected by ID prefix.\n\n  canon check not:a7F not:K9m\n      Check all expectations except those whose IDs start with a7F or K9m.\n\n  canon check --tree HEAD --against-tree HEAD~1 a7F\n      Check one canon expectation on HEAD with comparison against the previous commit.\n\n  canon check -q \"Does the app expose Undo?\"\n      Ask a one-off question.\n\n  canon check -q \"Does the app expose Undo?\" -s src/app.rs\n      Ask a one-off question with a restricted visible scope.",
         )
@@ -254,6 +256,8 @@ mod tests {
 
     #[test]
     fn query_accepts_break_after_tokens() {
+        // `--break-after-tokens` is a hidden internal/test control. Accepting
+        // it here does not make it part of the documented public help surface.
         let command = parse(&["-q", "Can this pass?", "--break-after-tokens", "1"]).unwrap();
 
         assert_eq!(command.options.break_after_tokens, Some(1));
@@ -274,6 +278,8 @@ mod tests {
 
     #[test]
     fn query_rejects_ignored_check_run_options() {
+        // `--ignore-cooldown` is hidden from `canon check --help`; this test
+        // only verifies that query mode rejects it when supplied explicitly.
         let err = match parse(&["-q", "Can this pass?", "--keep-going", "--ignore-cooldown"]) {
             Ok(_) => panic!("expected query check-run options to fail"),
             Err(err) => err,

@@ -29,6 +29,9 @@ pub(crate) fn add_check_option_args(command: Command) -> Command {
                 .action(ArgAction::SetTrue),
         )
         .arg(
+            // Hidden controls are accepted for internal/test workflows but are
+            // deliberately not part of the documented public `canon check`
+            // help surface.
             Arg::new("ignore_cooldown")
                 .long("ignore-cooldown")
                 .help("Re-evaluate expectations in cooldown")

@@ -4,7 +4,7 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::symlink;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(crate) fn mirror_evaluator_codex_home_file(source: &Path, target: &Path) -> PlatformResult<()> {
     symlink(source, target).map_err(|err| {
@@ -130,13 +130,22 @@ fn remove_directory_tree(path: &Path) -> PlatformResult<()> {
     match fs::remove_dir_all(path) {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
-            make_directory_tree_removable(path)?;
-            fs::remove_dir_all(path).map_err(|err| {
-                PlatformError::io(
-                    format!("failed to remove directory {}", path.display()),
-                    err,
-                )
-            })
+            let mut restored_modes = make_directory_tree_removable(path)?;
+            match fs::remove_dir_all(path) {
+                Ok(()) => Ok(()),
+                Err(err) => {
+                    let remove_err = PlatformError::io(
+                        format!("failed to remove directory {}", path.display()),
+                        err,
+                    );
+                    match restored_modes.restore() {
+                        Ok(()) => Err(remove_err),
+                        Err(restore_err) => {
+                            Err(PlatformError::chain(vec![remove_err, restore_err]))
+                        }
+                    }
+                }
+            }
         }
         Err(err) => Err(PlatformError::io(
             format!("failed to remove directory {}", path.display()),
@@ -145,7 +154,51 @@ fn remove_directory_tree(path: &Path) -> PlatformResult<()> {
     }
 }
 
-fn make_directory_tree_removable(path: &Path) -> PlatformResult<()> {
+#[derive(Default)]
+struct DirectoryModeRestorer {
+    modes: Vec<(PathBuf, u32)>,
+}
+
+impl DirectoryModeRestorer {
+    fn push(&mut self, path: PathBuf, mode: u32) {
+        self.modes.push((path, mode));
+    }
+
+    fn restore(&mut self) -> PlatformResult<()> {
+        let mut errors = Vec::new();
+        for (path, mode) in self.modes.drain(..).rev() {
+            match fs::set_permissions(&path, fs::Permissions::from_mode(mode)) {
+                Ok(()) => {}
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => errors.push(PlatformError::io(
+                    format!("failed to restore directory permissions {}", path.display()),
+                    err,
+                )),
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(PlatformError::chain(errors))
+        }
+    }
+}
+
+fn make_directory_tree_removable(path: &Path) -> PlatformResult<DirectoryModeRestorer> {
+    let mut restorer = DirectoryModeRestorer::default();
+    if let Err(err) = record_directory_tree_removable(path, &mut restorer) {
+        return Err(match restorer.restore() {
+            Ok(()) => err,
+            Err(restore_err) => PlatformError::chain(vec![err, restore_err]),
+        });
+    }
+    Ok(restorer)
+}
+
+fn record_directory_tree_removable(
+    path: &Path,
+    restorer: &mut DirectoryModeRestorer,
+) -> PlatformResult<()> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -159,19 +212,21 @@ fn make_directory_tree_removable(path: &Path) -> PlatformResult<()> {
     if !metadata.file_type().is_dir() {
         return Ok(());
     }
+    let mode = metadata.permissions().mode();
     fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|err| {
         PlatformError::io(
             format!("failed to make directory removable {}", path.display()),
             err,
         )
     })?;
+    restorer.push(path.to_path_buf(), mode);
     for entry in fs::read_dir(path).map_err(|err| {
         PlatformError::io(format!("failed to read directory {}", path.display()), err)
     })? {
         let entry = entry.map_err(|err| {
             PlatformError::io(format!("failed to read directory {}", path.display()), err)
         })?;
-        make_directory_tree_removable(&entry.path())?;
+        record_directory_tree_removable(&entry.path(), restorer)?;
     }
     Ok(())
 }
@@ -280,4 +335,50 @@ fn move_path_error(source: &Path, target: &Path, err: io::Error) -> PlatformErro
         ),
         err,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::make_directory_tree_removable;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
+    use std::process;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn directory_mode_restorer_restores_nested_modes_after_failed_retry() {
+        let root = temp_root("mode-restore");
+        let nested = root.join("source").join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        fs::set_permissions(root.join("source"), fs::Permissions::from_mode(0o500)).unwrap();
+        fs::set_permissions(&nested, fs::Permissions::from_mode(0o300)).unwrap();
+
+        let mut restorer = make_directory_tree_removable(&root.join("source")).unwrap();
+        assert_eq!(mode(root.join("source")) & 0o777, 0o700);
+        assert_eq!(mode(&nested) & 0o777, 0o700);
+
+        restorer.restore().unwrap();
+        assert_eq!(mode(root.join("source")) & 0o777, 0o500);
+        assert_eq!(mode(&nested) & 0o777, 0o300);
+
+        fs::set_permissions(root.join("source"), fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&nested, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn mode(path: impl AsRef<std::path::Path>) -> u32 {
+        fs::symlink_metadata(path).unwrap().permissions().mode()
+    }
+
+    fn temp_root(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("canon-unix-move-{name}-{}-{unique}", process::id()));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
 }
