@@ -120,8 +120,12 @@ pub(super) fn push_evaluator_startup_config_args(
     args: &mut Vec<String>,
     agent: &AgentConfig,
 ) -> EvaluatorConfigResult<()> {
-    EvaluatorConfigSettings::new("read", codex_reasoning_effort(&agent.thinking))
-        .push_toml_args(args)
+    evaluator_startup_config_settings(agent).push_toml_args(args)
+}
+
+fn evaluator_startup_config_settings(agent: &AgentConfig) -> EvaluatorConfigSettings<'_> {
+    EvaluatorConfigSettings::new(FILESYSTEM_DENY, codex_reasoning_effort(&agent.thinking))
+        .with_plugins(agent)
 }
 
 fn evaluator_filesystem_config_entries(
@@ -399,4 +403,23 @@ fn enabled_plugins_config(agent: &AgentConfig) -> BTreeMap<String, EnabledPlugin
         plugins.insert(plugin.clone(), EnabledPluginConfig { enabled: true });
     }
     plugins
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn startup_config_denies_root_access_before_thread_scope_is_known() {
+        let agent = AgentConfig::default();
+        let config = evaluator_startup_config_settings(&agent)
+            .to_json_value()
+            .unwrap();
+
+        assert_eq!(
+            config["permissions"][EVALUATOR_PERMISSION_PROFILE]["filesystem"][":root"],
+            json!(FILESYSTEM_DENY)
+        );
+    }
 }
