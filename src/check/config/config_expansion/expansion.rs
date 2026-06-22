@@ -170,9 +170,8 @@ impl RawExpectationExpansion<'_> {
                 item_number, label
             )
         })?;
-        let source = self.source.tree_source().clone();
         let files = match self.cache.as_deref_mut() {
-            Some(cache) => cache.generator_paths(root, config_path, path, &source)?,
+            Some(cache) => cache.generator_paths(root, config_path, path, &self.source)?,
             None => return Err("tree config expansion requires RepoInspectionCache".to_string()),
         };
         Ok(files)
@@ -183,8 +182,8 @@ impl RawExpectationExpansion<'_> {
             .root
             .ok_or_else(|| "config expansion has no project root".to_string())?;
         match self.cache.as_deref_mut() {
-            Some(cache) => cache.tree_file_content(root, self.source.tree_source(), file),
-            None => Err("staged config expansion requires RepoInspectionCache".to_string()),
+            Some(cache) => cache.config_source_file_content(root, &self.source, file),
+            None => Err("config expansion requires RepoInspectionCache".to_string()),
         }
     }
 

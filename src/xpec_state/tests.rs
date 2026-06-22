@@ -605,6 +605,55 @@ fn cooldown_can_reuse_older_fail_when_pass_is_newer() {
     let _ = fs::remove_dir_all(root);
 }
 
+#[test]
+fn cooldown_uses_response_timestamp_when_both_statuses_match() {
+    let root = git_project("cooldown-response-timestamp");
+    let mut expectation = test_expectation();
+    expectation.cooldown = Some(Cooldown {
+        pass_seconds: Some(10),
+        fail_seconds: Some(10),
+    });
+    let mut cache = XpecStateCache::default();
+    cache.last_results.insert(
+        (root.clone(), expectation.id.clone(), LastResultStatus::Pass),
+        Some(test_last_result_with_response_timestamp(
+            LastResultStatus::Pass,
+            &["src/pass.rs".to_string()],
+            "1970-01-01T00:00:01Z",
+            "1970-01-01T00:00:09Z",
+        )),
+    );
+    cache.last_results.insert(
+        (root.clone(), expectation.id.clone(), LastResultStatus::Fail),
+        Some(test_last_result_with_response_timestamp(
+            LastResultStatus::Fail,
+            &["src/fail.rs".to_string()],
+            "1970-01-01T00:00:04Z",
+            "1970-01-01T00:00:02Z",
+        )),
+    );
+
+    let hit = cached_last_result_for_expectation(
+        &root,
+        &TreeSource::Staged,
+        &expectation,
+        &mut cache,
+        &mut VisibleTreeOidCache::new(),
+        CachedLastResultLookup {
+            now: 5,
+            include_same_tree: false,
+            include_cooldown: true,
+        },
+    )
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(hit.status, CachedResultStatus::Pass);
+    assert_eq!(hit.kind, CachedLastResultKind::Cooldown);
+    assert_eq!(hit.result.status, LastResultStatus::Fail);
+    let _ = fs::remove_dir_all(root);
+}
+
 fn test_expectation() -> SelectedExpectation {
     SelectedExpectation {
         number: 1,
@@ -663,6 +712,20 @@ fn test_last_result(
     scope: &[String],
     updated_timestamp: &str,
 ) -> LastResult {
+    test_last_result_with_response_timestamp(
+        status,
+        scope,
+        "1970-01-01T00:00:01Z",
+        updated_timestamp,
+    )
+}
+
+fn test_last_result_with_response_timestamp(
+    status: LastResultStatus,
+    scope: &[String],
+    response_timestamp: &str,
+    updated_timestamp: &str,
+) -> LastResult {
     let response = match status {
         LastResultStatus::Pass => json!({
             "answer": "yes",
@@ -681,7 +744,7 @@ fn test_last_result(
         }),
     };
     LastResult {
-        response_timestamp: "1970-01-01T00:00:01Z".to_string(),
+        response_timestamp: response_timestamp.to_string(),
         updated_timestamp: updated_timestamp.to_string(),
         status,
         response,

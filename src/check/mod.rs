@@ -16,7 +16,8 @@ pub(crate) use command::preflight::{
 pub(crate) use command::{check_help_command, run_check_command};
 pub(crate) use config::{
     codex_reasoning_effort, expand_staged_generator_paths_from_listing,
-    parse_tree_check_config_content_with_root,
+    parse_check_config_content_with_root_and_source, parse_tree_check_config_content_with_root,
+    CheckConfigSource,
 };
 pub(crate) use core::{
     evaluator_response_output_schema_for_q_scope, parse_evaluator_response, CheckRecord,

@@ -80,7 +80,9 @@ expectation may also provide per-expectation instructions.
 An ephemeral evaluator interaction context whose history is not persisted across
 `canon check` invocations. Within one check run, an evaluator thread may only be
 reused for an interrogation with the same evaluator model and the same rendered
-developer instructions.
+developer instructions. Reuse may also require the same live thread-start
+context inputs that affect evaluator tools, session root, or prompt-rendered
+tree context.
 
 ## Generator item
 

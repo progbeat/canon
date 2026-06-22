@@ -28,10 +28,11 @@ pub(crate) struct CheckQueryCommand<'a> {
     pub(crate) question: &'a str,
     pub(crate) query_scope: &'a [String],
     pub(crate) query_scope_provided: bool,
-    pub(crate) tree_source: &'a TreeSource,
-    pub(crate) against_tree: &'a TreeSource,
+    pub(crate) tree_source: Option<&'a TreeSource>,
+    pub(crate) against_tree: Option<&'a TreeSource>,
     pub(crate) no_sandbox: bool,
-    pub(crate) diagnostic_log: DiagnosticLogWriter,
+    pub(crate) in_place: bool,
+    pub(crate) diagnostic_log: Option<DiagnosticLogWriter>,
     pub(crate) check_caches: &'a mut CheckRunCaches,
 }
 
@@ -45,10 +46,14 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
         tree_source,
         against_tree,
         no_sandbox,
-        mut diagnostic_log,
+        in_place,
+        diagnostic_log,
         check_caches,
     } = command;
-    write_query_lifecycle_start_event(&mut diagnostic_log).map_err(|err| err.to_string())?;
+    let mut diagnostic_log = diagnostic_log;
+    if let Some(writer) = diagnostic_log.as_mut() {
+        write_query_lifecycle_start_event(writer).map_err(|err| err.to_string())?;
+    }
     let result = run_started_check_query_command(StartedCheckQueryCommand {
         root,
         config,
@@ -58,12 +63,14 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
         tree_source,
         against_tree,
         no_sandbox,
-        diagnostic_log: &mut diagnostic_log,
+        in_place,
+        diagnostic_log: diagnostic_log.as_mut(),
         check_caches,
     });
     let finish_error = result.as_ref().err().map(String::as_str);
-    write_query_lifecycle_finish_event(&mut diagnostic_log, finish_error)
-        .map_err(|err| err.to_string())?;
+    if let Some(writer) = diagnostic_log.as_mut() {
+        write_query_lifecycle_finish_event(writer, finish_error).map_err(|err| err.to_string())?;
+    }
     result
 }
 
@@ -73,10 +80,11 @@ struct StartedCheckQueryCommand<'a, 'b> {
     question: &'a str,
     query_scope: &'a [String],
     query_scope_provided: bool,
-    tree_source: &'a TreeSource,
-    against_tree: &'a TreeSource,
+    tree_source: Option<&'a TreeSource>,
+    against_tree: Option<&'a TreeSource>,
     no_sandbox: bool,
-    diagnostic_log: &'b mut DiagnosticLogWriter,
+    in_place: bool,
+    diagnostic_log: Option<&'b mut DiagnosticLogWriter>,
     check_caches: &'a mut CheckRunCaches,
 }
 
@@ -92,34 +100,90 @@ fn run_started_check_query_command(
         tree_source,
         against_tree,
         no_sandbox,
-        diagnostic_log,
+        in_place,
+        mut diagnostic_log,
         check_caches,
     } = command;
     let mut enforced_scope = query_enforced_scope(query_scope)?;
-    let mut execution = prepare_check_execution(
-        root,
-        config,
-        PrepareCheckExecutionOptions {
-            tree_source,
-            against_tree,
+    let mut in_place_runner;
+    let (runtime, runner): (CheckRuntime<'_>, &mut LazyAppServerRunner) = if in_place {
+        in_place_runner = LazyAppServerRunner::new(
+            root,
+            crate::check::config::validation::check_config_loads_plugins(config),
+            &config.agent,
             no_sandbox,
-        },
-        &mut check_caches.visible_tree_oid,
-    )?;
-    let runtime = CheckRuntime::materialized(
+        )?;
+        (
+            CheckRuntime::in_place(root, config, no_sandbox),
+            &mut in_place_runner,
+        )
+    } else {
+        let tree_source = tree_source.ok_or_else(|| "missing query tree source".to_string())?;
+        let against_tree = against_tree.ok_or_else(|| "missing query against tree".to_string())?;
+        let mut execution = prepare_check_execution(
+            root,
+            config,
+            PrepareCheckExecutionOptions {
+                tree_source,
+                against_tree,
+                no_sandbox,
+            },
+            &mut check_caches.visible_tree_oid,
+        )?;
+        let runtime = CheckRuntime::materialized(
+            root,
+            &execution.staged_view,
+            &execution.tree_source,
+            execution.tree_context.clone(),
+            config,
+            no_sandbox,
+        );
+        let runner = &mut execution.runner;
+        return run_prepared_query(
+            root,
+            runtime,
+            runner,
+            config,
+            question,
+            query_scope_provided,
+            &mut enforced_scope,
+            &mut diagnostic_log,
+            check_caches,
+        );
+    };
+    run_prepared_query(
         root,
-        &execution.staged_view,
-        &execution.tree_source,
-        execution.tree_context.clone(),
+        runtime,
+        runner,
         config,
-        no_sandbox,
-    );
+        question,
+        query_scope_provided,
+        &mut enforced_scope,
+        &mut diagnostic_log,
+        check_caches,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_prepared_query(
+    root: &Path,
+    runtime: CheckRuntime<'_>,
+    runner: &mut LazyAppServerRunner,
+    config: &CheckConfig,
+    question: &str,
+    query_scope_provided: bool,
+    enforced_scope: &mut Vec<String>,
+    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    check_caches: &mut CheckRunCaches,
+) -> Result<(), String> {
     let query_expectation = query_expectation_context(config, question)?;
     if let Some(expectation) = query_expectation.as_ref() {
-        if !query_scope_provided {
-            enforced_scope = initial_visible_scope_for_expectation(
+        if !runtime.is_in_place() && !query_scope_provided {
+            *enforced_scope = initial_visible_scope_for_expectation(
                 root,
-                &execution.tree_source,
+                runtime
+                    .tree_source()
+                    .ok_or_else(|| "missing query tree source".to_string())?,
                 expectation,
                 &mut check_caches.xpec_state,
                 &mut check_caches.visible_tree_oid,
@@ -132,27 +196,32 @@ fn run_started_check_query_command(
     // caller rather than accepted by interrogation policy.
     let persist_expectation_record = query_expectation.is_some();
     let seed_stored_q_scope = !query_scope_provided;
-    let query_last_pass = query_expectation
-        .as_ref()
-        .map(|expectation| check_caches.xpec_state.read_last_pass(root, expectation))
-        .transpose()?
-        .flatten();
+    let query_last_pass = if runtime.is_in_place() {
+        None
+    } else {
+        query_expectation
+            .as_ref()
+            .map(|expectation| check_caches.xpec_state.read_last_pass(root, expectation))
+            .transpose()?
+            .flatten()
+    };
     let expectation = query_expectation
         .as_ref()
         .map(|expectation| QueryExpectationContext {
             expectation,
             last_pass: query_last_pass.as_ref(),
         });
-    let mut interrogation_run_state = InterrogationRunState::new(runtime.no_sandbox())?;
+    let mut interrogation_run_state =
+        InterrogationRunState::new(runtime.no_sandbox() || runtime.is_in_place())?;
     let result = run_query_with_runner(
         &runtime,
         QueryRequest {
             question,
-            enforced_scope: &enforced_scope,
+            enforced_scope,
             expectation,
         },
-        &mut execution.runner,
-        Some(diagnostic_log),
+        runner,
+        diagnostic_log.as_deref_mut(),
         &mut interrogation_run_state,
     );
     let result = match result {
@@ -161,31 +230,31 @@ fn run_started_check_query_command(
             persist_query_error_result(
                 root,
                 &runtime,
-                &execution.tree_context.checked_tree_oid,
+                runtime.checked_tree_oid(),
                 check_caches,
-                persist_expectation_record,
+                persist_expectation_record && !runtime.is_in_place(),
                 seed_stored_q_scope,
                 query_expectation.as_ref(),
-                &enforced_scope,
+                enforced_scope,
                 &err,
             )?;
-            print_query_token_usage(&mut execution.runner)?;
+            print_query_token_usage(runner)?;
             return Err(err);
         }
     };
     persist_query_result(
         root,
-        &execution.tree_context.checked_tree_oid,
+        runtime.checked_tree_oid(),
         check_caches,
-        persist_expectation_record,
+        persist_expectation_record && !runtime.is_in_place(),
         seed_stored_q_scope,
         &result,
     )?;
     if let Some(reason) = query_human_review_reason(&result) {
-        print_query_token_usage(&mut execution.runner)?;
+        print_query_token_usage(runner)?;
         return Err(format!("query requires human review: {}", reason));
     }
-    write_successful_query_output(&result, &mut execution.runner)?;
+    write_successful_query_output(&result, runner)?;
     Ok(())
 }
 

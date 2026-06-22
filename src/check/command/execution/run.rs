@@ -8,10 +8,12 @@ use super::query_preset::check_config_with_query_preset;
 use super::trailer::{
     check_command_writes_agent_message, check_report_passed, write_check_trailer, CompletedCheckRun,
 };
+use crate::app::LazyAppServerRunner;
 use crate::check::command::args::parse_check_command_args;
 use crate::check::command::output::SharedCheckOutput;
 use crate::check::command::{finish_check_report, CheckReportFinishContext};
-use crate::check::core::CheckCommandArgs;
+use crate::check::config::validation::check_config_loads_plugins;
+use crate::check::core::{CheckCommandArgs, SelectedExpectation};
 use crate::check::interrogation::{state::CheckRuntime, write_check_lifecycle_start_event};
 use crate::check::run::selection::{expectation_identities, resolve_check_options_with_identities};
 use crate::check::{run_check_with_runner_and_caches, CheckRunCaches, CheckRunSideEffects};
@@ -31,11 +33,18 @@ use std::time::Instant;
 // Command execution coordinates CLI parsing, tree/config preparation, and
 // final reporting. Per-expectation completion and last-result bookkeeping are
 // delegated to the check-run execution layer.
-pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), CommandError> {
+pub(crate) fn run_check_command(
+    root: &Path,
+    args: &[OsString],
+    default_in_place: bool,
+) -> Result<(), CommandError> {
     let started = Instant::now();
     install_check_signal_handlers().map_err(CommandError::from)?;
     reset_check_interrupted();
-    let command = parse_check_command_args(args)?;
+    let command = parse_check_command_args(args, default_in_place)?;
+    if command.in_place {
+        return run_in_place_check_command(root, &command, started);
+    }
     let checked_tree = TreeSource::resolve(root, &command.tree, "--tree")?;
     let against_tree = TreeSource::resolve_default_against_tree(
         root,
@@ -151,7 +160,7 @@ pub(crate) fn run_check_command(root: &Path, args: &[OsString]) -> Result<(), Co
         },
     };
     finish_completed_check(
-        &mut diagnostic_log,
+        Some(&mut diagnostic_log),
         &mut result_output,
         &mut check_caches,
         &mut execution.runner,
@@ -199,10 +208,11 @@ fn run_query_mode(
         question,
         query_scope: &command.query_scope,
         query_scope_provided: command.query_scope_provided,
-        tree_source: checked_tree,
-        against_tree,
+        tree_source: Some(checked_tree),
+        against_tree: Some(against_tree),
         no_sandbox: command.no_sandbox,
-        diagnostic_log,
+        in_place: false,
+        diagnostic_log: Some(diagnostic_log),
         check_caches,
     })
     .map_err(CommandError::from)
@@ -225,9 +235,108 @@ fn cleanup_cache_dirs(
     Ok(())
 }
 
+fn run_in_place_check_command(
+    root: &Path,
+    command: &CheckCommandArgs,
+    started: Instant,
+) -> Result<(), CommandError> {
+    let mut repo_cache = RepoInspectionCache::new();
+    let mut check_caches = CheckRunCaches::new();
+    let config = repo_cache.load_in_place_check_config(root, &command.config_path)?;
+    if let Some(question) = command.query.as_deref() {
+        return run_check_query_command(CheckQueryCommand {
+            root,
+            config: &config,
+            question,
+            query_scope: &command.query_scope,
+            query_scope_provided: command.query_scope_provided,
+            tree_source: None,
+            against_tree: None,
+            no_sandbox: command.no_sandbox,
+            in_place: true,
+            diagnostic_log: None,
+            check_caches: &mut check_caches,
+        })
+        .map_err(CommandError::from);
+    }
+    let identities = expectation_identities(&config)?;
+    let options = resolve_check_options_with_identities(&config, &identities, &command.options)?;
+    validate_in_place_selected_expectations(&options.selected)?;
+    let mut runner = LazyAppServerRunner::new(
+        root,
+        check_config_loads_plugins(&config),
+        &config.agent,
+        command.no_sandbox,
+    )?;
+    let shared_output = SharedCheckOutput::stdout();
+    let mut result_output = shared_output.clone();
+    let runtime = CheckRuntime::in_place(root, &config, command.no_sandbox);
+    let records_result = run_check_with_runner_and_caches(
+        runtime,
+        &options,
+        &mut runner,
+        CheckRunSideEffects {
+            diagnostic_log: None,
+            result_output: Some(&mut result_output),
+            live_report_output: None,
+            caches: &mut check_caches,
+        },
+    );
+    let completed = match records_result {
+        Ok(report) => CompletedCheckRun {
+            report,
+            error: None,
+            interrupted: false,
+        },
+        Err(err) => CompletedCheckRun {
+            report: *err.report,
+            error: Some(err.error),
+            interrupted: err.interrupted,
+        },
+    };
+    finish_completed_check(
+        None,
+        &mut result_output,
+        &mut check_caches,
+        &mut runner,
+        &completed,
+        started,
+        false,
+    )
+}
+
+fn validate_in_place_selected_expectations(
+    expectations: &[SelectedExpectation],
+) -> Result<(), String> {
+    for expectation in expectations {
+        let mut invalid = Vec::new();
+        if expectation.diff_from != crate::config_types::DEFAULT_DIFF_FROM {
+            invalid.push("diff-from");
+        }
+        if expectation.target.is_some() {
+            invalid.push("target");
+        }
+        if expectation.cooldown.is_some() {
+            invalid.push("cooldown");
+        }
+        if !expectation.agent.ignore.is_empty() {
+            invalid.push("ignore");
+        }
+        if !invalid.is_empty() {
+            return Err(format!(
+                "{}. ERROR\n{}\nError: invalid-in-place-expectation\nEvidence: selected expectation configures {}",
+                expectation.display_id,
+                expectation.question,
+                invalid.join(", ")
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn finish_completed_check(
-    diagnostic_log: &mut DiagnosticLogWriter,
+    mut diagnostic_log: Option<&mut DiagnosticLogWriter>,
     result_output: &mut dyn Write,
     check_caches: &mut CheckRunCaches,
     runner: &mut crate::app::LazyAppServerRunner,
@@ -237,6 +346,9 @@ fn finish_completed_check(
 ) -> Result<(), CommandError> {
     if let Err(err) = result_output.flush() {
         let err = format!("failed to flush check result to stdout: {}", err);
+        let Some(diagnostic_log) = diagnostic_log.as_deref_mut() else {
+            return Err(CommandError::from(err));
+        };
         return finish_check_error_report(CheckErrorReportFinish {
             diagnostic_log,
             result_output,
@@ -246,6 +358,9 @@ fn finish_completed_check(
         });
     }
     if let Err(err) = write_check_trailer(runner, result_output, &completed.report, started) {
+        let Some(diagnostic_log) = diagnostic_log.as_deref_mut() else {
+            return Err(CommandError::from(err));
+        };
         return finish_check_error_report(CheckErrorReportFinish {
             diagnostic_log,
             result_output,

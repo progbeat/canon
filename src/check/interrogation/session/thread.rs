@@ -13,7 +13,7 @@ use crate::evaluator::{
     EvaluatorTurnContext, ParsedTurnResponse, ThreadLifecycleLog,
 };
 use crate::logs::DiagnosticLogWriter;
-use crate::scope::{sanitize_scope, visible_scope};
+use crate::scope::sanitize_scope;
 use crate::xpec_state::{LastResult, XpecStateCache};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -44,11 +44,9 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
     state: &mut InterrogationRunState,
     request: ThreadTurnRequest<'_>,
 ) -> Result<ParsedTurnResponse, EvaluatorError> {
-    let current_visible_tree_oid = state
-        .visible_tree_oid_cache
+    let current_visible_tree_oid = runtime
         .visible_tree_oid(
-            runtime.root,
-            runtime.tree_source,
+            &mut state.visible_tree_oid_cache,
             request.agent,
             request.enforced_scope,
         )
@@ -64,7 +62,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         reuse_visible_tree_oid,
         request.expectation_instructions,
         request.diff_from_tree_oid,
-        &runtime.tree_context.checked_tree_oid,
+        runtime.checked_tree_oid(),
     )
     .map_err(EvaluatorError::message)?;
     // A restricted retry, q-scope verification, or different rendered diff
@@ -96,49 +94,57 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         request.model,
         request.thinking,
     );
-    let response = match ask_current_session(runner, &session_id, state, diagnostic_log, request) {
-        Ok(response) => response,
-        Err(err) if had_existing_session && is_context_window_failure(&err) => {
-            clear_thread_sessions_after_failure(state);
-            write_model_fallback_events(
-                diagnostic_log,
-                request.expectation_id,
-                request.model,
-                None,
-                err.message_str(),
-            );
-            write_thread_restart_event(
-                diagnostic_log,
-                &session_id,
-                request.expectation_id,
-                request.enforced_scope,
-                request.model,
-                &lifecycle_log.developer_instructions,
-                err.message_str(),
-            );
-            let lifecycle_log = start_thread_session(
-                runtime,
-                runner,
-                state,
-                &session_key,
-                &current_visible_tree_oid,
-                request,
-            )?;
-            session_id = lifecycle_log.session_id.clone();
-            write_thread_lifecycle_event(
-                diagnostic_log,
-                &lifecycle_log,
-                request.enforced_scope,
-                request.model,
-                request.thinking,
-            );
-            match ask_current_session(runner, &session_id, state, diagnostic_log, request) {
-                Ok(response) => response,
-                Err(err) => return fail_after_session_error(state, err),
+    let response =
+        match ask_current_session(runtime, runner, &session_id, state, diagnostic_log, request) {
+            Ok(response) => response,
+            Err(err) if had_existing_session && is_context_window_failure(&err) => {
+                clear_thread_sessions_after_failure(state);
+                write_model_fallback_events(
+                    diagnostic_log,
+                    request.expectation_id,
+                    request.model,
+                    None,
+                    err.message_str(),
+                );
+                write_thread_restart_event(
+                    diagnostic_log,
+                    &session_id,
+                    request.expectation_id,
+                    request.enforced_scope,
+                    request.model,
+                    &lifecycle_log.developer_instructions,
+                    err.message_str(),
+                );
+                let lifecycle_log = start_thread_session(
+                    runtime,
+                    runner,
+                    state,
+                    &session_key,
+                    &current_visible_tree_oid,
+                    request,
+                )?;
+                session_id = lifecycle_log.session_id.clone();
+                write_thread_lifecycle_event(
+                    diagnostic_log,
+                    &lifecycle_log,
+                    request.enforced_scope,
+                    request.model,
+                    request.thinking,
+                );
+                match ask_current_session(
+                    runtime,
+                    runner,
+                    &session_id,
+                    state,
+                    diagnostic_log,
+                    request,
+                ) {
+                    Ok(response) => response,
+                    Err(err) => return fail_after_session_error(state, err),
+                }
             }
-        }
-        Err(err) => return fail_after_session_error(state, err),
-    };
+            Err(err) => return fail_after_session_error(state, err),
+        };
     if !retire_thread_sessions_after_turn(state, runner.take_retired_sessions(), &session_id) {
         state
             .thread_sessions_by_reuse_key
@@ -148,6 +154,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
 }
 
 fn ask_current_session<R: EvaluatorRunner>(
+    runtime: &CheckRuntime<'_>,
     runner: &mut R,
     session_id: &str,
     state: &mut InterrogationRunState,
@@ -161,9 +168,9 @@ fn ask_current_session<R: EvaluatorRunner>(
         )));
     };
     ask_in_thread(
+        runtime,
         runner,
         session_id,
-        request.agent,
         session_root.as_path(),
         &mut state.parse_cache,
         diagnostic_log,
@@ -172,9 +179,9 @@ fn ask_current_session<R: EvaluatorRunner>(
 }
 
 fn ask_in_thread<R: EvaluatorRunner>(
+    runtime: &CheckRuntime<'_>,
     runner: &mut R,
     session_id: &str,
-    agent: &AgentConfig,
     session_root: &Path,
     parse_cache: &mut EvaluatorResponseParseCache,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
@@ -185,15 +192,16 @@ fn ask_in_thread<R: EvaluatorRunner>(
         model: request.model,
         thinking: request.thinking,
     };
-    let visible_scope =
-        visible_scope(agent, request.enforced_scope).map_err(EvaluatorError::message)?;
+    let visible_scope = runtime
+        .visible_scope(request.agent, request.enforced_scope)
+        .map_err(EvaluatorError::message)?;
     // The evaluator turn boundary owns agent.request/agent.response runtime
     // log events for the single evaluator request made by this turn.
     ask_evaluator_once(
         runner,
         &turn,
         request.prompt,
-        agent,
+        request.agent,
         request.enforced_scope,
         &visible_scope,
         session_root,
@@ -211,8 +219,9 @@ fn start_thread_session<R: EvaluatorRunner>(
     visible_tree_oid: &str,
     request: ThreadTurnRequest<'_>,
 ) -> Result<ThreadLifecycleLog, EvaluatorError> {
-    let visible_scope =
-        visible_scope(request.agent, request.enforced_scope).map_err(EvaluatorError::message)?;
+    let visible_scope = runtime
+        .visible_scope(request.agent, request.enforced_scope)
+        .map_err(EvaluatorError::message)?;
     let visible_file_count = runtime.visible_file_count(
         &mut state.visible_tree_oid_cache,
         request.agent,
@@ -224,11 +233,12 @@ fn start_thread_session<R: EvaluatorRunner>(
     let developer_instructions = developer_instructions(DeveloperInstructionsContext {
         root: runtime.root,
         template_output_dir: request.template_output_dir,
+        in_place: runtime.is_in_place(),
         diff_from_tree_oid: request.diff_from_tree_oid,
-        checked_tree_oid: &runtime.tree_context.checked_tree_oid,
+        checked_tree_oid: runtime.checked_tree_oid(),
         expectation_instructions: request.expectation_instructions,
         visible_scope: &visible_scope,
-        checked_file_count: runtime.tree_context.checked_file_count,
+        checked_file_count: runtime.checked_file_count(),
         visible_file_count,
         last_pass: request.last_pass,
     })
@@ -346,9 +356,13 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
     // developer instructions and the turn prompt are rendered from
     // `resources/prompts/` plus runtime data.
     let enforced_scope = sanitize_scope(enforced_scope)?;
-    let last_pass = xpec_state
-        .read_last_pass(runtime.root, expectation)
-        .map_err(EvaluatorError::message)?;
+    let last_pass = if runtime.is_in_place() {
+        None
+    } else {
+        xpec_state
+            .read_last_pass(runtime.root, expectation)
+            .map_err(EvaluatorError::message)?
+    };
     ask_expectation_turn(
         runtime,
         expectation,
@@ -425,15 +439,11 @@ pub(crate) fn resolve_diff_from<'a>(
     // tree; custom values use TreeSource.
     let diff_from = expectation.diff_from.as_str();
     if diff_from == DEFAULT_DIFF_FROM {
-        return checkpoint_diff_base(
-            runtime.root,
-            last_pass,
-            &runtime.tree_context.against_tree_oid,
-        );
+        return checkpoint_diff_base(runtime.root, last_pass, runtime.against_tree_oid());
     }
     if diff_from == AGAINST_TREE_DIFF_FROM {
         return Ok(ResolvedDiffFrom {
-            tree_oid: runtime.tree_context.against_tree_oid.clone(),
+            tree_oid: runtime.against_tree_oid().to_string(),
             last_pass,
         });
     }

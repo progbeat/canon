@@ -21,7 +21,7 @@ pub(crate) fn parse_tree_check_config_content_with_root(
     )
 }
 
-fn parse_check_config_content_with_root_and_source(
+pub(crate) fn parse_check_config_content_with_root_and_source(
     root: &Path,
     config_path: &Path,
     content: &str,

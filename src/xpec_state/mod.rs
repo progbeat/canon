@@ -245,7 +245,7 @@ fn cooldown_last_result(
     Ok([pass, fail]
         .into_iter()
         .flatten()
-        .max_by_key(|result| parse_record_timestamp(&result.updated_timestamp).unwrap_or(0)))
+        .max_by_key(|result| parse_record_timestamp(&result.response_timestamp).unwrap_or(0)))
 }
 
 fn cooldown_last_result_for_status(

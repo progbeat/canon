@@ -26,6 +26,7 @@ pub(crate) struct CheckCommandArgs {
     pub(crate) tree: String,
     pub(crate) against_tree: String,
     pub(crate) against_tree_explicit: bool,
+    pub(crate) in_place: bool,
     pub(crate) no_sandbox: bool,
     pub(crate) query: Option<String>,
     pub(crate) query_preset: Option<String>,

@@ -9,6 +9,8 @@ use crate::staged::StagedWorktreeView;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+pub(crate) const IN_PLACE_VISIBLE_TREE_OID: &str = "in-place";
+
 pub(crate) fn should_retry_full_scope_after_error(error: Option<&str>, scope: &[String]) -> bool {
     if scope == full_scope() {
         return false;
@@ -72,10 +74,17 @@ pub(crate) fn evaluator_thread_reuse_key(
 pub(crate) struct CheckRuntime<'a> {
     pub(crate) root: &'a Path,
     pub(crate) config: &'a CheckConfig,
-    pub(crate) tree_source: &'a TreeSource,
-    pub(crate) tree_context: CheckTreeContext,
     no_sandbox: bool,
-    staged_view: &'a StagedWorktreeView,
+    mode: CheckRuntimeMode<'a>,
+}
+
+enum CheckRuntimeMode<'a> {
+    Materialized {
+        tree_source: &'a TreeSource,
+        tree_context: CheckTreeContext,
+        staged_view: &'a StagedWorktreeView,
+    },
+    InPlace,
 }
 
 #[derive(Clone)]
@@ -97,15 +106,62 @@ impl<'a> CheckRuntime<'a> {
         CheckRuntime {
             root,
             config,
-            tree_source,
-            tree_context,
             no_sandbox,
-            staged_view,
+            mode: CheckRuntimeMode::Materialized {
+                tree_source,
+                tree_context,
+                staged_view,
+            },
+        }
+    }
+
+    pub(crate) fn in_place(
+        root: &'a Path,
+        config: &'a CheckConfig,
+        no_sandbox: bool,
+    ) -> CheckRuntime<'a> {
+        CheckRuntime {
+            root,
+            config,
+            no_sandbox,
+            mode: CheckRuntimeMode::InPlace,
         }
     }
 
     pub(crate) fn no_sandbox(&self) -> bool {
         self.no_sandbox
+    }
+
+    pub(crate) fn is_in_place(&self) -> bool {
+        matches!(self.mode, CheckRuntimeMode::InPlace)
+    }
+
+    pub(crate) fn tree_source(&self) -> Option<&TreeSource> {
+        match &self.mode {
+            CheckRuntimeMode::Materialized { tree_source, .. } => Some(tree_source),
+            CheckRuntimeMode::InPlace => None,
+        }
+    }
+
+    pub(crate) fn checked_tree_oid(&self) -> &str {
+        match &self.mode {
+            CheckRuntimeMode::Materialized { tree_context, .. } => &tree_context.checked_tree_oid,
+            CheckRuntimeMode::InPlace => IN_PLACE_VISIBLE_TREE_OID,
+        }
+    }
+
+    pub(crate) fn against_tree_oid(&self) -> &str {
+        match &self.mode {
+            CheckRuntimeMode::Materialized { tree_context, .. } => &tree_context.against_tree_oid,
+            CheckRuntimeMode::InPlace => IN_PLACE_VISIBLE_TREE_OID,
+        }
+    }
+
+    pub(crate) fn checked_file_count(&self) -> usize {
+        match &self.mode {
+            CheckRuntimeMode::Materialized { tree_context, .. } => tree_context.checked_file_count,
+            CheckRuntimeMode::InPlace => 0,
+        }
     }
 
     pub(crate) fn visible_tree_oid(
@@ -114,7 +170,12 @@ impl<'a> CheckRuntime<'a> {
         agent: &AgentConfig,
         scope: &[String],
     ) -> Result<String, String> {
-        cache.visible_tree_oid(self.root, self.tree_source, agent, scope)
+        match &self.mode {
+            CheckRuntimeMode::Materialized { tree_source, .. } => {
+                cache.visible_tree_oid(self.root, tree_source, agent, scope)
+            }
+            CheckRuntimeMode::InPlace => Ok(IN_PLACE_VISIBLE_TREE_OID.to_string()),
+        }
     }
 
     pub(crate) fn visible_file_count(
@@ -123,7 +184,26 @@ impl<'a> CheckRuntime<'a> {
         agent: &AgentConfig,
         scope: &[String],
     ) -> Result<usize, String> {
-        cache.visible_file_count(self.root, self.tree_source, agent, scope)
+        match &self.mode {
+            CheckRuntimeMode::Materialized { tree_source, .. } => {
+                cache.visible_file_count(self.root, tree_source, agent, scope)
+            }
+            CheckRuntimeMode::InPlace => Ok(0),
+        }
+    }
+
+    pub(crate) fn visible_scope(
+        &self,
+        agent: &AgentConfig,
+        scope: &[String],
+    ) -> Result<Vec<String>, String> {
+        if self.is_in_place() {
+            // In-place mode has no Git-backed visible tree and no path hiding.
+            // CLI parsing rejects `--scope` in this mode, while stored q-scopes
+            // and narrowing retries are intentionally ignored.
+            return Ok(full_scope());
+        }
+        visible_scope(agent, scope)
     }
 
     pub(crate) fn session_root_for_scope(
@@ -132,13 +212,22 @@ impl<'a> CheckRuntime<'a> {
         scope: &[String],
         visible_tree_oid: &str,
     ) -> Result<PathBuf, String> {
+        if self.is_in_place() {
+            // In-place evaluator sessions start in the checked directory
+            // itself; no scoped materialization is created.
+            return Ok(self.root.to_path_buf());
+        }
         // `visible_scope` returns the complete visible-scope pathspec,
         // including configured ignore exclusions. From here down,
         // materialization selects paths solely by applying that pathspec to
         // checked Git entries.
         let visible_scope = visible_scope(agent, scope)?;
-        self.staged_view
-            .materialize_visible_scope(&visible_scope, visible_tree_oid)
+        match &self.mode {
+            CheckRuntimeMode::Materialized { staged_view, .. } => {
+                staged_view.materialize_visible_scope(&visible_scope, visible_tree_oid)
+            }
+            CheckRuntimeMode::InPlace => Ok(self.root.to_path_buf()),
+        }
     }
 }
 
@@ -236,5 +325,31 @@ mod tests {
 
         assert_ne!(base, different_base);
         assert_ne!(base, different_checked);
+    }
+
+    #[test]
+    fn in_place_runtime_uses_full_scope_and_checked_directory() {
+        let root = PathBuf::from("/tmp/canon-in-place-runtime");
+        let config = CheckConfig {
+            version: 1,
+            presets: Default::default(),
+            agent: AgentConfig::default(),
+            expectations: Vec::new(),
+        };
+        let runtime = CheckRuntime::in_place(&root, &config, false);
+        let requested_scope = vec!["src".to_string()];
+
+        assert_eq!(
+            runtime
+                .visible_scope(&AgentConfig::default(), &requested_scope)
+                .unwrap(),
+            full_scope()
+        );
+        assert_eq!(
+            runtime
+                .session_root_for_scope(&AgentConfig::default(), &requested_scope, "in-place")
+                .unwrap(),
+            root
+        );
     }
 }

@@ -55,36 +55,50 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         };
     }
 
-    let mut interrogation_run_state = run_try!(InterrogationRunState::new(runtime.no_sandbox()));
-    caches.run_start_pass_ids = run_try!(snapshot_pass_ids(
-        root,
-        &options.selected,
-        &mut caches.xpec_state,
+    let mut interrogation_run_state = run_try!(InterrogationRunState::new(
+        runtime.no_sandbox() || runtime.is_in_place()
     ));
-    let check_work = run_try!(select_expectations_after_cache(
-        CacheFilterContext {
+    let check_work_queue = if runtime.is_in_place() {
+        options
+            .selected
+            .clone()
+            .into_iter()
+            .map(|expectation| CheckWorkItem::Evaluate(Box::new(expectation)))
+            .collect::<Vec<_>>()
+    } else {
+        caches.run_start_pass_ids = run_try!(snapshot_pass_ids(
             root,
-            source: runtime.tree_source,
-            xpec_state: &mut caches.xpec_state,
-            visible_tree_oid_cache: &mut caches.visible_tree_oid,
-            diagnostic_log: &mut diagnostic_log,
-        },
-        options,
-        run_try!(unix_timestamp()),
-        if options.selectors_provided {
-            CachedFailureMode::Continue
-        } else {
-            CachedFailureMode::StopDefaultSelection
-        },
-    ));
-    // Cached hits reuse results while evaluate items still require evaluator
-    // work, but both are ordered together for the public check run.
-    let check_work_queue = run_try!(order_check_work(
-        root,
-        check_work.cached_hits,
-        check_work.to_evaluate,
-        &mut caches.xpec_state,
-    ));
+            &options.selected,
+            &mut caches.xpec_state,
+        ));
+        let source = runtime
+            .tree_source()
+            .ok_or_else(|| current_error!("missing Git tree source".to_string()))?;
+        let check_work = run_try!(select_expectations_after_cache(
+            CacheFilterContext {
+                root,
+                source,
+                xpec_state: &mut caches.xpec_state,
+                visible_tree_oid_cache: &mut caches.visible_tree_oid,
+                diagnostic_log: &mut diagnostic_log,
+            },
+            options,
+            run_try!(unix_timestamp()),
+            if options.selectors_provided {
+                CachedFailureMode::Continue
+            } else {
+                CachedFailureMode::StopDefaultSelection
+            },
+        ));
+        // Cached hits reuse results while evaluate items still require evaluator
+        // work, but both are ordered together for the public check run.
+        run_try!(order_check_work(
+            root,
+            check_work.cached_hits,
+            check_work.to_evaluate,
+            &mut caches.xpec_state,
+        ))
+    };
     let mut check_work_queue = check_work_queue.into_iter();
     while let Some(item) = check_work_queue.next() {
         match item {

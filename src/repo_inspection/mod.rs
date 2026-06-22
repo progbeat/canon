@@ -1,6 +1,7 @@
+use crate::check::CheckConfigSource;
 use crate::check::{
-    expand_staged_generator_paths_from_listing, parse_tree_check_config_content_with_root,
-    CHECK_PATH,
+    expand_staged_generator_paths_from_listing, parse_check_config_content_with_root_and_source,
+    parse_tree_check_config_content_with_root, CHECK_PATH,
 };
 use crate::config_types::{CheckConfig, RawExpectationItem};
 use crate::git::{
@@ -8,6 +9,7 @@ use crate::git::{
 };
 use crate::platform::git_path_bytes;
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 type GitPathCacheKey = (PathBuf, String);
@@ -55,7 +57,7 @@ impl RepoInspectionCache {
         root: &Path,
         config_path: &Path,
         path: &str,
-        source: &TreeSource,
+        source: &CheckConfigSource,
     ) -> Result<Vec<String>, String> {
         let source_key = source.cache_key();
         let key = (
@@ -68,9 +70,14 @@ impl RepoInspectionCache {
             return cached.clone();
         }
         let expanded = match source {
-            TreeSource::Staged => self.expand_staged_generator_paths(root, config_path, path),
-            TreeSource::Git { .. } => {
+            CheckConfigSource::Tree(TreeSource::Staged) => {
+                self.expand_staged_generator_paths(root, config_path, path)
+            }
+            CheckConfigSource::Tree(source) => {
                 self.expand_tree_generator_paths(root, config_path, path, source)
+            }
+            CheckConfigSource::InPlace => {
+                self.expand_in_place_generator_paths(root, config_path, path)
             }
         };
         self.generator_paths.insert(key, expanded.clone());
@@ -141,6 +148,18 @@ impl RepoInspectionCache {
         }
     }
 
+    pub(crate) fn config_source_file_content(
+        &mut self,
+        root: &Path,
+        source: &CheckConfigSource,
+        path: impl AsRef<Path>,
+    ) -> Result<String, String> {
+        match source {
+            CheckConfigSource::Tree(source) => self.tree_file_content(root, source, path),
+            CheckConfigSource::InPlace => in_place_file_content(root, path.as_ref()),
+        }
+    }
+
     fn expand_tree_generator_paths(
         &mut self,
         root: &Path,
@@ -155,6 +174,16 @@ impl RepoInspectionCache {
             .filter_map(|file| String::from_utf8(file.path).ok())
             .collect::<Vec<_>>();
         expand_staged_generator_paths_from_listing(config_path, path, &tree_paths)
+    }
+
+    fn expand_in_place_generator_paths(
+        &mut self,
+        root: &Path,
+        config_path: &Path,
+        path: &str,
+    ) -> Result<Vec<String>, String> {
+        let files = in_place_file_listing(root)?;
+        expand_staged_generator_paths_from_listing(config_path, path, &files)
     }
 
     fn tree_file_content_from_batch(
@@ -287,6 +316,33 @@ impl RepoInspectionCache {
         parsed
     }
 
+    pub(crate) fn load_in_place_check_config(
+        &mut self,
+        root: &Path,
+        config_path: &Path,
+    ) -> Result<CheckConfig, String> {
+        let source = CheckConfigSource::InPlace;
+        let content = in_place_file_content(root, config_path)?;
+        let key = (
+            root.to_path_buf(),
+            config_path.to_path_buf(),
+            content.clone(),
+            source.cache_key(),
+        );
+        if let Some(cached) = self.check_configs.get(&key) {
+            return cached.clone();
+        }
+        let parsed = parse_check_config_content_with_root_and_source(
+            root,
+            config_path,
+            &content,
+            self,
+            source,
+        );
+        self.check_configs.insert(key, parsed.clone());
+        parsed
+    }
+
     pub(crate) fn included_expectation_items(
         &mut self,
         file: &str,
@@ -301,6 +357,41 @@ impl RepoInspectionCache {
         self.included_expectations.insert(key, parsed.clone());
         parsed
     }
+}
+
+fn in_place_file_content(root: &Path, path: &Path) -> Result<String, String> {
+    let path = root.join(path);
+    fs::read_to_string(&path).map_err(|err| format!("failed to read {}: {}", path.display(), err))
+}
+
+fn in_place_file_listing(root: &Path) -> Result<Vec<String>, String> {
+    let mut files = Vec::new();
+    collect_in_place_files(root, root, &mut files)?;
+    files.sort();
+    Ok(files)
+}
+
+fn collect_in_place_files(root: &Path, dir: &Path, files: &mut Vec<String>) -> Result<(), String> {
+    for entry in
+        fs::read_dir(dir).map_err(|err| format!("failed to read {}: {}", dir.display(), err))?
+    {
+        let entry = entry.map_err(|err| format!("failed to read {}: {}", dir.display(), err))?;
+        let path = entry.path();
+        let file_type = entry
+            .file_type()
+            .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
+        if file_type.is_dir() {
+            collect_in_place_files(root, &path, files)?;
+        } else if file_type.is_file() || file_type.is_symlink() {
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|_| format!("failed to relativize {}", path.display()))?;
+            if let Some(path) = relative.to_str() {
+                files.push(path.replace(std::path::MAIN_SEPARATOR, "/"));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn missing_staged_file_message(path: &Path) -> String {

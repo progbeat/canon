@@ -84,9 +84,12 @@ fn ask_query<R: EvaluatorRunner>(
     // Query mode uses the same Interrogation Policy q-scope verification
     // follow-up as expectation mode. All query-mode dependence on
     // `qScopeSuggestion` is contained in this verification planning helper.
-    let q_scope_verification_scope =
+    let q_scope_verification_scope = if runtime.is_in_place() {
+        None
+    } else {
         q_scope_verification_scope_for_query_answer(runtime, query, state, &active_scope, &attempt)
-            .map_err(|err| err.to_string())?;
+            .map_err(|err| err.to_string())?
+    };
     let mut result = attempt.result;
     if let Some(proposed_scope) = q_scope_verification_scope {
         let narrowed = match ask_once(
@@ -177,7 +180,9 @@ fn ask_with_full_scope_retry<R: EvaluatorRunner>(
         state,
     )?;
     let mut follow_up_used = false;
-    if should_retry_full_scope_after_error(result.answer.error.as_deref(), enforced_scope) {
+    if !runtime.is_in_place()
+        && should_retry_full_scope_after_error(result.answer.error.as_deref(), enforced_scope)
+    {
         // Restricted ScopeTooNarrow is not final for query-mode
         // interrogations either; retry once with full project scope.
         *enforced_scope = full_scope();
@@ -379,7 +384,7 @@ impl<'a> QueryRequest<'a> {
         match self.expectation {
             Some(context) => resolve_diff_from(runtime, context.expectation, context.last_pass),
             None => Ok(ResolvedDiffFrom {
-                tree_oid: runtime.tree_context.against_tree_oid.clone(),
+                tree_oid: runtime.against_tree_oid().to_string(),
                 last_pass: None,
             }),
         }

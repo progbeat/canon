@@ -22,7 +22,7 @@ pub(super) fn finish_check_error_report(
     let error = context.error;
     finish_check_report(
         CheckReportFinishContext {
-            diagnostic_log: context.diagnostic_log,
+            diagnostic_log: Some(context.diagnostic_log),
             result_output: context.result_output,
             check_caches: context.check_caches,
             write_agent_message: false,

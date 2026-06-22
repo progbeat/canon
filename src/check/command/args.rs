@@ -12,7 +12,10 @@ use clap::{Arg, ArgAction, Command};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommandArgs, String> {
+pub(crate) fn parse_check_command_args(
+    args: &[OsString],
+    default_in_place: bool,
+) -> Result<CheckCommandArgs, String> {
     let matches = check_help_command()
         .no_binary_name(true)
         .disable_version_flag(true)
@@ -23,6 +26,7 @@ pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommand
     if let Some(value) = matches.get_one::<OsString>("config") {
         set_check_config_path(&mut config_path, &arg_to_string(value)?)?;
     }
+    let tree_explicit = matches.contains_id("tree");
     let tree = match matches.get_one::<OsString>("tree") {
         Some(value) => {
             let value = arg_to_string(value)?;
@@ -69,6 +73,11 @@ pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommand
     }
     let query_scope_provided = !query_scope.is_empty();
     let options = raw_check_options_from_matches(&matches)?;
+    let in_place = default_in_place || matches.get_flag("in_place");
+
+    if in_place {
+        validate_in_place_options(tree_explicit, against_tree_explicit, query_scope_provided)?;
+    }
 
     if query.is_none() && !query_scope.is_empty() {
         return Err("canon check -s/--scope requires -q".to_string());
@@ -87,6 +96,7 @@ pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommand
         tree,
         against_tree,
         against_tree_explicit,
+        in_place,
         no_sandbox: matches.get_flag("no_sandbox"),
         query,
         query_preset,
@@ -99,7 +109,7 @@ pub(crate) fn parse_check_command_args(args: &[OsString]) -> Result<CheckCommand
 pub(crate) fn check_help_command() -> Command {
     let command = Command::new("check")
         .bin_name("canon check")
-        .about("Check whether a Git tree meets project expectations written in the canon.")
+        .about("Check whether project files meet human expectations written in the canon.")
         .arg(
             check_value_arg("config")
                 .short('c')
@@ -127,17 +137,13 @@ pub(crate) fn check_help_command() -> Command {
                 .help("Set the visible scope for the question")
                 .action(ArgAction::Append),
         )
+        .arg(checked_tree_arg())
+        .arg(against_tree_arg())
         .arg(
-            check_value_arg("tree")
-                .long("tree")
-                .value_name("TREE")
-                .help("Check this Git tree [default: :staged]"),
-        )
-        .arg(
-            check_value_arg("against_tree")
-                .long("against-tree")
-                .value_name("TREE")
-                .help("Compare against this Git tree [default: HEAD]"),
+            Arg::new("in_place")
+                .long("in-place")
+                .help("Check the current directory directly")
+                .action(ArgAction::SetTrue),
         )
         .arg(
             Arg::new("no_sandbox")
@@ -159,6 +165,20 @@ fn check_value_arg(name: &'static str) -> Arg {
         .num_args(1)
         .allow_hyphen_values(true)
         .value_parser(OsStringValueParser::new())
+}
+
+fn checked_tree_arg() -> Arg {
+    check_value_arg("tree")
+        .long("tree")
+        .value_name("TREE")
+        .help("Check this Git tree [default: :staged]")
+}
+
+fn against_tree_arg() -> Arg {
+    check_value_arg("against_tree")
+        .long("against-tree")
+        .value_name("TREE")
+        .help("Compare against this Git tree [default: HEAD]")
 }
 
 fn set_check_config_path(config_path: &mut Option<PathBuf>, value: &str) -> Result<(), String> {
@@ -201,13 +221,42 @@ fn validate_query_mode_options(options: &RawCheckOptions) -> Result<(), String> 
     ))
 }
 
+fn validate_in_place_options(
+    tree_explicit: bool,
+    against_tree_explicit: bool,
+    query_scope_provided: bool,
+) -> Result<(), String> {
+    let mut invalid = Vec::new();
+    if tree_explicit {
+        invalid.push("--tree");
+    }
+    if against_tree_explicit {
+        invalid.push("--against-tree");
+    }
+    if query_scope_provided {
+        invalid.push("-s/--scope");
+    }
+    if invalid.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "canon check --in-place cannot be combined with {}",
+        invalid.join(", ")
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn parse(args: &[&str]) -> Result<CheckCommandArgs, String> {
         let args = args.iter().map(OsString::from).collect::<Vec<_>>();
-        parse_check_command_args(&args)
+        parse_check_command_args(&args, false)
+    }
+
+    fn parse_default_in_place(args: &[&str]) -> Result<CheckCommandArgs, String> {
+        let args = args.iter().map(OsString::from).collect::<Vec<_>>();
+        parse_check_command_args(&args, true)
     }
 
     #[test]
@@ -252,6 +301,56 @@ mod tests {
         let command = parse(&["-q", "Can this pass?", "--no-sandbox"]).unwrap();
 
         assert!(command.no_sandbox);
+    }
+
+    #[test]
+    fn in_place_flag_is_recorded() {
+        let command = parse(&["--in-place"]).unwrap();
+
+        assert!(command.in_place);
+    }
+
+    #[test]
+    fn default_in_place_is_recorded() {
+        let command = parse_default_in_place(&[]).unwrap();
+
+        assert!(command.in_place);
+    }
+
+    #[test]
+    fn in_place_rejects_git_tree_options() {
+        let err = match parse(&["--in-place", "--tree", "HEAD", "--against-tree", "HEAD~1"]) {
+            Ok(_) => panic!("expected in-place tree options to fail"),
+            Err(err) => err,
+        };
+
+        assert_eq!(
+            err,
+            "canon check --in-place cannot be combined with --tree, --against-tree"
+        );
+    }
+
+    #[test]
+    fn default_in_place_rejects_git_tree_options() {
+        let err = match parse_default_in_place(&["--tree", "HEAD"]) {
+            Ok(_) => panic!("expected default in-place tree option to fail"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err, "canon check --in-place cannot be combined with --tree");
+    }
+
+    #[test]
+    fn in_place_rejects_query_scope() {
+        let err = match parse(&["--in-place", "-q", "Can this pass?", "-s", "src"]) {
+            Ok(_) => panic!("expected in-place query scope to fail"),
+            Err(err) => err,
+        };
+
+        assert_eq!(
+            err,
+            "canon check --in-place cannot be combined with -s/--scope"
+        );
     }
 
     #[test]

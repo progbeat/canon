@@ -30,6 +30,7 @@ const EVALUATOR_TURN_PROMPT_TEMPLATE: &str =
 pub(crate) struct DeveloperInstructionsContext<'a> {
     pub(crate) root: &'a Path,
     pub(crate) template_output_dir: &'a Path,
+    pub(crate) in_place: bool,
     pub(crate) diff_from_tree_oid: &'a str,
     pub(crate) checked_tree_oid: &'a str,
     pub(crate) expectation_instructions: &'a str,
@@ -59,6 +60,7 @@ pub(crate) fn developer_instructions(
             "expectation": {
                 "instructions": context.expectation_instructions,
             },
+            "in_place": context.in_place,
             "diff_from_tree_oid": context.diff_from_tree_oid,
             "checked_tree_oid": context.checked_tree_oid,
             "last_pass": context.last_pass,
@@ -131,8 +133,9 @@ fn render_minijinja_resource_template(
     let template = environment
         .template_from_str(template)
         .map_err(|err| format!("failed to parse prompt template: {}", err))?;
-    // Prompt Templates require the MiniJinja render itself to start from the
-    // repository root cwd; use the shared process-cwd guard for that boundary.
+    // Prompt Templates require the MiniJinja render itself to start from this
+    // check root cwd: the repository root outside in-place mode, or the
+    // checked directory in in-place mode.
     let rendered = render_with_repository_cwd(root, || template.render(context))
         .map_err(|err| format!("failed to render prompt template: {}", err))?;
     // Canon trims only outer template whitespace. Internal sentinels protect

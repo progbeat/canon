@@ -7,6 +7,7 @@ use crate::gate::run_gate_command;
 use crate::hooks::{run_hook_command, run_init};
 use crate::project::{git_project_root, project_root_or_current};
 use clap::Command as ClapCommand;
+use std::env;
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -68,8 +69,17 @@ impl BuiltinCommand {
                 run_hook_command(&root, args).map_err(CommandError::from)
             }
             BuiltinCommand::Check => {
-                let root = git_project_root(Path::new("."))?;
-                run_check_command(&root, args)
+                let current_dir = env::current_dir()
+                    .map_err(|err| format!("failed to read current dir: {err}"))?;
+                let git_root = git_project_root(&current_dir).ok();
+                let explicit_in_place = args.iter().any(|arg| arg == "--in-place");
+                let default_in_place = git_root.is_none();
+                let root = if explicit_in_place || default_in_place {
+                    current_dir
+                } else {
+                    git_root.expect("git_root is present when default_in_place is false")
+                };
+                run_check_command(&root, args, default_in_place)
             }
             BuiltinCommand::Show => {
                 let root = git_project_root(Path::new("."))?;

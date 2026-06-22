@@ -61,21 +61,29 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         );
     }
 
-    let mut verified_q_scope = match initial_visible_scope_for_expectation(
-        context.runtime.root,
-        context.runtime.tree_source,
-        expectation,
-        &mut context.caches.xpec_state,
-        &mut context.caches.visible_tree_oid,
-    ) {
-        Ok(scope) => scope,
-        Err(error) => {
-            return finish_unstarted_expectation_with_error_record(
-                context,
-                expectation,
-                full_scope(),
-                error,
-            );
+    let mut verified_q_scope = if context.runtime.is_in_place() {
+        full_scope()
+    } else {
+        let tree_source = context
+            .runtime
+            .tree_source()
+            .ok_or_else(|| "missing Git tree source".to_string())?;
+        match initial_visible_scope_for_expectation(
+            context.runtime.root,
+            tree_source,
+            expectation,
+            &mut context.caches.xpec_state,
+            &mut context.caches.visible_tree_oid,
+        ) {
+            Ok(scope) => scope,
+            Err(error) => {
+                return finish_unstarted_expectation_with_error_record(
+                    context,
+                    expectation,
+                    full_scope(),
+                    error,
+                );
+            }
         }
     };
     // Prepare the tree metadata needed to render an errored expectation before
@@ -192,12 +200,14 @@ fn record_finished_expectation<R: EvaluatorRunner>(
     // cache decisions. The final call emits the evaluated expectation's
     // expectation.result and, when needed, expectation.review_required runtime
     // log events through DiagnosticLogWriter::write_record_event.
-    context.caches.xpec_state.write_last_result_for_record(
-        context.runtime.root,
-        &context.runtime.tree_context.checked_tree_oid,
-        expectation,
-        record,
-    )?;
+    if !context.runtime.is_in_place() {
+        context.caches.xpec_state.write_last_result_for_record(
+            context.runtime.root,
+            context.runtime.checked_tree_oid(),
+            expectation,
+            record,
+        )?;
+    }
     write_expectation_result_event(context.diagnostic_log, record)
 }
 
@@ -232,6 +242,15 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
     }
     debug_assert!(scope_is_within(&record_scope, verified_q_scope));
     let initial_result = initial_interrogation.record.result;
+    if context.runtime.is_in_place() {
+        return Ok(CompletedInterrogation {
+            record: initial.into_interrogation().record,
+            break_after_tokens_hit,
+            context_compaction_hit,
+            stop_after_current_expectation,
+            interrupted,
+        });
+    }
     // This is the Interrogation Policy q-scope verification follow-up. It is
     // the only check-run decision point that consumes an evaluator
     // `qScopeSuggestion`; the rest of this function only executes the
@@ -311,7 +330,11 @@ fn interrogate_with_full_scope_retry<R: EvaluatorRunner>(
     let should_stop_after_current_expectation =
         turn_exceeds_break_after_tokens(&interrogation, context.options.break_after_tokens)
             || turn_has_context_compaction(&interrogation);
-    if should_retry_full_scope_after_error(interrogation.record.error.as_deref(), verified_q_scope)
+    if !context.runtime.is_in_place()
+        && should_retry_full_scope_after_error(
+            interrogation.record.error.as_deref(),
+            verified_q_scope,
+        )
     {
         // Restricted ScopeTooNarrow is not final. The single policy follow-up
         // retries it once at full scope.
