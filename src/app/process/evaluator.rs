@@ -110,6 +110,9 @@ pub(crate) fn turn_start_request(
     cwd: Option<&Path>,
     no_sandbox: bool,
 ) -> Result<Value, EvaluatorError> {
+    // Enforce the Interrogation Policy response schema selected by this
+    // interrogation's q-scope. For q-scope ["."], the schema excludes
+    // ScopeTooNarrow before the evaluator turn is started.
     let enforced_output_schema = evaluator_response_output_schema_for_q_scope(q_scope);
     let mut request = json!({
         "threadId": session_id,

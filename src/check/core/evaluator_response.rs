@@ -13,6 +13,8 @@ pub(crate) enum EvaluatorResponseSchemaScope {
 
 impl EvaluatorResponseSchemaScope {
     pub(crate) fn for_q_scope(q_scope: &[String]) -> EvaluatorResponseSchemaScope {
+        // Interrogation Policy defines full project scope as exactly q-scope
+        // ["."], before configured ignore exclusions are applied.
         if q_scope.len() == 1 && q_scope[0] == "." {
             EvaluatorResponseSchemaScope::FullProject
         } else {
@@ -22,9 +24,11 @@ impl EvaluatorResponseSchemaScope {
 
     fn error_enum(self) -> Value {
         match self {
+            // Restricted-scope interrogations may ask for more visible scope.
             EvaluatorResponseSchemaScope::Restricted => {
                 json!([ERROR_SCOPE_TOO_NARROW, ERROR_INVALID_QUESTION])
             }
+            // Full-project-scope interrogations disable ScopeTooNarrow.
             EvaluatorResponseSchemaScope::FullProject => json!([ERROR_INVALID_QUESTION]),
         }
     }
@@ -34,6 +38,9 @@ impl EvaluatorResponseSchemaScope {
             EvaluatorResponseSchemaScope::Restricted => {
                 json!([ERROR_SCOPE_TOO_NARROW, ERROR_INVALID_QUESTION, null])
             }
+            // This value is sent as turn/start.params.outputSchema for
+            // q-scope ["."], so the app server cannot return ScopeTooNarrow
+            // as a schema-valid full-project-scope response.
             EvaluatorResponseSchemaScope::FullProject => json!([ERROR_INVALID_QUESTION, null]),
         }
     }
@@ -134,7 +141,8 @@ pub(crate) fn evaluator_response_json_schema(schema_scope: EvaluatorResponseSche
 }
 
 pub(crate) fn evaluator_response_output_schema_for_q_scope(q_scope: &[String]) -> Value {
-    evaluator_response_output_schema(EvaluatorResponseSchemaScope::for_q_scope(q_scope))
+    let schema_scope = EvaluatorResponseSchemaScope::for_q_scope(q_scope);
+    evaluator_response_output_schema(schema_scope)
 }
 
 pub(crate) fn evaluator_response_output_schema(
