@@ -3,12 +3,15 @@ use std::path::{Path, PathBuf};
 
 use crate::config_types::AgentConfig;
 use crate::evaluator::{is_model_technical_failure, EvaluatorError, EvaluatorRunner};
+use crate::git::resolve_git_path;
+use crate::state_paths::CANON_STATE_DIR_GIT_PATH;
 use crate::token_usage_types::{EvaluatorTurnUsage, TokenUsage};
 
 use super::process::AppServerRunner;
 
 pub(crate) struct LazyAppServerRunner {
     app_server_root: PathBuf,
+    app_server_state_root: PathBuf,
     load_plugins: bool,
     agent: AgentConfig,
     no_sandbox: bool,
@@ -23,22 +26,25 @@ impl LazyAppServerRunner {
         load_plugins: bool,
         agent: &AgentConfig,
         no_sandbox: bool,
-    ) -> LazyAppServerRunner {
-        LazyAppServerRunner {
+    ) -> Result<LazyAppServerRunner, String> {
+        let app_server_state_root = resolve_git_path(app_server_root, CANON_STATE_DIR_GIT_PATH)?;
+        Ok(LazyAppServerRunner {
             app_server_root: app_server_root.to_path_buf(),
+            app_server_state_root,
             load_plugins,
             agent: agent.clone(),
             no_sandbox,
             inner: None,
             sessions: BTreeSet::new(),
             retired_token_usage: TokenUsage::default(),
-        }
+        })
     }
 
     fn inner(&mut self) -> Result<&mut AppServerRunner, EvaluatorError> {
         if self.inner.is_none() {
             self.inner = Some(AppServerRunner::new(
                 &self.app_server_root,
+                &self.app_server_state_root,
                 self.load_plugins,
                 &self.agent,
                 self.no_sandbox,
@@ -126,6 +132,7 @@ impl EvaluatorRunner for LazyAppServerRunner {
         prompt: &str,
         model: Option<&str>,
         thinking: &str,
+        q_scope: &[String],
     ) -> Result<String, EvaluatorError> {
         if !self.sessions.contains(session_id) {
             return Err("app-server runner does not own session".into());
@@ -134,7 +141,7 @@ impl EvaluatorRunner for LazyAppServerRunner {
             .inner
             .as_mut()
             .ok_or_else(|| EvaluatorError::message("app-server runner is not initialized"))?
-            .ask(session_id, prompt, model, thinking);
+            .ask(session_id, prompt, model, thinking, q_scope);
         if let Err(err) = &result {
             self.retire_inner_after_model_failure(err)?;
         }

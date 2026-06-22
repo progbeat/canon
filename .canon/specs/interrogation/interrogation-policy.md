@@ -4,7 +4,12 @@
 
 Each evaluator task input is rendered from the turn prompt template.
 
-An evaluator response must be a single JSON object matching this JSON Schema:
+An evaluator response must be a single JSON object matching the JSON Schema selected for that interrogation's q-scope.
+
+An interrogation is **restricted-scope** when its q-scope is not full project scope.
+For this policy, **full project scope** means the q-scope `["."]` before configured ignore exclusions are applied to form the visible scope.
+
+A restricted-scope interrogation uses this JSON Schema:
 
 ```json
 {
@@ -40,13 +45,15 @@ An evaluator response must be a single JSON object matching this JSON Schema:
 }
 ```
 
+A full-project-scope interrogation uses the same response schema except that `error.enum` is `["InvalidQuestion"]`.
+
 A fresh interrogation uses the stored q-scope for that expectation, or full project scope if no q-scope is stored.
 
 A **follow-up interrogation** is an additional interrogation required by this policy for the same expectation after the initial interrogation receives an evaluator response.
 
 For one expectation, `canon check` performs at most one follow-up interrogation.
 
-When the initial interrogation does not use full project scope and returns `error: "ScopeTooNarrow"`, the follow-up interrogation retries with full project scope.
+When a restricted-scope initial interrogation returns `error: "ScopeTooNarrow"`, the follow-up interrogation retries with full project scope, where `ScopeTooNarrow` is disabled.
 
 When the final evaluator response has `error`, human review is required.
 

@@ -7,7 +7,8 @@ pub(crate) use config::{git_config_get, GitConfigGetError};
 #[cfg(test)]
 pub(crate) use program::{empty_tree_oid, staged_tree_oid};
 pub(crate) use program::{
-    read_git_blobs, resolve_git_path, staged_tracked_files, GitBlobReader, StagedTrackedFile,
+    read_git_blobs, resolve_git_path, staged_tracked_files, tree_object_exists, GitBlobReader,
+    StagedTrackedFile,
 };
 pub(crate) use tree_source::{
     validate_tree_arg, TreeSource, DEFAULT_AGAINST_TREE_ARG, STAGED_TREE_ARG,

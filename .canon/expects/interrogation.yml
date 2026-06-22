@@ -10,8 +10,8 @@
 - q: "Do your instructions encourage you to make `qScopeSuggestion` as narrow as possible while still enough to justify the answer?"
   a: "yes"
 
-- q: "Are all built-in interrogation prompt and instruction templates kept under `resources/prompts/`?"
-  a: "yes"
+- q: "Can you find any prompts or instructions for the evaluator agent outside of `resources/prompts/`?"
+  a: "no"
 
 - q: "Do your base instructions contain any answer directive whose condition depends on the topic of a substantive project claim? Treat answer directive as any instruction that affects the semantic value of the final `answer`."
   a: "no"
@@ -36,6 +36,9 @@
 - q: "Is the q-scope verification follow-up the only `canon check` decision logic that may depend on a `qScopeSuggestion` from an evaluator response?"
   a: "yes"
   cooldown: 7d
+
+- q: "Can `canon check` make a non-initial evaluator request whose request kind has no dedicated progress timeline marker symbol?"
+  a: "no"
 
 # - q: "Do the dev instructions require knowing any specialized terms whose meaning is not available from the dev instructions themselves?"
 #   a: "no"

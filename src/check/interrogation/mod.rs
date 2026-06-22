@@ -12,8 +12,8 @@ pub(crate) use result::{
 };
 pub(crate) use session::{
     ask_with_reused_thread, interrogate_expectation_with_model,
-    interrogate_expectation_with_model_fallbacks, resolve_diff_from_tree_oid,
-    run_with_model_fallbacks, ThreadTurnRequest,
+    interrogate_expectation_with_model_fallbacks, resolve_diff_from, run_with_model_fallbacks,
+    ModelFallbackInterrogation, ResolvedDiffFrom, ThreadTurnRequest,
 };
 pub(crate) use session::{
     write_agent_turn_failure_event, write_agent_turn_missing_usage_event,

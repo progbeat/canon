@@ -1,14 +1,6 @@
 #!/usr/bin/env sh
 set -eu
 
-if [ "${1:-}" = "canon" ]; then
-  shift
-fi
-
-if [ "$#" -eq 0 ]; then
-  set -- help
-fi
-
 tmpdir="${TMPDIR:-/scratch/tmp}"
 codex_home="${CODEX_HOME:-/scratch/codex-home}"
 mkdir -p \
@@ -29,27 +21,18 @@ if [ -e "$system_skills_marker" ]; then
   cp "$system_skills_marker" "$codex_home/skills/.system/.codex-system-skills.marker"
 fi
 
-if [ "$1" = "check" ]; then
-  has_no_sandbox=0
-  for arg in "$@"; do
-    [ "$arg" != "--no-sandbox" ] || has_no_sandbox=1
-  done
-  if [ "$has_no_sandbox" -eq 0 ]; then
-    shift
-    set -- check --no-sandbox "$@"
-  fi
-fi
-
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   host_index="$(git rev-parse --path-format=absolute --git-path index)"
   if [ -e "$host_index" ]; then
-    git_common_dir="$(git rev-parse --path-format=absolute --git-common-dir)"
     export GIT_INDEX_FILE="$tmpdir/canon-git/index"
-    export GIT_OBJECT_DIRECTORY="$tmpdir/canon-git/objects"
-    export GIT_ALTERNATE_OBJECT_DIRECTORIES="${git_common_dir}/objects"
-    mkdir -p "$(dirname "$GIT_INDEX_FILE")" "$GIT_OBJECT_DIRECTORY"
+    mkdir -p "$(dirname "$GIT_INDEX_FILE")"
     cp "$host_index" "$GIT_INDEX_FILE"
   fi
 fi
 
+# Docker creates /scratch/secret for the bind mount before switching to
+# --user, so Canon's chmod-based secret-dir isolation cannot manage it here.
+# The container uses Codex's read-only evaluator sandbox plus /scratch/sandbox
+# materialization instead.
+unset CANON_SECRET_DIR
 exec canon "$@"

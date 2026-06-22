@@ -122,6 +122,35 @@ pub(crate) fn resolve_tree_oid(root: &Path, treeish: &str) -> Result<String, Str
     command_output_trimmed(&output.stdout, "git rev-parse stdout").map(str::to_string)
 }
 
+pub(crate) fn tree_object_exists(root: &Path, tree_oid: &str) -> Result<bool, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["cat-file", "-e", &format!("{tree_oid}^{{tree}}")])
+        .output()
+        .map_err(|err| format!("failed to run git cat-file: {}", err))?;
+    if output.status.success() {
+        return Ok(true);
+    }
+    let stderr = command_output_trimmed(&output.stderr, "git cat-file stderr")
+        .unwrap_or("git cat-file failed");
+    if git_cat_file_reports_unusable_tree_object(stderr, tree_oid) {
+        return Ok(false);
+    }
+    Err(format!(
+        "failed to inspect Git tree object {}: {}",
+        tree_oid, stderr
+    ))
+}
+
+fn git_cat_file_reports_unusable_tree_object(stderr: &str, tree_oid: &str) -> bool {
+    let tree_name = format!("{tree_oid}^{{tree}}");
+    stderr.contains(&format!("Not a valid object name {tree_name}"))
+        || stderr.contains(&format!(
+            "{tree_name}: expected tree type, but the object dereferences to"
+        ))
+}
+
 pub(crate) fn tree_tracked_files(
     root: &Path,
     treeish: &str,
@@ -483,4 +512,76 @@ fn parse_git_blob_batch(output: &[u8], object_ids: &[String]) -> Result<Vec<Vec<
         return Err("git cat-file output has trailing data".to_string());
     }
     Ok(blobs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tree_object_exists;
+    use crate::project::command_output_trimmed;
+    use std::fs;
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+    use std::process::{self, Command, Stdio};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn tree_object_exists_reports_missing_tree_without_masking_git_failures() {
+        let repo = temp_root("tree-object-exists");
+        run_git(&repo, &["init"]).unwrap();
+        let tree_oid = write_empty_tree(&repo);
+
+        assert!(tree_object_exists(&repo, &tree_oid).unwrap());
+        assert!(!tree_object_exists(&repo, "0000000000000000000000000000000000000000").unwrap());
+
+        let not_repo = temp_root("tree-object-not-repo");
+        let err = tree_object_exists(&not_repo, &tree_oid).unwrap_err();
+        assert!(err.contains("not a git repository"));
+
+        fs::remove_dir_all(repo).unwrap();
+        fs::remove_dir_all(not_repo).unwrap();
+    }
+
+    fn write_empty_tree(root: &Path) -> String {
+        let mut child = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["hash-object", "-t", "tree", "-w", "--stdin"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.as_mut().unwrap().write_all(b"").unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success());
+        command_output_trimmed(&output.stdout, "git hash-object stdout")
+            .unwrap()
+            .to_string()
+    }
+
+    fn run_git(root: &Path, args: &[&str]) -> Result<(), String> {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .unwrap();
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(command_output_trimmed(&output.stderr, "git stderr")
+                .unwrap_or("git failed")
+                .to_string())
+        }
+    }
+
+    fn temp_root(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("canon-git-{name}-{}-{unique}", process::id()));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
 }

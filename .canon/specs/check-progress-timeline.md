@@ -11,6 +11,7 @@ The marker is chosen by the first matching rule:
 ```
 ×  a minute during which a turn attempt failed after exhausting its no-progress timeout
 ~  a minute during which the active turn attempt's no-progress timeout was accumulating
+⇄  a minute during which an evaluator model fallback started
 ↗  a minute during which a full-scope retry started
 ↘  a minute during which a q-scope verification started
 .  a minute during which no higher-priority marker applied

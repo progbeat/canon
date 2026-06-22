@@ -1,5 +1,5 @@
 use super::{AppServerRunner, AppServerTurnRequest};
-use crate::check::{codex_reasoning_effort, evaluator_response_output_schema};
+use crate::check::{codex_reasoning_effort, evaluator_response_output_schema_for_q_scope};
 use crate::config_types::AgentConfig;
 use crate::evaluator::{
     evaluator_thread_config_with_no_sandbox, EvaluatorError, EvaluatorProgress, EvaluatorRunner,
@@ -41,7 +41,7 @@ impl EvaluatorRunner for AppServerRunner {
                 scope,
                 model,
                 thinking,
-                self.app_server_root(),
+                self.app_server_state_root(),
                 session_cwd,
                 template_output_dir,
                 self.no_sandbox(),
@@ -72,12 +72,14 @@ impl EvaluatorRunner for AppServerRunner {
         prompt: &str,
         model: Option<&str>,
         thinking: &str,
+        q_scope: &[String],
     ) -> Result<String, EvaluatorError> {
         let request = turn_start_request(
             session_id,
             prompt,
             model,
             thinking,
+            q_scope,
             self.session_cwd(session_id),
             self.no_sandbox(),
         )?;
@@ -104,9 +106,14 @@ pub(crate) fn turn_start_request(
     prompt: &str,
     model: Option<&str>,
     thinking: &str,
+    q_scope: &[String],
     cwd: Option<&Path>,
     no_sandbox: bool,
 ) -> Result<Value, EvaluatorError> {
+    // Enforce the Interrogation Policy response schema selected by this
+    // interrogation's q-scope. For q-scope ["."], the schema excludes
+    // ScopeTooNarrow before the evaluator turn is started.
+    let q_scope_specific_output_schema = evaluator_response_output_schema_for_q_scope(q_scope);
     let mut request = json!({
         "threadId": session_id,
         "input": [
@@ -115,7 +122,7 @@ pub(crate) fn turn_start_request(
                 "text": prompt
             }
         ],
-        "outputSchema": evaluator_response_output_schema()
+        "outputSchema": q_scope_specific_output_schema
     });
     if let Some(cwd) = cwd {
         request["cwd"] = Value::String(path_to_json_string(cwd, "turn/start cwd")?);
@@ -208,6 +215,7 @@ mod tests {
             "question",
             None,
             "low",
+            &[".".to_string()],
             Some(Path::new("/tmp/cwd")),
             false,
         )
@@ -226,6 +234,7 @@ mod tests {
             "question",
             None,
             "low",
+            &["src".to_string()],
             Some(Path::new("/tmp/cwd")),
             false,
         )
@@ -251,12 +260,32 @@ mod tests {
     }
 
     #[test]
+    fn full_project_evaluator_turn_disables_scope_too_narrow_output() {
+        let request = turn_start_request(
+            "thread",
+            "question",
+            None,
+            "low",
+            &[".".to_string()],
+            Some(Path::new("/tmp/cwd")),
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            request["outputSchema"]["properties"]["error"]["enum"],
+            json!(["InvalidQuestion", null])
+        );
+    }
+
+    #[test]
     fn no_sandbox_evaluator_turn_uses_danger_full_access_policy() {
         let request = turn_start_request(
             "thread",
             "question",
             None,
             "low",
+            &[".".to_string()],
             Some(Path::new("/tmp/cwd")),
             true,
         )

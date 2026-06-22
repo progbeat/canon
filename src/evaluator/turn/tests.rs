@@ -21,6 +21,7 @@ fn schema_valid_evidence_file_refs_do_not_trigger_repair() {
         "question",
         &AgentConfig::default(),
         &["src/visible.rs".to_string()],
+        &["src/visible.rs".to_string()],
         &root,
         &mut parser_cache,
         &mut diagnostic_log,
@@ -37,7 +38,7 @@ fn schema_valid_evidence_file_refs_do_not_trigger_repair() {
 }
 
 #[test]
-fn malformed_repair_response_stays_unparsable() {
+fn malformed_response_stays_unparsable_without_repair() {
     let root = temp_root("unparsable");
     let mut runner = RunnerWithResponses::new(vec!["status", "still status"]);
     let mut parser_cache = EvaluatorResponseParseCache::new();
@@ -48,6 +49,7 @@ fn malformed_repair_response_stays_unparsable() {
         &turn_context(),
         "question",
         &AgentConfig::default(),
+        &[".".to_string()],
         &[".".to_string()],
         &root,
         &mut parser_cache,
@@ -64,6 +66,7 @@ fn malformed_repair_response_stays_unparsable() {
         .answer
         .evidence
         .contains("evaluator response could not be parsed"));
+    assert_eq!(runner.responses.len(), 1);
 
     let _ = fs::remove_dir_all(root);
 }
@@ -119,6 +122,7 @@ impl EvaluatorRunner for RunnerWithResponses {
         _prompt: &str,
         _model: Option<&str>,
         _thinking: &str,
+        _q_scope: &[String],
     ) -> Result<String, EvaluatorError> {
         Ok(self.responses.remove(0))
     }

@@ -7,8 +7,8 @@ use crate::check::interrogation::state::{
     should_retry_full_scope_after_error, CheckRuntime, InterrogationRunState,
 };
 use crate::check::interrogation::{
-    ask_with_reused_thread, finalize_query_answer, resolve_diff_from_tree_oid,
-    run_with_model_fallbacks, write_query_result_event, write_query_review_required_event,
+    ask_with_reused_thread, finalize_query_answer, resolve_diff_from, run_with_model_fallbacks,
+    write_query_result_event, write_query_review_required_event, ResolvedDiffFrom,
     ThreadTurnRequest,
 };
 use crate::config_types::{AgentConfig, DEFAULT_DIFF_FROM};
@@ -211,6 +211,10 @@ fn ask_once<R: EvaluatorRunner>(
         state,
         diagnostic_log,
         query.expectation_id(),
+        // `canon check -q` returns a query answer instead of emitting a
+        // per-expectation result line, so there is no public progress timeline
+        // for model fallback attempts to update.
+        None,
         |state, diagnostic_log, model| {
             ask_once_with_model(
                 runtime,
@@ -236,7 +240,7 @@ fn ask_once_with_model<R: EvaluatorRunner>(
 ) -> Result<QueryResult, EvaluatorError> {
     let template_output_dir =
         create_prompt_template_output_dir().map_err(EvaluatorError::message)?;
-    let diff_from_tree_oid = query.diff_from_tree_oid(runtime)?;
+    let diff_from = query.resolved_diff_from(runtime)?;
     let prompt = evaluator_turn_prompt(
         runtime.root,
         &template_output_dir,
@@ -244,7 +248,7 @@ fn ask_once_with_model<R: EvaluatorRunner>(
         query.expected_answer(),
         query.diff_from(),
         query.target(),
-        query.last_pass(),
+        diff_from.last_pass,
     )?;
     let agent = query.agent(&runtime.config.agent);
     let response = ask_with_reused_thread(
@@ -259,10 +263,10 @@ fn ask_once_with_model<R: EvaluatorRunner>(
             thinking: query.thinking(&runtime.config.agent),
             expectation_id: query.expectation_id(),
             expectation_instructions: query.expectation_instructions(),
-            diff_from_tree_oid: &diff_from_tree_oid,
+            diff_from_tree_oid: &diff_from.tree_oid,
             prompt: &prompt,
             template_output_dir: &template_output_dir,
-            last_pass: query.last_pass(),
+            last_pass: diff_from.last_pass,
         },
     )?;
     finalize_query_answer(
@@ -368,16 +372,16 @@ impl<'a> QueryRequest<'a> {
             .unwrap_or("")
     }
 
-    fn last_pass(&self) -> Option<&LastResult> {
-        self.expectation.and_then(|context| context.last_pass)
-    }
-
-    fn diff_from_tree_oid(&self, runtime: &CheckRuntime<'_>) -> Result<String, EvaluatorError> {
+    fn resolved_diff_from(
+        &self,
+        runtime: &CheckRuntime<'_>,
+    ) -> Result<ResolvedDiffFrom<'a>, EvaluatorError> {
         match self.expectation {
-            Some(context) => {
-                resolve_diff_from_tree_oid(runtime, context.expectation, context.last_pass)
-            }
-            None => Ok(runtime.tree_context.against_tree_oid.clone()),
+            Some(context) => resolve_diff_from(runtime, context.expectation, context.last_pass),
+            None => Ok(ResolvedDiffFrom {
+                tree_oid: runtime.tree_context.against_tree_oid.clone(),
+                last_pass: None,
+            }),
         }
     }
 }
@@ -463,6 +467,5 @@ mod tests {
         assert_eq!(request.target(), None);
         assert_eq!(request.expectation_id(), None);
         assert_eq!(request.expectation_instructions(), "");
-        assert!(request.last_pass().is_none());
     }
 }

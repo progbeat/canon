@@ -32,6 +32,11 @@ pub(crate) struct ThreadTurnRequest<'a> {
     pub(crate) last_pass: Option<&'a LastResult>,
 }
 
+pub(crate) struct ResolvedDiffFrom<'a> {
+    pub(crate) tree_oid: String,
+    pub(crate) last_pass: Option<&'a LastResult>,
+}
+
 pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
     runtime: &CheckRuntime<'_>,
     runner: &mut R,
@@ -183,12 +188,13 @@ fn ask_in_thread<R: EvaluatorRunner>(
     let visible_scope =
         visible_scope(agent, request.enforced_scope).map_err(EvaluatorError::message)?;
     // The evaluator turn boundary owns agent.request/agent.response runtime
-    // log events for the initial turn and any repair turn.
+    // log events for the single evaluator request made by this turn.
     ask_evaluator_once(
         runner,
         &turn,
         request.prompt,
         agent,
+        request.enforced_scope,
         &visible_scope,
         session_root,
         parse_cache,
@@ -215,13 +221,6 @@ fn start_thread_session<R: EvaluatorRunner>(
     let session_root = runtime
         .session_root_for_scope(request.agent, request.enforced_scope, visible_tree_oid)
         .map_err(EvaluatorError::message)?;
-    let session_isolation = state
-        .isolate_session_root(&session_root)
-        .map_err(EvaluatorError::message)?;
-    let session_cwd = session_isolation
-        .as_ref()
-        .map(|isolation| isolation.path())
-        .unwrap_or(session_root.as_path());
     let developer_instructions = developer_instructions(DeveloperInstructionsContext {
         root: runtime.root,
         template_output_dir: request.template_output_dir,
@@ -234,6 +233,13 @@ fn start_thread_session<R: EvaluatorRunner>(
         last_pass: request.last_pass,
     })
     .map_err(EvaluatorError::message)?;
+    let session_isolation = state
+        .isolate_session_root(&session_root)
+        .map_err(EvaluatorError::message)?;
+    let session_cwd = session_isolation
+        .as_ref()
+        .map(|isolation| isolation.path())
+        .unwrap_or(session_root.as_path());
     let created = match runner.start_session(
         session_cwd,
         request.template_output_dir,
@@ -368,7 +374,7 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
 ) -> Result<InterrogationResult, EvaluatorError> {
     let template_output_dir =
         create_prompt_template_output_dir().map_err(EvaluatorError::message)?;
-    let diff_from_tree_oid = resolve_diff_from_tree_oid(runtime, expectation, last_pass)?;
+    let diff_from = resolve_diff_from(runtime, expectation, last_pass)?;
     let prompt = evaluator_turn_prompt(
         runtime.root,
         &template_output_dir,
@@ -376,7 +382,7 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
         &expectation.expected_answer,
         &expectation.diff_from,
         expectation.target.as_ref().map(|target| target.as_str()),
-        last_pass,
+        diff_from.last_pass,
     )
     .map_err(EvaluatorError::message)?;
     let thinking = effective_thinking(&expectation.agent, expectation);
@@ -392,10 +398,10 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
             thinking,
             expectation_id: Some(&expectation.id),
             expectation_instructions: &expectation.instructions,
-            diff_from_tree_oid: &diff_from_tree_oid,
+            diff_from_tree_oid: &diff_from.tree_oid,
             prompt: &prompt,
             template_output_dir: &template_output_dir,
-            last_pass,
+            last_pass: diff_from.last_pass,
         },
     )?;
     finalize_interrogation_response(
@@ -408,36 +414,156 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
     )
 }
 
-pub(crate) fn resolve_diff_from_tree_oid(
+pub(crate) fn resolve_diff_from<'a>(
     runtime: &CheckRuntime<'_>,
     expectation: &SelectedExpectation,
-    last_pass: Option<&LastResult>,
-) -> Result<String, EvaluatorError> {
-    // Canon `diff-from` resolution: `:checkpoint` prefers the last pass
-    // checked tree and falls back to the against tree; `:against-tree` uses
-    // the against tree; any other value is resolved as a tree source.
-    match expectation.diff_from.as_str() {
-        DEFAULT_DIFF_FROM => Ok(checkpoint_diff_base_tree_oid(
+    last_pass: Option<&'a LastResult>,
+) -> Result<ResolvedDiffFrom<'a>, EvaluatorError> {
+    // Canon `diff-from` resolution is deliberately literal: `:checkpoint`
+    // uses the last pass checked tree only while that tree object is still
+    // present, then the run's against tree; `:against-tree` uses the against
+    // tree; custom values use TreeSource.
+    let diff_from = expectation.diff_from.as_str();
+    if diff_from == DEFAULT_DIFF_FROM {
+        return checkpoint_diff_base(
+            runtime.root,
             last_pass,
             &runtime.tree_context.against_tree_oid,
-        )
-        .to_string()),
-        AGAINST_TREE_DIFF_FROM => Ok(runtime.tree_context.against_tree_oid.clone()),
-        tree => explicit_diff_base_tree_oid(runtime.root, tree),
+        );
     }
+    if diff_from == AGAINST_TREE_DIFF_FROM {
+        return Ok(ResolvedDiffFrom {
+            tree_oid: runtime.tree_context.against_tree_oid.clone(),
+            last_pass,
+        });
+    }
+    Ok(ResolvedDiffFrom {
+        tree_oid: explicit_diff_base_tree_oid(runtime.root, diff_from)?,
+        last_pass,
+    })
 }
 
-fn checkpoint_diff_base_tree_oid<'a>(
+fn checkpoint_diff_base<'a>(
+    root: &Path,
     last_pass: Option<&'a LastResult>,
-    against_tree_oid: &'a str,
-) -> &'a str {
-    last_pass
-        .and_then(|last_pass| last_pass.checked_tree_oid.as_deref())
-        .unwrap_or(against_tree_oid)
+    against_tree_oid: &str,
+) -> Result<ResolvedDiffFrom<'a>, EvaluatorError> {
+    if let Some(checked_tree_oid) =
+        last_pass.and_then(|last_pass| last_pass.checked_tree_oid.as_deref())
+    {
+        if crate::git::git_object_oid_has_known_shape(checked_tree_oid)
+            && crate::git::tree_object_exists(root, checked_tree_oid)
+                .map_err(EvaluatorError::message)?
+        {
+            return Ok(ResolvedDiffFrom {
+                tree_oid: checked_tree_oid.to_string(),
+                last_pass,
+            });
+        }
+    }
+    Ok(ResolvedDiffFrom {
+        tree_oid: against_tree_oid.to_string(),
+        last_pass: None,
+    })
 }
 
 fn explicit_diff_base_tree_oid(root: &Path, tree: &str) -> Result<String, EvaluatorError> {
     crate::git::TreeSource::resolve(root, tree, "diff-from")
         .and_then(|source| source.tree_oid_for_prompt_diff(root))
         .map_err(EvaluatorError::message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::checkpoint_diff_base;
+    use crate::xpec_state::{LastResult, LastResultStatus};
+    use serde_json::json;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::{self, Command};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn checkpoint_diff_base_uses_existing_checkpoint_tree() {
+        let root = git_project("checkpoint-existing");
+        let checked_tree_oid = crate::git::staged_tree_oid(&root).unwrap();
+        let last_pass = last_pass_with_checked_tree_oid(&checked_tree_oid);
+
+        let resolved = checkpoint_diff_base(&root, Some(&last_pass), "against-tree").unwrap();
+
+        assert_eq!(resolved.tree_oid, checked_tree_oid);
+        assert!(resolved.last_pass.is_some());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn checkpoint_diff_base_ignores_missing_checkpoint_tree() {
+        let root = git_project("checkpoint-missing");
+        let missing_tree_oid = "ffffffffffffffffffffffffffffffffffffffff";
+        let last_pass = last_pass_with_checked_tree_oid(missing_tree_oid);
+
+        let resolved = checkpoint_diff_base(&root, Some(&last_pass), "against-tree").unwrap();
+
+        assert_eq!(resolved.tree_oid, "against-tree");
+        assert!(resolved.last_pass.is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn checkpoint_diff_base_ignores_non_oid_checkpoint_tree() {
+        let root = git_project("checkpoint-revspec");
+        let last_pass = last_pass_with_checked_tree_oid("HEAD^{tree}");
+
+        let resolved = checkpoint_diff_base(&root, Some(&last_pass), "against-tree").unwrap();
+
+        assert_eq!(resolved.tree_oid, "against-tree");
+        assert!(resolved.last_pass.is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn last_pass_with_checked_tree_oid(checked_tree_oid: &str) -> LastResult {
+        LastResult {
+            response_timestamp: "1970-01-01T00:00:00Z".to_string(),
+            updated_timestamp: "1970-01-01T00:00:00Z".to_string(),
+            status: LastResultStatus::Pass,
+            response: json!({
+                "answer": "yes",
+                "evidence": "`src/main.rs`",
+                "qScopeSuggestion": ["."]
+            }),
+            q_scope: vec![".".to_string()],
+            visible_scope: vec![".".to_string()],
+            checked_tree_oid: Some(checked_tree_oid.to_string()),
+            visible_tree_oid: None,
+        }
+    }
+
+    fn git_project(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("canon-{name}-{}-{unique}", process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("src")).unwrap();
+        git(&root, &["init"]);
+        fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        git(&root, &["add", "src/main.rs"]);
+        root
+    }
+
+    fn git(root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }

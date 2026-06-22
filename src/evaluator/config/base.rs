@@ -1,6 +1,6 @@
 use super::codec::{config_entries_to_json, push_toml_arg, ConfigEntry, ConfigEntryValue};
 use super::permissions::{
-    evaluator_runtime_permissions, evaluator_state_dir_permissions,
+    evaluator_resolved_state_dir_permissions, evaluator_runtime_permissions,
     evaluator_template_output_permissions, evaluator_working_tree_permissions,
     merge_filesystem_permissions, EVALUATOR_FILESYSTEM_GLOB_SCAN_MAX_DEPTH, FILESYSTEM_DENY,
 };
@@ -87,7 +87,7 @@ pub(crate) fn evaluator_thread_config_with_no_sandbox(
     _scope: &[String],
     model: Option<&str>,
     thinking: &str,
-    app_server_root: &Path,
+    app_server_state_root: &Path,
     session_root: &Path,
     template_output_dir: &Path,
     no_sandbox: bool,
@@ -102,7 +102,7 @@ pub(crate) fn evaluator_thread_config_with_no_sandbox(
     )?;
     merge_filesystem_permissions(
         &mut extra_permissions,
-        evaluator_state_dir_permissions(app_server_root)?,
+        evaluator_resolved_state_dir_permissions(app_server_state_root)?,
     )?;
     merge_filesystem_permissions(
         &mut extra_permissions,
@@ -120,8 +120,12 @@ pub(super) fn push_evaluator_startup_config_args(
     args: &mut Vec<String>,
     agent: &AgentConfig,
 ) -> EvaluatorConfigResult<()> {
-    EvaluatorConfigSettings::new("read", codex_reasoning_effort(&agent.thinking))
-        .push_toml_args(args)
+    evaluator_startup_config_settings(agent).push_toml_args(args)
+}
+
+fn evaluator_startup_config_settings(agent: &AgentConfig) -> EvaluatorConfigSettings<'_> {
+    EvaluatorConfigSettings::new(FILESYSTEM_DENY, codex_reasoning_effort(&agent.thinking))
+        .with_plugins(agent)
 }
 
 fn evaluator_filesystem_config_entries(
@@ -399,4 +403,23 @@ fn enabled_plugins_config(agent: &AgentConfig) -> BTreeMap<String, EnabledPlugin
         plugins.insert(plugin.clone(), EnabledPluginConfig { enabled: true });
     }
     plugins
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn startup_config_denies_root_access_before_thread_scope_is_known() {
+        let agent = AgentConfig::default();
+        let config = evaluator_startup_config_settings(&agent)
+            .to_json_value()
+            .unwrap();
+
+        assert_eq!(
+            config["permissions"][EVALUATOR_PERMISSION_PROFILE]["filesystem"][":root"],
+            json!(FILESYSTEM_DENY)
+        );
+    }
 }

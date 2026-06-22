@@ -2,26 +2,40 @@ use crate::check::core::{InterrogationResult, SelectedExpectation};
 use crate::check::interrogation::interrogate_expectation_with_model;
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::config_types::AgentConfig;
-use crate::evaluator::{is_model_technical_failure, model_label, EvaluatorError, EvaluatorRunner};
+use crate::evaluator::{
+    is_model_technical_failure, model_label, EvaluatorError, EvaluatorProgress, EvaluatorRunner,
+};
 use crate::logs::DiagnosticLogWriter;
 use crate::platform::check_interrupted;
 use crate::xpec_state::XpecStateCache;
 use serde_json::json;
 
+pub(crate) struct ModelFallbackInterrogation<'a> {
+    pub(crate) runtime: &'a CheckRuntime<'a>,
+    pub(crate) expectation: &'a SelectedExpectation,
+    pub(crate) enforced_scope: &'a [String],
+    pub(crate) progress: Option<&'a EvaluatorProgress>,
+}
+
 pub(crate) fn interrogate_expectation_with_model_fallbacks<R: EvaluatorRunner>(
-    runtime: &CheckRuntime<'_>,
-    expectation: &SelectedExpectation,
+    interrogation: ModelFallbackInterrogation<'_>,
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     state: &mut InterrogationRunState,
     xpec_state: &mut XpecStateCache,
-    enforced_scope: &[String],
 ) -> Result<InterrogationResult, String> {
+    let ModelFallbackInterrogation {
+        runtime,
+        expectation,
+        enforced_scope,
+        progress,
+    } = interrogation;
     run_with_model_fallbacks(
         &expectation.agent,
         state,
         diagnostic_log,
         Some(&expectation.id),
+        progress,
         |state, diagnostic_log, model| {
             interrogate_expectation_with_model(
                 runtime,
@@ -42,6 +56,7 @@ pub(crate) fn run_with_model_fallbacks<T>(
     state: &mut InterrogationRunState,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     expectation_id: Option<&str>,
+    progress: Option<&EvaluatorProgress>,
     mut attempt: impl FnMut(
         &mut InterrogationRunState,
         &mut Option<&mut DiagnosticLogWriter>,
@@ -59,6 +74,12 @@ pub(crate) fn run_with_model_fallbacks<T>(
             Err(err) if is_model_technical_failure(&err) => {
                 let next_model = models.get(model_index + 1);
                 if next_model.is_some() {
+                    if let Some(progress) = progress {
+                        progress.record_model_fallback_started();
+                    }
+                    // `progress` is present for check-run expectation result
+                    // timelines. Query mode reuses model fallback behavior but
+                    // has no public progress timeline.
                     // Fallback attempts are the technical-failure exception to
                     // normal model/visible-context thread reuse. The failing
                     // model may have caused the app server to retire every live

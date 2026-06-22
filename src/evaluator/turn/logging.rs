@@ -10,40 +10,51 @@ use crate::logs::{
     ThreadRestartEventFields,
 };
 
+pub(super) struct LoggedTurnRequest<'a> {
+    pub(super) turn: &'a EvaluatorTurnContext<'a>,
+    pub(super) prompt: &'a str,
+    pub(super) expectation_id: Option<&'a str>,
+    pub(super) attempt: usize,
+    pub(super) reason: &'a str,
+    pub(super) q_scope: &'a [String],
+}
+
 pub(super) fn ask_and_log<R: EvaluatorRunner>(
     runner: &mut R,
-    turn: &EvaluatorTurnContext<'_>,
-    prompt: &str,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    expectation_id: Option<&str>,
-    attempt: usize,
-    reason: &str,
+    request: LoggedTurnRequest<'_>,
 ) -> Result<RawTurnResponse, EvaluatorError> {
     write_optional_diagnostic_log(diagnostic_log, |writer| {
         write_agent_turn_request_event(
             writer,
-            expectation_id,
-            attempt,
-            reason,
+            request.expectation_id,
+            request.attempt,
+            request.reason,
             AgentTurnLogRequest {
-                session_id: turn.session_id,
-                prompt,
-                model: turn.model,
-                thinking: turn.thinking,
+                session_id: request.turn.session_id,
+                prompt: request.prompt,
+                model: request.turn.model,
+                thinking: request.turn.thinking,
             },
         )
     });
-    let response = match runner.ask(turn.session_id, prompt, turn.model, turn.thinking) {
+    let response = match runner.ask(
+        request.turn.session_id,
+        request.prompt,
+        request.turn.model,
+        request.turn.thinking,
+        request.q_scope,
+    ) {
         Ok(response) => response,
         Err(err) => {
             let turn_usage = runner.take_last_turn_usage();
             write_optional_diagnostic_log(diagnostic_log, |writer| {
                 write_agent_turn_failure_event(
                     writer,
-                    expectation_id,
-                    attempt,
-                    reason,
-                    turn.session_id,
+                    request.expectation_id,
+                    request.attempt,
+                    request.reason,
+                    request.turn.session_id,
                     err.message_str(),
                     turn_usage.as_ref(),
                 )
@@ -60,10 +71,10 @@ pub(super) fn ask_and_log<R: EvaluatorRunner>(
         write_optional_diagnostic_log(diagnostic_log, |writer| {
             write_agent_turn_missing_usage_event(
                 writer,
-                expectation_id,
-                attempt,
-                reason,
-                turn.session_id,
+                request.expectation_id,
+                request.attempt,
+                request.reason,
+                request.turn.session_id,
                 &response,
             )
         });
@@ -74,10 +85,10 @@ pub(super) fn ask_and_log<R: EvaluatorRunner>(
         write_optional_diagnostic_log(diagnostic_log, |writer| {
             write_agent_turn_response_event(
                 writer,
-                expectation_id,
-                attempt,
-                reason,
-                turn.session_id,
+                request.expectation_id,
+                request.attempt,
+                request.reason,
+                request.turn.session_id,
                 &response,
                 turn_usage,
             )
