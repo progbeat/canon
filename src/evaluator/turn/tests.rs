@@ -38,7 +38,7 @@ fn schema_valid_evidence_file_refs_do_not_trigger_repair() {
 }
 
 #[test]
-fn malformed_repair_response_stays_unparsable() {
+fn malformed_response_stays_unparsable_without_repair() {
     let root = temp_root("unparsable");
     let mut runner = RunnerWithResponses::new(vec!["status", "still status"]);
     let mut parser_cache = EvaluatorResponseParseCache::new();
@@ -66,6 +66,7 @@ fn malformed_repair_response_stays_unparsable() {
         .answer
         .evidence
         .contains("evaluator response could not be parsed"));
+    assert_eq!(runner.responses.len(), 1);
 
     let _ = fs::remove_dir_all(root);
 }
