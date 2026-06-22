@@ -2,7 +2,7 @@
 
 ```sh
 $ canon check --help
-Check whether a Git tree meets project expectations written in the canon.
+Check whether project files meet human expectations written in the canon.
 
 Usage: canon check [OPTIONS] [SELECTOR]...
 
@@ -16,6 +16,7 @@ Options:
       --preset <PRESET>        Select a preset by name for the question [default: default]
       --tree <TREE>            Check this Git tree [default: :staged]
       --against-tree <TREE>    Compare against this Git tree [default: HEAD]
+      --in-place               Check the current directory directly
       --keep-going             Continue after failures
       --no-sandbox             Disable canon-managed sandboxing; caller is responsible for isolation
   -h, --help                   Print help

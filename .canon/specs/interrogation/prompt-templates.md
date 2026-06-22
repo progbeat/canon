@@ -2,7 +2,8 @@
 
 **prompt template** is an evaluator prompt or instruction template rendered with MiniJinja.
 
-Prompt template rendering starts with the repository root as the current working directory.
+Outside in-place mode, prompt template rendering starts with the repository root as the current working directory.
+In in-place mode, prompt template rendering starts with the checked directory as the current working directory.
 
 Prompt templates may execute shell commands during rendering with a `sh` block filter.
 

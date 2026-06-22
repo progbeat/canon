@@ -40,5 +40,8 @@
 - q: "Can `canon check` make a non-initial evaluator request whose request kind has no dedicated progress timeline marker symbol?"
   a: "no"
 
+- q: "Does `canon check` assert that user-visible final results never have `error: \"ScopeTooNarrow\"`?"
+  a: "yes"
+
 # - q: "Do the dev instructions require knowing any specialized terms whose meaning is not available from the dev instructions themselves?"
 #   a: "no"
