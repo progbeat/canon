@@ -12,6 +12,6 @@ pub(crate) use runtime_logs::{
     write_query_lifecycle_finish_event, write_query_lifecycle_start_event,
 };
 pub(crate) use thread::{
-    ask_with_reused_thread, interrogate_expectation_with_model, resolve_diff_from_tree_oid,
-    ThreadTurnRequest,
+    ask_with_reused_thread, interrogate_expectation_with_model, resolve_diff_from,
+    ResolvedDiffFrom, ThreadTurnRequest,
 };
