@@ -1,5 +1,6 @@
 use crate::check::command::output::{
-    start_expectation_report_output, SharedCheckOutput, StartedExpectationReportOutput,
+    defer_expectation_report_output, start_expectation_report_output, SharedCheckOutput,
+    StartedExpectationReportOutput,
 };
 use crate::check::core::{CheckRecord, SelectedExpectation};
 use crate::evaluator::EvaluatorProgress;
@@ -33,7 +34,7 @@ pub(super) fn start_live_expectation_report(
 ) -> Result<LiveExpectationReport, String> {
     let Some(root) = state_root else {
         return Ok(LiveExpectationReport::OutputOnly(
-            start_expectation_report_output(output.clone(), &expectation.display_id),
+            defer_expectation_report_output(output.clone()),
         ));
     };
     let state_path = live_report_state_path(root, expectation)?;
@@ -66,20 +67,23 @@ impl LiveExpectationReport {
         }
     }
 
-    pub(super) fn finish_public_output_or_keep_state_report(self, record: &CheckRecord) {
+    pub(super) fn finish_public_output_or_keep_state_report(
+        self,
+        record: &CheckRecord,
+    ) -> Result<(), String> {
         match self {
             LiveExpectationReport::StateBacked(report) => {
                 report.finish_public_output_or_keep_state_report(record)
             }
             LiveExpectationReport::OutputOnly(output) => {
-                let _ = output.finish_with_record(record);
+                output.finish_with_record(record).map(|_| ())
             }
         }
     }
 }
 
 impl StateBackedLiveExpectationReport {
-    fn finish_public_output_or_keep_state_report(self, record: &CheckRecord) {
+    fn finish_public_output_or_keep_state_report(self, record: &CheckRecord) -> Result<(), String> {
         let _ = write_live_report_state(
             &self.state_path,
             json!({
@@ -97,14 +101,16 @@ impl StateBackedLiveExpectationReport {
                 "visibleTreeOid": record.visible_tree_oid,
             }),
         );
-        if self.output.finish_with_record(record) {
+        if self.output.finish_with_record(record).unwrap_or(false) {
             // Public output already contains the report; keep the state file
             // only for interrupted or public-output-failure cases.
             let _ = fs::remove_file(&self.state_path);
         } else {
-            // Both public sinks refused the completion. The completed state
-            // report above remains under CANON_STATE_DIR/live-reports.
+            // Stdout did not receive the completion, or all public sinks
+            // refused it. The completed state report above remains under
+            // CANON_STATE_DIR/live-reports.
         }
+        Ok(())
     }
 }
 

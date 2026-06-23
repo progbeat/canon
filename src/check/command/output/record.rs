@@ -92,12 +92,30 @@ pub(crate) fn start_expectation_report_output(
     }
 }
 
+pub(crate) fn defer_expectation_report_output(
+    output: SharedCheckOutput,
+) -> StartedExpectationReportOutput {
+    let (stop, _stop_requested) = mpsc::channel();
+    StartedExpectationReportOutput {
+        output,
+        stop,
+        active: Arc::new(AtomicBool::new(false)),
+        progress: EvaluatorProgress::new(),
+        timeline: Arc::new(Mutex::new(ElapsedProgressTimelineState {
+            last_snapshot: EvaluatorProgressSnapshot::default(),
+            next_marker_at: Instant::now() + PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL,
+        })),
+        worker: None,
+        prefix_completed: false,
+    }
+}
+
 impl StartedExpectationReportOutput {
     pub(crate) fn progress(&self) -> EvaluatorProgress {
         self.progress.clone()
     }
 
-    pub(crate) fn finish_with_record(mut self, record: &CheckRecord) -> bool {
+    pub(crate) fn finish_with_record(mut self, record: &CheckRecord) -> Result<bool, String> {
         // Once the report prefix is visible, final result output has priority
         // over delayed progress-worker cleanup errors.
         let _ = self.stop_progress_worker();
@@ -113,17 +131,18 @@ impl StartedExpectationReportOutput {
         };
         let mut output = self.output.clone();
         if write_stdout_record(&mut output, result_suffix.as_bytes(), "check result").is_err() {
-            // Human byte sinks can reject all writes; no CLI can force bytes
-            // into closed stdout/stderr. The report invariant here is that
-            // human-output failure cannot erase the CheckRecord returned for
-            // summary accounting, last-result state, or diagnostic logs.
-            return write_live_completion_fallback_to_stderr(
+            if write_live_completion_fallback_to_stderr(
                 record,
                 &result_suffix,
                 self.prefix_completed,
+            ) {
+                return Ok(false);
+            }
+            return Err(
+                "failed to write started expectation result to stdout or stderr".to_string(),
             );
         }
-        true
+        Ok(true)
     }
 
     fn stop_progress_worker(&mut self) -> Result<(), String> {

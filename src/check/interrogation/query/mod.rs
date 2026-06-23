@@ -81,10 +81,11 @@ fn ask_query<R: EvaluatorRunner>(
             follow_up_used: false,
         },
     };
-    // Query mode uses the same Interrogation Policy q-scope verification
-    // follow-up as expectation mode. Matched q/a queries use pass/fail records
-    // for the acceptance matrix; one-off queries can exercise the verification
-    // flow but cannot graduate a narrowed result without pass/fail records.
+    // This is query mode's use of the same Interrogation Policy q-scope
+    // verification follow-up, not a separate `qScopeSuggestion` decision.
+    // Matched q/a queries use pass/fail records for the acceptance matrix;
+    // one-off queries can exercise the verification flow but cannot graduate a
+    // narrowed result without pass/fail records.
     let q_scope_verification_scope =
         q_scope_verification_scope_for_query_answer(runtime, query, state, &active_scope, &attempt)
             .map_err(|err| err.to_string())?;
@@ -305,8 +306,8 @@ fn q_scope_verification_scope_for_query_answer(
     enforced_scope: &[String],
     attempt: &QueryAttempt,
 ) -> Result<Option<Vec<String>>, EvaluatorError> {
-    // `ScopeTooNarrow` full-scope retry and q-scope verification share the
-    // same single follow-up budget in query mode too.
+    // `ScopeTooNarrow` full-scope retry and the q-scope verification follow-up
+    // share the same single follow-up budget in query mode too.
     if !q_scope_verification_follow_up_is_available(attempt.follow_up_used, &attempt.result.answer)
     {
         return Ok(None);
@@ -322,11 +323,11 @@ fn q_scope_verification_scope_for_query_answer(
 }
 
 fn query_narrowed_scope_is_accepted(initial: &QueryResult, narrowed: &QueryResult) -> bool {
-    // Query-mode q-scope verification mirrors the check-run acceptance matrix
-    // only when the query is matched to a q/a expectation and therefore has
-    // CheckRecord pass/fail results to compare. Check-run sequencing lives in
-    // `src/check/run/execute/expectation.rs`, and the shared 25%-smaller gate
-    // lives in `src/check/interrogation/policy.rs`.
+    // The query-mode verification follow-up mirrors the expectation acceptance
+    // matrix only when the query is matched to a q/a expectation and therefore
+    // has CheckRecord pass/fail results to compare. Expectation sequencing
+    // lives in `src/check/run/execute/expectation.rs`, and the shared
+    // 25%-smaller gate lives in `src/check/interrogation/policy.rs`.
     if narrowed.answer.error.is_some() {
         return false;
     }

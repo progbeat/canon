@@ -167,12 +167,10 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         stop_after_current_expectation,
         interrupted: interrogation_interrupted,
     } = completed_interrogation;
-    // Live output is best-effort after the prefix; completion does not create a
-    // return path that can drop the completed CheckRecord.
-    started_report.finish_public_output_or_keep_state_report(&record);
-    // `record_finished_expectation` is still required after best-effort public
-    // output: returning the completed CheckRecord lets the caller append it to
-    // the in-memory CheckRunReport, while Git-backed runs can also update
+    started_report.finish_public_output_or_keep_state_report(&record)?;
+    // `record_finished_expectation` is still required after public output:
+    // returning the completed CheckRecord lets the caller append it to the
+    // in-memory CheckRunReport, while Git-backed runs can also update
     // persistent xpec/live-report state.
     // Later state/cache/logging errors can fail the command, but they occur
     // after the result has been reported through the active report channel.
@@ -254,11 +252,10 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
     }
     debug_assert!(scope_is_within(&record_scope, verified_q_scope));
     let initial_result = initial_interrogation.record.result;
-    // This is the Interrogation Policy q-scope verification follow-up. It is
-    // the only check-run decision point that consumes an evaluator
-    // `qScopeSuggestion`; the rest of this function only executes the
-    // verification turn planned by policy. It is unrelated to check-config
-    // expectation item expansion.
+    // This is the selected-expectation path's Interrogation Policy q-scope
+    // verification follow-up. The only decision made from an evaluator
+    // `qScopeSuggestion` is whether this verification follow-up should run;
+    // the rest of this function only executes that planned verification turn.
     let q_scope_verification_scope = question_scope_suggestion_scope_for_unused_follow_up(
         context.runtime,
         &expectation.agent,
@@ -272,8 +269,9 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
             progress.record_q_scope_verification_started();
         }
         // This verification turn is already the Interrogation Policy's single
-        // follow-up. It intentionally calls `interrogate_or_error_record`
-        // directly instead of the initial-turn full-scope retry helper.
+        // follow-up for this expectation. It intentionally calls
+        // `interrogate_or_error_record` directly instead of the initial-turn
+        // full-scope retry helper.
         // `ScopeTooNarrow` rejects the evaluator's proposed q-scope; other
         // verification errors remain final human-review results. Pass/fail
         // results use the acceptance matrix below.
@@ -430,7 +428,7 @@ fn finish_started_expectation_with_error_record<R: EvaluatorRunner>(
         &error,
         visible_tree_oid.to_string(),
     )?;
-    started_report.finish_public_output_or_keep_state_report(&record);
+    started_report.finish_public_output_or_keep_state_report(&record)?;
     finish_expectation_with_error_record(context, expectation, record)
 }
 

@@ -15,7 +15,7 @@ mod usage;
 pub(crate) use escape::escape_check_output_text;
 pub(crate) use query::write_query_output;
 pub(crate) use record::{
-    start_expectation_report_output, write_cached_non_pass_output,
+    defer_expectation_report_output, start_expectation_report_output, write_cached_non_pass_output,
     write_result_output_without_started_report, StartedExpectationReportOutput,
 };
 pub(crate) use shared::{write_stdout_record, SharedCheckOutput};
@@ -122,7 +122,7 @@ mod tests {
         }));
 
         let report = start_expectation_report_output(output, "j");
-        report.finish_with_record(&passing_record());
+        report.finish_with_record(&passing_record()).unwrap();
 
         let completed = captured_string(&bytes);
         assert_result_entry(&completed, "OK");
