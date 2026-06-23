@@ -9,25 +9,10 @@ const EVALUATOR_CODEX_HOME_AUTH_FILES: &[&str] = &["auth.json", "installation_id
 const EVALUATOR_CODEX_HOME_RANDOM_BYTES: usize = 16;
 const EVALUATOR_CODEX_HOME_RANDOM_ATTEMPTS: usize = 1000;
 const SYSTEM_SKILLS_MARKER: &str = ".codex-system-skills.marker";
-const EVALUATOR_CODEX_HOME_RESET_DIRS: &[&str] =
-    &["mcp", "memories", "plugins", "sessions", "skills"];
-const EVALUATOR_CODEX_HOME_RESET_FILES: &[&str] = &[
-    "AGENTS.md",
-    "config.json",
-    "config.toml",
-    "instructions.md",
-    "preferences.json",
-];
 
 pub(crate) fn prepare_evaluator_codex_home(root: &Path) -> Result<PathBuf, String> {
     let codex_home = evaluator_codex_home_path(root)?;
     ensure_evaluator_codex_home_dir(&codex_home)?;
-    for file in EVALUATOR_CODEX_HOME_RESET_FILES {
-        remove_existing_codex_home_entry(&codex_home.join(file))?;
-    }
-    for dir in EVALUATOR_CODEX_HOME_RESET_DIRS {
-        remove_existing_codex_home_entry(&codex_home.join(dir))?;
-    }
     for dir in [
         ".tmp", "cache", "log", "mcp", "memories", "plugins", "sessions", "skills",
     ] {

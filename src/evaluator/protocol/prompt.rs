@@ -12,18 +12,10 @@ use std::path::{Path, PathBuf};
 
 const TEMPLATE_OUTPUT_HEAD_BYTES: usize = 8 * 1024;
 
-// These resource files are the Canon-owned interrogation prompt/instruction
-// templates. User-authored expectation questions are runtime data inserted into
-// the turn prompt template. The turn prompt is sent as turn input, not as the
-// evaluator developerInstructions parameter.
-// `resources/prompts/` also contains the base instructions included by
-// `protocol::base`; the developer-instructions and turn prompt templates are
-// included here because they are rendered with runtime check data.
+// Canon-owned evaluator templates are loaded from `resources/prompts/`; this
+// module only renders those resource files with runtime check data.
 const DEVELOPER_INSTRUCTIONS_TEMPLATE: &str =
     include_str!("../../../resources/prompts/evaluator_developer_instructions.txt");
-// Implements the Turn Prompt Template spec: the resource template is rendered
-// by `evaluator_turn_prompt`, including the `target: diff` previous-response
-// hint driven by `diff_from` and `last_pass` below.
 const EVALUATOR_TURN_PROMPT_TEMPLATE: &str =
     include_str!("../../../resources/prompts/evaluator_turn_prompt.txt");
 
