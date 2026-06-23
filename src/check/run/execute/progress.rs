@@ -12,6 +12,11 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+pub(super) enum LiveExpectationReport {
+    StateBacked(StateBackedLiveExpectationReport),
+    OutputOnly(StartedExpectationReportOutput),
+}
+
 // State-backed live expectation reports have only start and finish operations.
 // The state file is written before the public short-ID prefix, so even a later
 // interruption or public-output failure has already reported the expectation.
@@ -22,12 +27,14 @@ pub(super) struct StateBackedLiveExpectationReport {
 }
 
 pub(super) fn start_live_expectation_report(
-    root: &Path,
-    output: &Option<SharedCheckOutput>,
+    state_root: Option<&Path>,
+    output: &SharedCheckOutput,
     expectation: &SelectedExpectation,
-) -> Result<Option<StateBackedLiveExpectationReport>, String> {
-    let Some(output) = output.as_ref() else {
-        return Ok(None);
+) -> Result<LiveExpectationReport, String> {
+    let Some(root) = state_root else {
+        return Ok(LiveExpectationReport::OutputOnly(
+            start_expectation_report_output(output.clone(), &expectation.display_id),
+        ));
     };
     let state_path = live_report_state_path(root, expectation)?;
     // Write and flush a canon-owned report marker before the public short-ID
@@ -43,18 +50,36 @@ pub(super) fn start_live_expectation_report(
             "question": expectation.question,
         }),
     )?;
-    Ok(Some(StateBackedLiveExpectationReport {
-        output: start_expectation_report_output(output.clone(), &expectation.display_id),
-        state_path,
-    }))
+    Ok(LiveExpectationReport::StateBacked(
+        StateBackedLiveExpectationReport {
+            output: start_expectation_report_output(output.clone(), &expectation.display_id),
+            state_path,
+        },
+    ))
 }
 
-impl StateBackedLiveExpectationReport {
+impl LiveExpectationReport {
     pub(super) fn progress(&self) -> EvaluatorProgress {
-        self.output.progress()
+        match self {
+            LiveExpectationReport::StateBacked(report) => report.output.progress(),
+            LiveExpectationReport::OutputOnly(output) => output.progress(),
+        }
     }
 
     pub(super) fn finish_public_output_or_keep_state_report(self, record: &CheckRecord) {
+        match self {
+            LiveExpectationReport::StateBacked(report) => {
+                report.finish_public_output_or_keep_state_report(record)
+            }
+            LiveExpectationReport::OutputOnly(output) => {
+                let _ = output.finish_with_record(record);
+            }
+        }
+    }
+}
+
+impl StateBackedLiveExpectationReport {
+    fn finish_public_output_or_keep_state_report(self, record: &CheckRecord) {
         let _ = write_live_report_state(
             &self.state_path,
             json!({

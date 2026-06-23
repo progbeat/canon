@@ -32,6 +32,7 @@ pub(crate) struct RepoInspectionCache {
     tree_files: BTreeMap<(PathBuf, String), Result<Vec<StagedTrackedFile>, String>>,
     staged_blob_contents: BTreeMap<PathBuf, Result<StagedBlobContents, String>>,
     tree_blob_contents: BTreeMap<(PathBuf, String), Result<StagedBlobContents, String>>,
+    in_place_files: BTreeMap<PathBuf, Result<Vec<String>, String>>,
     check_configs: BTreeMap<CheckConfigCacheKey, Result<CheckConfig, String>>,
     included_expectations:
         BTreeMap<IncludedExpectationsCacheKey, Result<Vec<RawExpectationItem>, String>>,
@@ -182,7 +183,7 @@ impl RepoInspectionCache {
         config_path: &Path,
         path: &str,
     ) -> Result<Vec<String>, String> {
-        let files = in_place_file_listing(root)?;
+        let files = self.in_place_files(root)?;
         expand_staged_generator_paths_from_listing(config_path, path, &files)
     }
 
@@ -225,6 +226,16 @@ impl RepoInspectionCache {
         }
         let files = source.tracked_files(root);
         self.tree_files.insert(key, files.clone());
+        files
+    }
+
+    fn in_place_files(&mut self, root: &Path) -> Result<Vec<String>, String> {
+        if let Some(cached) = self.in_place_files.get(root) {
+            return cached.clone();
+        }
+        let files = in_place_file_listing(root);
+        self.in_place_files
+            .insert(root.to_path_buf(), files.clone());
         files
     }
 

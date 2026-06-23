@@ -34,10 +34,11 @@ pub(crate) struct CacheFilterContext<'a, 'log> {
     pub(crate) diagnostic_log: &'a mut Option<&'log mut DiagnosticLogWriter>,
 }
 
-// Cache filtering is the Git-backed Cached Result implementation. In-place runs
-// build an evaluate-only queue in `execute::run` and never call this function,
-// because the in-place spec has no persistent last-result reads and therefore no
-// same-tree or cooldown cache lookup.
+// Cache filtering decides when a cached result is reused as check work.
+// `cached_result_for_expectation` owns the Cached Result definition itself.
+// In-place runs build an evaluate-only queue in `execute::run` and never call
+// this function, because the in-place spec has no persistent last-result reads
+// and therefore no same-tree or cooldown cache lookup.
 //
 // This function receives command-independent `CheckOptions`; CLI/trailer policy
 // stays in the command layer before and after this selection step.
@@ -47,13 +48,6 @@ pub(crate) fn select_expectations_after_cache(
     now: u64,
     cached_failure_mode: CachedFailureMode,
 ) -> Result<CacheFilteredCheckWork, String> {
-    if options.selectors_provided {
-        return Ok(CacheFilteredCheckWork {
-            to_evaluate: options.selected.clone(),
-            cached_hits: Vec::new(),
-        });
-    }
-
     let mut to_evaluate = Vec::new();
     let mut cached_hits = Vec::new();
     let mut cached_failure_seen = false;
@@ -114,8 +108,8 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
-    fn selector_runs_bypass_cached_results() {
-        let root = git_project("selector-bypasses-cache");
+    fn default_runs_reuse_cached_results() {
+        let root = git_project("default-reuses-cache");
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src/lib.rs"), "pub fn demo() {}\n").unwrap();
         git(&root, &["add", "src/lib.rs"]);
@@ -136,13 +130,46 @@ mod tests {
             )
             .unwrap();
 
-        let default_work = cache_filtered_work(&root, &source, expectation.clone(), false);
-        assert_eq!(default_work.cached_hits.len(), 1);
-        assert!(default_work.to_evaluate.is_empty());
+        let work = cache_filtered_work(&root, &source, expectation);
+        assert_eq!(work.cached_hits.len(), 1);
+        assert!(work.to_evaluate.is_empty());
+        let _ = fs::remove_dir_all(root);
+    }
 
-        let selector_work = cache_filtered_work(&root, &source, expectation, true);
-        assert!(selector_work.cached_hits.is_empty());
-        assert_eq!(selector_work.to_evaluate.len(), 1);
+    #[test]
+    fn selector_mode_reuses_cache_without_stopping_uncached_work() {
+        let root = git_project("selector-cache-continues");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub fn demo() {}\n").unwrap();
+        git(&root, &["add", "src/lib.rs"]);
+
+        let cached_expectation = test_expectation();
+        let uncached_expectation = test_expectation_with_identity(2, "def456", "d");
+        let source = TreeSource::Staged;
+        let scope = full_scope();
+        let checked_tree_oid = source.tree_oid_for_prompt_diff(&root).unwrap();
+        let visible_tree_oid = VisibleTreeOidCache::new()
+            .visible_tree_oid(&root, &source, &cached_expectation.agent, &scope)
+            .unwrap();
+        XpecStateCache::default()
+            .write_last_result_for_record(
+                &root,
+                &checked_tree_oid,
+                &cached_expectation,
+                &test_record(&cached_expectation, &scope, "no", visible_tree_oid),
+            )
+            .unwrap();
+
+        let work = cache_filtered_work_with_mode(
+            &root,
+            &source,
+            vec![cached_expectation, uncached_expectation],
+            true,
+            CachedFailureMode::Continue,
+        );
+        assert_eq!(work.cached_hits.len(), 1);
+        assert_eq!(work.to_evaluate.len(), 1);
+        assert_eq!(work.to_evaluate[0].id, "def456");
         let _ = fs::remove_dir_all(root);
     }
 
@@ -150,7 +177,22 @@ mod tests {
         root: &Path,
         source: &TreeSource,
         expectation: SelectedExpectation,
+    ) -> CacheFilteredCheckWork {
+        cache_filtered_work_with_mode(
+            root,
+            source,
+            vec![expectation],
+            false,
+            CachedFailureMode::StopDefaultSelection,
+        )
+    }
+
+    fn cache_filtered_work_with_mode(
+        root: &Path,
+        source: &TreeSource,
+        expectations: Vec<SelectedExpectation>,
         selectors_provided: bool,
+        cached_failure_mode: CachedFailureMode,
     ) -> CacheFilteredCheckWork {
         let mut xpec_state = XpecStateCache::default();
         let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
@@ -164,24 +206,32 @@ mod tests {
                 diagnostic_log: &mut diagnostic_log,
             },
             &CheckOptions {
-                selected: vec![expectation],
+                selected: expectations,
                 selectors_provided,
                 keep_going: false,
                 ignore_cooldown: false,
                 break_after_tokens: None,
             },
             2,
-            CachedFailureMode::Continue,
+            cached_failure_mode,
         )
         .unwrap()
     }
 
     fn test_expectation() -> SelectedExpectation {
+        test_expectation_with_identity(1, "abc123", "a")
+    }
+
+    fn test_expectation_with_identity(
+        number: usize,
+        id: &str,
+        display_id: &str,
+    ) -> SelectedExpectation {
         SelectedExpectation {
-            number: 1,
-            id: "abc123".to_string(),
-            display_id: "a".to_string(),
-            question: "Does it pass?".to_string(),
+            number,
+            id: id.to_string(),
+            display_id: display_id.to_string(),
+            question: format!("Does {id} pass?"),
             expected_answer: "yes".to_string(),
             instructions: String::new(),
             diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),

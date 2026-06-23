@@ -148,6 +148,17 @@ impl<'a> CheckRuntime<'a> {
         matches!(self.mode, CheckRuntimeMode::InPlace)
     }
 
+    pub(crate) fn persistent_check_state_root(&self) -> Option<&Path> {
+        match self.mode {
+            CheckRuntimeMode::Materialized { .. } => Some(self.root),
+            // In-place mode has no Git-backed persistent check-state target:
+            // persisted xpec last-result history is absent, so the Last
+            // Results files have no XPECS_DIR to read or update for this
+            // runtime.
+            CheckRuntimeMode::InPlace => None,
+        }
+    }
+
     pub(crate) fn tree_source(&self) -> Option<&TreeSource> {
         match &self.mode {
             CheckRuntimeMode::Materialized { tree_source, .. } => Some(tree_source),

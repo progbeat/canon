@@ -1,6 +1,6 @@
 use super::escape::escape_check_output_text;
 use super::shared::{write_stdout_record, SharedCheckOutput};
-use crate::check::core::CheckRecord;
+use crate::check::core::{CheckRecord, ERROR_SCOPE_TOO_NARROW};
 use crate::evaluator::{EvaluatorProgress, EvaluatorProgressMarker, EvaluatorProgressSnapshot};
 use crate::json_util::compact_json_string_array;
 use std::io::Write;
@@ -13,6 +13,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 const PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL: Duration = Duration::from_secs(60);
+const FORBIDDEN_FINAL_SCOPE_ERROR: &str = "internal error: forbidden final check scope error";
 
 pub(crate) struct StartedExpectationReportOutput {
     output: SharedCheckOutput,
@@ -219,8 +220,7 @@ pub(super) fn render_check_output_record_status_and_details(record: &CheckRecord
     output.push('\n');
     if is_error {
         output.push_str("Error: ");
-        let error = record
-            .human_review_reason()
+        let error = user_visible_final_check_error(record)
             .expect("error records must expose an error value");
         output.push_str(&escape_check_output_text(error));
         output.push('\n');
@@ -245,4 +245,21 @@ pub(super) fn render_check_output_record_status_and_details(record: &CheckRecord
         }
     }
     output
+}
+
+fn user_visible_final_check_error(record: &CheckRecord) -> Option<&str> {
+    let error = record.human_review_reason()?;
+    if assert_final_check_record_has_no_scope_too_narrow(record).is_err() {
+        Some(FORBIDDEN_FINAL_SCOPE_ERROR)
+    } else {
+        Some(error)
+    }
+}
+
+fn assert_final_check_record_has_no_scope_too_narrow(record: &CheckRecord) -> Result<(), String> {
+    if record.error.as_deref() == Some(ERROR_SCOPE_TOO_NARROW) {
+        Err(FORBIDDEN_FINAL_SCOPE_ERROR.to_string())
+    } else {
+        Ok(())
+    }
 }

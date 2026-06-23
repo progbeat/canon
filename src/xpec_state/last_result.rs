@@ -204,6 +204,23 @@ impl XpecStateCache {
         Ok(result)
     }
 
+    pub(crate) fn write_last_result_for_record_or_absent_history(
+        &mut self,
+        root: Option<&Path>,
+        checked_tree_oid: &str,
+        expectation: &SelectedExpectation,
+        record: &CheckRecord,
+    ) -> Result<Option<LastResult>, String> {
+        let Some(root) = root else {
+            // Last Results are file-backed xpec state under XPECS_DIR. A
+            // runtime with absent persistent history has no status-specific
+            // files to update and no stored q-scope seed to write.
+            return Ok(None);
+        };
+        self.write_last_result_for_record(root, checked_tree_oid, expectation, record)
+            .map(Some)
+    }
+
     pub(crate) fn write_last_result_for_record_without_stored_q_scope_seed(
         &mut self,
         root: &Path,

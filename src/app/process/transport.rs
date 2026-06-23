@@ -39,6 +39,7 @@ impl AppServerRunner {
             let Some(message) = self.read_message_or_timeout()? else {
                 let now = Instant::now();
                 if turn_idle_timed_out(last_activity, now) {
+                    self.record_turn_timeout_progress();
                     return Err(EvaluatorError::failure(
                         EvaluatorFailureKind::TurnTimeout,
                         format!(

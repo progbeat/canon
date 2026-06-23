@@ -1,4 +1,4 @@
-use super::progress::{start_live_expectation_report, StateBackedLiveExpectationReport};
+use super::progress::{start_live_expectation_report, LiveExpectationReport};
 use super::CheckRunCaches;
 use crate::check::command::output::{
     write_result_output_without_started_report, SharedCheckOutput,
@@ -108,20 +108,27 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     };
     // Start the live report entry before the evaluator turn so the first dot
     // is visible while the expectation is still being evaluated.
-    let mut started_report = match start_live_expectation_report(
-        context.runtime.root,
-        context.live_report_output,
+    let Some(live_report_output) = context.live_report_output.as_ref() else {
+        return finish_unstarted_expectation_with_error_record(
+            context,
+            expectation,
+            verified_q_scope,
+            "missing check live report output".to_string(),
+        );
+    };
+    let live_report_state_root = context.runtime.persistent_check_state_root();
+    let started_report = match start_live_expectation_report(
+        live_report_state_root,
+        live_report_output,
         expectation,
     ) {
         Ok(report) => report,
         Err(error) => {
-            let mut started_report = None;
-            return finish_started_expectation_with_error_record(
+            return finish_unstarted_expectation_with_error_record_for_visible_tree_oid(
                 context,
                 expectation,
                 &verified_q_scope,
                 &started_report_error_visible_tree_oid,
-                &mut started_report,
                 error,
             );
         }
@@ -131,13 +138,13 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     // failures through a cancel-only progress helper: this match converts any
     // post-prefix error into the same public ERROR block shape as a normal
     // result.
-    let progress = started_report.as_ref().map(|report| report.progress());
-    context.runner.set_progress_reporter(progress.clone());
+    let progress = started_report.progress();
+    context.runner.set_progress_reporter(Some(progress.clone()));
     let completed_interrogation = match run_started_expectation_interrogation(
         context,
         expectation,
         &mut verified_q_scope,
-        progress.as_ref(),
+        Some(&progress),
     ) {
         Ok(completed) => completed,
         Err(error) => {
@@ -147,7 +154,7 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
                 expectation,
                 &verified_q_scope,
                 &started_report_error_visible_tree_oid,
-                &mut started_report,
+                started_report,
                 error.to_string(),
             );
         }
@@ -160,16 +167,15 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         stop_after_current_expectation,
         interrupted: interrogation_interrupted,
     } = completed_interrogation;
-    if let Some(report) = started_report.take() {
-        // Live output is best-effort after the prefix; completion does not
-        // create a return path that can drop the completed CheckRecord.
-        report.finish_public_output_or_keep_state_report(&record);
-    } else {
-        write_result_output_without_started_report(context.result_output, &record)?;
-    }
-    // From this point on, the public per-expectation result has already been
-    // written. Later state/cache/logging errors can fail the command, but they
-    // occur after the visible result block.
+    // Live output is best-effort after the prefix; completion does not create a
+    // return path that can drop the completed CheckRecord.
+    started_report.finish_public_output_or_keep_state_report(&record);
+    // `record_finished_expectation` is still required after best-effort public
+    // output: returning the completed CheckRecord lets the caller append it to
+    // the in-memory CheckRunReport, while Git-backed runs can also update
+    // persistent xpec/live-report state.
+    // Later state/cache/logging errors can fail the command, but they occur
+    // after the result has been reported through the active report channel.
     record_finished_expectation(context, expectation, &record)?;
     let human_review_required = record.requires_human_review();
     let run_stop_signal_hit =
@@ -201,14 +207,15 @@ fn record_finished_expectation<R: EvaluatorRunner>(
     // cache decisions. The final call emits the evaluated expectation's
     // expectation.result and, when needed, expectation.review_required runtime
     // log events through DiagnosticLogWriter::write_record_event.
-    if !context.runtime.is_in_place() {
-        context.caches.xpec_state.write_last_result_for_record(
-            context.runtime.root,
+    context
+        .caches
+        .xpec_state
+        .write_last_result_for_record_or_absent_history(
+            context.runtime.persistent_check_state_root(),
             context.runtime.checked_tree_oid(),
             expectation,
             record,
         )?;
-    }
     write_expectation_result_event(context.diagnostic_log, record)
 }
 
@@ -383,23 +390,20 @@ fn finish_unstarted_expectation_with_error_record<R: EvaluatorRunner>(
         &expectation.agent,
         &scope,
     )?;
-    let mut started_report = None;
-    finish_started_expectation_with_error_record(
+    finish_unstarted_expectation_with_error_record_for_visible_tree_oid(
         context,
         expectation,
         &scope,
         &visible_tree_oid,
-        &mut started_report,
         error,
     )
 }
 
-fn finish_started_expectation_with_error_record<R: EvaluatorRunner>(
+fn finish_unstarted_expectation_with_error_record_for_visible_tree_oid<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
     expectation: &SelectedExpectation,
     scope: &[String],
     visible_tree_oid: &str,
-    started_report: &mut Option<StateBackedLiveExpectationReport>,
     error: String,
 ) -> Result<ExpectationRunOutcome, String> {
     let record = error_record_from_visible_tree_oid(
@@ -408,11 +412,33 @@ fn finish_started_expectation_with_error_record<R: EvaluatorRunner>(
         &error,
         visible_tree_oid.to_string(),
     )?;
-    if let Some(report) = started_report.take() {
-        report.finish_public_output_or_keep_state_report(&record);
-    } else {
-        write_result_output_without_started_report(context.result_output, &record)?;
-    }
+    write_result_output_without_started_report(context.result_output, &record)?;
+    finish_expectation_with_error_record(context, expectation, record)
+}
+
+fn finish_started_expectation_with_error_record<R: EvaluatorRunner>(
+    context: &mut ExpectationRunContext<'_, '_, '_, R>,
+    expectation: &SelectedExpectation,
+    scope: &[String],
+    visible_tree_oid: &str,
+    started_report: LiveExpectationReport,
+    error: String,
+) -> Result<ExpectationRunOutcome, String> {
+    let record = error_record_from_visible_tree_oid(
+        expectation,
+        scope,
+        &error,
+        visible_tree_oid.to_string(),
+    )?;
+    started_report.finish_public_output_or_keep_state_report(&record);
+    finish_expectation_with_error_record(context, expectation, record)
+}
+
+fn finish_expectation_with_error_record<R: EvaluatorRunner>(
+    context: &mut ExpectationRunContext<'_, '_, '_, R>,
+    expectation: &SelectedExpectation,
+    record: CheckRecord,
+) -> Result<ExpectationRunOutcome, String> {
     record_finished_expectation(context, expectation, &record)?;
     context.interrogation_run_state.clear_thread_sessions();
     Ok(ExpectationRunOutcome {

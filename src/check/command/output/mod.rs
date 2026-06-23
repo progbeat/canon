@@ -31,6 +31,7 @@ mod tests {
     };
     use crate::check::core::{
         CachedExpectation, CheckRecord, CheckResult, CheckRunReport, ERROR_INVALID_QUESTION,
+        ERROR_SCOPE_TOO_NARROW,
     };
     use crate::check::SelectedExpectation;
     use crate::config_types::AgentConfig;
@@ -91,6 +92,26 @@ mod tests {
         assert_eq!(counts.passed, 0);
         assert_eq!(counts.failed, 1);
         assert_eq!(counts.errors, 1);
+    }
+
+    #[test]
+    fn result_output_never_exposes_scope_too_narrow_error() {
+        let mut bytes = Vec::new();
+        let mut result_output = Some(&mut bytes as &mut dyn Write);
+        let record = record_with_identity(
+            CheckResult::Fail,
+            ERROR_SCOPE_TOO_NARROW,
+            Some(ERROR_SCOPE_TOO_NARROW),
+            "11111111111111111111",
+            "j",
+        );
+
+        write_result_output_without_started_report(&mut result_output, &record).unwrap();
+
+        let rendered = String::from_utf8(bytes).unwrap();
+        assert_result_entry(&rendered, "ERROR");
+        assert!(!rendered.contains(ERROR_SCOPE_TOO_NARROW));
+        assert!(rendered.contains("internal error: forbidden final check scope error"));
     }
 
     #[test]

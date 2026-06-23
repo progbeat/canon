@@ -337,7 +337,7 @@ fn query_narrowed_scope_is_accepted(initial: &QueryResult, narrowed: &QueryResul
             | (CheckResult::Pass, CheckResult::Fail)
             | (CheckResult::Fail, CheckResult::Fail) => true,
         },
-        (None, None) => initial.answer.answer == narrowed.answer.answer,
+        (None, None) => false,
         _ => false,
     }
 }
@@ -476,7 +476,7 @@ mod tests {
     }
 
     #[test]
-    fn one_off_query_accepts_only_stable_q_scope_verification_answer() {
+    fn one_off_query_never_accepts_q_scope_verification_result() {
         let initial = QueryResult {
             answer: ParsedAnswer::answer("no".to_string(), "evidence".to_string(), None),
             record: None,
@@ -502,7 +502,10 @@ mod tests {
             &initial,
             &changed_narrowed
         ));
-        assert!(query_narrowed_scope_is_accepted(&initial, &stable_narrowed));
+        assert!(!query_narrowed_scope_is_accepted(
+            &initial,
+            &stable_narrowed
+        ));
         assert!(!query_narrowed_scope_is_accepted(&initial, &error_narrowed));
         assert!(!query_narrowed_scope_is_accepted(
             &initial,

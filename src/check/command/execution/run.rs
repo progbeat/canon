@@ -251,9 +251,9 @@ fn run_in_place_check_command(
 ) -> Result<(), CommandError> {
     let mut repo_cache = RepoInspectionCache::new();
     // In-place uses a fresh in-memory cache bundle only because the shared
-    // execution APIs accept cache handles. This command branch does not create
-    // diagnostic logs, does not clean persistent cache directories, and passes
-    // an in-place runtime whose lower layers skip xpec reads/writes.
+    // execution APIs accept cache handles. It does not create diagnostic logs,
+    // does not clean persistent cache directories, and passes an in-place
+    // runtime whose lower layers skip xpec reads/writes.
     let mut check_caches = CheckRunCaches::new();
     let config = repo_cache.load_in_place_check_config(root, &command.config_path)?;
     if let Some(question) = command.query.as_deref() {
@@ -323,8 +323,9 @@ fn run_in_place_check_command(
     // The in-place runtime makes `run_check_with_runner_and_caches` build a
     // direct Evaluate-only work queue: no pass snapshot, same-tree cache,
     // cooldown cache, stored q-scope, xpec ordering, or cached-result output is
-    // read. Per-expectation completion also checks `runtime.is_in_place()`
-    // before writing xpec last-result state.
+    // read. The completed records are returned in this invocation's
+    // CheckRunReport; the runtime exposes no persistent check-state root for
+    // xpec last-result or live-report files.
     let records_result = run_check_with_runner_and_caches(
         runtime,
         &options,
@@ -332,7 +333,7 @@ fn run_in_place_check_command(
         CheckRunSideEffects {
             diagnostic_log: None,
             result_output: Some(&mut result_output),
-            live_report_output: None,
+            live_report_output: Some(shared_output.clone()),
             caches: &mut check_caches,
         },
     );

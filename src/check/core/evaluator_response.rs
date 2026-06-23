@@ -42,7 +42,7 @@ impl EvaluatorResponseSchemaScope {
         }
     }
 
-    fn allows_question_scope_suggestion(self) -> bool {
+    fn requires_question_scope_suggestion(self) -> bool {
         matches!(self, EvaluatorResponseSchemaScope::Restricted)
     }
 }
@@ -121,7 +121,10 @@ pub(crate) fn evaluator_response_json_schema(schema_scope: EvaluatorResponseSche
         ],
         "additionalProperties": false,
     });
-    if schema_scope.allows_question_scope_suggestion() {
+    if schema_scope.requires_question_scope_suggestion() {
+        // Interrogation Policy's restricted-scope schema requires
+        // qScopeSuggestion. Full-project schema takes the opposite branch and
+        // omits the property entirely because nothing narrower is needed.
         schema["properties"]["qScopeSuggestion"] = json!({
             "type": "array",
             "minItems": 1,
@@ -197,7 +200,7 @@ fn evaluator_response_output_schema_with_error_enum(
         .expect("evaluator response schema is an object");
     object.insert(
         "required".to_string(),
-        if schema_scope.allows_question_scope_suggestion() {
+        if schema_scope.requires_question_scope_suggestion() {
             json!(["answer", "error", "evidence", "qScopeSuggestion"])
         } else {
             json!(["answer", "error", "evidence"])
