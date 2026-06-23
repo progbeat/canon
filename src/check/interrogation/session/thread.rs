@@ -167,6 +167,10 @@ fn ask_current_session<R: EvaluatorRunner>(
             session_id
         )));
     };
+    if let Err(err) = state.activate_session_root(session_id) {
+        state.clear_thread_sessions();
+        return Err(EvaluatorError::message(err));
+    }
     ask_in_thread(
         runtime,
         runner,

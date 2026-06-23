@@ -328,6 +328,17 @@ impl InterrogationRunState {
             .map(|policy| policy.isolate(session_root))
             .transpose()
     }
+
+    pub(crate) fn activate_session_root(&mut self, session_id: &str) -> Result<(), String> {
+        for (isolated_session_id, isolation) in &mut self.session_isolations {
+            if isolated_session_id == session_id {
+                isolation.reveal()?;
+            } else {
+                isolation.hide()?;
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

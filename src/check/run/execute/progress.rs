@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 pub(super) enum LiveExpectationReport {
     StateBacked(StateBackedLiveExpectationReport),
-    OutputOnly(StartedExpectationReportOutput),
+    DeferredOutputOnly(StartedExpectationReportOutput),
 }
 
 // State-backed live expectation reports have only start and finish operations.
@@ -33,7 +33,11 @@ pub(super) fn start_live_expectation_report(
     expectation: &SelectedExpectation,
 ) -> Result<LiveExpectationReport, String> {
     let Some(root) = state_root else {
-        return Ok(LiveExpectationReport::OutputOnly(
+        // Without persistent check state there is no durable started marker,
+        // so output-only reports defer the short-ID prefix until the complete
+        // record is ready. If all public output sinks fail, no `<short ID>.`
+        // was printed for this expectation.
+        return Ok(LiveExpectationReport::DeferredOutputOnly(
             defer_expectation_report_output(output.clone()),
         ));
     };
@@ -63,7 +67,7 @@ impl LiveExpectationReport {
     pub(super) fn progress(&self) -> EvaluatorProgress {
         match self {
             LiveExpectationReport::StateBacked(report) => report.output.progress(),
-            LiveExpectationReport::OutputOnly(output) => output.progress(),
+            LiveExpectationReport::DeferredOutputOnly(output) => output.progress(),
         }
     }
 
@@ -75,7 +79,7 @@ impl LiveExpectationReport {
             LiveExpectationReport::StateBacked(report) => {
                 report.finish_public_output_or_keep_state_report(record)
             }
-            LiveExpectationReport::OutputOnly(output) => {
+            LiveExpectationReport::DeferredOutputOnly(output) => {
                 output.finish_with_record(record).map(|_| ())
             }
         }

@@ -408,6 +408,7 @@ mod tests {
             agent: agent.clone(),
             expectations: vec![
                 expectation(None),
+                expectation(Some(ExpectationTarget::Project)),
                 expectation(Some(ExpectationTarget::Diff)),
             ],
         };

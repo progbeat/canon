@@ -25,9 +25,9 @@ pub(crate) use usage::render_token_usage_summary;
 #[cfg(test)]
 mod tests {
     use super::{
-        render_check_agent_messages, start_expectation_report_output, summary_outcome_counts,
-        write_cached_non_pass_output, write_result_output_without_started_report,
-        SharedCheckOutput,
+        defer_expectation_report_output, render_check_agent_messages,
+        start_expectation_report_output, summary_outcome_counts, write_cached_non_pass_output,
+        write_result_output_without_started_report, SharedCheckOutput,
     };
     use crate::check::core::{
         CachedExpectation, CheckRecord, CheckResult, CheckRunReport, ERROR_INVALID_QUESTION,
@@ -124,6 +124,21 @@ mod tests {
         let report = start_expectation_report_output(output, "j");
         report.finish_with_record(&passing_record()).unwrap();
 
+        let completed = captured_string(&bytes);
+        assert_result_entry(&completed, "OK");
+    }
+
+    #[test]
+    fn deferred_live_report_output_prints_nothing_until_completion() {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let output = SharedCheckOutput::new(Box::new(CapturedOutput {
+            bytes: bytes.clone(),
+        }));
+
+        let report = defer_expectation_report_output(output);
+
+        assert!(captured_string(&bytes).is_empty());
+        report.finish_with_record(&passing_record()).unwrap();
         let completed = captured_string(&bytes);
         assert_result_entry(&completed, "OK");
     }

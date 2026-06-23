@@ -1,5 +1,6 @@
 use crate::platform;
 use std::env;
+use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -11,6 +12,7 @@ const CANON_SANDBOX_DIR: &str = "CANON_SANDBOX_DIR";
 pub(crate) struct NaiveIsolationPolicy {
     secret_dir: Option<PathBuf>,
     sandbox_dir: PathBuf,
+    remove_sandbox_dir_on_drop: bool,
     counter: u64,
     secret_dir_mode: Option<platform::SecretDirMode>,
 }
@@ -18,7 +20,7 @@ pub(crate) struct NaiveIsolationPolicy {
 impl NaiveIsolationPolicy {
     pub(crate) fn from_env() -> Result<NaiveIsolationPolicy, String> {
         let secret_dir = configured_secret_dir();
-        let sandbox_dir = match configured_dir(CANON_SANDBOX_DIR) {
+        let (sandbox_dir, remove_sandbox_dir_on_drop) = match configured_dir(CANON_SANDBOX_DIR) {
             Some(path) => {
                 platform::create_private_dir_all(&path).map_err(|err| {
                     format!(
@@ -28,14 +30,15 @@ impl NaiveIsolationPolicy {
                         err
                     )
                 })?;
-                path
+                (path, false)
             }
-            None => make_temp_dir()?,
+            None => (make_temp_dir()?, true),
         };
         let secret_dir_mode = secret_dir.as_deref().map(stat_mode).transpose()?;
         Ok(NaiveIsolationPolicy {
             secret_dir,
             sandbox_dir,
+            remove_sandbox_dir_on_drop,
             counter: 0,
             secret_dir_mode,
         })
@@ -57,6 +60,7 @@ impl NaiveIsolationPolicy {
         Ok(NaiveIsolationPolicy {
             secret_dir,
             sandbox_dir,
+            remove_sandbox_dir_on_drop: false,
             counter: 0,
             secret_dir_mode,
         })
@@ -80,6 +84,7 @@ impl NaiveIsolationPolicy {
             isolated_path,
             secret_dir: self.secret_dir.clone(),
             secret_dir_mode: self.secret_dir_mode.clone(),
+            hidden_root_mode: None,
             active: true,
         };
         if let Some(secret_dir) = &guard.secret_dir {
@@ -114,11 +119,20 @@ impl NaiveIsolationPolicy {
     }
 }
 
+impl Drop for NaiveIsolationPolicy {
+    fn drop(&mut self) {
+        if self.remove_sandbox_dir_on_drop {
+            let _ = fs::remove_dir_all(&self.sandbox_dir);
+        }
+    }
+}
+
 pub(crate) struct NaiveIsolationGuard {
     original_path: PathBuf,
     isolated_path: PathBuf,
     secret_dir: Option<PathBuf>,
     secret_dir_mode: Option<platform::SecretDirMode>,
+    hidden_root_mode: Option<platform::SecretDirMode>,
     active: bool,
 }
 
@@ -127,11 +141,41 @@ impl NaiveIsolationGuard {
         &self.isolated_path
     }
 
+    pub(crate) fn hide(&mut self) -> Result<(), String> {
+        if !self.active || self.hidden_root_mode.is_some() {
+            return Ok(());
+        }
+        let mode = dir_mode(&self.isolated_path)?;
+        chmod_dir_no_access(&self.isolated_path)?;
+        self.hidden_root_mode = Some(mode);
+        Ok(())
+    }
+
+    pub(crate) fn reveal(&mut self) -> Result<(), String> {
+        let Some(mode) = self.hidden_root_mode.take() else {
+            return Ok(());
+        };
+        match restore_dir_mode(&self.isolated_path, &mode) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                self.hidden_root_mode = Some(mode);
+                Err(err)
+            }
+        }
+    }
+
     fn restore(&mut self) -> Result<(), String> {
         if !self.active {
             return Ok(());
         }
         let mut errors = Vec::new();
+        if let Err(err) = self.reveal() {
+            errors.push(format!(
+                "failed to reveal isolated path {} before restore: {}",
+                self.isolated_path.display(),
+                err
+            ));
+        }
         if let (Some(secret_dir), Some(mode)) = (&self.secret_dir, self.secret_dir_mode.clone()) {
             if let Err(err) = platform::restore_secret_dir_mode(secret_dir, &mode) {
                 errors.push(format!(
@@ -216,6 +260,18 @@ fn chmod_secret_dir_no_access(path: &Path) -> Result<(), String> {
     platform::chmod_secret_dir_no_access(path)
 }
 
+fn dir_mode(path: &Path) -> Result<platform::SecretDirMode, String> {
+    platform::secret_dir_mode(path)
+}
+
+fn chmod_dir_no_access(path: &Path) -> Result<(), String> {
+    platform::chmod_secret_dir_no_access(path)
+}
+
+fn restore_dir_mode(path: &Path, mode: &platform::SecretDirMode) -> Result<(), String> {
+    platform::restore_secret_dir_mode(path, mode)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,6 +328,44 @@ mod tests {
         #[cfg(unix)]
         assert_eq!(dir_mode(&project), 0o555);
         let _ = platform::set_private_dir_permissions(&project);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn naive_isolation_can_hide_and_reveal_parked_roots() {
+        let root = test_root("naive-isolation-hide-parked-root");
+        let sandbox = root.join("sandbox");
+        let first_project = root.join("first");
+        let second_project = root.join("second");
+        platform::create_private_dir_all(&first_project).unwrap();
+        platform::create_private_dir_all(&second_project).unwrap();
+        fs::write(first_project.join("file.txt"), "first").unwrap();
+        fs::write(second_project.join("file.txt"), "second").unwrap();
+        platform::set_materialized_dir_permissions(&first_project).unwrap();
+        platform::set_materialized_dir_permissions(&second_project).unwrap();
+        let mut policy = NaiveIsolationPolicy::with_dirs(None, sandbox).unwrap();
+
+        {
+            let mut first = policy.isolate(&first_project).unwrap();
+            let second = policy.isolate(&second_project).unwrap();
+
+            first.hide().unwrap();
+            assert_eq!(dir_mode(first.path()), 0o000);
+            assert_eq!(dir_mode(second.path()), 0o555);
+
+            first.reveal().unwrap();
+            assert_eq!(dir_mode(first.path()), 0o555);
+            assert_eq!(
+                fs::read_to_string(first.path().join("file.txt")).unwrap(),
+                "first"
+            );
+        }
+
+        assert_eq!(dir_mode(&first_project), 0o555);
+        assert_eq!(dir_mode(&second_project), 0o555);
+        let _ = platform::set_private_dir_permissions(&first_project);
+        let _ = platform::set_private_dir_permissions(&second_project);
         let _ = fs::remove_dir_all(root);
     }
 

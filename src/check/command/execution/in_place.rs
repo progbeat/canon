@@ -38,6 +38,10 @@ impl InPlaceProhibitedField {
     fn is_configured_for(self, expectation: &SelectedExpectation) -> bool {
         match self {
             InPlaceProhibitedField::DiffFrom => expectation.diff_from != DEFAULT_DIFF_FROM,
+            // Omitted target means the default project target and is not a
+            // configured in-place feature. Explicit `target: project` and
+            // `target: diff` are rejected uniformly by mode compatibility; the
+            // target value itself remains prompt-rendering data.
             InPlaceProhibitedField::Target => expectation.target.is_some(),
             InPlaceProhibitedField::Cooldown => expectation.cooldown.is_some(),
             InPlaceProhibitedField::Ignore => !expectation.agent.ignore.is_empty(),
@@ -179,6 +183,24 @@ mod tests {
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].display_id, "A");
         assert_eq!(records[1].display_id, "B");
+    }
+
+    #[test]
+    fn in_place_rejects_explicit_project_and_diff_targets_uniformly() {
+        let mut project = selected_expectation();
+        project.target = Some(ExpectationTarget::Project);
+        let mut diff = selected_expectation();
+        diff.id = "bbbbbbbbbbbbbbbbbbbb".to_string();
+        diff.display_id = "B".to_string();
+        diff.question = "Can that pass?".to_string();
+        diff.target = Some(ExpectationTarget::Diff);
+
+        let records = invalid_in_place_expectation_records(&[project, diff]).unwrap();
+
+        assert_eq!(records.len(), 2);
+        assert!(records
+            .iter()
+            .all(|record| record.evidence == "configured target invalid in in-place mode"));
     }
 
     #[test]

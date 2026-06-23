@@ -157,12 +157,14 @@ pub(crate) struct Expectation {
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum ExpectationTarget {
+    Project,
     Diff,
 }
 
 impl ExpectationTarget {
     pub(crate) fn as_str(&self) -> &'static str {
         match self {
+            ExpectationTarget::Project => "project",
             ExpectationTarget::Diff => "diff",
         }
     }
@@ -173,6 +175,7 @@ impl std::str::FromStr for ExpectationTarget {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
+            "project" => Ok(ExpectationTarget::Project),
             "diff" => Ok(ExpectationTarget::Diff),
             _ => Err(format!("unsupported target: {}", value)),
         }

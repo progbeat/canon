@@ -152,6 +152,36 @@ expectations:
 }
 
 #[test]
+fn explicit_project_target_is_supported() {
+    let raw: RawCheckConfig = serde_saphyr::from_str(
+        r#"
+version: 1
+presets:
+  default: {}
+expectations:
+  - q: "Does it pass?"
+    a: "yes"
+    target: project
+"#,
+    )
+    .expect("parse raw check config");
+
+    let config = expand_raw_check_config(
+        None,
+        Path::new("check.yml"),
+        raw,
+        None,
+        CheckConfigSource::Tree(TreeSource::Staged),
+    )
+    .expect("expand config");
+
+    assert_eq!(
+        config.expectations[0].target,
+        Some(ExpectationTarget::Project)
+    );
+}
+
+#[test]
 fn expectation_diff_from_expands_and_inherits() {
     let raw: RawCheckConfig = serde_saphyr::from_str(
         r#"
