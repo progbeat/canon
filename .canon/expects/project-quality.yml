@@ -90,3 +90,7 @@
   preset: smart
   target: diff
   cooldown: {pass: 20m, fail: 10m}
+
+- q: "Is any data persisted even though it is not useful for future runs?"
+  a: "no"
+  target: diff
