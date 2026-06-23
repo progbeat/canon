@@ -314,7 +314,7 @@ expectations:
 }
 
 #[test]
-fn question_answer_only_uses_raw_item_before_preset_defaults() {
+fn question_answer_only_uses_resolved_preset_defaults() {
     let raw: RawCheckConfig = serde_saphyr::from_str(
         r#"
 version: 1
@@ -341,7 +341,7 @@ expectations:
     .expect("expand config");
 
     let expectation = &config.expectations[0];
-    assert!(expectation.question_answer_only);
+    assert!(!expectation.question_answer_only);
     assert_eq!(expectation.instructions, "Use the preset instructions.");
     assert_eq!(expectation.diff_from, "master");
     assert_eq!(expectation.target, Some(ExpectationTarget::Diff));

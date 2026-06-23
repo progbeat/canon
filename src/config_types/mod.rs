@@ -130,16 +130,6 @@ pub(crate) struct RawExpectationSettings {
     pub(crate) plugins: Option<Vec<String>>,
 }
 
-impl RawExpectationSettings {
-    pub(crate) fn is_empty(&self) -> bool {
-        self.preset.is_none()
-            && self.models.is_none()
-            && self.thinking.is_none()
-            && self.ignore.is_none()
-            && self.plugins.is_none()
-    }
-}
-
 pub(crate) fn default_thinking() -> String {
     "low".to_string()
 }
