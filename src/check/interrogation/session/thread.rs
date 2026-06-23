@@ -435,6 +435,9 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
             model,
             thinking,
             expectation_id: Some(&expectation.id),
+            // This is question-scoped canon config data. The implementation-owned
+            // evaluator instruction source is the template in `resources/prompts/`;
+            // this text is only a value embedded by that source.
             expectation_instructions: &expectation.instructions,
             diff_from_tree_oid: &diff_from.tree_oid,
             prompt: &prompt,

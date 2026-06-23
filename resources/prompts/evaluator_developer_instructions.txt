@@ -1,3 +1,4 @@
+{# This resource template is the evaluator instruction source; expectation.instructions is question-scoped canon data embedded by it. #}
 {% if expectation.instructions|trim -%}
 {{ expectation.instructions|trim }}
 

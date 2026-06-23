@@ -151,6 +151,8 @@ pub(crate) fn check_help_command() -> Command {
                 .action(ArgAction::SetTrue),
         )
         .arg(
+            // `--no-sandbox` is part of the documented public help surface;
+            // Docker uses it when the container provides isolation.
             Arg::new("no_sandbox")
                 .long("no-sandbox")
                 .help("Disable canon-managed sandboxing; caller is responsible for isolation")

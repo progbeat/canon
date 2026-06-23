@@ -142,6 +142,9 @@ pub(crate) const AGAINST_TREE_DIFF_FROM: &str = ":against-tree";
 pub(crate) struct Expectation {
     pub(crate) q: String,
     pub(crate) a: String,
+    // Human-authored canon data from check config, like `q` and `a`. It is
+    // not an implementation-owned evaluator-agent prompt or policy source; the
+    // resource template in `resources/prompts/` decides whether to embed it.
     pub(crate) instructions: String,
     pub(crate) diff_from: String,
     #[serde(default)]
@@ -220,6 +223,9 @@ impl RawExpectationItem {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RawExpectationCommonConfig {
+    // Raw config data shared by presets, explicit expectations, generated
+    // expectations, and includes. It is not an implementation-owned evaluator
+    // prompt or policy source.
     pub(crate) instructions: Option<String>,
     pub(crate) diff_from: Option<String>,
     pub(crate) target: Option<String>,

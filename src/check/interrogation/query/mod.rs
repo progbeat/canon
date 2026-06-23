@@ -231,8 +231,9 @@ fn ask_once<R: EvaluatorRunner>(
         diagnostic_log,
         query.expectation_id(),
         // `canon check -q` returns a query answer instead of emitting a
-        // per-expectation result line, so there is no public progress timeline
-        // for model fallback attempts to update.
+        // `<short ID><progress timeline>` result entry. Passing `None` here
+        // opts out of result-timeline reporting for the whole query command
+        // form; it is not a check-run request kind without a marker.
         None,
         |state, diagnostic_log, model| {
             ask_once_with_model(

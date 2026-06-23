@@ -181,6 +181,11 @@ fn run_prepared_query(
     let query_expectation = query_expectation_context(config, question)?;
     if let Some(expectation) = query_expectation.as_ref() {
         if runtime.is_in_place() {
+            // In query mode, only this matched q/a expectation is selected for
+            // expectation-context behavior. Other config expectations are not
+            // selected by `canon check -q`, so the in-place selected-expectation
+            // validation applies only here; one-off unmatched queries have no
+            // selected expectation to validate.
             validate_in_place_query_expectation(expectation)?;
             *enforced_scope = runtime
                 .fresh_scope_without_persistent_q_scope()

@@ -1,5 +1,9 @@
-// The check command owns CLI-facing flow. Args, preflight, execution,
-// completion, and output are the sequential phases of that command boundary.
+// The check command owns the `canon check` public contract. `args` renders the
+// clap help surface, `output::record` renders expectation result entries,
+// `output::query` renders one-off `canon check -q` answers, and the other
+// output modules render summaries, token-usage text, and agent messages.
+// `execution` and `completion` orchestrate when those pieces are emitted and
+// flushed.
 pub(super) mod args;
 mod completion;
 mod execution;

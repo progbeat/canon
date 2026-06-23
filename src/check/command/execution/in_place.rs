@@ -38,15 +38,19 @@ impl InPlaceProhibitedField {
     fn is_configured_for(self, expectation: &SelectedExpectation) -> bool {
         match self {
             InPlaceProhibitedField::DiffFrom => expectation.diff_from != DEFAULT_DIFF_FROM,
-            // Omitted target means the default project target and is not a
-            // configured in-place feature. Explicit `target: project` and
-            // `target: diff` are rejected uniformly by mode compatibility; the
-            // target value itself remains prompt-rendering data.
-            InPlaceProhibitedField::Target => expectation.target.is_some(),
+            InPlaceProhibitedField::Target => has_explicit_target(expectation),
             InPlaceProhibitedField::Cooldown => expectation.cooldown.is_some(),
             InPlaceProhibitedField::Ignore => !expectation.agent.ignore.is_empty(),
         }
     }
+}
+
+fn has_explicit_target(expectation: &SelectedExpectation) -> bool {
+    // Omitted target means the default project target and is not a configured
+    // in-place feature. Explicit `target: project` and `target: diff` are
+    // rejected uniformly by presence only; the target value itself remains
+    // prompt-rendering data.
+    expectation.target.is_some()
 }
 
 pub(super) fn validate_in_place_query_expectation(

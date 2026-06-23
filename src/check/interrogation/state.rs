@@ -40,6 +40,9 @@ pub(crate) fn evaluator_thread_reuse_key(
     // thread-start context, so the key includes the model, the inputs that
     // render the current developer-instructions template, and the non-rendered
     // context that changes the evaluator cwd or tools.
+    // Per-turn prompt inputs such as expectation `target` are intentionally
+    // absent: they are rendered into the fresh turn prompt, not the reused
+    // thread's start instructions or sandbox context.
     let mut key = String::new();
     app_server_model_key(model).push_cache_key_part(&mut key);
     key.push('\0');

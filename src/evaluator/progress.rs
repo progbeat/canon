@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex};
 // handle, installs it on the evaluator runner, and records model fallback plus
 // q-scope/full-scope follow-up starts. App-server transport records activity,
 // no-progress timeout accumulation, and exhausted no-progress turn timeouts
-// through the same handle.
+// through the same handle. Query mode does not create this handle because it
+// does not emit per-expectation result-entry timelines.
 #[derive(Clone, Default)]
 pub(crate) struct EvaluatorProgress {
     state: Arc<Mutex<EvaluatorProgressState>>,

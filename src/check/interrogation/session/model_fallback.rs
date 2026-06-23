@@ -77,9 +77,10 @@ pub(crate) fn run_with_model_fallbacks<T>(
                     if let Some(progress) = progress {
                         progress.record_model_fallback_started();
                     }
-                    // `progress` is present for check-run expectation result
-                    // timelines. Query mode reuses model fallback behavior but
-                    // has no public progress timeline.
+                    // `progress` is present for selected-expectation result
+                    // timelines, where this fallback maps to the `⇄` marker.
+                    // Query mode reuses fallback behavior but has no public
+                    // result-entry timeline at all.
                     // Fallback attempts are the technical-failure exception to
                     // normal model/visible-context thread reuse. The failing
                     // model may have caused the app server to retire every live

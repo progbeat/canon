@@ -25,9 +25,9 @@ pub(crate) use usage::render_token_usage_summary;
 #[cfg(test)]
 mod tests {
     use super::{
-        defer_expectation_report_output, render_check_agent_messages,
+        defer_expectation_report_output, render_check_agent_messages, render_token_usage_summary,
         start_expectation_report_output, summary_outcome_counts, write_cached_non_pass_output,
-        write_result_output_without_started_report, SharedCheckOutput,
+        write_result_output_without_started_report, write_summary_line, SharedCheckOutput,
     };
     use crate::check::core::{
         CachedExpectation, CheckRecord, CheckResult, CheckRunReport, ERROR_INVALID_QUESTION,
@@ -35,8 +35,10 @@ mod tests {
     };
     use crate::check::SelectedExpectation;
     use crate::config_types::AgentConfig;
+    use crate::token_usage_types::TokenUsage;
     use std::io::{self, Write};
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     #[derive(Clone)]
     struct CapturedOutput {
@@ -92,6 +94,35 @@ mod tests {
         assert_eq!(counts.passed, 0);
         assert_eq!(counts.failed, 1);
         assert_eq!(counts.errors, 1);
+    }
+
+    #[test]
+    fn summary_and_token_usage_output_match_documented_lines() {
+        let report = CheckRunReport {
+            records: vec![passing_record()],
+            cached: Vec::new(),
+            skipped: 2,
+        };
+        let mut summary_bytes = Vec::new();
+
+        write_summary_line(&mut summary_bytes, &report, Duration::from_millis(1250)).unwrap();
+
+        let summary = String::from_utf8(summary_bytes).unwrap();
+        assert!(summary.contains(" 1 passed, 2 pending in 1.25s "));
+        assert!(summary.starts_with('='));
+        assert!(summary.ends_with("=\n"));
+
+        let usage = TokenUsage {
+            total_tokens: 9,
+            input_tokens: 4,
+            cached_input_tokens: 3,
+            output_tokens: 2,
+            reasoning_output_tokens: 1,
+        };
+        assert_eq!(
+            render_token_usage_summary(usage),
+            "Token usage: total=9 input=4 (+ 3 cached) output=2 (reasoning 1)"
+        );
     }
 
     #[test]

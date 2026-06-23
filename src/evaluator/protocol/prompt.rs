@@ -49,6 +49,8 @@ pub(crate) fn developer_instructions(
         context.template_output_dir,
         DEVELOPER_INSTRUCTIONS_TEMPLATE,
         json!({
+            // `expectation.instructions` is question-scoped canon data, not a
+            // second implementation-owned evaluator instruction source.
             "expectation": {
                 "instructions": context.expectation_instructions,
             },
@@ -75,6 +77,8 @@ pub(crate) fn evaluator_turn_prompt(
     // results are emitted without rendering this prompt. The turn template uses
     // `expectation.diff_from` to choose whether a target-diff prompt can reuse
     // the checkpoint response or must render the expectation's default answer.
+    // `target` is the same kind of per-turn prompt input; it is deliberately
+    // not part of evaluator thread reuse.
     let expectation_context = turn_prompt_expectation_context(expected_answer, diff_from, target);
     render_minijinja_resource_template(
         root,
