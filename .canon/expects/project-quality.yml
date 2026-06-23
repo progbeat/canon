@@ -91,6 +91,6 @@
   target: diff
   cooldown: {pass: 20m, fail: 10m}
 
-- q: "Is any data persisted even though it is not useful for future runs?"
+- q: "Is any invocation-local state written to disk instead of being kept in memory?"
   a: "no"
   target: diff
