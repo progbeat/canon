@@ -22,7 +22,6 @@ Missing transcript excerpts are not missing visibility; read visible files and a
 Missing transcript excerpts are not missing visibility; read visible files and any transcript full-output files needed before returning `ScopeTooNarrow`.
 {% endif -%}
 Relevant direct reads/searches can be sufficient evidence.
-For questions about any matching file or code path, visible path/text searches that find no candidate can prove `no`; do not require a literal exhaustive audit.
 
 When an actual file-inspection tool channel is available:
 - Prefer `rg` and `rg --files` for text and file searches; fall back cleanly if unavailable.
