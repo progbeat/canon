@@ -277,6 +277,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(
+            request["outputSchema"]["required"],
+            json!(["answer", "error", "evidence"])
+        );
+        assert!(request["outputSchema"]["properties"]
+            .get("qScopeSuggestion")
+            .is_none());
+        assert_eq!(
             request["outputSchema"]["properties"]["error"]["enum"],
             json!(["InvalidQuestion", null])
         );

@@ -34,8 +34,13 @@ pub(crate) struct CacheFilterContext<'a, 'log> {
     pub(crate) diagnostic_log: &'a mut Option<&'log mut DiagnosticLogWriter>,
 }
 
-// Cache filtering receives command-independent `CheckOptions`; CLI/trailer
-// policy stays in the command layer before and after this selection step.
+// Cache filtering is the Git-backed Cached Result implementation. In-place runs
+// build an evaluate-only queue in `execute::run` and never call this function,
+// because the in-place spec has no persistent last-result reads and therefore no
+// same-tree or cooldown cache lookup.
+//
+// This function receives command-independent `CheckOptions`; CLI/trailer policy
+// stays in the command layer before and after this selection step.
 pub(crate) fn select_expectations_after_cache(
     context: CacheFilterContext<'_, '_>,
     options: &CheckOptions,

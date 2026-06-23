@@ -17,6 +17,7 @@ pub(crate) use last_result::{LastResult, LastResultStatus};
 
 #[derive(Default)]
 pub(crate) struct XpecStateCache {
+    absent_persistent_history_roots: BTreeSet<PathBuf>,
     xpecs_dirs: BTreeMap<PathBuf, PathBuf>,
     xpec_dirs: BTreeMap<(PathBuf, String), PathBuf>,
     last_results: BTreeMap<LastResultCacheKey, Option<LastResult>>,
@@ -43,6 +44,18 @@ pub(crate) enum CachedLastResultKind {
 }
 
 impl XpecStateCache {
+    pub(crate) fn with_absent_persistent_history(root: &Path) -> XpecStateCache {
+        let mut cache = XpecStateCache::default();
+        cache
+            .absent_persistent_history_roots
+            .insert(root.to_path_buf());
+        cache
+    }
+
+    pub(crate) fn persistent_history_is_absent(&self, root: &Path) -> bool {
+        self.absent_persistent_history_roots.contains(root)
+    }
+
     pub(crate) fn xpecs_dir(&mut self, root: &Path) -> Result<PathBuf, String> {
         let key = root.to_path_buf();
         if let Some(path) = self.xpecs_dirs.get(&key) {

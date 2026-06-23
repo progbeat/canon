@@ -105,6 +105,27 @@ fn last_result_unexpected_answer_uses_fail_status() {
 }
 
 #[test]
+fn absent_persistent_history_does_not_read_existing_last_results() {
+    let root = git_project("absent-persistent-history");
+    let expectation = test_expectation();
+    let scope = full_scope();
+    let fail = test_record(&expectation, &scope, "no", None);
+    let mut writer = XpecStateCache::default();
+    writer
+        .write_last_result_for_record(&root, "checked-tree", &expectation, &fail)
+        .unwrap();
+
+    let mut absent_history = XpecStateCache::with_absent_persistent_history(&root);
+
+    assert!(last_result_path(&root, &expectation.id, "last-fail.json").exists());
+    assert!(absent_history
+        .read_last_fail(&root, &expectation)
+        .unwrap()
+        .is_none());
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn last_error_keeps_response_suggestion_separate_from_persisted_q_scope() {
     let root = git_project("last-error-suggestion-separate");
     let expectation = test_expectation();
@@ -161,6 +182,28 @@ fn last_pass_keeps_response_suggestion_separate_from_persisted_q_scope() {
     let pass_json = read_json(&root, &expectation.id, "last-pass.json");
     assert_eq!(pass_json["qScope"], json!(persisted_scope));
     assert_eq!(pass_json["response"]["qScopeSuggestion"], json!(["."]));
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn last_result_response_omits_absent_question_scope_suggestion() {
+    let root = git_project("last-result-no-suggestion");
+    let expectation = test_expectation();
+    let scope = full_scope();
+    let mut record = test_record(&expectation, &scope, "yes", None);
+    record.question_scope_suggestion = None;
+
+    XpecStateCache::default()
+        .write_last_result_for_record(&root, "checked-tree", &expectation, &record)
+        .unwrap();
+
+    let pass_json = read_json(&root, &expectation.id, "last-pass.json");
+    assert!(pass_json["response"].get("qScopeSuggestion").is_none());
+    let result = XpecStateCache::default()
+        .read_last_pass(&root, &expectation)
+        .unwrap()
+        .unwrap();
+    assert_eq!(result.question_scope_suggestion(), None);
     let _ = fs::remove_dir_all(root);
 }
 

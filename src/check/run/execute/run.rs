@@ -13,7 +13,7 @@ use crate::check::run::selection::{
 };
 use crate::evaluator::EvaluatorRunner;
 use crate::time::unix_timestamp;
-use crate::xpec_state::snapshot_pass_ids;
+use crate::xpec_state::{snapshot_pass_ids, XpecStateCache};
 use std::path::Path;
 
 // This runtime layer consumes resolved check options and owns cache/evaluator
@@ -59,11 +59,15 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         runtime.no_sandbox() || runtime.is_in_place()
     ));
     let check_work_queue = if runtime.is_in_place() {
+        // In-place mode still uses the normal check ordering algorithm. Its
+        // persisted xpec history is absent by mode, so latest-non-pass lookups
+        // return no record and the order policy's Unix epoch fallback applies.
+        let mut absent_history = XpecStateCache::with_absent_persistent_history(root);
         run_try!(order_check_work(
             root,
             Vec::new(),
             options.selected.clone(),
-            &mut caches.xpec_state,
+            &mut absent_history,
         ))
     } else {
         caches.run_start_pass_ids = run_try!(snapshot_pass_ids(

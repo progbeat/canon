@@ -1,7 +1,6 @@
 use crate::check::{CheckRecord, CheckResult, SelectedExpectation};
 use crate::fs_util::{ensure_dir_without_symlinks, reject_symlink, write_temp_file_then_replace};
 use crate::git::{TreeSource, VisibleTreeOidCache};
-use crate::hash::full_scope;
 use crate::scope::visible_scope;
 use crate::time::{format_record_timestamp, parse_record_timestamp, unix_timestamp};
 use serde::{Deserialize, Serialize};
@@ -179,6 +178,9 @@ impl XpecStateCache {
         expectation: &SelectedExpectation,
         status: LastResultStatus,
     ) -> Result<Option<LastResult>, String> {
+        if self.persistent_history_is_absent(root) {
+            return Ok(None);
+        }
         let key = (root.to_path_buf(), expectation.id.clone(), status);
         if let Some(cached) = self.last_results.get(&key) {
             return Ok(cached.clone());
@@ -407,11 +409,9 @@ fn normalized_response_from_record(record: &CheckRecord) -> Value {
         response.insert("answer".to_string(), json!(record.observed));
     }
     response.insert("evidence".to_string(), json!(record.evidence));
-    let suggestion = record
-        .question_scope_suggestion
-        .as_ref()
-        .unwrap_or(&record.scope);
-    response.insert("qScopeSuggestion".to_string(), json!(suggestion));
+    if let Some(suggestion) = record.question_scope_suggestion.as_ref() {
+        response.insert("qScopeSuggestion".to_string(), json!(suggestion));
+    }
     Value::Object(response)
 }
 
@@ -444,9 +444,8 @@ fn read_last_result_path(
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(format!("failed to read {}: {}", path.display(), err)),
     };
-    let mut result = serde_json::from_str::<LastResult>(&content)
+    let result = serde_json::from_str::<LastResult>(&content)
         .map_err(|err| format!("invalid last-result JSON in {}: {}", path.display(), err))?;
-    normalize_legacy_last_result_response(&mut result);
     validate_last_result(expected_status, &result).map_err(|message| {
         format!(
             "invalid last-result JSON in {}: {}",
@@ -455,20 +454,6 @@ fn read_last_result_path(
         )
     })?;
     Ok(Some(result))
-}
-
-fn normalize_legacy_last_result_response(result: &mut LastResult) {
-    if result.question_scope_suggestion().is_some() {
-        return;
-    }
-    if let Some(response) = result.response.as_object_mut() {
-        let fallback_scope = if result.status == LastResultStatus::Pass {
-            full_scope()
-        } else {
-            result.q_scope.clone()
-        };
-        response.insert("qScopeSuggestion".to_string(), json!(fallback_scope));
-    }
 }
 
 fn validate_last_result(
@@ -495,9 +480,6 @@ fn validate_last_result(
         .is_none()
     {
         return Err("response must contain evidence".to_string());
-    }
-    if result.question_scope_suggestion().is_none() {
-        return Err("response must contain qScopeSuggestion".to_string());
     }
     match expected_status {
         LastResultStatus::Pass => {

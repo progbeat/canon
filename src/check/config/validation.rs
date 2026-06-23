@@ -55,6 +55,9 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
             ));
         }
         if let Some(cooldown) = expectation.cooldown.as_ref() {
+            // Cached Result defines `cooldown` as valid check.yml configuration.
+            // Command modes that cannot read cached last-result state may reject
+            // a parsed expectation later without changing config validity.
             parse_cooldown(cooldown)
                 .map_err(|err| format!("expectation {} cooldown: {}", number, err))?;
         }
