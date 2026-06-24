@@ -43,6 +43,7 @@ mod tests {
 
         assert!(!rendered.contains("ScopeTooNarrow"));
         assert!(rendered.contains("InvalidQuestion"));
+        assert!(rendered.contains("response schema includes `qScopeSuggestion`"));
     }
 
     #[test]
@@ -55,5 +56,32 @@ mod tests {
 
         assert!(rendered.contains("ScopeTooNarrow"));
         assert!(rendered.contains("InvalidQuestion"));
+        assert!(rendered.contains("qScopeSuggestion"));
+    }
+
+    #[test]
+    fn git_diff_context_is_not_the_visible_tree() {
+        let rendered = evaluator_base_instructions(BaseInstructionsContext {
+            in_place: false,
+            full_scope: true,
+        })
+        .unwrap();
+
+        assert!(rendered.contains("not visible project files"));
+        assert!(rendered.contains("search/read visible files"));
+    }
+
+    #[test]
+    fn in_place_base_instructions_do_not_use_git_diff_or_q_scope() {
+        let rendered = evaluator_base_instructions(BaseInstructionsContext {
+            in_place: true,
+            full_scope: true,
+        })
+        .unwrap();
+
+        assert!(!rendered.contains("Use the Git diff"));
+        assert!(!rendered.contains("qScopeSuggestion"));
+        assert!(!rendered.contains("sandbox transcript"));
+        assert!(rendered.contains("The checked directory is the visible project."));
     }
 }

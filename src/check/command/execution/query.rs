@@ -109,7 +109,7 @@ fn run_started_check_query_command(
     let mut enforced_scope = query_enforced_scope(query_scope)?;
     let mut in_place_runner;
     let (runtime, runner): (CheckRuntime<'_>, &mut LazyAppServerRunner) = if in_place {
-        in_place_runner = LazyAppServerRunner::new(
+        in_place_runner = LazyAppServerRunner::new_in_place(
             root,
             crate::check::config::validation::check_config_loads_plugins(config),
             &config.agent,

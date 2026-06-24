@@ -73,6 +73,9 @@ impl RawExpectationExpansion<'_> {
                     } = common;
                     let item_number = index + 1;
                     let question_context = resolved_question_context(question_context);
+                    // Keep the literal `diff-from` selection here. Prompt rendering
+                    // resolves it to a tree in `resolve_diff_from`, where the check
+                    // runtime can validate checkpoint trees and resolve custom tree-ishs.
                     let diff_from_configured = diff_from.is_some();
                     let diff_from = resolved_expectation_diff_from(diff_from);
                     let target = resolve_expectation_target(target)
@@ -115,6 +118,8 @@ impl RawExpectationExpansion<'_> {
         let common = self.resolve_expectation_common(item.common)?;
         let target = resolve_expectation_target(common.target.clone())
             .map_err(|err| format!("expectation {} target: {}", item_number, err))?;
+        // Keep the literal `diff-from` selection here. Prompt rendering resolves
+        // it to a tree in `resolve_diff_from` using the active check runtime.
         let diff_from_configured = common.diff_from.is_some();
         for file in files {
             let content = if uses_content {

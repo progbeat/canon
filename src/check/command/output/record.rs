@@ -1,7 +1,7 @@
 use super::escape::escape_check_output_text;
 use super::shared::{write_stdout_record, SharedCheckOutput};
 use crate::check::core::{CheckRecord, ERROR_SCOPE_TOO_NARROW};
-use crate::evaluator::{EvaluatorProgress, EvaluatorProgressMarker, EvaluatorProgressSnapshot};
+use crate::evaluator::{EvaluatorProgress, EvaluatorProgressMarker};
 use crate::json_util::compact_json_string_array;
 use std::io::Write;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
@@ -13,8 +13,6 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 const PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL: Duration = Duration::from_secs(60);
-const FORBIDDEN_FINAL_SCOPE_ERROR: &str = "internal error: forbidden final check scope error";
-
 pub(crate) struct StartedExpectationReportOutput {
     output: SharedCheckOutput,
     stop: Sender<()>,
@@ -48,7 +46,6 @@ impl FinishedExpectationReportOutput {
 }
 
 struct ElapsedProgressTimelineState {
-    last_snapshot: EvaluatorProgressSnapshot,
     next_marker_at: Instant,
 }
 
@@ -69,36 +66,31 @@ pub(crate) fn start_expectation_report_output(
     let worker_active = active.clone();
     let progress = EvaluatorProgress::new();
     let worker_progress = progress.clone();
-    let initial_snapshot = progress.snapshot();
     let first_elapsed_marker_at = Instant::now() + PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL;
     let elapsed_timeline = Arc::new(Mutex::new(ElapsedProgressTimelineState {
-        last_snapshot: initial_snapshot,
         next_marker_at: first_elapsed_marker_at,
     }));
     let worker_timeline = elapsed_timeline.clone();
     let mut progress_output = output.clone();
     let worker = thread::spawn(move || loop {
-        match stop_requested.recv_timeout(PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL) {
+        match stop_requested.recv_timeout(wait_for_next_elapsed_marker(&worker_timeline)) {
             Ok(()) | Err(RecvTimeoutError::Disconnected) => return Ok(()),
             Err(RecvTimeoutError::Timeout) => {
                 if !worker_active.load(Ordering::Acquire) {
                     return Ok(());
                 }
-                let marker = worker_progress.with_snapshot(|snapshot| {
-                    let mut timeline = worker_timeline
-                        .lock()
-                        .map_err(|_| "check live report progress state poisoned")?;
-                    let marker = snapshot.marker_since(timeline.last_snapshot);
-                    timeline.last_snapshot = snapshot;
-                    timeline.next_marker_at =
-                        Instant::now() + PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL;
-                    Ok::<EvaluatorProgressMarker, String>(marker)
-                })??;
-                write_stdout_record(
-                    &mut progress_output,
-                    marker.as_str().as_bytes(),
-                    "check live report progress marker",
+                let markers = elapsed_progress_markers_due(
+                    &worker_progress,
+                    &worker_timeline,
+                    Instant::now(),
                 )?;
+                for marker in markers {
+                    write_stdout_record(
+                        &mut progress_output,
+                        marker.as_str().as_bytes(),
+                        "check live report progress marker",
+                    )?;
+                }
             }
         }
     });
@@ -126,23 +118,30 @@ impl StartedExpectationReportOutput {
         // Once the report prefix is visible, final result output has priority
         // over delayed progress-worker cleanup errors.
         let _ = self.stop_progress_worker();
-        let result_suffix = if self.prefix_completed {
-            let mut result_suffix = String::new();
-            if let Some(marker) = self.due_elapsed_progress_marker() {
-                result_suffix.push_str(marker.as_str());
+        let mut output = self.output.clone();
+        if self.prefix_completed {
+            let markers = match self.due_elapsed_progress_markers() {
+                Ok(markers) => markers,
+                Err(_) => return FinishedExpectationReportOutput::backup_report(),
+            };
+            for marker in markers {
+                if write_stdout_record(
+                    &mut output,
+                    marker.as_str().as_bytes(),
+                    "check live report progress marker",
+                )
+                .is_err()
+                {
+                    return FinishedExpectationReportOutput::backup_report();
+                }
             }
-            result_suffix.push_str(&render_check_output_record_status_and_details(record));
-            result_suffix
+        }
+        let result_suffix = if self.prefix_completed {
+            render_check_output_record_status_and_details(record)
         } else {
             render_check_output_record_with_initial_marker_timeline(record)
         };
-        let mut output = self.output.clone();
         if write_stdout_record(&mut output, result_suffix.as_bytes(), "check result").is_err() {
-            let _ = write_live_completion_fallback_to_stderr(
-                record,
-                &result_suffix,
-                self.prefix_completed,
-            );
             return FinishedExpectationReportOutput::backup_report();
         }
         FinishedExpectationReportOutput::completed_report()
@@ -159,43 +158,35 @@ impl StartedExpectationReportOutput {
             .map_err(|_| "check live report progress thread panicked".to_string())?
     }
 
-    fn due_elapsed_progress_marker(&self) -> Option<EvaluatorProgressMarker> {
-        let now = Instant::now();
-        self.progress
-            .with_snapshot(|snapshot| {
-                let mut timeline = self.timeline.lock().ok()?;
-                // Elapsed markers are minute-cadenced. Completion does not emit
-                // a marker for a final partial interval before the next tick.
-                if now < timeline.next_marker_at {
-                    return None;
-                }
-                let marker = snapshot.marker_since(timeline.last_snapshot);
-                timeline.last_snapshot = snapshot;
-                timeline.next_marker_at = now + PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL;
-                Some(marker)
-            })
-            .ok()
-            .flatten()
+    fn due_elapsed_progress_markers(&self) -> Result<Vec<EvaluatorProgressMarker>, String> {
+        elapsed_progress_markers_due(&self.progress, &self.timeline, Instant::now())
     }
 }
 
-fn write_live_completion_fallback_to_stderr(
-    record: &CheckRecord,
-    completion: &str,
-    prefix_completed: bool,
-) -> Result<(), String> {
-    let fallback = if prefix_completed {
-        format!("{}{}", record.display_id, completion)
-    } else {
-        completion.to_string()
-    };
-    // Best-effort human-output fallback. The completed CheckRecord remains the
-    // structured report even if this fallback cannot be written.
-    let mut stderr = std::io::stderr();
-    stderr
-        .write_all(fallback.as_bytes())
-        .and_then(|_| stderr.flush())
-        .map_err(|err| format!("failed to write check result fallback to stderr: {}", err))
+fn elapsed_progress_markers_due(
+    progress: &EvaluatorProgress,
+    timeline: &Arc<Mutex<ElapsedProgressTimelineState>>,
+    now: Instant,
+) -> Result<Vec<EvaluatorProgressMarker>, String> {
+    let mut timeline = timeline
+        .lock()
+        .map_err(|_| "check live report progress state poisoned".to_string())?;
+    progress.elapsed_markers_due(
+        &mut timeline.next_marker_at,
+        now,
+        PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL,
+    )
+}
+
+fn wait_for_next_elapsed_marker(timeline: &Arc<Mutex<ElapsedProgressTimelineState>>) -> Duration {
+    timeline
+        .lock()
+        .map(|timeline| {
+            timeline
+                .next_marker_at
+                .saturating_duration_since(Instant::now())
+        })
+        .unwrap_or(PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL)
 }
 
 // Results without a live evaluated report still have a progress timeline: the
@@ -233,6 +224,11 @@ fn render_check_output_record_with_initial_marker_timeline(record: &CheckRecord)
 }
 
 pub(super) fn render_check_output_record_status_and_details(record: &CheckRecord) -> String {
+    assert_ne!(
+        record.human_review_reason(),
+        Some(ERROR_SCOPE_TOO_NARROW),
+        "user-visible final check results must not expose ScopeTooNarrow"
+    );
     if record.passed() {
         return " OK\n".to_string();
     }
@@ -244,7 +240,8 @@ pub(super) fn render_check_output_record_status_and_details(record: &CheckRecord
     output.push('\n');
     if is_error {
         output.push_str("Error: ");
-        let error = user_visible_final_check_error(record)
+        let error = record
+            .human_review_reason()
             .expect("error records must expose an error value");
         output.push_str(&escape_check_output_text(error));
         output.push('\n');
@@ -262,6 +259,9 @@ pub(super) fn render_check_output_record_status_and_details(record: &CheckRecord
     output.push_str(&escape_check_output_text(&record.evidence));
     output.push('\n');
     if !is_error {
+        // The optional Suggested q-scope line is emitted only while an
+        // invocation-local evaluator suggestion is still available. Cached
+        // records reconstructed from persistent last-result state omit it.
         if let Some(suggestion) = record.question_scope_suggestion.as_deref() {
             output.push_str("Suggested q-scope: ");
             output.push_str(&compact_json_string_array(suggestion));
@@ -269,21 +269,4 @@ pub(super) fn render_check_output_record_status_and_details(record: &CheckRecord
         }
     }
     output
-}
-
-fn user_visible_final_check_error(record: &CheckRecord) -> Option<&str> {
-    let error = record.human_review_reason()?;
-    if assert_final_check_record_has_no_scope_too_narrow(record).is_err() {
-        Some(FORBIDDEN_FINAL_SCOPE_ERROR)
-    } else {
-        Some(error)
-    }
-}
-
-fn assert_final_check_record_has_no_scope_too_narrow(record: &CheckRecord) -> Result<(), String> {
-    if record.error.as_deref() == Some(ERROR_SCOPE_TOO_NARROW) {
-        Err(FORBIDDEN_FINAL_SCOPE_ERROR.to_string())
-    } else {
-        Ok(())
-    }
 }

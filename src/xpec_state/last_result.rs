@@ -92,20 +92,6 @@ impl LastResult {
             .unwrap_or("")
             .to_string()
     }
-
-    pub(crate) fn question_scope_suggestion(&self) -> Option<Vec<String>> {
-        self.response
-            .get("qScopeSuggestion")?
-            .as_array()
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .filter(|items| !items.is_empty())
-    }
 }
 
 impl XpecStateCache {
@@ -375,7 +361,11 @@ pub(super) fn check_record_from_last_result(
         error,
         evidence: result.evidence(),
         scope: result.q_scope.clone(),
-        question_scope_suggestion: result.question_scope_suggestion(),
+        // qScopeSuggestion is not persisted, so cached records reconstructed
+        // from last-result state have no optional Suggested q-scope line.
+        // This preserves `canon check` output's "if available" behavior
+        // without writing invocation-local evaluator feedback to disk.
+        question_scope_suggestion: None,
         visible_tree_oid: result.visible_tree_oid.clone().unwrap_or_default(),
         id: expectation.id.clone(),
         display_id: expectation.display_id.clone(),
@@ -396,7 +386,10 @@ pub(super) fn pass_record_from_cooldown_result(
         error: None,
         evidence: result.evidence(),
         scope: result.q_scope.clone(),
-        question_scope_suggestion: result.question_scope_suggestion(),
+        // Cooldown records come from persisted last-result state too; the
+        // applied q-scope is persisted separately, while the old evaluator
+        // suggestion remains invocation-local and unavailable for output.
+        question_scope_suggestion: None,
         visible_tree_oid: result.visible_tree_oid.clone().unwrap_or_default(),
         id: expectation.id.clone(),
         display_id: expectation.display_id.clone(),
@@ -426,9 +419,9 @@ fn normalized_response_from_record(record: &CheckRecord) -> Value {
         response.insert("answer".to_string(), json!(record.observed));
     }
     response.insert("evidence".to_string(), json!(record.evidence));
-    if let Some(suggestion) = record.question_scope_suggestion.as_ref() {
-        response.insert("qScopeSuggestion".to_string(), json!(suggestion));
-    }
+    // qScopeSuggestion is invocation-local evaluator feedback for narrowing.
+    // Persist the q-scope actually used in `qScope`, but do not write the
+    // transient suggestion into last-result response state.
     Value::Object(response)
 }
 

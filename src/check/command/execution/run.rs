@@ -288,7 +288,7 @@ fn run_in_place_check_command(
     // only for selected expectations before any selected expectation is
     // evaluated.
     let options = resolve_check_options_with_identities(&config, &identities, &command.options)?;
-    let mut runner = LazyAppServerRunner::new(
+    let mut runner = LazyAppServerRunner::new_in_place(
         root,
         check_config_loads_plugins(&config),
         &config.agent,

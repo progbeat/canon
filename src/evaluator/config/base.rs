@@ -87,7 +87,7 @@ pub(crate) fn evaluator_thread_config_with_no_sandbox(
     _scope: &[String],
     model: Option<&str>,
     thinking: &str,
-    app_server_state_root: &Path,
+    app_server_state_root: Option<&Path>,
     session_root: &Path,
     template_output_dir: &Path,
     no_sandbox: bool,
@@ -100,10 +100,12 @@ pub(crate) fn evaluator_thread_config_with_no_sandbox(
         &mut extra_permissions,
         evaluator_working_tree_permissions(session_root)?,
     )?;
-    merge_filesystem_permissions(
-        &mut extra_permissions,
-        evaluator_resolved_state_dir_permissions(app_server_state_root)?,
-    )?;
+    if let Some(app_server_state_root) = app_server_state_root {
+        merge_filesystem_permissions(
+            &mut extra_permissions,
+            evaluator_resolved_state_dir_permissions(app_server_state_root)?,
+        )?;
+    }
     merge_filesystem_permissions(
         &mut extra_permissions,
         evaluator_template_output_permissions(template_output_dir)?,

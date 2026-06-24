@@ -149,20 +149,17 @@ mod tests {
     use super::run_with_model_fallbacks;
     use crate::check::interrogation::state::InterrogationRunState;
     use crate::config_types::AgentConfig;
-    use crate::evaluator::{
-        EvaluatorError, EvaluatorFailureKind, EvaluatorProgress, EvaluatorProgressMarker,
-    };
+    use crate::evaluator::{EvaluatorError, EvaluatorFailureKind, EvaluatorProgress};
     use crate::logs::DiagnosticLogWriter;
 
     #[test]
-    fn model_fallback_records_progress_timeline_marker() {
+    fn model_fallback_tries_configured_models_in_order() {
         let agent = AgentConfig {
             models: vec!["first".to_string(), "second".to_string()],
             ..AgentConfig::default()
         };
         let mut state = InterrogationRunState::new(true).unwrap();
         let progress = EvaluatorProgress::new();
-        let before = progress.snapshot();
         let mut attempts = Vec::new();
         let mut diagnostic_log: Option<&mut DiagnosticLogWriter> = None;
 
@@ -190,8 +187,5 @@ mod tests {
             attempts,
             vec![Some("first".to_string()), Some("second".to_string())]
         );
-        let marker = progress.snapshot().marker_since(before);
-        assert_eq!(marker, EvaluatorProgressMarker::ModelFallback);
-        assert_eq!(marker.as_str(), "⇄");
     }
 }

@@ -9,6 +9,8 @@ pub(crate) struct SelectedExpectation {
     pub(crate) question: String,
     pub(crate) expected_answer: String,
     pub(crate) question_context: String,
+    // Literal `diff-from` config selection. The interrogation session resolves
+    // it to the prompt diff tree with the active runtime and last-pass state.
     pub(crate) diff_from: String,
     pub(crate) diff_from_configured: bool,
     pub(crate) target: Option<ExpectationTarget>,

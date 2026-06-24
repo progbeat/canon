@@ -7,8 +7,6 @@ use std::path::{Path, PathBuf};
 
 mod hash;
 mod scope_entries;
-#[cfg(test)]
-mod tests;
 
 pub(crate) use hash::git_object_oid_has_known_shape;
 use hash::{git_object_hash_algorithm, scope_entry_is_tree, GitObjectHashAlgorithm};
@@ -256,4 +254,66 @@ fn source_scope_cache_key(
 ) -> Result<SourceScopeCacheKey, String> {
     let (root, scope, ignore_patterns) = source_scope_cache_key_parts(root, agent, scope)?;
     Ok((root, source.cache_key(), scope, ignore_patterns))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GitObjectHashAlgorithm, StagedTrackedFile, VisibleTreeOidReuseResolver};
+
+    #[test]
+    fn parent_scope_matches_non_utf8_child_entry() {
+        let resolver = resolver_with_files(vec![StagedTrackedFile {
+            path: b"dir/nonutf8-\xff.txt".to_vec(),
+            mode: "100644".to_string(),
+            object_id: "0123456789012345678901234567890123456789".to_string(),
+        }]);
+
+        assert!(resolver
+            .visible_tree_oid_for_visible_scope_pathspec(&["dir".to_string()])
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn visible_scope_hash_accepts_gitlink_entries() {
+        let resolver = resolver_with_files(vec![StagedTrackedFile {
+            path: b"deps/example".to_vec(),
+            mode: "160000".to_string(),
+            object_id: "0123456789012345678901234567890123456789".to_string(),
+        }]);
+
+        assert!(resolver
+            .visible_tree_oid_for_visible_scope_pathspec(&["deps".to_string()])
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn explicit_absent_scope_does_not_match_empty_tree() {
+        let resolver = resolver_with_files(vec![StagedTrackedFile {
+            path: b"src/check/run/run.rs".to_vec(),
+            mode: "100644".to_string(),
+            object_id: "0123456789012345678901234567890123456789".to_string(),
+        }]);
+
+        assert!(resolver
+            .visible_tree_oid_for_visible_scope_pathspec(&["src/check/run".to_string()])
+            .unwrap()
+            .is_some());
+        assert!(resolver
+            .visible_tree_oid_for_visible_scope_pathspec(&["src/check/run.rs".to_string()])
+            .unwrap()
+            .is_none());
+        assert!(resolver_with_files(Vec::new())
+            .visible_tree_oid_for_visible_scope_pathspec(&[".".to_string()])
+            .unwrap()
+            .is_some());
+    }
+
+    fn resolver_with_files(files: Vec<StagedTrackedFile>) -> VisibleTreeOidReuseResolver {
+        VisibleTreeOidReuseResolver {
+            files,
+            object_hash_algorithm: GitObjectHashAlgorithm::Sha1,
+        }
+    }
 }

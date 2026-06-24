@@ -16,6 +16,6 @@ git diff {{ diff_from_tree_oid|shq }} {{ checked_tree_oid|shq }} -- {{ visible_s
 
 $ enter-sandbox --scope {{ visible_scope|json }}
 You are now in the read-only sandbox. Git commands are unavailable.
-{{ num_invisible_files }} project files are hidden because they are likely unnecessary to answer the question.
+{{ num_invisible_files }} project files are hidden because they are outside the visible scope pathspec.
 ```
 {% endif -%}

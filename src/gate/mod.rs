@@ -45,11 +45,18 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
 
 fn gate_regression_count(root: &Path) -> Result<usize, CommandError> {
     let mut repo_cache = RepoInspectionCache::new();
-    let config = gate_command_result(repo_cache.load_check_config(
+    // The regression baseline is the committed canon. Staged canon edits are
+    // handled by the gate decision after this count is known.
+    let config_source = gate_command_result(TreeSource::resolve_default_against_tree(
         root,
-        Path::new(CHECK_PATH),
-        &TreeSource::Staged,
+        crate::git::DEFAULT_AGAINST_TREE_ARG,
+        false,
     ))?;
+    let config = match repo_cache.load_check_config(root, Path::new(CHECK_PATH), &config_source) {
+        Ok(config) => config,
+        Err(err) if gate_check_config_is_missing(&err) => return Ok(0),
+        Err(err) => return gate_command_result(Err(err)),
+    };
     let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
     let mut xpec_state = XpecStateCache::default();
     gate_command_result(gate_regression_count_with_config(
@@ -83,11 +90,20 @@ fn gate_command_result<T>(result: Result<T, String>) -> Result<T, CommandError> 
     }
 }
 
+fn gate_check_config_is_missing(err: &str) -> bool {
+    err.starts_with(&format!("failed to read {CHECK_PATH} from "))
+        && err.ends_with(": path is not in the selected tree")
+}
+
 fn has_mixed_canon_and_non_canon_changes(changed_paths: &[Vec<u8>]) -> bool {
-    let has_canon_change = changed_paths
-        .iter()
-        .any(|path| is_canon_project_path_bytes(path));
+    let has_canon_change = has_canon_staged_change(changed_paths);
     has_canon_change && !is_canon_only_staged_change_bytes(changed_paths)
+}
+
+fn has_canon_staged_change(changed_paths: &[Vec<u8>]) -> bool {
+    changed_paths
+        .iter()
+        .any(|path| is_canon_project_path_bytes(path))
 }
 
 fn write_mixed_canon_change_failure() -> Result<(), String> {
@@ -257,4 +273,19 @@ fn gate_cache_result_for_tree_at(
 pub(crate) enum GateComparisonTree {
     StagedIndex,
     Head,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{gate_decision, GateDecision};
+
+    #[test]
+    fn gate_decision_prioritizes_regressions_over_canon_only_pass() {
+        let changed_paths = vec![b".canon/check.yml".to_vec()];
+
+        assert!(matches!(
+            gate_decision(1, &changed_paths),
+            GateDecision::RegressionFailure
+        ));
+    }
 }

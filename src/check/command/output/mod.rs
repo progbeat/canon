@@ -36,7 +36,6 @@ mod tests {
     };
     use crate::check::core::{
         CachedExpectation, CheckRecord, CheckResult, CheckRunReport, ERROR_INVALID_QUESTION,
-        ERROR_SCOPE_TOO_NARROW,
     };
     use crate::check::SelectedExpectation;
     use crate::config_types::AgentConfig;
@@ -131,26 +130,6 @@ mod tests {
     }
 
     #[test]
-    fn result_output_never_exposes_scope_too_narrow_error() {
-        let mut bytes = Vec::new();
-        let mut result_output = Some(&mut bytes as &mut dyn Write);
-        let record = record_with_identity(
-            CheckResult::Fail,
-            ERROR_SCOPE_TOO_NARROW,
-            Some(ERROR_SCOPE_TOO_NARROW),
-            "11111111111111111111",
-            "j",
-        );
-
-        write_result_output_without_started_report(&mut result_output, &record).unwrap();
-
-        let rendered = String::from_utf8(bytes).unwrap();
-        assert_result_entry(&rendered, "ERROR");
-        assert!(!rendered.contains(ERROR_SCOPE_TOO_NARROW));
-        assert!(rendered.contains("internal error: forbidden final check scope error"));
-    }
-
-    #[test]
     fn failed_result_output_matches_documented_detail_lines() {
         let mut bytes = Vec::new();
         let mut result_output = Some(&mut bytes as &mut dyn Write);
@@ -172,7 +151,8 @@ mod tests {
     fn error_result_output_matches_documented_detail_lines() {
         let mut bytes = Vec::new();
         let mut result_output = Some(&mut bytes as &mut dyn Write);
-        let record = review_record_with_id("11111111111111111111", "j");
+        let mut record = review_record_with_id("11111111111111111111", "j");
+        record.question_scope_suggestion = Some(vec!["src/check".to_string()]);
 
         write_result_output_without_started_report(&mut result_output, &record).unwrap();
 

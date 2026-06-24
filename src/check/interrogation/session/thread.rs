@@ -255,9 +255,17 @@ fn start_thread_session<R: EvaluatorRunner>(
         full_scope: q_scope_is_full_project(request.enforced_scope),
     })
     .map_err(EvaluatorError::message)?;
-    let session_isolation = state
-        .isolate_session_root(&session_root)
-        .map_err(EvaluatorError::message)?;
+    let session_isolation = if runtime.is_in_place() {
+        // In-place mode starts the evaluator in the checked directory itself.
+        // Moving that directory to an isolation path would make the evaluator
+        // cwd a sandbox copy instead of the checked directory required by the
+        // in-place canon.
+        None
+    } else {
+        state
+            .isolate_session_root(&session_root)
+            .map_err(EvaluatorError::message)?
+    };
     let session_cwd = session_isolation
         .as_ref()
         .map(|isolation| isolation.path())
@@ -463,10 +471,11 @@ pub(crate) fn resolve_diff_from<'a>(
     expectation: &SelectedExpectation,
     last_pass: Option<&'a LastResult>,
 ) -> Result<ResolvedDiffFrom<'a>, EvaluatorError> {
-    // Canon `diff-from` resolution is deliberately literal: `:checkpoint`
-    // uses the last pass checked tree only while that tree object is still
-    // present, then the run's against tree; `:against-tree` uses the against
-    // tree; custom values use TreeSource.
+    // This is the canon `diff-from` resolver for prompt-rendered Git diffs.
+    // `:checkpoint` uses the last pass checked tree only while that tree object
+    // exists in the repository, otherwise it falls back to the run's against
+    // tree. `:against-tree` uses the against tree directly. Other values use
+    // the same TreeSource resolution as check command `<TREE>` options.
     let diff_from = expectation.diff_from.as_str();
     if diff_from == DEFAULT_DIFF_FROM {
         return checkpoint_diff_base(runtime.root, last_pass, runtime.against_tree_oid());

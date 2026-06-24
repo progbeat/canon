@@ -312,10 +312,7 @@ mod tests {
             .unwrap();
         let pass_json = read_json(&root, &expectation.id, "last-pass.json");
         assert_eq!(pass_json["status"], "pass");
-        assert_eq!(
-            pass_json["response"]["qScopeSuggestion"],
-            serde_json::json!(["."])
-        );
+        assert!(pass_json["response"].get("qScopeSuggestion").is_none());
         assert_eq!(pass_json["checkedTreeOid"], "checked-tree");
         assert_eq!(pass_json["visibleTreeOid"], "visible-tree");
 
@@ -416,7 +413,7 @@ mod tests {
     }
 
     #[test]
-    fn last_error_keeps_response_suggestion_separate_from_persisted_q_scope() {
+    fn last_error_omits_invocation_local_response_suggestion() {
         let root = git_project("last-error-suggestion-separate");
         let expectation = test_expectation();
         let mut cache = XpecStateCache::default();
@@ -436,15 +433,12 @@ mod tests {
 
         let error_json = read_json(&root, &expectation.id, "last-error.json");
         assert_eq!(error_json["qScope"], json!(scope));
-        assert_eq!(
-            error_json["response"]["qScopeSuggestion"],
-            json!(suggestion)
-        );
+        assert!(error_json["response"].get("qScopeSuggestion").is_none());
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
-    fn last_pass_keeps_response_suggestion_separate_from_persisted_q_scope() {
+    fn last_pass_omits_invocation_local_response_suggestion() {
         let root = git_project("last-pass-suggestion-separate");
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src/narrow.rs"), "narrow\n").unwrap();
@@ -471,17 +465,17 @@ mod tests {
 
         let pass_json = read_json(&root, &expectation.id, "last-pass.json");
         assert_eq!(pass_json["qScope"], json!(persisted_scope));
-        assert_eq!(pass_json["response"]["qScopeSuggestion"], json!(["."]));
+        assert!(pass_json["response"].get("qScopeSuggestion").is_none());
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
-    fn last_result_response_omits_absent_question_scope_suggestion() {
+    fn last_result_response_omits_question_scope_suggestion() {
         let root = git_project("last-result-no-suggestion");
         let expectation = test_expectation();
         let scope = full_scope();
         let mut record = test_record(&expectation, &scope, "yes", None);
-        record.question_scope_suggestion = None;
+        record.question_scope_suggestion = Some(full_scope());
 
         XpecStateCache::default()
             .write_last_result_for_record(&root, "checked-tree", &expectation, &record)
@@ -489,11 +483,6 @@ mod tests {
 
         let pass_json = read_json(&root, &expectation.id, "last-pass.json");
         assert!(pass_json["response"].get("qScopeSuggestion").is_none());
-        let result = XpecStateCache::default()
-            .read_last_pass(&root, &expectation)
-            .unwrap()
-            .unwrap();
-        assert_eq!(result.question_scope_suggestion(), None);
         let _ = fs::remove_dir_all(root);
     }
 

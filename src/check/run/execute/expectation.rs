@@ -3,7 +3,7 @@ use super::CheckRunCaches;
 use crate::check::command::output::{
     write_result_output_without_started_report, SharedCheckOutput,
 };
-use crate::check::core::errors::error_record_from_visible_tree_oid;
+use crate::check::core::errors::{error_record_from_visible_tree_oid, INTERNAL_ERROR_UNPARSABLE};
 use crate::check::core::{CheckOptions, CheckRecord, SelectedExpectation, ERROR_SCOPE_TOO_NARROW};
 use crate::check::interrogation::policy::{
     initial_visible_scope_for_expectation, interrogate_or_error_record, narrowed_scope_is_accepted,
@@ -22,6 +22,8 @@ use crate::logs::DiagnosticLogWriter;
 use crate::platform::check_interrupted;
 use crate::scope::scope_is_within;
 use std::io::Write;
+
+const FORBIDDEN_FINAL_CHECK_SCOPE_ERROR: &str = "internal error: forbidden final check scope error";
 
 pub(super) struct ExpectationRunContext<'a, 'out, 'log, R: EvaluatorRunner> {
     pub(super) runtime: &'a CheckRuntime<'a>,
@@ -161,12 +163,13 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     };
     context.runner.set_progress_reporter(None);
     let CompletedInterrogation {
-        record,
+        mut record,
         break_after_tokens_hit,
         context_compaction_hit,
         stop_after_current_expectation,
         interrupted: interrogation_interrupted,
     } = completed_interrogation;
+    record = user_visible_final_check_record(record);
     started_report.finish_public_output_or_keep_state_report(&record);
     // `record_finished_expectation` is still required after public output:
     // returning the completed CheckRecord lets the caller append it to the
@@ -404,12 +407,12 @@ fn finish_unstarted_expectation_with_error_record_for_visible_tree_oid<R: Evalua
     visible_tree_oid: &str,
     error: String,
 ) -> Result<ExpectationRunOutcome, String> {
-    let record = error_record_from_visible_tree_oid(
+    let record = user_visible_final_check_record(error_record_from_visible_tree_oid(
         expectation,
         scope,
         &error,
         visible_tree_oid.to_string(),
-    )?;
+    )?);
     write_result_output_without_started_report(context.result_output, &record)?;
     finish_expectation_with_error_record(context, expectation, record)
 }
@@ -422,14 +425,33 @@ fn finish_started_expectation_with_error_record<R: EvaluatorRunner>(
     started_report: LiveExpectationReport,
     error: String,
 ) -> Result<ExpectationRunOutcome, String> {
-    let record = error_record_from_visible_tree_oid(
+    let record = user_visible_final_check_record(error_record_from_visible_tree_oid(
         expectation,
         scope,
         &error,
         visible_tree_oid.to_string(),
-    )?;
+    )?);
     started_report.finish_public_output_or_keep_state_report(&record);
     finish_expectation_with_error_record(context, expectation, record)
+}
+
+fn user_visible_final_check_record(mut record: CheckRecord) -> CheckRecord {
+    if assert_final_check_record_has_no_scope_too_narrow(&record).is_ok() {
+        return record;
+    }
+    record.observed = INTERNAL_ERROR_UNPARSABLE.to_string();
+    record.error = Some(INTERNAL_ERROR_UNPARSABLE.to_string());
+    record.evidence = FORBIDDEN_FINAL_CHECK_SCOPE_ERROR.to_string();
+    record.question_scope_suggestion = None;
+    record
+}
+
+fn assert_final_check_record_has_no_scope_too_narrow(record: &CheckRecord) -> Result<(), String> {
+    if record.error.as_deref() == Some(ERROR_SCOPE_TOO_NARROW) {
+        Err(FORBIDDEN_FINAL_CHECK_SCOPE_ERROR.to_string())
+    } else {
+        Ok(())
+    }
 }
 
 fn finish_expectation_with_error_record<R: EvaluatorRunner>(
@@ -448,7 +470,11 @@ fn finish_expectation_with_error_record<R: EvaluatorRunner>(
 
 #[cfg(test)]
 mod tests {
-    use super::q_scope_verification_record_replaces_initial;
+    use super::{
+        q_scope_verification_record_replaces_initial, user_visible_final_check_record,
+        FORBIDDEN_FINAL_CHECK_SCOPE_ERROR,
+    };
+    use crate::check::core::errors::INTERNAL_ERROR_UNPARSABLE;
     use crate::check::core::{
         CheckRecord, CheckResult, ERROR_INVALID_QUESTION, ERROR_SCOPE_TOO_NARROW,
     };
@@ -487,6 +513,22 @@ mod tests {
             CheckResult::Fail,
             &pass
         ));
+    }
+
+    #[test]
+    fn final_check_record_replaces_forbidden_scope_too_narrow_error() {
+        let mut record = test_record(CheckResult::Fail, Some(ERROR_SCOPE_TOO_NARROW));
+        record.question_scope_suggestion = Some(vec!["src".to_string()]);
+
+        let final_record = user_visible_final_check_record(record);
+
+        assert_eq!(final_record.observed, INTERNAL_ERROR_UNPARSABLE);
+        assert_eq!(
+            final_record.error.as_deref(),
+            Some(INTERNAL_ERROR_UNPARSABLE)
+        );
+        assert_eq!(final_record.evidence, FORBIDDEN_FINAL_CHECK_SCOPE_ERROR);
+        assert!(final_record.question_scope_suggestion.is_none());
     }
 
     fn test_record(result: CheckResult, error: Option<&str>) -> CheckRecord {

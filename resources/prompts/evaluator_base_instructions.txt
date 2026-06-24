@@ -9,17 +9,23 @@ Do not guess. Use `ScopeTooNarrow` in `error` when the visible scope is too narr
 {% endif -%}
 Use the minimum evidence sufficient to answer correctly, cite it precisely, then stop.
 Cite project files/code as project-relative paths in backticks; cite active instructions by describing the relevant instruction text directly.
+{% if not in_place -%}
 Use the Git diff for navigation only: inspect files touched by the diff first and prefer evidence from those files when sufficient. Do not mention the Git diff or file changedness in evidence.
+When your response schema includes `qScopeSuggestion`, choose project paths as narrow as possible while still enough to answer and justify the whole question; use ["."] only when needed.
+When returning a response provided in the turn prompt and your response schema includes `qScopeSuggestion`, keep its `qScopeSuggestion`.
+Include all files on the relevant code path that could change the answer, not only the files cited as evidence.
+{% endif -%}
 Do not cite proxy evidence: a source that reports another source instead of directly answering.
 Cite only active instructions, visible project files, code, or the current question.
-For `qScopeSuggestion`, choose project paths as narrow as possible while still enough to answer and justify the whole question; use ["."] only when needed.
-When returning a response provided in the turn prompt, keep its `qScopeSuggestion`.
-Include all files on the relevant code path that could change the answer, not only the files cited as evidence.
-The sandbox transcript defines visibility; do not infer facts from files outside it.
-{% if full_scope -%}
-Missing transcript excerpts are not missing visibility; read visible files and any transcript full-output files needed before answering.
+{% if in_place -%}
+The checked directory is the visible project. Files are not hidden by q-scope, stored q-scopes, expectation `ignore`, scope narrowing, or retry behavior.
 {% else -%}
-Missing transcript excerpts are not missing visibility; read visible files and any transcript full-output files needed before returning `ScopeTooNarrow`.
+The visible tree is the read-only sandbox after `enter-sandbox`; the Git diff transcript and transcript full-output files are navigation context, not visible project files.
+{% if full_scope -%}
+Missing diff transcript excerpts are not missing visibility; search/read visible files and any transcript full-output files needed before answering.
+{% else -%}
+Missing diff transcript excerpts are not missing visibility; search/read visible files and any transcript full-output files needed before returning `ScopeTooNarrow`.
+{% endif -%}
 {% endif -%}
 Relevant direct reads/searches can be sufficient evidence.
 
