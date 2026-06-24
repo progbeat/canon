@@ -75,6 +75,9 @@ pub(crate) fn run_with_model_fallbacks<T>(
                 let next_model = models.get(model_index + 1);
                 if next_model.is_some() {
                     if let Some(progress) = progress {
+                        // A fallback clears live sessions, so the next attempt
+                        // may begin with thread/start. Record the canon `⇄`
+                        // marker before that control message can happen.
                         progress.record_model_fallback_started();
                     }
                     // `progress` is present for selected-expectation result

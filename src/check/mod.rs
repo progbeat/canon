@@ -20,7 +20,7 @@ pub(crate) use config::{
     CheckConfigSource,
 };
 pub(crate) use core::{
-    evaluator_response_output_schema_for_q_scope, parse_evaluator_response, CheckRecord,
+    evaluator_response_output_schema_for_scope, parse_evaluator_response, CheckRecord,
     CheckRecordOutcome, CheckResult, Cooldown, EvaluatorResponseSchemaScope, ParsedAnswer,
     SelectedExpectation, INTERNAL_ERROR_UNPARSABLE,
 };

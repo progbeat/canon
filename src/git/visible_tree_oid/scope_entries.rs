@@ -6,6 +6,8 @@ pub(super) fn visible_scope_entries_from_files(
     files: &[StagedTrackedFile],
     scope: &[String],
 ) -> Result<Vec<String>, String> {
+    // This is the visible tree entry selection step: apply the complete
+    // visible-scope pathspec to the checked Git tree's tracked files.
     let mut visible_files = Vec::new();
     for file in files {
         if path_bytes_in_scope(&file.path, scope)? {
@@ -20,14 +22,17 @@ pub(super) fn visible_tree_oid_from_files_if_scope_present(
     scope: &[String],
     object_hash_algorithm: GitObjectHashAlgorithm,
 ) -> Result<Option<String>, String> {
-    if !scope_includes_match_tracked_files(files, scope)? {
+    // This presence check does not select visible tree entries. It only keeps
+    // an explicit include pathspec that matches no checked Git path from being
+    // treated as the Git empty tree.
+    if !visible_scope_include_terms_are_present_in_checked_tree(files, scope)? {
         return Ok(None);
     }
     let entries = visible_scope_entries_from_files(files, scope)?;
     visible_tree_oid_from_entries(&entries, object_hash_algorithm).map(Some)
 }
 
-pub(super) fn scope_includes_match_tracked_files(
+pub(super) fn visible_scope_include_terms_are_present_in_checked_tree(
     files: &[StagedTrackedFile],
     scope: &[String],
 ) -> Result<bool, String> {

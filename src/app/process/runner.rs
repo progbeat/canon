@@ -64,9 +64,9 @@ impl AppServerRunner {
         self.progress = progress;
     }
 
-    pub(crate) fn record_app_server_activity_progress(&self) {
+    pub(crate) fn record_turn_message_activity_progress(&self) {
         if let Some(progress) = &self.progress {
-            progress.record_app_server_activity();
+            progress.record_turn_message_activity();
         }
     }
 

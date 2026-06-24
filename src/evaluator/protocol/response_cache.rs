@@ -18,9 +18,8 @@ impl EvaluatorResponseParseCache {
         &mut self,
         text: &str,
         agent: &AgentConfig,
-        q_scope: &[String],
+        schema_scope: EvaluatorResponseSchemaScope,
     ) -> Result<ParsedAnswer, String> {
-        let schema_scope = EvaluatorResponseSchemaScope::for_q_scope(q_scope);
         let key = (
             text.to_string(),
             effective_ignore_patterns(agent)?,

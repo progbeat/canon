@@ -170,7 +170,7 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         interrupted: interrogation_interrupted,
     } = completed_interrogation;
     record = user_visible_final_check_record(record);
-    started_report.finish_public_output_or_keep_state_report(&record);
+    started_report.finish_public_output_or_keep_state_report(&record)?;
     // `record_finished_expectation` is still required after public output:
     // returning the completed CheckRecord lets the caller append it to the
     // in-memory CheckRunReport, while Git-backed runs can also update
@@ -269,6 +269,9 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
     let mut interrogation = initial.into_interrogation();
     if let Some(proposed_scope) = q_scope_verification_scope {
         if let Some(progress) = progress {
+            // A narrowed verification may need a fresh evaluator session for
+            // its visible scope, so record the canon `↘` marker before any
+            // resulting thread/start control message.
             progress.record_q_scope_verification_started();
         }
         // This verification turn is already the Interrogation Policy's single
@@ -358,6 +361,9 @@ fn interrogate_initial_with_full_scope_retry<R: EvaluatorRunner>(
         // Restricted ScopeTooNarrow is not final. The single policy follow-up
         // retries it once at full scope.
         if let Some(progress) = progress {
+            // A full-scope retry may need a fresh evaluator session for its
+            // visible scope, so record the canon `↗` marker before any
+            // resulting thread/start control message.
             progress.record_full_scope_retry_started();
         }
         *verified_q_scope = full_scope();
@@ -431,7 +437,7 @@ fn finish_started_expectation_with_error_record<R: EvaluatorRunner>(
         &error,
         visible_tree_oid.to_string(),
     )?);
-    started_report.finish_public_output_or_keep_state_report(&record);
+    started_report.finish_public_output_or_keep_state_report(&record)?;
     finish_expectation_with_error_record(context, expectation, record)
 }
 

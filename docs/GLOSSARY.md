@@ -56,8 +56,10 @@ code that support it.
 ## Expectation Instructions
 
 The resolved `instructions` config value for an expectation, or empty text when
-none is configured. This glossary describes the config data; evaluator prompt
-templates live under `resources/prompts/`.
+none is configured. Despite the config field name, this is expectation context
+data, not an implementation-owned evaluator-agent prompt or instruction source.
+Evaluator prompt and instruction templates live under `resources/prompts/` and
+decide how to embed this data.
 
 ## Expectation ID
 

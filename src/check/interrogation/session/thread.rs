@@ -4,6 +4,7 @@ use crate::check::interrogation::finalize_interrogation_response;
 use crate::check::interrogation::state::{
     evaluator_thread_reuse_key, CheckRuntime, InterrogationRunState,
 };
+use crate::check::{evaluator_response_output_schema_for_scope, EvaluatorResponseSchemaScope};
 use crate::config_types::{AgentConfig, AGAINST_TREE_DIFF_FROM, DEFAULT_DIFF_FROM};
 use crate::evaluator::{
     ask_once as ask_evaluator_once, create_prompt_template_output_dir, developer_instructions,
@@ -61,6 +62,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         request.enforced_scope,
         request.model,
         reuse_visible_tree_oid,
+        request.prompt,
         request.question_context,
         request.diff_from_tree_oid,
         runtime.checked_tree_oid(),
@@ -199,6 +201,14 @@ fn ask_in_thread<R: EvaluatorRunner>(
     let visible_scope = runtime
         .visible_scope(request.agent, request.enforced_scope)
         .map_err(EvaluatorError::message)?;
+    let schema_scope = if runtime.evaluator_interrogations_never_hide_files() {
+        EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion
+    } else {
+        EvaluatorResponseSchemaScope::for_scope_with_question_scope_suggestion(
+            request.enforced_scope,
+        )
+    };
+    let output_schema = evaluator_response_output_schema_for_scope(schema_scope);
     // The evaluator turn boundary owns agent.request/agent.response runtime
     // log events for the single evaluator request made by this turn.
     ask_evaluator_once(
@@ -206,7 +216,8 @@ fn ask_in_thread<R: EvaluatorRunner>(
         &turn,
         request.prompt,
         request.agent,
-        request.enforced_scope,
+        schema_scope,
+        &output_schema,
         &visible_scope,
         session_root,
         parse_cache,
@@ -429,6 +440,7 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
         &template_output_dir,
         &expectation.question,
         &expectation.expected_answer,
+        runtime.is_in_place(),
         &expectation.diff_from,
         expectation.target.as_ref().map(|target| target.as_str()),
         diff_from.last_pass,
@@ -471,6 +483,15 @@ pub(crate) fn resolve_diff_from<'a>(
     expectation: &SelectedExpectation,
     last_pass: Option<&'a LastResult>,
 ) -> Result<ResolvedDiffFrom<'a>, EvaluatorError> {
+    if runtime.is_in_place() {
+        // In-place mode has no Git-backed diff base. Its selected expectations
+        // are validated before interrogation, and prompt rendering clears any
+        // diff-only turn inputs for this mode.
+        return Ok(ResolvedDiffFrom {
+            tree_oid: runtime.checked_tree_oid().to_string(),
+            last_pass: None,
+        });
+    }
     // This is the canon `diff-from` resolver for prompt-rendered Git diffs.
     // `:checkpoint` uses the last pass checked tree only while that tree object
     // exists in the repository, otherwise it falls back to the run's against

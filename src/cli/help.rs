@@ -91,11 +91,7 @@ pub(super) fn init_help_command() -> ClapCommand {
 }
 
 pub(super) fn hook_help_command() -> ClapCommand {
-    ClapCommand::new("hook")
-        .bin_name("canon hook")
-        .about("Manage the canon Git hook")
-        .subcommand(ClapCommand::new("install").about("Install the canon Git hook"))
-        .subcommand(ClapCommand::new("uninstall").about("Uninstall the canon Git hook"))
+    crate::hooks::hook_help_command()
 }
 
 pub(super) fn gate_help_command() -> ClapCommand {

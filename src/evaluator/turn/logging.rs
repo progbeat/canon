@@ -9,6 +9,7 @@ use crate::logs::{
     AgentTurnLogRequest, DiagnosticLogResult, DiagnosticLogWriter, ThreadLifecycleEventFields,
     ThreadRestartEventFields,
 };
+use serde_json::Value;
 
 pub(super) struct LoggedTurnRequest<'a> {
     pub(super) turn: &'a EvaluatorTurnContext<'a>,
@@ -16,7 +17,7 @@ pub(super) struct LoggedTurnRequest<'a> {
     pub(super) expectation_id: Option<&'a str>,
     pub(super) attempt: usize,
     pub(super) reason: &'a str,
-    pub(super) q_scope: &'a [String],
+    pub(super) output_schema: &'a Value,
 }
 
 pub(super) fn ask_and_log<R: EvaluatorRunner>(
@@ -43,7 +44,7 @@ pub(super) fn ask_and_log<R: EvaluatorRunner>(
         request.prompt,
         request.turn.model,
         request.turn.thinking,
-        request.q_scope,
+        request.output_schema,
     ) {
         Ok(response) => response,
         Err(err) => {

@@ -106,6 +106,10 @@ pub(crate) fn cached_last_result_for_expectation(
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
     lookup: CachedLastResultLookup,
 ) -> Result<Option<CachedLastResultHit>, String> {
+    // This is the Cached Result implementation for ordinary Git-backed runs.
+    // The in-place command path never calls it; in-place's separate
+    // compatibility validator can reject configured cooldown because that mode
+    // has no persistent last-result history to query.
     // Cached results are answers for the checked visible tree. `diff-from`
     // only chooses the left-hand tree for prompt-rendered Git diffs during
     // fresh evaluator work, so it is not part of cache identity.
@@ -826,7 +830,7 @@ mod tests {
     }
 
     #[test]
-    fn cooldown_can_reuse_older_pass_when_fail_is_newer() {
+    fn git_backed_cooldown_can_reuse_older_pass_when_fail_is_newer() {
         let root = git_project("cooldown-older-pass");
         let mut expectation = test_expectation();
         expectation.cooldown = Some(Cooldown {
@@ -875,7 +879,7 @@ mod tests {
     }
 
     #[test]
-    fn cooldown_can_reuse_older_fail_when_pass_is_newer() {
+    fn git_backed_cooldown_can_reuse_older_fail_when_pass_is_newer() {
         let root = git_project("cooldown-older-fail");
         let mut expectation = test_expectation();
         expectation.cooldown = Some(Cooldown {
@@ -924,7 +928,7 @@ mod tests {
     }
 
     #[test]
-    fn cooldown_uses_response_timestamp_when_both_statuses_match() {
+    fn git_backed_cooldown_uses_response_timestamp_when_both_statuses_match() {
         let root = git_project("cooldown-response-timestamp");
         let mut expectation = test_expectation();
         expectation.cooldown = Some(Cooldown {

@@ -25,7 +25,7 @@ impl AppServerTurnRequest {
 }
 
 impl AppServerRunner {
-    pub(crate) fn send_request(
+    pub(crate) fn send_control_request(
         &mut self,
         method: &str,
         params: Value,
@@ -39,7 +39,12 @@ impl AppServerRunner {
             let Some(message) = self.read_message_or_timeout()? else {
                 let now = Instant::now();
                 if turn_idle_timed_out(last_activity, now) {
-                    self.record_turn_timeout_progress();
+                    // Control messages such as initialize and thread/start set
+                    // up the app server or a session; they are not evaluator
+                    // work kinds in the per-expectation timeline. If a
+                    // non-initial interrogation needs a fresh session, the
+                    // higher-level fallback/retry/verification path records
+                    // its dedicated marker before this control message.
                     return Err(EvaluatorError::failure(
                         EvaluatorFailureKind::TurnTimeout,
                         format!(
@@ -48,11 +53,9 @@ impl AppServerRunner {
                         ),
                     ));
                 }
-                self.record_no_progress_timeout_accumulating_progress();
                 continue;
             };
             last_activity = Instant::now();
-            self.record_app_server_activity_progress();
             self.record_app_server_events(&message);
             let envelope = app_server_message(&message).map_err(|error| {
                 EvaluatorError::failure(EvaluatorFailureKind::UnknownAppServer, error)
@@ -115,6 +118,8 @@ impl AppServerRunner {
             let Some(message) = message else {
                 let now = Instant::now();
                 if turn_idle_timed_out(last_activity, now) {
+                    // A turn attempt is active here, so an exhausted
+                    // no-progress timeout owns the timeline `×` marker.
                     self.record_turn_timeout_progress();
                     return Err(EvaluatorError::failure(
                         EvaluatorFailureKind::TurnTimeout,
@@ -124,11 +129,13 @@ impl AppServerRunner {
                         ),
                     ));
                 }
+                // A turn attempt is active here, so time is accumulating
+                // toward the no-progress timeout and owns the timeline `~`.
                 self.record_no_progress_timeout_accumulating_progress();
                 continue;
             };
             last_activity = Instant::now();
-            self.record_app_server_activity_progress();
+            self.record_turn_message_activity_progress();
             self.record_app_server_events(&message);
             let envelope = match app_server_message(&message) {
                 Ok(envelope) => envelope,

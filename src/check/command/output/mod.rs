@@ -182,6 +182,20 @@ mod tests {
     }
 
     #[test]
+    fn live_report_writes_initial_progress_marker_before_completion() {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let output = SharedCheckOutput::new(Box::new(CapturedOutput {
+            bytes: bytes.clone(),
+        }));
+
+        let report = start_expectation_report_output(output, "j");
+
+        assert_eq!(captured_string(&bytes), "j.");
+        let finished = report.finish_with_record(&passing_record());
+        assert!(!finished.backup_report_needed());
+    }
+
+    #[test]
     fn agent_messages_cover_documented_actions() {
         assert!(has_action(
             &render_check_agent_messages(&issues(&["a"]), &[], 0, 0, 0),

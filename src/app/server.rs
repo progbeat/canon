@@ -165,7 +165,7 @@ impl EvaluatorRunner for LazyAppServerRunner {
         prompt: &str,
         model: Option<&str>,
         thinking: &str,
-        q_scope: &[String],
+        output_schema: &serde_json::Value,
     ) -> Result<String, EvaluatorError> {
         if !self.sessions.contains(session_id) {
             return Err("app-server runner does not own session".into());
@@ -174,7 +174,7 @@ impl EvaluatorRunner for LazyAppServerRunner {
             .inner
             .as_mut()
             .ok_or_else(|| EvaluatorError::message("app-server runner is not initialized"))?
-            .ask(session_id, prompt, model, thinking, q_scope);
+            .ask(session_id, prompt, model, thinking, output_schema);
         if let Err(err) = &result {
             self.retire_inner_after_model_failure(err)?;
         }

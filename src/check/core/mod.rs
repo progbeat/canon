@@ -10,7 +10,7 @@ mod run_report;
 pub(crate) use answer::CheckResult;
 pub(crate) use errors::INTERNAL_ERROR_UNPARSABLE;
 pub(crate) use evaluator_response::{
-    evaluator_response_output_schema_for_q_scope, matches_answer_pattern, parse_evaluator_response,
+    evaluator_response_output_schema_for_scope, matches_answer_pattern, parse_evaluator_response,
     EvaluatorResponseSchemaScope, ParsedAnswer, ANSWER_PATTERN, ERROR_INVALID_QUESTION,
     ERROR_SCOPE_TOO_NARROW,
 };

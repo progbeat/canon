@@ -73,7 +73,7 @@ impl AppServerRunner {
             no_sandbox,
             startup_args: Some(app_server_args),
         };
-        runner.send_request(
+        runner.send_control_request(
             "initialize",
             json!({
                 "clientInfo": {

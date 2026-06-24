@@ -1,9 +1,11 @@
 use super::logging::{ask_and_log, LoggedTurnRequest};
 use super::parse::{parse_visible_evaluator_response, unparsable_response_answer};
 use super::{EvaluatorTurnContext, ParsedTurnResponse};
+use crate::check::EvaluatorResponseSchemaScope;
 use crate::config_types::AgentConfig;
 use crate::evaluator::{EvaluatorError, EvaluatorResponseParseCache, EvaluatorRunner};
 use crate::logs::DiagnosticLogWriter;
+use serde_json::Value;
 use std::path::Path;
 
 #[allow(clippy::too_many_arguments)]
@@ -12,7 +14,8 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
     turn: &EvaluatorTurnContext<'_>,
     prompt: &str,
     agent: &AgentConfig,
-    q_scope: &[String],
+    schema_scope: EvaluatorResponseSchemaScope,
+    output_schema: &Value,
     visible_scope: &[String],
     session_root: &Path,
     parser_cache: &mut EvaluatorResponseParseCache,
@@ -28,14 +31,14 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
             expectation_id,
             attempt: 1,
             reason: "initial",
-            q_scope,
+            output_schema,
         },
     )?;
     let parsed = match parse_visible_evaluator_response(
         parser_cache,
         &response.text,
         agent,
-        q_scope,
+        schema_scope,
         visible_scope,
         session_root,
     ) {

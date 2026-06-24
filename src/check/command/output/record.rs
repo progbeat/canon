@@ -13,6 +13,16 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 const PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL: Duration = Duration::from_secs(60);
+
+// Check progress timeline ownership:
+// - `start_expectation_report_output` writes and flushes `<short ID>.` before
+//   evaluator work starts.
+// - the progress worker writes and flushes elapsed markers every minute while
+//   evaluator work is still active.
+// - `finish_with_record` writes the due elapsed marker before the final
+//   ` OK`/` FAILED`/` ERROR` suffix when it wins the one-minute boundary race
+//   before the worker observes that tick.
+// Event-to-marker priority and symbols live in `src/evaluator/progress.rs`.
 pub(crate) struct StartedExpectationReportOutput {
     output: SharedCheckOutput,
     stop: Sender<()>,
@@ -79,12 +89,12 @@ pub(crate) fn start_expectation_report_output(
                 if !worker_active.load(Ordering::Acquire) {
                     return Ok(());
                 }
-                let markers = elapsed_progress_markers_due(
+                let marker = elapsed_progress_marker_due(
                     &worker_progress,
                     &worker_timeline,
                     Instant::now(),
                 )?;
-                for marker in markers {
+                if let Some(marker) = marker {
                     write_stdout_record(
                         &mut progress_output,
                         marker.as_str().as_bytes(),
@@ -120,11 +130,11 @@ impl StartedExpectationReportOutput {
         let _ = self.stop_progress_worker();
         let mut output = self.output.clone();
         if self.prefix_completed {
-            let markers = match self.due_elapsed_progress_markers() {
-                Ok(markers) => markers,
+            let marker = match self.due_elapsed_progress_marker() {
+                Ok(marker) => marker,
                 Err(_) => return FinishedExpectationReportOutput::backup_report(),
             };
-            for marker in markers {
+            if let Some(marker) = marker {
                 if write_stdout_record(
                     &mut output,
                     marker.as_str().as_bytes(),
@@ -158,20 +168,20 @@ impl StartedExpectationReportOutput {
             .map_err(|_| "check live report progress thread panicked".to_string())?
     }
 
-    fn due_elapsed_progress_markers(&self) -> Result<Vec<EvaluatorProgressMarker>, String> {
-        elapsed_progress_markers_due(&self.progress, &self.timeline, Instant::now())
+    fn due_elapsed_progress_marker(&self) -> Result<Option<EvaluatorProgressMarker>, String> {
+        elapsed_progress_marker_due(&self.progress, &self.timeline, Instant::now())
     }
 }
 
-fn elapsed_progress_markers_due(
+fn elapsed_progress_marker_due(
     progress: &EvaluatorProgress,
     timeline: &Arc<Mutex<ElapsedProgressTimelineState>>,
     now: Instant,
-) -> Result<Vec<EvaluatorProgressMarker>, String> {
+) -> Result<Option<EvaluatorProgressMarker>, String> {
     let mut timeline = timeline
         .lock()
         .map_err(|_| "check live report progress state poisoned".to_string())?;
-    progress.elapsed_markers_due(
+    progress.elapsed_marker_due(
         &mut timeline.next_marker_at,
         now,
         PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL,

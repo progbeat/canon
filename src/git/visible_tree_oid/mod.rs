@@ -103,6 +103,11 @@ impl VisibleTreeOidCache {
         scope: &[String],
     ) -> Result<usize, String> {
         let visible_scope_pathspec = visible_scope(agent, scope)?;
+        // This count is the other side of the prompt's
+        // `num_invisible_files = checked_file_count - visible_file_count`.
+        // The entries are selected solely by the complete visible-scope
+        // pathspec against the checked Git tree; no token or relevance
+        // heuristic removes files here.
         let entries =
             self.visible_scope_entries_for_source(root, source, agent, &visible_scope_pathspec)?;
         Ok(entries

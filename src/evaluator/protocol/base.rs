@@ -43,7 +43,12 @@ mod tests {
 
         assert!(!rendered.contains("ScopeTooNarrow"));
         assert!(rendered.contains("InvalidQuestion"));
+        assert!(rendered.contains("normative text in the question itself"));
+        assert!(rendered.contains("absence of a separate policy file"));
         assert!(rendered.contains("response schema includes `qScopeSuggestion`"));
+        assert!(rendered.contains("Do not use diff hunks as evidence"));
+        assert!(rendered.contains("removed diff line is not current content"));
+        assert!(rendered.contains("Do not widen `qScopeSuggestion`"));
     }
 
     #[test]

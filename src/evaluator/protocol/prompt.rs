@@ -36,7 +36,11 @@ pub(crate) struct DeveloperInstructionsContext<'a> {
 pub(crate) fn developer_instructions(
     context: DeveloperInstructionsContext<'_>,
 ) -> Result<String, String> {
-    let num_invisible_files = context
+    // This count is reporting-only prompt data. File visibility has already
+    // been decided by the visible-tree pathspec selection in
+    // `src/git/visible_tree_oid/`; the template's "likely unnecessary" wording
+    // does not add another hiding rule.
+    let files_not_selected_by_visible_scope_pathspec = context
         .checked_file_count
         .checked_sub(context.visible_file_count)
         .ok_or("visible file count exceeds checked file count")?;
@@ -61,7 +65,7 @@ pub(crate) fn developer_instructions(
             "checked_tree_oid": context.checked_tree_oid,
             "last_pass": context.last_pass,
             "visible_scope": context.visible_scope,
-            "num_invisible_files": num_invisible_files,
+            "num_invisible_files": files_not_selected_by_visible_scope_pathspec,
         }),
     )
 }
@@ -71,10 +75,20 @@ pub(crate) fn evaluator_turn_prompt(
     template_output_dir: &Path,
     question: &str,
     expected_answer: &str,
+    in_place: bool,
     diff_from: &str,
     target: Option<&str>,
     last_pass: Option<&LastResult>,
 ) -> Result<String, String> {
+    let (diff_from, target, last_pass) = if in_place {
+        // In-place mode has no Git diff target or checkpoint context. The
+        // caller validates selected expectations before interrogation; this
+        // clamp keeps the rendered prompt diff-free even if an invalid in-place
+        // expectation reaches this component.
+        ("", None, None)
+    } else {
+        (diff_from, target, last_pass)
+    };
     // `diff_from` is template input for this fresh evaluator turn only. Cached
     // results are emitted without rendering this prompt. The turn template uses
     // `expectation.diff_from` to choose whether a target-diff prompt can reuse
@@ -638,6 +652,7 @@ mod tests {
             &output_dir,
             "Does it pass?",
             "yes",
+            false,
             crate::config_types::DEFAULT_DIFF_FROM,
             Some("diff"),
             Some(&last_pass),
@@ -680,6 +695,7 @@ mod tests {
             &output_dir,
             "Does it pass?",
             "yes",
+            false,
             crate::config_types::AGAINST_TREE_DIFF_FROM,
             Some("diff"),
             Some(&last_pass),
@@ -690,6 +706,40 @@ mod tests {
         assert!(prompt.contains(r#""evidence": """#));
         assert!(prompt.contains(r#""answer": "yes""#));
         assert!(!prompt.contains(r#""answer": "no""#));
+        let _ = fs::remove_dir_all(output_dir);
+    }
+
+    #[test]
+    fn in_place_turn_prompt_omits_target_diff_hint() {
+        let last_pass = LastResult {
+            response_timestamp: "1970-01-01T00:00:01Z".to_string(),
+            updated_timestamp: "1970-01-01T00:00:01Z".to_string(),
+            status: LastResultStatus::Pass,
+            response: json!({
+                "answer": "yes",
+                "evidence": "`src/a.rs`",
+                "qScopeSuggestion": ["src/a.rs"],
+            }),
+            q_scope: vec!["src/a.rs".to_string()],
+            visible_scope: vec!["src/a.rs".to_string()],
+            checked_tree_oid: Some("checked-tree".to_string()),
+            visible_tree_oid: Some("visible-tree".to_string()),
+        };
+        let output_dir = test_output_dir("turn-prompt-in-place");
+
+        let prompt = evaluator_turn_prompt(
+            Path::new("."),
+            &output_dir,
+            "Does it pass?",
+            "yes",
+            true,
+            crate::config_types::DEFAULT_DIFF_FROM,
+            Some("diff"),
+            Some(&last_pass),
+        )
+        .unwrap();
+
+        assert_eq!(prompt, "Does it pass?");
         let _ = fs::remove_dir_all(output_dir);
     }
 

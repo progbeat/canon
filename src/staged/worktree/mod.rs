@@ -149,6 +149,38 @@ mod tests {
     }
 
     #[test]
+    fn materialized_visible_tree_uses_only_checked_git_paths_selected_by_visible_scope() {
+        let root = git_project("staged-snapshot-visible-scope-pathspec-only");
+        fs::create_dir_all(root.join("visible")).unwrap();
+        fs::create_dir_all(root.join("hidden")).unwrap();
+        fs::write(root.join("visible/keep.txt"), "keep\n").unwrap();
+        fs::write(root.join("visible/untracked.txt"), "untracked\n").unwrap();
+        fs::write(root.join("hidden/drop.txt"), "drop\n").unwrap();
+        Command::new("git")
+            .args(["add", "visible/keep.txt", "hidden/drop.txt"])
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
+        let agent = empty_test_agent();
+        let visible_scope = vec!["visible".to_string()];
+        let staged_view =
+            StagedWorktreeView::apply_for_tree_source(&root, TreeSource::Staged).unwrap();
+        let visible_tree_oid = visible_tree_oid_cache
+            .visible_tree_oid(&root, &TreeSource::Staged, &agent, &visible_scope)
+            .unwrap();
+        let scope_root = staged_view
+            .materialize_visible_scope(&visible_scope, &visible_tree_oid)
+            .unwrap();
+
+        assert!(scope_root.join("visible/keep.txt").is_file());
+        assert!(!scope_root.join("visible/untracked.txt").exists());
+        assert!(!scope_root.join("hidden").exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn materialization_rejects_non_oid_tree_root_name() {
         let root = git_project("staged-snapshot-reject-tree-root-escape");
         let visible_scope = full_scope();

@@ -266,6 +266,7 @@ fn ask_once_with_model<R: EvaluatorRunner>(
         &template_output_dir,
         query.turn_question(),
         query.expected_answer(),
+        runtime.is_in_place(),
         query.diff_from(),
         query.target(),
         diff_from.last_pass,

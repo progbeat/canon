@@ -9,10 +9,13 @@ pub(crate) const ANSWER_PATTERN: &str = "^[-_a-z0-9]+$";
 pub(crate) enum EvaluatorResponseSchemaScope {
     Restricted,
     FullProject,
+    WithoutQuestionScopeSuggestion,
 }
 
 impl EvaluatorResponseSchemaScope {
-    pub(crate) fn for_q_scope(q_scope: &[String]) -> EvaluatorResponseSchemaScope {
+    pub(crate) fn for_scope_with_question_scope_suggestion(
+        q_scope: &[String],
+    ) -> EvaluatorResponseSchemaScope {
         // Interrogation Policy defines full project scope as exactly q-scope
         // ["."], before configured ignore exclusions are applied.
         if q_scope.len() == 1 && q_scope[0] == "." {
@@ -28,8 +31,11 @@ impl EvaluatorResponseSchemaScope {
             EvaluatorResponseSchemaScope::Restricted => {
                 json!([ERROR_SCOPE_TOO_NARROW, ERROR_INVALID_QUESTION])
             }
-            // Full-project-scope interrogations disable ScopeTooNarrow.
-            EvaluatorResponseSchemaScope::FullProject => json!([ERROR_INVALID_QUESTION]),
+            // Full-project-scope and no-suggestion schemas disable ScopeTooNarrow.
+            EvaluatorResponseSchemaScope::FullProject
+            | EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion => {
+                json!([ERROR_INVALID_QUESTION])
+            }
         }
     }
 
@@ -38,12 +44,18 @@ impl EvaluatorResponseSchemaScope {
             EvaluatorResponseSchemaScope::Restricted => {
                 matches!(error, ERROR_SCOPE_TOO_NARROW | ERROR_INVALID_QUESTION)
             }
-            EvaluatorResponseSchemaScope::FullProject => error == ERROR_INVALID_QUESTION,
+            EvaluatorResponseSchemaScope::FullProject
+            | EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion => {
+                error == ERROR_INVALID_QUESTION
+            }
         }
     }
 
     fn requires_question_scope_suggestion(self) -> bool {
-        matches!(self, EvaluatorResponseSchemaScope::Restricted)
+        matches!(
+            self,
+            EvaluatorResponseSchemaScope::Restricted | EvaluatorResponseSchemaScope::FullProject
+        )
     }
 }
 
@@ -122,9 +134,11 @@ pub(crate) fn evaluator_response_json_schema(schema_scope: EvaluatorResponseSche
         "additionalProperties": false,
     });
     if schema_scope.requires_question_scope_suggestion() {
-        // Interrogation Policy's restricted-scope schema requires
-        // qScopeSuggestion. Full-project schema takes the opposite branch and
-        // omits the property entirely because nothing narrower is needed.
+        // Interrogations that may hide files outside the visible scope require
+        // qScopeSuggestion, even when the q-scope is full project before
+        // configured ignore exclusions. A full-scope first turn can still
+        // propose a narrower reusable q-scope. Check modes that never hide
+        // files use WithoutQuestionScopeSuggestion and omit qScopeSuggestion.
         schema["properties"]["qScopeSuggestion"] = json!({
             "type": "array",
             "minItems": 1,
@@ -139,7 +153,9 @@ pub(crate) fn evaluator_response_json_schema(schema_scope: EvaluatorResponseSche
     schema
 }
 
-pub(crate) fn evaluator_response_output_schema_for_q_scope(q_scope: &[String]) -> Value {
+pub(crate) fn evaluator_response_output_schema_for_scope(
+    schema_scope: EvaluatorResponseSchemaScope,
+) -> Value {
     // Interrogation Policy navigation: this module only builds and validates
     // the response schema for one evaluator turn. Follow-up sequencing for
     // check runs lives in `src/check/run/execute/expectation.rs`; query-mode
@@ -149,10 +165,13 @@ pub(crate) fn evaluator_response_output_schema_for_q_scope(q_scope: &[String]) -
     // selection flow through `src/check/interrogation/session/model_fallback.rs`,
     // `src/check/interrogation/session/thread.rs`, and
     // `src/check/interrogation/state.rs`.
-    match EvaluatorResponseSchemaScope::for_q_scope(q_scope) {
+    match schema_scope {
         EvaluatorResponseSchemaScope::Restricted => restricted_evaluator_response_output_schema(),
         EvaluatorResponseSchemaScope::FullProject => {
             full_project_evaluator_response_output_schema()
+        }
+        EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion => {
+            without_question_scope_suggestion_evaluator_response_output_schema()
         }
     }
 }
@@ -165,6 +184,9 @@ fn evaluator_response_output_schema_for_schema_scope(
         EvaluatorResponseSchemaScope::Restricted => restricted_evaluator_response_output_schema(),
         EvaluatorResponseSchemaScope::FullProject => {
             full_project_evaluator_response_output_schema()
+        }
+        EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion => {
+            without_question_scope_suggestion_evaluator_response_output_schema()
         }
     }
 }
@@ -179,9 +201,17 @@ fn restricted_evaluator_response_output_schema() -> Value {
 fn full_project_evaluator_response_output_schema() -> Value {
     // This value is sent as turn/start.params.outputSchema for q-scope ["."],
     // so the app server cannot return ScopeTooNarrow as a schema-valid
-    // full-project-scope response.
+    // full-project-scope response. It still requires qScopeSuggestion because
+    // Git-backed full-scope turns can seed a narrower q-scope.
     evaluator_response_output_schema_with_error_enum(
         EvaluatorResponseSchemaScope::FullProject,
+        json!([ERROR_INVALID_QUESTION, null]),
+    )
+}
+
+fn without_question_scope_suggestion_evaluator_response_output_schema() -> Value {
+    evaluator_response_output_schema_with_error_enum(
+        EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion,
         json!([ERROR_INVALID_QUESTION, null]),
     )
 }
@@ -289,7 +319,11 @@ impl EvaluatorResponseJson {
             }
         }
         match (schema_scope, self.question_scope_suggestion.as_ref()) {
-            (EvaluatorResponseSchemaScope::Restricted, Some(items)) => {
+            (
+                EvaluatorResponseSchemaScope::Restricted
+                | EvaluatorResponseSchemaScope::FullProject,
+                Some(items),
+            ) => {
                 if items.is_empty() {
                     return Err("qScopeSuggestion must contain at least one item".to_string());
                 }
@@ -302,13 +336,17 @@ impl EvaluatorResponseJson {
                     }
                 }
             }
-            (EvaluatorResponseSchemaScope::Restricted, None) => {
+            (
+                EvaluatorResponseSchemaScope::Restricted
+                | EvaluatorResponseSchemaScope::FullProject,
+                None,
+            ) => {
                 return Err("qScopeSuggestion is required".to_string());
             }
-            (EvaluatorResponseSchemaScope::FullProject, Some(_)) => {
-                return Err("qScopeSuggestion must be omitted for full project scope".to_string());
+            (EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion, Some(_)) => {
+                return Err("qScopeSuggestion must be omitted when no files are hidden".to_string());
             }
-            (EvaluatorResponseSchemaScope::FullProject, None) => {}
+            (EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion, None) => {}
         }
         Ok(())
     }
@@ -451,6 +489,21 @@ mod tests {
     fn full_project_evaluator_response_json_schema_disables_scope_too_narrow() {
         let schema = evaluator_response_json_schema(EvaluatorResponseSchemaScope::FullProject);
 
+        assert_eq!(schema["required"], json!(["evidence", "qScopeSuggestion"]));
+        assert!(schema["properties"].get("qScopeSuggestion").is_some());
+        assert_eq!(
+            schema["properties"]["error"]["enum"],
+            json!([ERROR_INVALID_QUESTION])
+        );
+    }
+
+    #[test]
+    fn without_question_scope_suggestion_evaluator_response_json_schema_omits_question_scope_suggestion(
+    ) {
+        let schema = evaluator_response_json_schema(
+            EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion,
+        );
+
         assert_eq!(schema["required"], json!(["evidence"]));
         assert!(schema["properties"].get("qScopeSuggestion").is_none());
         assert_eq!(
@@ -490,6 +543,25 @@ mod tests {
             EvaluatorResponseSchemaScope::FullProject,
         );
 
+        assert_eq!(
+            schema["required"],
+            json!(["answer", "error", "evidence", "qScopeSuggestion"])
+        );
+        assert!(schema["properties"].get("qScopeSuggestion").is_some());
+        assert_eq!(
+            schema["properties"]["error"]["enum"],
+            json!([ERROR_INVALID_QUESTION, null])
+        );
+        assert!(schema.get("oneOf").is_none());
+    }
+
+    #[test]
+    fn without_question_scope_suggestion_evaluator_response_output_schema_omits_question_scope_suggestion(
+    ) {
+        let schema = evaluator_response_output_schema_for_schema_scope(
+            EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion,
+        );
+
         assert_eq!(schema["required"], json!(["answer", "error", "evidence"]));
         assert!(schema["properties"].get("qScopeSuggestion").is_none());
         assert_eq!(
@@ -523,10 +595,22 @@ mod tests {
     }
 
     #[test]
-    fn full_project_evaluator_response_omits_question_scope_suggestion() {
+    fn full_project_evaluator_response_requires_question_scope_suggestion() {
+        let response =
+            parse_evaluator_response_json(r#"{"answer":"yes","evidence":"`src/main.rs`"}"#)
+                .unwrap();
+        let error = response
+            .validate_schema(EvaluatorResponseSchemaScope::FullProject)
+            .unwrap_err();
+
+        assert!(error.contains("qScopeSuggestion"));
+    }
+
+    #[test]
+    fn without_question_scope_suggestion_evaluator_response_omits_question_scope_suggestion() {
         let response = parse_evaluator_response(
             r#"{"answer":"yes","evidence":"`src/main.rs`"}"#,
-            EvaluatorResponseSchemaScope::FullProject,
+            EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion,
         )
         .unwrap();
 
@@ -535,10 +619,24 @@ mod tests {
     }
 
     #[test]
-    fn full_project_evaluator_response_rejects_question_scope_suggestion() {
+    fn full_project_evaluator_response_accepts_question_scope_suggestion() {
+        let response = parse_evaluator_response(
+            r#"{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":["src/main.rs"]}"#,
+            EvaluatorResponseSchemaScope::FullProject,
+        )
+        .unwrap();
+
+        assert_eq!(
+            response.question_scope_suggestion,
+            Some(vec!["src/main.rs".to_string()])
+        );
+    }
+
+    #[test]
+    fn without_question_scope_suggestion_evaluator_response_rejects_question_scope_suggestion() {
         let error = parse_evaluator_response(
             r#"{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":["."]}"#,
-            EvaluatorResponseSchemaScope::FullProject,
+            EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion,
         )
         .unwrap_err();
 

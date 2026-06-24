@@ -54,7 +54,7 @@ impl BuiltinCommand {
     }
 
     pub(super) fn run(self, args: &[OsString]) -> Result<(), CommandError> {
-        if print_help_if_requested(args, self.help_command())? {
+        if self != BuiltinCommand::Hook && print_help_if_requested(args, self.help_command())? {
             return Ok(());
         }
         match self {
@@ -66,6 +66,12 @@ impl BuiltinCommand {
                 run_init(&root).map_err(CommandError::from)
             }
             BuiltinCommand::Hook => {
+                if args
+                    .iter()
+                    .any(|arg| arg == std::ffi::OsStr::new("-h") || arg == "--help")
+                {
+                    return run_hook_command(Path::new("."), args).map_err(CommandError::from);
+                }
                 let root = git_project_root(Path::new("."))?;
                 run_hook_command(&root, args).map_err(CommandError::from)
             }

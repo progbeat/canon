@@ -54,8 +54,10 @@ impl Default for AgentConfig {
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawPresetConfig {
     #[serde(default)]
-    // Human-authored canon data inherited by expectation items; prompt
-    // templates decide how to render it.
+    // Human-authored expectation context data inherited by expectation items.
+    // Despite the config key name, this is not an implementation-owned
+    // evaluator-agent instruction source; only resource templates under
+    // `resources/prompts/` decide how to embed it.
     #[serde(rename = "instructions")]
     pub(crate) question_context: Option<String>,
     #[serde(default)]
@@ -145,9 +147,10 @@ pub(crate) const AGAINST_TREE_DIFF_FROM: &str = ":against-tree";
 pub(crate) struct Expectation {
     pub(crate) q: String,
     pub(crate) a: String,
-    // Human-authored canon data from check config, like `q` and `a`. It is
-    // not an implementation-owned evaluator-agent prompt or policy source; the
-    // resource template in `resources/prompts/` decides whether to embed it.
+    // Human-authored expectation context data from check config, like `q` and
+    // `a`. Despite the config key name, this is not an implementation-owned
+    // evaluator-agent prompt or policy source; only the resource template in
+    // `resources/prompts/` decides how to embed it.
     #[serde(rename = "instructions")]
     pub(crate) question_context: String,
     pub(crate) diff_from: String,

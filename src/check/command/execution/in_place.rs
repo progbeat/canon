@@ -10,7 +10,7 @@ use crate::hash::full_scope;
 const IN_PLACE_SPEC_PROHIBITED_FIELDS: &[InPlaceProhibitedField] = &[
     InPlaceProhibitedField::DiffFrom,
     InPlaceProhibitedField::Target,
-    InPlaceProhibitedField::Cooldown,
+    InPlaceProhibitedField::CachedResultCooldown,
     InPlaceProhibitedField::Ignore,
 ];
 
@@ -18,9 +18,11 @@ const IN_PLACE_SPEC_PROHIBITED_FIELDS: &[InPlaceProhibitedField] = &[
 enum InPlaceProhibitedField {
     DiffFrom,
     Target,
-    // Cached Result owns the normal `cooldown` behavior; this variant exists
-    // only because `canon check --in-place` explicitly prohibits cache inputs.
-    Cooldown,
+    // Cached Result owns normal `cooldown` behavior for Git-backed runs. This
+    // variant is only the `canon check --in-place` mode-compatibility rule:
+    // only selected in-place expectations reject cooldown-cache behavior,
+    // because that mode treats persisted xpec history as absent.
+    CachedResultCooldown,
     Ignore,
 }
 
@@ -29,7 +31,7 @@ impl InPlaceProhibitedField {
         match self {
             InPlaceProhibitedField::DiffFrom => "diff-from",
             InPlaceProhibitedField::Target => "target",
-            InPlaceProhibitedField::Cooldown => "cooldown",
+            InPlaceProhibitedField::CachedResultCooldown => "cooldown",
             InPlaceProhibitedField::Ignore => "ignore",
         }
     }
@@ -42,7 +44,7 @@ impl InPlaceProhibitedField {
         match self {
             InPlaceProhibitedField::DiffFrom => expectation.diff_from_configured,
             InPlaceProhibitedField::Target => has_explicit_target(expectation),
-            InPlaceProhibitedField::Cooldown => expectation.cooldown.is_some(),
+            InPlaceProhibitedField::CachedResultCooldown => expectation.cooldown.is_some(),
             InPlaceProhibitedField::Ignore => {
                 !config_agent.ignore.is_empty() || !expectation.agent.ignore.is_empty()
             }

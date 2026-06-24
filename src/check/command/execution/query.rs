@@ -179,18 +179,19 @@ fn run_prepared_query(
     check_caches: &mut CheckRunCaches,
 ) -> Result<(), String> {
     let query_expectation = query_expectation_context(config, question)?;
-    if let Some(expectation) = query_expectation.as_ref() {
-        if runtime.is_in_place() {
-            // In query mode, only this matched q/a expectation is selected for
-            // expectation-context behavior. Other config expectations are not
-            // selected by `canon check -q`, so the in-place selected-expectation
-            // validation applies only here; one-off unmatched queries have no
-            // selected expectation to validate.
+    if runtime.is_in_place() {
+        // Query mode has no expectation selectors. The only selected
+        // expectation is the matched q/a-only item, when one exists; an
+        // unmatched one-off query has no check.yml expectation selected for
+        // in-place compatibility validation.
+        if let Some(expectation) = query_expectation.as_ref() {
             validate_in_place_query_expectation(&config.agent, expectation)?;
-            *enforced_scope = runtime
-                .fresh_scope_without_persistent_q_scope()
-                .expect("in-place query has no persistent q-scope");
-        } else if !query_scope_provided {
+        }
+        *enforced_scope = runtime
+            .fresh_scope_without_persistent_q_scope()
+            .expect("in-place query has no persistent q-scope");
+    } else if let Some(expectation) = query_expectation.as_ref() {
+        if !query_scope_provided {
             *enforced_scope = initial_visible_scope_for_expectation(
                 root,
                 runtime
@@ -396,9 +397,10 @@ fn query_expectation_context(
     let [index] = matches.as_slice() else {
         return Ok(None);
     };
-    // This is not check-run selection. It only recovers the q/a-only
-    // expectation context needed for plain `canon check -q <q>` to use the
-    // same prompt and state inputs as `canon check <ID>`.
+    // This is query-mode selection, not check-run selector expansion. Only a
+    // q/a-only expectation can be selected here; if a text-matching
+    // expectation has diff, cache, path-hiding, or instruction fields, it is a
+    // non-q/a expectation and the query remains an unmatched one-off question.
     selected_expectation_at(config, &identities, *index, true).map(Some)
 }
 

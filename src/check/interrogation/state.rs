@@ -31,18 +31,20 @@ pub(crate) fn evaluator_thread_reuse_key(
     scope: &[String],
     model: Option<&str>,
     visible_tree_oid: &str,
+    turn_prompt: &str,
     question_context: &str,
     diff_base_tree_oid: &str,
     checked_tree_oid: &str,
 ) -> Result<String, String> {
     // Evaluator thread reuse is context reuse, not a deterministic result cache.
     // A reused thread keeps its original developer instructions and live
-    // thread-start context, so the key includes the model, the inputs that
-    // render the current developer-instructions template, and the non-rendered
-    // context that changes the evaluator cwd or tools.
-    // Per-turn prompt inputs such as expectation `target` are intentionally
-    // absent: they are rendered into the fresh turn prompt, not the reused
-    // thread's start instructions or sandbox context.
+    // thread-start context, so the key includes the model, the exact turn
+    // prompt, the inputs that render the current developer-instructions
+    // template, and the non-rendered context that changes the evaluator cwd or
+    // tools. The turn prompt is part of the key because a live Codex thread is
+    // conversational state, and each reused thread must stay tied to the same
+    // evaluator task input. This protects answer correctness; started
+    // expectation report liveness is owned by the check-run output layer.
     let mut key = String::new();
     app_server_model_key(model).push_cache_key_part(&mut key);
     key.push('\0');
@@ -51,6 +53,10 @@ pub(crate) fn evaluator_thread_reuse_key(
     key.push_str(diff_base_tree_oid);
     key.push('\0');
     key.push_str(checked_tree_oid);
+    key.push('\0');
+    key.push_str(&turn_prompt.len().to_string());
+    key.push('\0');
+    key.push_str(turn_prompt);
     key.push('\0');
     key.push_str(&question_context.len().to_string());
     key.push('\0');
@@ -149,6 +155,14 @@ impl<'a> CheckRuntime<'a> {
 
     pub(crate) fn is_in_place(&self) -> bool {
         matches!(self.mode, CheckRuntimeMode::InPlace)
+    }
+
+    pub(crate) fn evaluator_interrogations_never_hide_files(&self) -> bool {
+        // In-place mode is the check mode whose selected expectations are
+        // evaluated against the checked directory as-is. Its evaluator
+        // interrogations never hide files through q-scope, stored q-scope,
+        // expectation ignore, scope narrowing, or retry behavior.
+        self.is_in_place()
     }
 
     pub(crate) fn persistent_check_state_root(&self) -> Option<&Path> {
@@ -357,6 +371,7 @@ mod tests {
             &scope,
             Some("model"),
             "visible-tree",
+            "Does it pass?",
             "instructions",
             "base-a",
             "checked-a",
@@ -367,6 +382,7 @@ mod tests {
             &scope,
             Some("model"),
             "visible-tree",
+            "Does it pass?",
             "instructions",
             "base-b",
             "checked-a",
@@ -377,6 +393,7 @@ mod tests {
             &scope,
             Some("model"),
             "visible-tree",
+            "Does it pass?",
             "instructions",
             "base-a",
             "checked-b",
@@ -385,6 +402,36 @@ mod tests {
 
         assert_ne!(base, different_base);
         assert_ne!(base, different_checked);
+    }
+
+    #[test]
+    fn thread_reuse_key_includes_turn_prompt() {
+        let agent = AgentConfig::default();
+        let scope = full_scope();
+        let first = evaluator_thread_reuse_key(
+            &agent,
+            &scope,
+            Some("model"),
+            "visible-tree",
+            "Does alpha pass?",
+            "",
+            "base",
+            "checked",
+        )
+        .unwrap();
+        let second = evaluator_thread_reuse_key(
+            &agent,
+            &scope,
+            Some("model"),
+            "visible-tree",
+            "Does beta pass?",
+            "",
+            "base",
+            "checked",
+        )
+        .unwrap();
+
+        assert_ne!(first, second);
     }
 
     #[test]

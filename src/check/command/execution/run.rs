@@ -251,11 +251,11 @@ fn run_in_place_check_command(
 ) -> Result<(), CommandError> {
     // In-place delegates stay behind their component boundaries: CLI dispatch
     // supplies `root` and `default_in_place`, argument parsing rejects
-    // Git-tree/query-scope options, repo inspection reads this directory
-    // directly, and `CheckRuntime::in_place` owns the evaluator view with no
-    // persistent xpec state root. This command path only coordinates those
-    // interfaces and validates selected expectations for in-place-prohibited
-    // expectation fields.
+    // Git-tree, query-scope, and cache controls, repo inspection reads this
+    // directory directly, and `CheckRuntime::in_place` owns the evaluator view
+    // with no persistent xpec state root. This command path only coordinates
+    // those interfaces and validates selected expectations for
+    // in-place-prohibited expectation fields.
     let mut repo_cache = RepoInspectionCache::new();
     // In-place uses a fresh in-memory cache bundle only because the shared
     // execution APIs accept cache handles. It does not create diagnostic logs,

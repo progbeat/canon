@@ -106,6 +106,7 @@ mod tests {
     use crate::check::INTERNAL_ERROR_UNPARSABLE;
     use crate::evaluator::{EvaluatorResponseParseCache, EvaluatorRunner};
     use crate::token_usage_types::{EvaluatorTurnUsage, TokenUsage};
+    use serde_json::json;
     use std::fs;
     use std::path::Path;
 
@@ -123,7 +124,8 @@ mod tests {
             &turn_context(),
             "question",
             &AgentConfig::default(),
-            &["src/visible.rs".to_string()],
+            crate::check::EvaluatorResponseSchemaScope::Restricted,
+            &json!({"type": "object"}),
             &["src/visible.rs".to_string()],
             &root,
             &mut parser_cache,
@@ -152,7 +154,8 @@ mod tests {
             &turn_context(),
             "question",
             &AgentConfig::default(),
-            &[".".to_string()],
+            crate::check::EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion,
+            &json!({"type": "object"}),
             &[".".to_string()],
             &root,
             &mut parser_cache,
@@ -226,7 +229,7 @@ mod tests {
             _prompt: &str,
             _model: Option<&str>,
             _thinking: &str,
-            _q_scope: &[String],
+            _output_schema: &serde_json::Value,
         ) -> Result<String, EvaluatorError> {
             Ok(self.responses.remove(0))
         }

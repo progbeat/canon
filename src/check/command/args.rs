@@ -77,11 +77,16 @@ pub(crate) fn parse_check_command_args(
 
     if in_place {
         // This parser rejects CLI options whose meaning depends on a Git tree
-        // or caller-provided query scope. Expectation-level in-place
+        // or cache/path-hiding behavior. Expectation-level in-place
         // validation for diff-from/target/cooldown/ignore happens after config
         // expansion in `src/check/command/execution/in_place.rs`, and
         // generators/includes are expanded before that by `repo_inspection`.
-        validate_in_place_options(tree_explicit, against_tree_explicit, query_scope_provided)?;
+        validate_in_place_options(
+            tree_explicit,
+            against_tree_explicit,
+            query_scope_provided,
+            &options,
+        )?;
     }
 
     if query.is_none() && !query_scope.is_empty() {
@@ -232,6 +237,7 @@ fn validate_in_place_options(
     tree_explicit: bool,
     against_tree_explicit: bool,
     query_scope_provided: bool,
+    options: &RawCheckOptions,
 ) -> Result<(), String> {
     let mut invalid = Vec::new();
     if tree_explicit {
@@ -242,6 +248,12 @@ fn validate_in_place_options(
     }
     if query_scope_provided {
         invalid.push("-s/--scope");
+    }
+    if options.ignore_cooldown {
+        // This is only the in-place mode check. Ordinary Git-backed
+        // `canon check` accepts this cache-control flag and still supports
+        // configured cooldown through the Cached Result implementation.
+        invalid.push("--ignore-cooldown");
     }
     if invalid.is_empty() {
         return Ok(());
@@ -358,6 +370,27 @@ mod tests {
             err,
             "canon check --in-place cannot be combined with -s/--scope"
         );
+    }
+
+    #[test]
+    fn in_place_rejects_cache_controls() {
+        let err = match parse(&["--in-place", "--ignore-cooldown"]) {
+            Ok(_) => panic!("expected in-place cache control to fail"),
+            Err(err) => err,
+        };
+
+        assert_eq!(
+            err,
+            "canon check --in-place cannot be combined with --ignore-cooldown"
+        );
+    }
+
+    #[test]
+    fn git_backed_check_accepts_cache_controls() {
+        let command = parse(&["--ignore-cooldown"]).unwrap();
+
+        assert!(!command.in_place);
+        assert!(command.options.ignore_cooldown);
     }
 
     #[test]

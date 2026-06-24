@@ -2,11 +2,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 // Shared progress handle for one evaluated expectation. Check execution owns the
-// handle, installs it on the evaluator runner, and records model fallback plus
-// q-scope/full-scope follow-up starts. App-server transport records activity,
-// no-progress timeout accumulation, and exhausted no-progress turn timeouts
-// through the same handle. Query mode does not create this handle because it
-// does not emit per-expectation result-entry timelines.
+// handle, installs it on the evaluator runner, and records the non-initial
+// evaluator work kinds that have canon timeline markers: model fallback,
+// full-scope retry, and q-scope verification. The evaluator turn request path
+// records active-turn idle accumulation and exhausted no-progress turn timeouts.
+// App-server control messages such as initialize and thread/start are session
+// setup, not evaluator work kinds in this timeline. When a non-initial
+// interrogation needs a fresh session, its caller records the fallback, retry,
+// or verification marker before sending thread/start.
 #[derive(Clone, Default)]
 pub(crate) struct EvaluatorProgress {
     state: Arc<Mutex<EvaluatorProgressState>>,
@@ -24,7 +27,7 @@ pub(crate) enum EvaluatorProgressMarker {
     ModelFallback,
     FullScopeRetry,
     QScopeVerification,
-    AppServerActivity,
+    NoHigherPriorityEvent,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,9 +50,9 @@ impl EvaluatorProgress {
         EvaluatorProgress::default()
     }
 
-    pub(crate) fn record_app_server_activity(&self) {
+    pub(crate) fn record_turn_message_activity(&self) {
         // A quiet elapsed window emits "." by default. Higher-priority events
-        // are the only state the progress timeline has to remember.
+        // are the only state the progress timeline stores.
     }
 
     pub(crate) fn record_turn_timeout(&self) {
@@ -82,32 +85,26 @@ impl EvaluatorProgress {
         }
     }
 
-    pub(crate) fn elapsed_markers_due(
+    pub(crate) fn elapsed_marker_due(
         &self,
         next_marker_at: &mut Instant,
         now: Instant,
         interval: Duration,
-    ) -> Result<Vec<EvaluatorProgressMarker>, String> {
-        if interval.is_zero() {
-            return Ok(Vec::new());
+    ) -> Result<Option<EvaluatorProgressMarker>, String> {
+        if interval.is_zero() || *next_marker_at > now {
+            return Ok(None);
         }
         let mut state = self
             .state
             .lock()
             .map_err(|_| "evaluator progress state poisoned".to_string())?;
-        let mut markers = Vec::new();
-        let mut latest_closed_marker_at = None;
-        while *next_marker_at <= now {
-            let marker_at = *next_marker_at;
-            let window_start = marker_at - interval;
-            markers.push(state.marker_for_window(window_start, marker_at));
-            latest_closed_marker_at = Some(marker_at);
-            *next_marker_at += interval;
-        }
-        if let Some(closed_at) = latest_closed_marker_at {
-            state.events.retain(|event| event.at > closed_at);
-        }
-        Ok(markers)
+        // One call classifies one scheduled elapsed-marker tick. The output
+        // worker owns the one-minute cadence; this helper owns marker priority.
+        let window_start = now - interval;
+        let marker = state.marker_for_window(window_start, now);
+        state.events.retain(|event| event.at > now);
+        *next_marker_at = now + interval;
+        Ok(Some(marker))
     }
 }
 
@@ -171,7 +168,7 @@ impl EvaluatorProgressState {
                 return marker;
             }
         }
-        EvaluatorProgressMarker::AppServerActivity
+        EvaluatorProgressMarker::NoHigherPriorityEvent
     }
 }
 
@@ -183,7 +180,55 @@ impl EvaluatorProgressMarker {
             EvaluatorProgressMarker::ModelFallback => "⇄",
             EvaluatorProgressMarker::FullScopeRetry => "↗",
             EvaluatorProgressMarker::QScopeVerification => "↘",
-            EvaluatorProgressMarker::AppServerActivity => ".",
+            EvaluatorProgressMarker::NoHigherPriorityEvent => ".",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EvaluatorProgress, EvaluatorProgressMarker};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn elapsed_marker_due_waits_until_scheduled_tick() {
+        let progress = EvaluatorProgress::new();
+        let interval = Duration::from_secs(60);
+        let start = Instant::now();
+        let mut next_marker_at = start + interval;
+
+        assert_eq!(
+            progress
+                .elapsed_marker_due(
+                    &mut next_marker_at,
+                    start + Duration::from_secs(59),
+                    interval
+                )
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn elapsed_marker_due_classifies_the_current_tick_window() {
+        let progress = EvaluatorProgress::new();
+        let interval = Duration::from_secs(60);
+        let start = Instant::now();
+        let event_at = start + Duration::from_secs(30);
+        let tick_at = start + interval;
+        let mut next_marker_at = start + interval;
+
+        progress
+            .state
+            .lock()
+            .unwrap()
+            .record_full_scope_retry_started_at(event_at);
+
+        let marker = progress
+            .elapsed_marker_due(&mut next_marker_at, tick_at, interval)
+            .unwrap();
+
+        assert_eq!(marker, Some(EvaluatorProgressMarker::FullScopeRetry));
+        assert!(next_marker_at > tick_at);
     }
 }
