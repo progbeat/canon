@@ -1,6 +1,5 @@
 use crate::check::command::output::{
-    defer_expectation_report_output, start_expectation_report_output, SharedCheckOutput,
-    StartedExpectationReportOutput,
+    start_expectation_report_output, SharedCheckOutput, StartedExpectationReportOutput,
 };
 use crate::check::core::{CheckRecord, SelectedExpectation};
 use crate::evaluator::EvaluatorProgress;
@@ -15,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 pub(super) enum LiveExpectationReport {
     StateBacked(StateBackedLiveExpectationReport),
-    DeferredOutputOnly(StartedExpectationReportOutput),
+    OutputOnly(StartedExpectationReportOutput),
 }
 
 // State-backed live expectation reports have only start and finish operations.
@@ -33,12 +32,10 @@ pub(super) fn start_live_expectation_report(
     expectation: &SelectedExpectation,
 ) -> Result<LiveExpectationReport, String> {
     let Some(root) = state_root else {
-        // Without persistent check state there is no durable started marker,
-        // so output-only reports defer the short-ID prefix until the complete
-        // record is ready. If all public output sinks fail, no `<short ID>.`
-        // was printed for this expectation.
-        return Ok(LiveExpectationReport::DeferredOutputOnly(
-            defer_expectation_report_output(output.clone()),
+        // In-place mode has no persistent check state; its completed CheckRecord
+        // is still returned through CheckRunReport.
+        return Ok(LiveExpectationReport::OutputOnly(
+            start_expectation_report_output(output.clone(), &expectation.display_id),
         ));
     };
     let state_path = live_report_state_path(root, expectation)?;
@@ -67,27 +64,27 @@ impl LiveExpectationReport {
     pub(super) fn progress(&self) -> EvaluatorProgress {
         match self {
             LiveExpectationReport::StateBacked(report) => report.output.progress(),
-            LiveExpectationReport::DeferredOutputOnly(output) => output.progress(),
+            LiveExpectationReport::OutputOnly(output) => output.progress(),
         }
     }
 
-    pub(super) fn finish_public_output_or_keep_state_report(
-        self,
-        record: &CheckRecord,
-    ) -> Result<(), String> {
+    pub(super) fn finish_public_output_or_keep_state_report(self, record: &CheckRecord) {
         match self {
             LiveExpectationReport::StateBacked(report) => {
                 report.finish_public_output_or_keep_state_report(record)
             }
-            LiveExpectationReport::DeferredOutputOnly(output) => {
-                output.finish_with_record(record).map(|_| ())
+            LiveExpectationReport::OutputOnly(report) => {
+                // Output-only mode has no state file to update. Its completed
+                // CheckRecord is reported by CheckRunReport even when human
+                // output is unavailable.
+                let _ = report.finish_with_record(record);
             }
         }
     }
 }
 
 impl StateBackedLiveExpectationReport {
-    fn finish_public_output_or_keep_state_report(self, record: &CheckRecord) -> Result<(), String> {
+    fn finish_public_output_or_keep_state_report(self, record: &CheckRecord) {
         let _ = write_live_report_state(
             &self.state_path,
             json!({
@@ -105,7 +102,11 @@ impl StateBackedLiveExpectationReport {
                 "visibleTreeOid": record.visible_tree_oid,
             }),
         );
-        if self.output.finish_with_record(record).unwrap_or(false) {
+        if !self
+            .output
+            .finish_with_record(record)
+            .backup_report_needed()
+        {
             // Public output already contains the report; keep the state file
             // only for interrupted or public-output-failure cases.
             let _ = fs::remove_file(&self.state_path);
@@ -114,7 +115,6 @@ impl StateBackedLiveExpectationReport {
             // refused it. The completed state report above remains under
             // CANON_STATE_DIR/live-reports.
         }
-        Ok(())
     }
 }
 

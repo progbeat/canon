@@ -128,13 +128,17 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                     Ok(outcome) => outcome,
                     Err(error) => return Err(current_error!(error)),
                 };
+                let stop_run = outcome.stop_run;
+                let interrupted = outcome.interrupted;
+                // This is the structured per-expectation report for evaluated
+                // work; human stdout/stderr rendering is not the only report.
                 records.push(outcome.record);
-                if outcome.stop_run {
+                if stop_run {
                     // This is the shared default-order stop point for both
                     // materialized and in-place runs. In-place mode changes
                     // cache/state usage, not the stop-after-evaluated-non-pass
                     // rule.
-                    if !outcome.interrupted {
+                    if !interrupted {
                         write_remaining_cached_failures_without_evaluation(
                             &mut check_work_queue,
                             &mut cached,
@@ -143,7 +147,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                         .map_err(|err| current_error!(err))?;
                     }
                     let report = current_report(records, cached, total_expectations);
-                    if outcome.interrupted {
+                    if interrupted {
                         // The post-summary agent-message spec is explicitly scoped to
                         // runs without Ctrl-C or other interruption. Resource/control
                         // stop signals finish through the error-report path so no

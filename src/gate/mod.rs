@@ -24,7 +24,7 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
             "canon gate does not accept arguments\n▷ Run `canon gate` without arguments.".into(),
         );
     }
-    let changed_paths = gate_result_or_failure(staged_changed_path_bytes(root))?;
+    let changed_paths = gate_command_result(staged_changed_path_bytes(root))?;
     // `canon check` prints "Commit the staged changes NOW!" only when this
     // same HEAD-vs-staged regression count is zero. In that same-tree commit
     // case, remaining expectation failures are not gate failures; only a
@@ -45,14 +45,14 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
 
 fn gate_regression_count(root: &Path) -> Result<usize, CommandError> {
     let mut repo_cache = RepoInspectionCache::new();
-    let config =
-        match repo_cache.load_check_config(root, Path::new(CHECK_PATH), &TreeSource::Staged) {
-            Ok(config) => config,
-            Err(_) => return Ok(0),
-        };
+    let config = gate_command_result(repo_cache.load_check_config(
+        root,
+        Path::new(CHECK_PATH),
+        &TreeSource::Staged,
+    ))?;
     let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
     let mut xpec_state = XpecStateCache::default();
-    gate_result_or_failure(gate_regression_count_with_config(
+    gate_command_result(gate_regression_count_with_config(
         root,
         &config,
         &mut xpec_state,
@@ -76,14 +76,10 @@ fn gate_decision(num_regressions: usize, changed_paths: &[Vec<u8>]) -> GateDecis
     GateDecision::Pass
 }
 
-fn gate_result_or_failure<T>(result: Result<T, String>) -> Result<T, CommandError> {
+fn gate_command_result<T>(result: Result<T, String>) -> Result<T, CommandError> {
     match result {
         Ok(value) => Ok(value),
-        Err(err) => {
-            write_stderr_line(&format!("canon gate: {}", err))?;
-            write_stderr_line(gate_error_advice())?;
-            Err(CommandError::GateFailed)
-        }
+        Err(err) => Err(format!("canon gate: {}\n{}", err, gate_error_advice()).into()),
     }
 }
 

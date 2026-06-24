@@ -25,6 +25,28 @@ pub(crate) struct StartedExpectationReportOutput {
     prefix_completed: bool,
 }
 
+pub(crate) struct FinishedExpectationReportOutput {
+    backup_report_needed: bool,
+}
+
+impl FinishedExpectationReportOutput {
+    fn completed_report() -> FinishedExpectationReportOutput {
+        FinishedExpectationReportOutput {
+            backup_report_needed: false,
+        }
+    }
+
+    fn backup_report() -> FinishedExpectationReportOutput {
+        FinishedExpectationReportOutput {
+            backup_report_needed: true,
+        }
+    }
+
+    pub(crate) fn backup_report_needed(&self) -> bool {
+        self.backup_report_needed
+    }
+}
+
 struct ElapsedProgressTimelineState {
     last_snapshot: EvaluatorProgressSnapshot,
     next_marker_at: Instant,
@@ -92,30 +114,15 @@ pub(crate) fn start_expectation_report_output(
     }
 }
 
-pub(crate) fn defer_expectation_report_output(
-    output: SharedCheckOutput,
-) -> StartedExpectationReportOutput {
-    let (stop, _stop_requested) = mpsc::channel();
-    StartedExpectationReportOutput {
-        output,
-        stop,
-        active: Arc::new(AtomicBool::new(false)),
-        progress: EvaluatorProgress::new(),
-        timeline: Arc::new(Mutex::new(ElapsedProgressTimelineState {
-            last_snapshot: EvaluatorProgressSnapshot::default(),
-            next_marker_at: Instant::now() + PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL,
-        })),
-        worker: None,
-        prefix_completed: false,
-    }
-}
-
 impl StartedExpectationReportOutput {
     pub(crate) fn progress(&self) -> EvaluatorProgress {
         self.progress.clone()
     }
 
-    pub(crate) fn finish_with_record(mut self, record: &CheckRecord) -> Result<bool, String> {
+    pub(crate) fn finish_with_record(
+        mut self,
+        record: &CheckRecord,
+    ) -> FinishedExpectationReportOutput {
         // Once the report prefix is visible, final result output has priority
         // over delayed progress-worker cleanup errors.
         let _ = self.stop_progress_worker();
@@ -131,18 +138,14 @@ impl StartedExpectationReportOutput {
         };
         let mut output = self.output.clone();
         if write_stdout_record(&mut output, result_suffix.as_bytes(), "check result").is_err() {
-            if write_live_completion_fallback_to_stderr(
+            let _ = write_live_completion_fallback_to_stderr(
                 record,
                 &result_suffix,
                 self.prefix_completed,
-            ) {
-                return Ok(false);
-            }
-            return Err(
-                "failed to write started expectation result to stdout or stderr".to_string(),
             );
+            return FinishedExpectationReportOutput::backup_report();
         }
-        Ok(true)
+        FinishedExpectationReportOutput::completed_report()
     }
 
     fn stop_progress_worker(&mut self) -> Result<(), String> {
@@ -161,6 +164,8 @@ impl StartedExpectationReportOutput {
         self.progress
             .with_snapshot(|snapshot| {
                 let mut timeline = self.timeline.lock().ok()?;
+                // Elapsed markers are minute-cadenced. Completion does not emit
+                // a marker for a final partial interval before the next tick.
                 if now < timeline.next_marker_at {
                     return None;
                 }
@@ -178,19 +183,19 @@ fn write_live_completion_fallback_to_stderr(
     record: &CheckRecord,
     completion: &str,
     prefix_completed: bool,
-) -> bool {
+) -> Result<(), String> {
     let fallback = if prefix_completed {
         format!("{}{}", record.display_id, completion)
     } else {
         completion.to_string()
     };
-    // Best-effort human-output fallback only. A closed stderr must not panic
-    // before the caller can return the CheckRecord for report accounting.
+    // Best-effort human-output fallback. The completed CheckRecord remains the
+    // structured report even if this fallback cannot be written.
     let mut stderr = std::io::stderr();
     stderr
         .write_all(fallback.as_bytes())
         .and_then(|_| stderr.flush())
-        .is_ok()
+        .map_err(|err| format!("failed to write check result fallback to stderr: {}", err))
 }
 
 // Results without a live evaluated report still have a progress timeline: the

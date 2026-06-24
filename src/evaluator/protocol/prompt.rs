@@ -25,7 +25,8 @@ pub(crate) struct DeveloperInstructionsContext<'a> {
     pub(crate) in_place: bool,
     pub(crate) diff_from_tree_oid: &'a str,
     pub(crate) checked_tree_oid: &'a str,
-    pub(crate) expectation_instructions: &'a str,
+    // Data for the resource template's `expectation.instructions` variable.
+    pub(crate) question_context: &'a str,
     pub(crate) visible_scope: &'a [String],
     pub(crate) checked_file_count: usize,
     pub(crate) visible_file_count: usize,
@@ -49,10 +50,11 @@ pub(crate) fn developer_instructions(
         context.template_output_dir,
         DEVELOPER_INSTRUCTIONS_TEMPLATE,
         json!({
-            // `expectation.instructions` is question-scoped canon data, not a
+            // This object is template input only. Its key spelling follows
+            // the resource-template contract; this renderer does not define a
             // second implementation-owned evaluator instruction source.
             "expectation": {
-                "instructions": context.expectation_instructions,
+                "instructions": context.question_context,
             },
             "in_place": context.in_place,
             "diff_from_tree_oid": context.diff_from_tree_oid,
@@ -594,7 +596,7 @@ mod tests {
             in_place,
             diff_from_tree_oid: "HEAD",
             checked_tree_oid: "HEAD",
-            expectation_instructions: "Custom expectation instructions.",
+            question_context: "Custom expectation instructions.",
             visible_scope: &visible_scope,
             checked_file_count: 10,
             visible_file_count: 5,

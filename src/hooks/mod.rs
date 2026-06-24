@@ -1,16 +1,12 @@
 mod fs;
 mod git;
 
-use self::fs::{
-    ensure_project_dir_without_symlinks, make_executable, path_exists_no_follow,
-    remove_optional_file, replace_file, write_new_file,
-};
+use self::fs::make_executable;
 use self::git::{
     configure_git_hooks_path, git_hooks_path_matches, has_canon_git_hooks_path,
     unset_git_hooks_path, uses_canon_git_hooks_path, HookInstallPreflight,
 };
-use crate::check::CHECK_PATH;
-use crate::fs_util::ensure_dir_without_symlinks;
+use crate::fs_util::{ensure_dir_without_symlinks, remove_optional_file, replace_file};
 use crate::notes::arg_to_string;
 use crate::output::write_stdout_line;
 use std::ffi::OsString;
@@ -30,30 +26,6 @@ const PRE_COMMIT_HOOK_MANUAL_ADVICE: &str =
     "Can't safely install pre-commit hook.\n▷ Add `canon gate` manually to the existing hook setup or ask a human to handle it.";
 pub(super) const GIT_WORKTREE_REQUIRED_FOR_HOOK_INSTALL: &str =
     "Can't safely install pre-commit hook: canon hook install requires a Git worktree.";
-
-// The canon init seed is compiled into the binary from the default check-config
-// template file, not loaded at runtime as an evaluator prompt/instruction.
-// Interrogation texts live under resources/prompts.
-const DEFAULT_CHECK_CONFIG_TEMPLATE_FILE_CONTENTS: &str =
-    include_str!("../../.canon/templates/default/check.yml");
-
-pub(crate) fn run_init(root: &Path) -> Result<(), String> {
-    let check_path = root.join(CHECK_PATH);
-    if path_exists_no_follow(&check_path)? {
-        return Err(format!("{} already exists", CHECK_PATH));
-    }
-
-    // These are user-owned project configuration files, not canon runtime
-    // state: they live in the worktree so humans can review and version them.
-    if let Some(parent) = check_path.parent() {
-        ensure_project_dir_without_symlinks(root, parent)?;
-    }
-    write_new_file(&check_path, DEFAULT_CHECK_CONFIG_TEMPLATE_FILE_CONTENTS)?;
-    // This success line becomes eligible only after the config file exists;
-    // `write_stdout_line` flushes it immediately and no later init work remains.
-    write_stdout_line(&format!("Created {}", CHECK_PATH))?;
-    Ok(())
-}
 
 pub(crate) fn run_hook_command(root: &Path, args: &[OsString]) -> Result<(), String> {
     if args.len() != 1 {

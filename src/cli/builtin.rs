@@ -4,7 +4,8 @@ use super::help::{
 };
 use crate::check::{check_help_command, run_check_command, run_show_command, show_help_command};
 use crate::gate::run_gate_command;
-use crate::hooks::{run_hook_command, run_init};
+use crate::hooks::run_hook_command;
+use crate::init::run_init;
 use crate::project::{git_project_root, project_root_or_current};
 use clap::Command as ClapCommand;
 use std::env;

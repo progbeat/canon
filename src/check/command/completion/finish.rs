@@ -261,8 +261,9 @@ mod tests {
             expectations: vec![Expectation {
                 q: "Does it pass?".to_string(),
                 a: "yes".to_string(),
-                instructions: String::new(),
+                question_context: String::new(),
                 diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
+                diff_from_configured: false,
                 target: None,
                 question_answer_only: false,
                 agent: agent.clone(),

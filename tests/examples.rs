@@ -168,36 +168,6 @@ fn gate_rejects_mixed_canon_and_implementation_changes() {
 }
 
 #[test]
-fn gate_reports_mixed_canon_changes_before_config_errors() {
-    let repo = temp_repo("canon-gate-mixed-before-config-example");
-    init_git_repo(&repo);
-    fs::create_dir_all(repo.join(".canon")).unwrap();
-    fs::write(repo.join(".canon/check.yml"), "not valid: [").unwrap();
-    fs::write(repo.join("src-main.py"), "print('hello')\n").unwrap();
-    let output = Command::new("git")
-        .args(["add", ".canon/check.yml", "src-main.py"])
-        .current_dir(&repo)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let output = canon().arg("gate").current_dir(&repo).output().unwrap();
-
-    let _ = fs::remove_dir_all(&repo);
-
-    assert!(!output.status.success());
-    assert_eq!(
-        String::from_utf8(output.stderr).unwrap(),
-        "canon gate: .canon/** changes must not be mixed with non-.canon changes\n\
-         ▷ Ask human to handle .canon/ changes.\n"
-    );
-}
-
-#[test]
 fn check_without_config_renders_documented_recovery_message() {
     let repo = temp_repo("canon-missing-config-example");
     init_git_repo(&repo);

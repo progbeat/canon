@@ -282,7 +282,7 @@ fn ask_once_with_model<R: EvaluatorRunner>(
             model,
             thinking: query.thinking(&runtime.config.agent),
             expectation_id: query.expectation_id(),
-            expectation_instructions: query.expectation_instructions(),
+            question_context: query.question_context(),
             diff_from_tree_oid: &diff_from.tree_oid,
             prompt: &prompt,
             template_output_dir: &template_output_dir,
@@ -410,9 +410,9 @@ impl<'a> QueryRequest<'a> {
             .map(|context| context.expectation.id.as_str())
     }
 
-    fn expectation_instructions(&self) -> &str {
+    fn question_context(&self) -> &str {
         self.expectation
-            .map(|context| context.expectation.instructions.as_str())
+            .map(|context| context.expectation.question_context.as_str())
             .unwrap_or("")
     }
 
@@ -544,8 +544,9 @@ mod tests {
             display_id: "e".to_string(),
             question: "Does matched expectation pass?".to_string(),
             expected_answer: "yes".to_string(),
-            instructions: "Use this expectation context.".to_string(),
+            question_context: "Use this expectation context.".to_string(),
             diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
+            diff_from_configured: false,
             target: Some(ExpectationTarget::Diff),
             question_answer_only: true,
             agent: expectation_agent,
@@ -569,10 +570,7 @@ mod tests {
         assert_eq!(request.expected_answer(), expectation.expected_answer);
         assert_eq!(request.target(), Some("diff"));
         assert_eq!(request.expectation_id(), Some("expectation-id"));
-        assert_eq!(
-            request.expectation_instructions(),
-            "Use this expectation context."
-        );
+        assert_eq!(request.question_context(), "Use this expectation context.");
     }
 
     #[test]
@@ -593,7 +591,7 @@ mod tests {
         assert_eq!(request.expected_answer(), "");
         assert_eq!(request.target(), None);
         assert_eq!(request.expectation_id(), None);
-        assert_eq!(request.expectation_instructions(), "");
+        assert_eq!(request.question_context(), "");
     }
 
     fn test_expectation() -> SelectedExpectation {
@@ -603,8 +601,9 @@ mod tests {
             display_id: "e".to_string(),
             question: "Does matched expectation pass?".to_string(),
             expected_answer: "yes".to_string(),
-            instructions: String::new(),
+            question_context: String::new(),
             diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
+            diff_from_configured: false,
             target: None,
             question_answer_only: true,
             agent: AgentConfig::default(),

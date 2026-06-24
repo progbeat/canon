@@ -167,7 +167,7 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         stop_after_current_expectation,
         interrupted: interrogation_interrupted,
     } = completed_interrogation;
-    started_report.finish_public_output_or_keep_state_report(&record)?;
+    started_report.finish_public_output_or_keep_state_report(&record);
     // `record_finished_expectation` is still required after public output:
     // returning the completed CheckRecord lets the caller append it to the
     // in-memory CheckRunReport, while Git-backed runs can also update
@@ -428,7 +428,7 @@ fn finish_started_expectation_with_error_record<R: EvaluatorRunner>(
         &error,
         visible_tree_oid.to_string(),
     )?;
-    started_report.finish_public_output_or_keep_state_report(&record)?;
+    started_report.finish_public_output_or_keep_state_report(&record);
     finish_expectation_with_error_record(context, expectation, record)
 }
 

@@ -85,18 +85,22 @@ fn validate_expected_answer_matches_interrogation_response_schema_answer_pattern
     ))
 }
 
-fn render_expectation_validation_error(
+pub(crate) fn render_expectation_validation_error(
     display_id: &str,
     question: &str,
     error: &str,
     evidence: &str,
 ) -> String {
+    assert_ne!(
+        error, ERROR_SCOPE_TOO_NARROW,
+        "public expectation error blocks must not expose ScopeTooNarrow"
+    );
     format!(
         "{}. ERROR\n{}\nError: {}\nEvidence: {}",
         display_id,
         escape_config_error_block_text(question),
-        error,
-        evidence
+        escape_config_error_block_text(error),
+        escape_config_error_block_text(evidence)
     )
 }
 
@@ -105,7 +109,11 @@ fn expectation_ids(config: &CheckConfig) -> Vec<String> {
         .expectations
         .iter()
         .map(|expectation| {
-            expectation_id(&expectation.q, &expectation.a, &expectation.instructions)
+            expectation_id(
+                &expectation.q,
+                &expectation.a,
+                &expectation.question_context,
+            )
         })
         .collect()
 }
@@ -344,7 +352,9 @@ pub(crate) fn normalize_agent_ignore_pattern_for_config(value: &str) -> Result<S
 #[cfg(test)]
 mod tests {
     use super::push_config_error_unicode_escape;
+    use super::render_expectation_validation_error;
     use super::validate_check_config;
+    use crate::check::core::ERROR_SCOPE_TOO_NARROW;
     use crate::config_types::{
         AgentConfig, CheckConfig, Expectation, ExpectationTarget, ResolvedPresetConfig,
     };
@@ -363,8 +373,9 @@ mod tests {
             expectations: vec![Expectation {
                 q: question.to_string(),
                 a: "Rust".to_string(),
-                instructions: String::new(),
+                question_context: String::new(),
                 diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
+                diff_from_configured: false,
                 target: None,
                 question_answer_only: false,
                 agent,
@@ -388,6 +399,23 @@ mod tests {
     }
 
     #[test]
+    fn expectation_validation_error_escapes_all_public_fields() {
+        let rendered =
+            render_expectation_validation_error("A", "Question\ntext", "bad\terror", "line\rbreak");
+
+        assert_eq!(
+            rendered,
+            "A. ERROR\nQuestion\\ntext\nError: bad\\terror\nEvidence: line\\rbreak"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "public expectation error blocks must not expose ScopeTooNarrow")]
+    fn expectation_validation_error_rejects_scope_too_narrow() {
+        render_expectation_validation_error("A", "Question", ERROR_SCOPE_TOO_NARROW, "scope");
+    }
+
+    #[test]
     fn duplicate_expectation_ids_are_rejected_even_when_targets_differ() {
         let agent = AgentConfig::default();
         let mut presets = BTreeMap::new();
@@ -395,8 +423,9 @@ mod tests {
         let expectation = |target| Expectation {
             q: "Does this behavior work?".to_string(),
             a: "yes".to_string(),
-            instructions: String::new(),
+            question_context: String::new(),
             diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
+            diff_from_configured: false,
             target,
             question_answer_only: false,
             agent: agent.clone(),

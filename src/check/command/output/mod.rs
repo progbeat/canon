@@ -2,9 +2,12 @@
 // stable stdout/stderr surfaces by output kind while keeping callers away from
 // renderer internals.
 // `canon check` uses this facade instead of `crate::output` because live
-// progress shares stdout across threads; every exported writer flushes through
-// `shared::write_stdout_record` or `SharedCheckOutput` as soon as a record,
-// summary, query answer, agent message, or progress dot is eligible.
+// progress shares stdout across threads. The documented check output surfaces
+// are split across `record`, `usage`, and `summary`; every exported writer
+// flushes through `shared::write_stdout_record` or `SharedCheckOutput` as soon
+// as a record, token line, summary, query answer, agent message, or progress
+// dot is eligible.
+// `canon gate` output is not routed through this check-output component.
 mod escape;
 mod query;
 mod record;
@@ -15,7 +18,7 @@ mod usage;
 pub(crate) use escape::escape_check_output_text;
 pub(crate) use query::write_query_output;
 pub(crate) use record::{
-    defer_expectation_report_output, start_expectation_report_output, write_cached_non_pass_output,
+    start_expectation_report_output, write_cached_non_pass_output,
     write_result_output_without_started_report, StartedExpectationReportOutput,
 };
 pub(crate) use shared::{write_stdout_record, SharedCheckOutput};
@@ -23,10 +26,12 @@ pub(crate) use summary::{render_check_agent_messages, summary_outcome_counts, wr
 pub(crate) use usage::render_token_usage_summary;
 
 #[cfg(test)]
+// These tests are colocated with the command-output implementation. Dedicated
+// tests outside implementation files exercise public CLI behavior instead.
 mod tests {
     use super::{
-        defer_expectation_report_output, render_check_agent_messages, render_token_usage_summary,
-        start_expectation_report_output, summary_outcome_counts, write_cached_non_pass_output,
+        render_check_agent_messages, render_token_usage_summary, start_expectation_report_output,
+        summary_outcome_counts, write_cached_non_pass_output,
         write_result_output_without_started_report, write_summary_line, SharedCheckOutput,
     };
     use crate::check::core::{
@@ -146,6 +151,42 @@ mod tests {
     }
 
     #[test]
+    fn failed_result_output_matches_documented_detail_lines() {
+        let mut bytes = Vec::new();
+        let mut result_output = Some(&mut bytes as &mut dyn Write);
+        let mut record = failed_record();
+        record.question_scope_suggestion = Some(vec!["src/check".to_string()]);
+
+        write_result_output_without_started_report(&mut result_output, &record).unwrap();
+
+        let rendered = String::from_utf8(bytes).unwrap();
+        assert_result_entry(&rendered, "FAILED");
+        assert!(rendered.contains("Does it pass?\n"));
+        assert!(rendered.contains("Expected: yes\n"));
+        assert!(rendered.contains("Observed: no\n"));
+        assert!(rendered.contains("Evidence: test evidence\n"));
+        assert!(rendered.contains("Suggested q-scope: [\"src/check\"]\n"));
+    }
+
+    #[test]
+    fn error_result_output_matches_documented_detail_lines() {
+        let mut bytes = Vec::new();
+        let mut result_output = Some(&mut bytes as &mut dyn Write);
+        let record = review_record_with_id("11111111111111111111", "j");
+
+        write_result_output_without_started_report(&mut result_output, &record).unwrap();
+
+        let rendered = String::from_utf8(bytes).unwrap();
+        assert_result_entry(&rendered, "ERROR");
+        assert!(rendered.contains("Does it pass?\n"));
+        assert!(rendered.contains("Error: InvalidQuestion\n"));
+        assert!(rendered.contains("Evidence: test evidence\n"));
+        assert!(!rendered.contains("Expected:"));
+        assert!(!rendered.contains("Observed:"));
+        assert!(!rendered.contains("Suggested q-scope:"));
+    }
+
+    #[test]
     fn live_report_result_output_matches_documented_record_shape() {
         let bytes = Arc::new(Mutex::new(Vec::new()));
         let output = SharedCheckOutput::new(Box::new(CapturedOutput {
@@ -153,23 +194,9 @@ mod tests {
         }));
 
         let report = start_expectation_report_output(output, "j");
-        report.finish_with_record(&passing_record()).unwrap();
+        let finished = report.finish_with_record(&passing_record());
+        assert!(!finished.backup_report_needed());
 
-        let completed = captured_string(&bytes);
-        assert_result_entry(&completed, "OK");
-    }
-
-    #[test]
-    fn deferred_live_report_output_prints_nothing_until_completion() {
-        let bytes = Arc::new(Mutex::new(Vec::new()));
-        let output = SharedCheckOutput::new(Box::new(CapturedOutput {
-            bytes: bytes.clone(),
-        }));
-
-        let report = defer_expectation_report_output(output);
-
-        assert!(captured_string(&bytes).is_empty());
-        report.finish_with_record(&passing_record()).unwrap();
         let completed = captured_string(&bytes);
         assert_result_entry(&completed, "OK");
     }
@@ -250,8 +277,9 @@ mod tests {
                 display_id: record.display_id.clone(),
                 question: record.question_text().to_string(),
                 expected_answer: record.expected_answer_text().unwrap_or("yes").to_string(),
-                instructions: String::new(),
+                question_context: String::new(),
                 diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
+                diff_from_configured: false,
                 target: None,
                 question_answer_only: true,
                 agent: AgentConfig::default(),

@@ -54,7 +54,10 @@ impl Default for AgentConfig {
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawPresetConfig {
     #[serde(default)]
-    pub(crate) instructions: Option<String>,
+    // Human-authored canon data inherited by expectation items; prompt
+    // templates decide how to render it.
+    #[serde(rename = "instructions")]
+    pub(crate) question_context: Option<String>,
     #[serde(default)]
     #[serde(rename = "diff-from")]
     pub(crate) diff_from: Option<String>,
@@ -145,8 +148,11 @@ pub(crate) struct Expectation {
     // Human-authored canon data from check config, like `q` and `a`. It is
     // not an implementation-owned evaluator-agent prompt or policy source; the
     // resource template in `resources/prompts/` decides whether to embed it.
-    pub(crate) instructions: String,
+    #[serde(rename = "instructions")]
+    pub(crate) question_context: String,
     pub(crate) diff_from: String,
+    #[serde(default)]
+    pub(crate) diff_from_configured: bool,
     #[serde(default)]
     pub(crate) target: Option<ExpectationTarget>,
     #[serde(default)]
@@ -226,7 +232,7 @@ pub(crate) struct RawExpectationCommonConfig {
     // Raw config data shared by presets, explicit expectations, generated
     // expectations, and includes. It is not an implementation-owned evaluator
     // prompt or policy source.
-    pub(crate) instructions: Option<String>,
+    pub(crate) question_context: Option<String>,
     pub(crate) diff_from: Option<String>,
     pub(crate) target: Option<String>,
     pub(crate) cooldown: Option<CooldownConfig>,
@@ -269,7 +275,10 @@ struct RawExpectationFields {
     #[serde(default)]
     a: Option<String>,
     #[serde(default)]
-    instructions: Option<String>,
+    // Human-authored canon data for one expectation item, not a prompt
+    // template defined by this config parser.
+    #[serde(rename = "instructions")]
+    question_context: Option<String>,
     #[serde(default)]
     #[serde(rename = "diff-from")]
     diff_from: Option<String>,
@@ -309,7 +318,7 @@ impl RawExpectationItem {
             q,
             q_template,
             a,
-            instructions,
+            question_context,
             diff_from,
             target,
             path,
@@ -329,7 +338,7 @@ impl RawExpectationItem {
             plugins,
         };
         let common = RawExpectationCommonConfig {
-            instructions,
+            question_context,
             diff_from,
             target,
             cooldown,

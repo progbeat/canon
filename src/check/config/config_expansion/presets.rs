@@ -64,7 +64,7 @@ fn raw_preset_from_legacy_agent(agent: RawLegacyAgentConfig) -> RawPresetConfig 
     }
     models.extend(agent.model.fallbacks);
     RawPresetConfig {
-        instructions: None,
+        question_context: None,
         diff_from: None,
         target: None,
         cooldown: None,
@@ -105,8 +105,8 @@ fn resolve_preset(
 
 fn apply_raw_preset(preset: &mut ResolvedPresetConfig, raw: &RawPresetConfig) {
     let common = &mut preset.common;
-    if let Some(instructions) = &raw.instructions {
-        common.instructions = Some(instructions.clone());
+    if let Some(context) = &raw.question_context {
+        common.question_context = Some(context.clone());
     }
     if let Some(diff_from) = &raw.diff_from {
         common.diff_from = Some(diff_from.clone());

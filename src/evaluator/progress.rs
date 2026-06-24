@@ -121,6 +121,10 @@ impl EvaluatorProgressState {
 }
 
 impl EvaluatorProgressSnapshot {
+    // Keep this order identical to the check progress timeline spec:
+    // `×`, `~`, `⇄`, `↗`, `↘`, then `.`. The idle marker intentionally wins over fallback
+    // or retry starts that happen in the same interval because `~` is listed
+    // before those markers.
     pub(crate) fn marker_since(
         self,
         previous: EvaluatorProgressSnapshot,

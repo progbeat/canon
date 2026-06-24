@@ -7,15 +7,19 @@ pub(crate) fn full_scope() -> Vec<String> {
     vec![".".to_string()]
 }
 
-pub(crate) fn expectation_id(question: &str, expected_answer: &str, instructions: &str) -> String {
+pub(crate) fn expectation_id(
+    question: &str,
+    expected_answer: &str,
+    question_context: &str,
+) -> String {
     // Expectation IDs are 20-character base62 IDs derived from the question,
-    // expected answer, and a deterministic hash of the resolved expectation
-    // instructions.
-    let instructions_hash = hash_60(instructions.as_bytes());
+    // expected answer, and a deterministic hash of the resolved question
+    // context.
+    let context_hash = hash_60(question_context.as_bytes());
     let mut input = Vec::new();
     push_expectation_id_frame(&mut input, "question", question.as_bytes());
     push_expectation_id_frame(&mut input, "expectedAnswer", expected_answer.as_bytes());
-    push_expectation_id_frame(&mut input, "instructionsHash", instructions_hash.as_bytes());
+    push_expectation_id_frame(&mut input, "instructionsHash", context_hash.as_bytes());
     expectation_id_base62_20(&input)
 }
 

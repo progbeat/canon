@@ -124,8 +124,9 @@ pub(crate) fn selected_expectation_at(
         display_id: identity.display_id.clone(),
         question: expectation.q.clone(),
         expected_answer: expectation.a.clone(),
-        instructions: expectation.instructions.clone(),
+        question_context: expectation.question_context.clone(),
         diff_from: expectation.diff_from.clone(),
+        diff_from_configured: expectation.diff_from_configured,
         target: expectation.target.clone(),
         question_answer_only: expectation.question_answer_only,
         agent: expectation.agent.clone(),
@@ -142,7 +143,7 @@ pub(crate) fn expectation_identities(
         .map(|expectation| {
             let rendered_question = &expectation.q;
             let expected_answer = &expectation.a;
-            let resolved_instructions = &expectation.instructions;
+            let resolved_instructions = &expectation.question_context;
             expectation_id(rendered_question, expected_answer, resolved_instructions)
         })
         .collect::<Vec<_>>();
@@ -274,8 +275,9 @@ mod tests {
         Expectation {
             q: question.to_string(),
             a: "yes".to_string(),
-            instructions: String::new(),
+            question_context: String::new(),
             diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
+            diff_from_configured: false,
             target: None,
             question_answer_only: true,
             agent: AgentConfig::implementation_default(),

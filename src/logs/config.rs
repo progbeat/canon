@@ -34,6 +34,8 @@ fn configured_log_max_size(root: &Path) -> DiagnosticLogResult<(u64, bool)> {
         .map_err(log_config_get_error)?
         .unwrap_or_else(|| DEFAULT_LOG_MAX_SIZE_CONFIG_VALUE.to_string());
     let max_bytes = parse_log_max_size(&value)?;
+    // `canon.logs.maxSize=0` is the off switch; the default `0M` follows the
+    // same path so logs stay disabled until a positive size is configured.
     Ok((max_bytes, max_bytes == 0))
 }
 

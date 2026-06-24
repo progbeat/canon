@@ -1,8 +1,7 @@
+use crate::check::config::validation::render_expectation_validation_error;
 use crate::check::core::{CheckRecord, CheckRecordOutcome, CheckResult, SelectedExpectation};
 use crate::check::interrogation::state::IN_PLACE_VISIBLE_TREE_OID;
-use crate::check::run::selection::{selected_expectation_at, ExpectationIdentity};
-use crate::config_types::CheckConfig;
-use crate::config_types::DEFAULT_DIFF_FROM;
+use crate::config_types::AgentConfig;
 use crate::hash::full_scope;
 
 // This module enforces `canon check --in-place` mode compatibility. It is not
@@ -35,12 +34,18 @@ impl InPlaceProhibitedField {
         }
     }
 
-    fn is_configured_for(self, expectation: &SelectedExpectation) -> bool {
+    fn is_configured_for(
+        self,
+        config_agent: &AgentConfig,
+        expectation: &SelectedExpectation,
+    ) -> bool {
         match self {
-            InPlaceProhibitedField::DiffFrom => expectation.diff_from != DEFAULT_DIFF_FROM,
+            InPlaceProhibitedField::DiffFrom => expectation.diff_from_configured,
             InPlaceProhibitedField::Target => has_explicit_target(expectation),
             InPlaceProhibitedField::Cooldown => expectation.cooldown.is_some(),
-            InPlaceProhibitedField::Ignore => !expectation.agent.ignore.is_empty(),
+            InPlaceProhibitedField::Ignore => {
+                !config_agent.ignore.is_empty() || !expectation.agent.ignore.is_empty()
+            }
         }
     }
 }
@@ -54,30 +59,31 @@ fn has_explicit_target(expectation: &SelectedExpectation) -> bool {
 }
 
 pub(super) fn validate_in_place_query_expectation(
+    config_agent: &AgentConfig,
     expectation: &SelectedExpectation,
 ) -> Result<(), String> {
-    let unsupported = in_place_unsupported_fields(expectation);
+    let unsupported = in_place_unsupported_fields(config_agent, expectation);
     if unsupported.is_empty() {
         return Ok(());
     }
     let record = in_place_unsupported_expectation_record(expectation, &unsupported)?;
-    Err(format!(
-        "{}. ERROR\n{}\nError: {}\nEvidence: {}",
-        record.display_id,
+    Err(render_expectation_validation_error(
+        &record.display_id,
         record.question_text(),
         record
             .human_review_reason()
             .expect("invalid in-place records include error"),
-        record.evidence
+        &record.evidence,
     ))
 }
 
 pub(super) fn invalid_in_place_expectation_records(
+    config_agent: &AgentConfig,
     expectations: &[SelectedExpectation],
 ) -> Result<Vec<CheckRecord>, String> {
     let mut records = Vec::new();
     for expectation in expectations {
-        let unsupported = in_place_unsupported_fields(expectation);
+        let unsupported = in_place_unsupported_fields(config_agent, expectation);
         if !unsupported.is_empty() {
             records.push(in_place_unsupported_expectation_record(
                 expectation,
@@ -86,16 +92,6 @@ pub(super) fn invalid_in_place_expectation_records(
         }
     }
     Ok(records)
-}
-
-pub(super) fn invalid_in_place_config_records(
-    config: &CheckConfig,
-    identities: &[ExpectationIdentity],
-) -> Result<Vec<CheckRecord>, String> {
-    let expectations = (0..config.expectations.len())
-        .map(|index| selected_expectation_at(config, identities, index, true))
-        .collect::<Result<Vec<_>, _>>()?;
-    invalid_in_place_expectation_records(&expectations)
 }
 
 fn in_place_unsupported_expectation_record(
@@ -122,7 +118,10 @@ fn in_place_unsupported_expectation_record(
     )
 }
 
-fn in_place_unsupported_fields(expectation: &SelectedExpectation) -> Vec<&'static str> {
+fn in_place_unsupported_fields(
+    config_agent: &AgentConfig,
+    expectation: &SelectedExpectation,
+) -> Vec<&'static str> {
     // These are parsed, valid check.yml fields. This table is only the
     // mode-compatibility list required by the in-place spec: in-place has no Git
     // tree, cached-result lookup, or path hiding, so these otherwise valid
@@ -130,7 +129,7 @@ fn in_place_unsupported_fields(expectation: &SelectedExpectation) -> Vec<&'stati
     IN_PLACE_SPEC_PROHIBITED_FIELDS
         .iter()
         .copied()
-        .filter(|field| field.is_configured_for(expectation))
+        .filter(|field| field.is_configured_for(config_agent, expectation))
         .map(InPlaceProhibitedField::name)
         .collect()
 }
@@ -139,21 +138,28 @@ fn in_place_unsupported_fields(expectation: &SelectedExpectation) -> Vec<&'stati
 mod tests {
     use super::*;
     use crate::check::core::Cooldown;
-    use crate::check::run::selection::expectation_identities;
-    use crate::config_types::{AgentConfig, CheckConfig, Expectation, ExpectationTarget};
+    use crate::check::run::selection::{
+        expectation_identities, select_expectations_with_identities,
+    };
+    use crate::config_types::{
+        AgentConfig, CheckConfig, Expectation, ExpectationTarget, DEFAULT_DIFF_FROM,
+    };
     use std::collections::BTreeMap;
+    use std::ffi::OsString;
 
     #[test]
     fn rejects_in_place_expectation_that_needs_git_or_path_hiding() {
         let mut expectation = selected_expectation();
         expectation.diff_from = "HEAD".to_string();
+        expectation.diff_from_configured = true;
         expectation.cooldown = Some(Cooldown {
             pass_seconds: Some(60),
             fail_seconds: None,
         });
         expectation.agent.ignore = vec!["target/**".to_string()];
 
-        let records = invalid_in_place_expectation_records(&[expectation]).unwrap();
+        let records =
+            invalid_in_place_expectation_records(&AgentConfig::default(), &[expectation]).unwrap();
         let [record] = records.as_slice() else {
             panic!("expected one invalid record");
         };
@@ -176,13 +182,16 @@ mod tests {
     fn collects_every_invalid_in_place_expectation() {
         let mut first = selected_expectation();
         first.diff_from = "HEAD".to_string();
+        first.diff_from_configured = true;
         let mut second = selected_expectation();
         second.id = "bbbbbbbbbbbbbbbbbbbb".to_string();
         second.display_id = "B".to_string();
         second.question = "Can that pass?".to_string();
         second.target = Some(ExpectationTarget::Diff);
 
-        let records = invalid_in_place_expectation_records(&[first, second]).unwrap();
+        let records =
+            invalid_in_place_expectation_records(&AgentConfig::default(), &[first, second])
+                .unwrap();
 
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].display_id, "A");
@@ -199,7 +208,9 @@ mod tests {
         diff.question = "Can that pass?".to_string();
         diff.target = Some(ExpectationTarget::Diff);
 
-        let records = invalid_in_place_expectation_records(&[project, diff]).unwrap();
+        let records =
+            invalid_in_place_expectation_records(&AgentConfig::default(), &[project, diff])
+                .unwrap();
 
         assert_eq!(records.len(), 2);
         assert!(records
@@ -208,7 +219,22 @@ mod tests {
     }
 
     #[test]
-    fn config_records_include_unselected_invalid_expectations() {
+    fn in_place_rejects_explicit_default_diff_from() {
+        let mut expectation = selected_expectation();
+        expectation.diff_from_configured = true;
+
+        let records =
+            invalid_in_place_expectation_records(&AgentConfig::default(), &[expectation]).unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(
+            records[0].evidence,
+            "configured diff-from invalid in in-place mode"
+        );
+    }
+
+    #[test]
+    fn selected_records_ignore_unselected_invalid_expectations() {
         let mut config = CheckConfig {
             version: 1,
             presets: BTreeMap::new(),
@@ -223,20 +249,17 @@ mod tests {
         ));
         config.expectations[1].target = Some(ExpectationTarget::Diff);
         let identities = expectation_identities(&config).unwrap();
-        let selected =
-            selected_expectation_at(&config, &identities, 0, true).expect("valid selected");
+        let selected = select_expectations_with_identities(
+            &config,
+            &identities,
+            &[OsString::from(identities[0].display_id.clone())],
+        )
+        .expect("valid selected");
 
-        assert!(invalid_in_place_expectation_records(&[selected])
-            .unwrap()
-            .is_empty());
-        let records = invalid_in_place_config_records(&config, &identities).unwrap();
-
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].display_id, identities[1].display_id);
-        assert_eq!(records[0].question_text(), "Can that pass?");
-        assert_eq!(
-            records[0].evidence,
-            "configured target, cooldown invalid in in-place mode"
+        assert!(
+            invalid_in_place_expectation_records(&config.agent, &selected)
+                .unwrap()
+                .is_empty()
         );
     }
 
@@ -253,12 +276,33 @@ mod tests {
         ));
         let identities = expectation_identities(&config).unwrap();
 
-        let records = invalid_in_place_config_records(&config, &identities).unwrap();
+        let selected = select_expectations_with_identities(&config, &identities, &[]).unwrap();
+        let records = invalid_in_place_expectation_records(&config.agent, &selected).unwrap();
 
         assert_eq!(records.len(), 1);
         assert_eq!(
             records[0].evidence,
             "configured cooldown invalid in in-place mode"
+        );
+    }
+
+    #[test]
+    fn top_level_ignore_is_reported_as_invalid_in_place_record() {
+        let mut config_agent = AgentConfig::default();
+        config_agent.ignore = vec!["target/**".to_string()];
+        let expectation = selected_expectation();
+
+        let records = invalid_in_place_expectation_records(&config_agent, &[expectation]).unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].display_id, "A");
+        assert_eq!(
+            records[0].human_review_reason(),
+            Some("invalid-in-place-expectation")
+        );
+        assert_eq!(
+            records[0].evidence,
+            "configured ignore invalid in in-place mode"
         );
     }
 
@@ -269,8 +313,9 @@ mod tests {
             display_id: "A".to_string(),
             question: "Can this pass?".to_string(),
             expected_answer: "yes".to_string(),
-            instructions: String::new(),
+            question_context: String::new(),
             diff_from: DEFAULT_DIFF_FROM.to_string(),
+            diff_from_configured: false,
             target: None,
             question_answer_only: false,
             agent: AgentConfig::default(),
@@ -282,8 +327,9 @@ mod tests {
         Expectation {
             q: question.to_string(),
             a: "yes".to_string(),
-            instructions: String::new(),
+            question_context: String::new(),
             diff_from: DEFAULT_DIFF_FROM.to_string(),
+            diff_from_configured: false,
             target: None,
             question_answer_only: false,
             agent: AgentConfig::default(),

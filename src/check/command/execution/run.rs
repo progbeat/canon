@@ -2,7 +2,7 @@ use super::failure::{
     fail_check_after_start, fail_check_before_selection, finish_check_error_report,
     CheckErrorReportFinish,
 };
-use super::in_place::invalid_in_place_config_records;
+use super::in_place::invalid_in_place_expectation_records;
 use super::prepare::{prepare_check_execution, PrepareCheckExecutionOptions};
 use super::query::{run_check_query_command, CheckQueryCommand};
 use super::query_preset::check_config_with_query_preset;
@@ -283,9 +283,10 @@ fn run_in_place_check_command(
         .map_err(CommandError::from);
     }
     let identities = expectation_identities(&config)?;
-    // This resolves only selector/keep-going controls from the expanded config.
-    // Persistent state is not consulted here; invalid config is checked against
-    // the full expanded config before any selected expectation is evaluated.
+    // This resolves selector/keep-going controls from the expanded config.
+    // Persistent state is not consulted here; in-place compatibility is checked
+    // only for selected expectations before any selected expectation is
+    // evaluated.
     let options = resolve_check_options_with_identities(&config, &identities, &command.options)?;
     let mut runner = LazyAppServerRunner::new(
         root,
@@ -295,8 +296,10 @@ fn run_in_place_check_command(
     )?;
     let shared_output = SharedCheckOutput::stdout();
     let mut result_output = shared_output.clone();
-    let invalid_records = invalid_in_place_config_records(&config, &identities)?;
+    let invalid_records = invalid_in_place_expectation_records(&config.agent, &options.selected)?;
     if !invalid_records.is_empty() {
+        // In-place compatibility errors are result records. Each selected
+        // invalid expectation is printed with its short ID before the summary.
         {
             let mut output = Some(&mut result_output as &mut dyn Write);
             for record in &invalid_records {

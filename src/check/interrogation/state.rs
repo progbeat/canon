@@ -31,7 +31,7 @@ pub(crate) fn evaluator_thread_reuse_key(
     scope: &[String],
     model: Option<&str>,
     visible_tree_oid: &str,
-    expectation_instructions: &str,
+    question_context: &str,
     diff_base_tree_oid: &str,
     checked_tree_oid: &str,
 ) -> Result<String, String> {
@@ -52,9 +52,9 @@ pub(crate) fn evaluator_thread_reuse_key(
     key.push('\0');
     key.push_str(checked_tree_oid);
     key.push('\0');
-    key.push_str(&expectation_instructions.len().to_string());
+    key.push_str(&question_context.len().to_string());
     key.push('\0');
-    key.push_str(expectation_instructions);
+    key.push_str(question_context);
     key.push('\0');
     for plugin in &agent.plugins {
         key.push_str(&plugin.len().to_string());

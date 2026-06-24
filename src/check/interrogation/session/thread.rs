@@ -26,7 +26,7 @@ pub(crate) struct ThreadTurnRequest<'a> {
     pub(crate) model: Option<&'a str>,
     pub(crate) thinking: &'a str,
     pub(crate) expectation_id: Option<&'a str>,
-    pub(crate) expectation_instructions: &'a str,
+    pub(crate) question_context: &'a str,
     pub(crate) diff_from_tree_oid: &'a str,
     pub(crate) prompt: &'a str,
     pub(crate) template_output_dir: &'a Path,
@@ -61,7 +61,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         request.enforced_scope,
         request.model,
         reuse_visible_tree_oid,
-        request.expectation_instructions,
+        request.question_context,
         request.diff_from_tree_oid,
         runtime.checked_tree_oid(),
     )
@@ -234,13 +234,16 @@ fn start_thread_session<R: EvaluatorRunner>(
     let session_root = runtime
         .session_root_for_scope(request.agent, request.enforced_scope, visible_tree_oid)
         .map_err(EvaluatorError::message)?;
+    // Render the developer-instructions resource template. `question_context`
+    // is the value for that template's `expectation.instructions` input slot,
+    // not a second prompt or instruction template.
     let developer_instructions = developer_instructions(DeveloperInstructionsContext {
         root: runtime.root,
         template_output_dir: request.template_output_dir,
         in_place: runtime.is_in_place(),
         diff_from_tree_oid: request.diff_from_tree_oid,
         checked_tree_oid: runtime.checked_tree_oid(),
-        expectation_instructions: request.expectation_instructions,
+        question_context: request.question_context,
         visible_scope: &visible_scope,
         checked_file_count: runtime.checked_file_count(),
         visible_file_count,
@@ -438,7 +441,7 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
             // This is question-scoped canon config data. The implementation-owned
             // evaluator instruction source is the template in `resources/prompts/`;
             // this text is only a value embedded by that source.
-            expectation_instructions: &expectation.instructions,
+            question_context: &expectation.question_context,
             diff_from_tree_oid: &diff_from.tree_oid,
             prompt: &prompt,
             template_output_dir: &template_output_dir,

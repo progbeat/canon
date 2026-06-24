@@ -55,8 +55,9 @@ code that support it.
 
 ## Expectation Instructions
 
-Additional per-expectation developer instructions resolved from an
-expectation's `instructions` field, or empty text when none is configured.
+The resolved `instructions` config value for an expectation, or empty text when
+none is configured. This glossary describes the config data; evaluator prompt
+templates live under `resources/prompts/`.
 
 ## Expectation ID
 
@@ -73,7 +74,7 @@ to the observed answer using exact string equality.
 
 A question and expected answer that the project should satisfy. In
 `.canon/check.yml`, a basic expectation has a `q` field and an `a` field. An
-expectation may also provide per-expectation instructions.
+expectation may also provide an `instructions` config value.
 
 ## Evaluator thread
 
@@ -83,6 +84,13 @@ reused for an interrogation with the same evaluator model and the same rendered
 developer instructions. Reuse may also require the same live thread-start
 context inputs that affect evaluator tools, session root, or prompt-rendered
 tree context.
+
+## Evaluator Prompt Boundary
+
+The implementation-owned evaluator prompt and instruction templates are the
+resource files under `resources/prompts/`. Config values such as expectation
+`instructions` are human-authored canon data passed into those templates, not
+additional implementation-owned prompt templates.
 
 ## Generator item
 
@@ -180,8 +188,8 @@ The scoped tree induced by a visible scope.
 ## Implementation Map
 
 `config_types::Expectation` and `check::core::SelectedExpectation` carry
-expectation questions, expected answers, expectation instructions, and target
-metadata from config loading into check runs.
+expectation questions, expected answers, the resolved `instructions` config
+text, and target metadata from config loading into check runs.
 
 `scope` keeps scopes as Git pathspec lists: it normalizes repository paths,
 forms visible scopes by appending configured ignore patterns as excluding

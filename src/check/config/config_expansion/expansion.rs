@@ -65,14 +65,15 @@ impl RawExpectationExpansion<'_> {
                     let common = self.resolve_expectation_common(item.common)?;
                     let question_answer_only = resolved_common_is_question_answer_only(&common);
                     let RawExpectationCommonConfig {
-                        instructions,
+                        question_context,
                         diff_from,
                         target,
                         cooldown,
                         settings,
                     } = common;
                     let item_number = index + 1;
-                    let instructions = resolved_expectation_instructions(instructions);
+                    let question_context = resolved_question_context(question_context);
+                    let diff_from_configured = diff_from.is_some();
                     let diff_from = resolved_expectation_diff_from(diff_from);
                     let target = resolve_expectation_target(target)
                         .map_err(|err| format!("expectation {} target: {}", item_number, err))?;
@@ -80,8 +81,9 @@ impl RawExpectationExpansion<'_> {
                     self.expectations.push(Expectation {
                         q: item.q,
                         a: item.a,
-                        instructions,
+                        question_context,
                         diff_from,
+                        diff_from_configured,
                         target,
                         question_answer_only,
                         agent,
@@ -113,6 +115,7 @@ impl RawExpectationExpansion<'_> {
         let common = self.resolve_expectation_common(item.common)?;
         let target = resolve_expectation_target(common.target.clone())
             .map_err(|err| format!("expectation {} target: {}", item_number, err))?;
+        let diff_from_configured = common.diff_from.is_some();
         for file in files {
             let content = if uses_content {
                 self.read_expanded_file(&file)?
@@ -122,8 +125,9 @@ impl RawExpectationExpansion<'_> {
             self.expectations.push(Expectation {
                 q: render_generator_expectation_question(&item.generated_question_format, &content),
                 a: item.a.clone(),
-                instructions: resolved_expectation_instructions(common.instructions.clone()),
+                question_context: resolved_question_context(common.question_context.clone()),
                 diff_from: resolved_expectation_diff_from(common.diff_from.clone()),
+                diff_from_configured,
                 target: target.clone(),
                 question_answer_only: false,
                 agent: self.resolve_expectation_agent(&common.settings)?,
@@ -226,7 +230,7 @@ impl RawExpectationExpansion<'_> {
 fn resolved_common_is_question_answer_only(common: &RawExpectationCommonConfig) -> bool {
     common.cooldown.is_none()
         && resolved_common_settings_are_empty(&common.settings)
-        && resolved_expectation_instructions(common.instructions.clone()).is_empty()
+        && resolved_question_context(common.question_context.clone()).is_empty()
         && resolved_expectation_diff_from(common.diff_from.clone()) == DEFAULT_DIFF_FROM
         && common.target.is_none()
 }
@@ -242,8 +246,8 @@ fn apply_preset_defaults(
     common: &mut RawExpectationCommonConfig,
     preset: &RawExpectationCommonConfig,
 ) {
-    if common.instructions.is_none() {
-        common.instructions = preset.instructions.clone();
+    if common.question_context.is_none() {
+        common.question_context = preset.question_context.clone();
     }
     if common.diff_from.is_none() {
         common.diff_from = preset.diff_from.clone();
@@ -268,12 +272,10 @@ fn apply_preset_defaults(
     }
 }
 
-fn resolved_expectation_instructions(instructions: Option<String>) -> String {
-    instructions
-        .as_deref()
-        .map(str::trim)
-        .unwrap_or("")
-        .to_string()
+fn resolved_question_context(context: Option<String>) -> String {
+    // Normalize human-authored canon data before prompt rendering; this config
+    // layer does not define evaluator prompt templates.
+    context.as_deref().map(str::trim).unwrap_or("").to_string()
 }
 
 fn resolved_expectation_diff_from(diff_from: Option<String>) -> String {

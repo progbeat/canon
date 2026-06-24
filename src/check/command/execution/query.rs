@@ -15,7 +15,7 @@ use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::interrogation::{
     write_query_lifecycle_finish_event, write_query_lifecycle_start_event,
 };
-use crate::check::run::selection::parse_cooldown;
+use crate::check::run::selection::selected_expectation_at;
 use crate::check::{expectation_identities, CheckRecord, CheckRunCaches, SelectedExpectation};
 use crate::config_types::CheckConfig;
 use crate::git::TreeSource;
@@ -186,7 +186,7 @@ fn run_prepared_query(
             // selected by `canon check -q`, so the in-place selected-expectation
             // validation applies only here; one-off unmatched queries have no
             // selected expectation to validate.
-            validate_in_place_query_expectation(expectation)?;
+            validate_in_place_query_expectation(&config.agent, expectation)?;
             *enforced_scope = runtime
                 .fresh_scope_without_persistent_q_scope()
                 .expect("in-place query has no persistent q-scope");
@@ -396,34 +396,10 @@ fn query_expectation_context(
     let [index] = matches.as_slice() else {
         return Ok(None);
     };
-    let identity = identities
-        .get(*index)
-        .ok_or_else(|| "expectation identity count mismatch".to_string())?;
-    let expectation = config
-        .expectations
-        .get(*index)
-        .ok_or_else(|| "expectation identity count mismatch".to_string())?;
-    let cooldown = expectation
-        .cooldown
-        .as_ref()
-        .map(parse_cooldown)
-        .transpose()?;
     // This is not check-run selection. It only recovers the q/a-only
     // expectation context needed for plain `canon check -q <q>` to use the
     // same prompt and state inputs as `canon check <ID>`.
-    Ok(Some(SelectedExpectation {
-        number: *index + 1,
-        id: identity.id.clone(),
-        display_id: identity.display_id.clone(),
-        question: expectation.q.clone(),
-        expected_answer: expectation.a.clone(),
-        instructions: expectation.instructions.clone(),
-        diff_from: expectation.diff_from.clone(),
-        target: expectation.target.clone(),
-        question_answer_only: expectation.question_answer_only,
-        agent: expectation.agent.clone(),
-        cooldown,
-    }))
+    selected_expectation_at(config, &identities, *index, true).map(Some)
 }
 
 #[cfg(test)]
@@ -556,8 +532,9 @@ mod tests {
         Expectation {
             q: question.to_string(),
             a: "yes".to_string(),
-            instructions: String::new(),
+            question_context: String::new(),
             diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
+            diff_from_configured: false,
             target: None,
             question_answer_only: true,
             agent: AgentConfig::implementation_default(),

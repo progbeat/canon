@@ -10,6 +10,7 @@ mod gate;
 mod git;
 mod hash;
 mod hooks;
+mod init;
 mod isolation;
 mod json_util;
 mod logs;
