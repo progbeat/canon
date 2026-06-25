@@ -51,7 +51,9 @@ impl LastResultStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct LastResult {
     // This struct is the persisted last-result schema. Prompt-rendering inputs
-    // such as `diff-from` are intentionally not part of this state record.
+    // such as `diff-from` are intentionally not part of this state record. The
+    // containing xpec directory is keyed by the full expectation ID; the JSON
+    // body does not persist the expectation ID or human display prefix.
     #[serde(rename = "responseTimestamp")]
     pub(crate) response_timestamp: String,
     #[serde(rename = "updatedTimestamp")]

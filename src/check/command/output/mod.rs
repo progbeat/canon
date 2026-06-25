@@ -175,7 +175,7 @@ mod tests {
 
         let report = start_expectation_report_output(output, "j");
         let finished = report.finish_with_record(&passing_record());
-        assert!(!finished.backup_report_needed());
+        assert!(!finished.stdout_completion_failed());
 
         let completed = captured_string(&bytes);
         assert_result_entry(&completed, "OK");
@@ -192,7 +192,7 @@ mod tests {
 
         assert_eq!(captured_string(&bytes), "j.");
         let finished = report.finish_with_record(&passing_record());
-        assert!(!finished.backup_report_needed());
+        assert!(!finished.stdout_completion_failed());
     }
 
     #[test]

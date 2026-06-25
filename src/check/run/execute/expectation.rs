@@ -170,11 +170,11 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         interrupted: interrogation_interrupted,
     } = completed_interrogation;
     record = user_visible_final_check_record(record);
-    started_report.finish_public_output_or_keep_state_report(&record)?;
-    // `record_finished_expectation` is still required after public output:
-    // returning the completed CheckRecord lets the caller append it to the
-    // in-memory CheckRunReport, while Git-backed runs can also update
-    // persistent xpec/live-report state.
+    started_report.finish_public_output_before_structured_report(&record);
+    // `record_finished_expectation` is the structured report path after public
+    // output is finished: returning the completed CheckRecord lets the caller
+    // append it to the in-memory CheckRunReport, while Git-backed runs can also
+    // update persistent xpec/live-report state.
     // Later state/cache/logging errors can fail the command, but they occur
     // after the result has been reported through the active report channel.
     record_finished_expectation(context, expectation, &record)?;
@@ -439,7 +439,7 @@ fn finish_started_expectation_with_error_record<R: EvaluatorRunner>(
         &error,
         visible_tree_oid.to_string(),
     )?);
-    started_report.finish_public_output_or_keep_state_report(&record)?;
+    started_report.finish_public_output_before_structured_report(&record);
     finish_expectation_with_error_record(context, expectation, record)
 }
 

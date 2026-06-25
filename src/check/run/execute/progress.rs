@@ -3,6 +3,7 @@ use crate::check::command::output::{
 };
 use crate::check::core::{CheckRecord, SelectedExpectation};
 use crate::evaluator::EvaluatorProgress;
+use crate::output::write_stderr_line;
 use std::path::Path;
 
 pub(super) struct LiveExpectationReport {
@@ -14,14 +15,12 @@ pub(super) fn start_live_expectation_report(
     output: &SharedCheckOutput,
     expectation: &SelectedExpectation,
 ) -> Result<LiveExpectationReport, String> {
-    // The flushed `<short ID>.` prefix is the started report. Invocation-local
-    // report state stays in memory; if completion stdout later fails, finish
-    // emits an emergency completed report on stderr and still returns the
-    // CheckRecord through the in-memory CheckRunReport. The caller contract is
-    // that every command-controlled fallible or interrupted post-start path
-    // calls `finish_public_output_or_keep_state_report` with either the normal
-    // result or an ERROR record; there is intentionally no separate cancel
-    // operation for a started expectation.
+    // The flushed `<short ID>.` prefix is already public output for this
+    // expectation: it starts the report before evaluator work. This module owns
+    // public output only; the structured `CheckRunReport` remains the report
+    // owner. Every command-controlled fallible or interrupted post-start path
+    // calls this component with either the normal result or an ERROR record,
+    // then continues into the structured report.
     Ok(LiveExpectationReport {
         output: start_expectation_report_output(output.clone(), &expectation.display_id),
     })
@@ -32,24 +31,19 @@ impl LiveExpectationReport {
         self.output.progress()
     }
 
-    pub(super) fn finish_public_output_or_keep_state_report(
-        self,
-        record: &CheckRecord,
-    ) -> Result<(), String> {
+    pub(super) fn finish_public_output_before_structured_report(self, record: &CheckRecord) {
         let finished = self.output.finish_with_record(record);
-        if finished.backup_report_needed() {
+        if finished.stdout_completion_failed() {
             // If stdout accepted the short-ID prefix but cannot receive the
-            // completed result, stderr is the emergency completed report for
-            // the affected expectation. Stderr is not the ownership boundary
-            // for the record: the CheckRecord still flows to CheckRunReport
-            // after this function returns.
-            eprintln!("{}", output_only_backup_report_line(record));
+            // completed result, stderr gets an emergency public-output notice.
+            // The notice does not own reporting: the CheckRecord still flows to
+            // the structured report after this function returns.
+            let _ = write_stderr_line(&emergency_completion_notice_line(record));
         }
-        Ok(())
     }
 }
 
-fn output_only_backup_report_line(record: &CheckRecord) -> String {
+fn emergency_completion_notice_line(record: &CheckRecord) -> String {
     let status = if record.requires_human_review() {
         "error"
     } else if record.passed() {

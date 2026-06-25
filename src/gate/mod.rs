@@ -17,6 +17,9 @@ use std::ffi::OsString;
 use std::path::Path;
 
 pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), CommandError> {
+    // Gate failure diagnostics have two ownership points: CLI dispatch handles
+    // root-resolution failures before this function, and this module handles
+    // failures after a project root exists.
     // CLI validation happens before the gate pass/fail decision. These
     // unsupported-option errors are usage errors, not `GateFailed` outcomes.
     if !args.is_empty() {
@@ -69,6 +72,9 @@ fn gate_regression_count(root: &Path) -> Result<usize, CommandError> {
 
 enum GateDecision {
     Pass,
+    // This is not "any non-pass result". It is the gate-only blocking
+    // shape that also prevents same-tree `canon check` from saying to commit:
+    // a prior HEAD pass now has a staged fail.
     RegressionFailure,
     MixedCanonChangeFailure,
 }
@@ -86,8 +92,15 @@ fn gate_decision(num_regressions: usize, changed_paths: &[Vec<u8>]) -> GateDecis
 fn gate_command_result<T>(result: Result<T, String>) -> Result<T, CommandError> {
     match result {
         Ok(value) => Ok(value),
-        Err(err) => Err(format!("canon gate: {}\n{}", err, gate_error_advice()).into()),
+        Err(err) => {
+            write_gate_error(&err).map_err(CommandError::from)?;
+            Err(CommandError::GateFailed)
+        }
     }
+}
+
+fn write_gate_error(err: &str) -> Result<(), String> {
+    write_stderr_line(&format!("canon gate: {}\n{}", err, gate_error_advice()))
 }
 
 fn gate_check_config_is_missing(err: &str) -> bool {
@@ -107,8 +120,9 @@ fn has_canon_staged_change(changed_paths: &[Vec<u8>]) -> bool {
 }
 
 fn write_mixed_canon_change_failure() -> Result<(), String> {
-    write_stderr_line("canon gate: .canon/** changes must not be mixed with non-.canon changes")?;
-    write_stderr_line("▷ Ask human to handle .canon/ changes.")
+    write_stderr_line(
+        "canon gate: .canon/** changes must not be mixed with non-.canon changes\n▷ Ask human to handle .canon/ changes.",
+    )
 }
 
 pub(crate) fn gate_regression_count_with_config(
@@ -204,8 +218,10 @@ fn write_gate_regression_failure() -> Result<(), String> {
     // Gate output stays generic by canon: even expectation-related failures
     // are reported without expectation IDs or per-expectation lines. `canon
     // check` is the command that prints individual expectation records.
-    write_stderr_line("canon gate: staged changes regress cached canon results")?;
-    write_stderr_line(gate_regression_advice())
+    write_stderr_line(&format!(
+        "canon gate: staged changes regress cached canon results\n{}",
+        gate_regression_advice()
+    ))
 }
 
 pub(crate) fn gate_regression_advice() -> &'static str {
@@ -286,6 +302,16 @@ mod tests {
         assert!(matches!(
             gate_decision(1, &changed_paths),
             GateDecision::RegressionFailure
+        ));
+    }
+
+    #[test]
+    fn gate_decision_passes_same_tree_commit_shape_without_regressions() {
+        let changed_paths = vec![b"src/lib.rs".to_vec()];
+
+        assert!(matches!(
+            gate_decision(0, &changed_paths),
+            GateDecision::Pass
         ));
     }
 }

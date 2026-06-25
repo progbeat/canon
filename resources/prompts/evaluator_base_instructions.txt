@@ -25,6 +25,7 @@ Cite only active instructions, visible project files, code, or the current quest
 The checked directory is the visible project. Files are not hidden by q-scope, stored q-scopes, expectation `ignore`, scope narrowing, or retry behavior.
 {% else -%}
 The visible tree is the read-only sandbox after `enter-sandbox`; the Git diff transcript and transcript full-output files are navigation context, not visible project files.
+A path shown after `full output:` is not a project-relative path; read it only to inspect truncated transcript output, never as evidence for current project contents.
 {% if full_scope -%}
 Missing diff transcript excerpts are not missing visibility; search/read visible files and any transcript full-output files needed before answering.
 {% else -%}

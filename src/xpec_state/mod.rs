@@ -316,9 +316,12 @@ mod tests {
             .unwrap();
         let pass_json = read_json(&root, &expectation.id, "last-pass.json");
         assert_eq!(pass_json["status"], "pass");
+        assert!(pass_json.get("id").is_none());
+        assert!(pass_json.get("displayId").is_none());
         assert_eq!(pass_json["response"]["qScopeSuggestion"], json!(scope));
         assert_eq!(pass_json["checkedTreeOid"], "checked-tree");
         assert_eq!(pass_json["visibleTreeOid"], "visible-tree");
+        assert!(!last_result_path(&root, &expectation.display_id, "last-pass.json").exists());
 
         let fail = test_record(&expectation, &scope, "no", None);
         cache

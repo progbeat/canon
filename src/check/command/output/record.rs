@@ -16,7 +16,8 @@ const PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL: Duration = Duration::from_secs(
 
 // Check progress timeline ownership:
 // - `start_expectation_report_output` writes and flushes `<short ID>.` before
-//   evaluator work starts.
+//   evaluator work starts; that prefix is the started public report for the
+//   expectation, not an unowned placeholder.
 // - the progress worker writes and flushes elapsed markers every minute while
 //   evaluator work is still active.
 // - `finish_with_record` writes the due elapsed marker before the final
@@ -34,24 +35,24 @@ pub(crate) struct StartedExpectationReportOutput {
 }
 
 pub(crate) struct FinishedExpectationReportOutput {
-    backup_report_needed: bool,
+    stdout_completion_failed: bool,
 }
 
 impl FinishedExpectationReportOutput {
     fn completed_report() -> FinishedExpectationReportOutput {
         FinishedExpectationReportOutput {
-            backup_report_needed: false,
+            stdout_completion_failed: false,
         }
     }
 
-    fn backup_report() -> FinishedExpectationReportOutput {
+    fn with_stdout_completion_failed() -> FinishedExpectationReportOutput {
         FinishedExpectationReportOutput {
-            backup_report_needed: true,
+            stdout_completion_failed: true,
         }
     }
 
-    pub(crate) fn backup_report_needed(&self) -> bool {
-        self.backup_report_needed
+    pub(crate) fn stdout_completion_failed(&self) -> bool {
+        self.stdout_completion_failed
     }
 }
 
@@ -132,7 +133,7 @@ impl StartedExpectationReportOutput {
         if self.prefix_completed {
             let marker = match self.due_elapsed_progress_marker() {
                 Ok(marker) => marker,
-                Err(_) => return FinishedExpectationReportOutput::backup_report(),
+                Err(_) => return FinishedExpectationReportOutput::with_stdout_completion_failed(),
             };
             if let Some(marker) = marker {
                 if write_stdout_record(
@@ -142,7 +143,7 @@ impl StartedExpectationReportOutput {
                 )
                 .is_err()
                 {
-                    return FinishedExpectationReportOutput::backup_report();
+                    return FinishedExpectationReportOutput::with_stdout_completion_failed();
                 }
             }
         }
@@ -152,7 +153,7 @@ impl StartedExpectationReportOutput {
             render_check_output_record_with_initial_marker_timeline(record)
         };
         if write_stdout_record(&mut output, result_suffix.as_bytes(), "check result").is_err() {
-            return FinishedExpectationReportOutput::backup_report();
+            return FinishedExpectationReportOutput::with_stdout_completion_failed();
         }
         FinishedExpectationReportOutput::completed_report()
     }

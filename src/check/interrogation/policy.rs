@@ -15,13 +15,20 @@ use crate::scope::sanitize_scope;
 use crate::xpec_state::XpecStateCache;
 
 // Interrogation Policy implementation map:
-// - response schema selection and parsing: `src/check/core/evaluator_response.rs`
-// - initial q-scope, 25%-smaller gate, and narrowed-scope acceptance: this file
-// - check-run initial/follow-up sequencing: `src/check/run/execute/expectation.rs`
-// - query-mode initial/follow-up sequencing: `src/check/interrogation/query/mod.rs`
+// - full vs restricted response schema selection, `ScopeTooNarrow`,
+//   `InvalidQuestion`, `answer`, `evidence`, and `qScopeSuggestion` schema
+//   parsing: `src/check/core/evaluator_response.rs`
+// - initial q-scope, invalid qScopeSuggestion rejection, 25%-smaller gate, and
+//   narrowed-scope acceptance: this file
+// - check-run `ScopeTooNarrow` retry and q-scope verification sequencing:
+//   `src/check/run/execute/expectation.rs`
+// - query-mode retry and q-scope verification sequencing:
+//   `src/check/interrogation/query/mod.rs`
 // - evaluator model retry order: `src/check/interrogation/session/model_fallback.rs`
-// - per-turn thinking, prompt, and thread inputs: `src/check/interrogation/session/thread.rs`
-// - configured model list expansion for retries: `src/check/interrogation/state.rs`
+// - per-turn thinking, enforced response schema, prompt, and thread inputs:
+//   `src/check/interrogation/session/thread.rs`
+// - configured model list and thinking expansion for retries:
+//   `src/check/interrogation/state.rs`
 // A whole-policy audit needs all of these code paths; a narrower q-scope can
 // verify only the policy clauses owned by the included files.
 

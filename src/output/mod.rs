@@ -3,7 +3,9 @@ use std::io::{self, Write};
 // General command output goes through these helpers so each eligible stdout or
 // stderr fragment is flushed before the caller can continue. Commands with
 // streaming output, such as `canon check`, own a command-specific facade with
-// the same flush-after-write contract.
+// the same flush-after-write contract. A write or flush error means the host
+// did not accept that public-output fragment; callers can report or ignore
+// that I/O failure, but cannot turn a broken output sink into printed bytes.
 pub(crate) fn write_stdout(text: &str) -> Result<(), String> {
     write_stdout_bytes(text.as_bytes())
 }

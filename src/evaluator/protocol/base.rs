@@ -73,6 +73,9 @@ mod tests {
         .unwrap();
 
         assert!(rendered.contains("not visible project files"));
+        assert!(
+            rendered.contains("A path shown after `full output:` is not a project-relative path")
+        );
         assert!(rendered.contains("search/read visible files"));
     }
 

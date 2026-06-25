@@ -101,7 +101,9 @@ impl BuiltinCommand {
                 run_show_command(&root, args)
             }
             BuiltinCommand::Gate => {
-                let root = git_project_root(Path::new("."))?;
+                let root = git_project_root(Path::new(".")).map_err(|err| {
+                    format!("{err}\n▷ Run `canon gate` from inside a Git worktree.")
+                })?;
                 run_gate_command(&root, args)
             }
         }
