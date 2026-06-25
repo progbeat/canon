@@ -1,6 +1,9 @@
 use crate::check::core::ERROR_SCOPE_TOO_NARROW;
 use crate::config_types::{AgentConfig, CheckConfig};
-use crate::evaluator::{app_server_model_key, evaluator_models, EvaluatorResponseParseCache};
+use crate::evaluator::{
+    app_server_model_key, evaluator_models, EvaluatorResponseParseCache,
+    PromptTemplateOutputDirCache,
+};
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::hash::full_scope;
 use crate::isolation::{NaiveIsolationGuard, NaiveIsolationPolicy};
@@ -302,6 +305,7 @@ pub(crate) struct InterrogationRunState {
     pub(crate) session_roots_by_id: BTreeMap<String, PathBuf>,
     pub(crate) visible_tree_oid_cache: VisibleTreeOidCache,
     pub(crate) parse_cache: EvaluatorResponseParseCache,
+    pub(crate) prompt_template_output_dir_cache: PromptTemplateOutputDirCache,
     isolation_policy: Option<NaiveIsolationPolicy>,
 }
 
@@ -320,6 +324,7 @@ impl InterrogationRunState {
             session_roots_by_id: BTreeMap::new(),
             visible_tree_oid_cache: VisibleTreeOidCache::new(),
             parse_cache: EvaluatorResponseParseCache::new(),
+            prompt_template_output_dir_cache: PromptTemplateOutputDirCache::new(),
             isolation_policy,
         })
     }

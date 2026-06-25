@@ -278,9 +278,11 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
         // follow-up for this expectation. It intentionally calls
         // `interrogate_or_error_record` directly instead of the initial-turn
         // full-scope retry helper.
-        // `ScopeTooNarrow` rejects the evaluator's proposed q-scope; other
-        // verification errors remain final human-review results. Pass/fail
-        // results use the acceptance matrix below.
+        // Verification ScopeTooNarrow is a concrete rejection of the proposed
+        // q-scope, not the final evaluator response for the expectation; the
+        // initial answer stays final. Other verification errors remain final
+        // human-review results. Pass/fail results use the acceptance matrix
+        // below.
         let verification_scope = proposed_scope.clone();
         let narrowed = interrogate_or_error_record(
             InterrogationCall {
@@ -487,7 +489,7 @@ mod tests {
     use crate::hash::full_scope;
 
     #[test]
-    fn q_scope_verification_scope_too_narrow_does_not_replace_initial_result() {
+    fn q_scope_verification_scope_too_narrow_rejects_scope_without_replacing_initial_result() {
         let narrowed = test_record(CheckResult::Fail, Some(ERROR_SCOPE_TOO_NARROW));
 
         assert!(!q_scope_verification_record_replaces_initial(

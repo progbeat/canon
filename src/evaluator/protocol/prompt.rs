@@ -9,10 +9,11 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 const TEMPLATE_OUTPUT_HEAD_BYTES: usize = 8 * 1024;
-const PROMPT_TEMPLATE_ARTIFACT_DIR_NAME: &str = "canon-template-output";
+const PROMPT_TEMPLATE_ARTIFACT_DIR_PREFIX: &str = "canon-template-output";
+const PROMPT_TEMPLATE_ARTIFACT_DIR_CREATE_ATTEMPTS: usize = 64;
 
 // Canon-owned evaluator templates are loaded from `resources/prompts/`; this
 // module only renders those resource files with runtime check data.
@@ -265,33 +266,75 @@ where
     with_current_dir(root, render).map_err(template_error)?
 }
 
-pub(crate) fn create_prompt_template_output_dir() -> Result<PathBuf, String> {
-    // This fixed temporary root is an evaluator-readable artifact container,
-    // not invocation state. Individual files under it are addressed by the
-    // complete stdout bytes that Prompt Templates expose in truncation lines.
-    let path = std::env::temp_dir().join(PROMPT_TEMPLATE_ARTIFACT_DIR_NAME);
-    ensure_prompt_template_output_dir(&path)?;
-    Ok(path)
+pub(crate) struct PromptTemplateOutputDirCache {
+    dir: OnceLock<PromptTemplateOutputDir>,
 }
 
-fn ensure_prompt_template_output_dir(path: &Path) -> Result<(), String> {
-    match create_private_dir(path) {
-        Ok(()) => Ok(()),
-        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-            let metadata = fs::symlink_metadata(path)
-                .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
-            if !metadata.file_type().is_dir() {
-                return Err(format!(
-                    "prompt template output path exists but is not a directory: {}",
-                    path.display()
-                ));
-            }
-            // Use the platform facade here: it normalizes platform-specific
-            // permission errors into this function's `Result<(), String>`.
-            crate::platform::set_private_dir_permissions(path)
+impl PromptTemplateOutputDirCache {
+    pub(crate) fn new() -> PromptTemplateOutputDirCache {
+        PromptTemplateOutputDirCache {
+            dir: OnceLock::new(),
         }
-        Err(err) => Err(format!("failed to create {}: {}", path.display(), err)),
     }
+
+    pub(crate) fn path_for_check_invocation(&self) -> Result<PathBuf, String> {
+        if let Some(dir) = self.dir.get() {
+            return Ok(dir.path().to_path_buf());
+        }
+        let dir = allocate_prompt_template_output_dir_for_check_invocation()?;
+        let path = dir.path().to_path_buf();
+        if self.dir.set(dir).is_err() {
+            return Ok(self
+                .dir
+                .get()
+                .expect("prompt template output dir is set")
+                .path()
+                .to_path_buf());
+        }
+        Ok(path)
+    }
+}
+
+struct PromptTemplateOutputDir {
+    path: PathBuf,
+}
+
+impl PromptTemplateOutputDir {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for PromptTemplateOutputDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
+}
+
+fn allocate_prompt_template_output_dir_for_check_invocation(
+) -> Result<PromptTemplateOutputDir, String> {
+    // This allocator intentionally returns a fresh private directory per call.
+    // Production check runs call it through `PromptTemplateOutputDirCache`,
+    // which caches one returned path for every prompt render in that invocation.
+    let parent = std::env::temp_dir();
+    for _ in 0..PROMPT_TEMPLATE_ARTIFACT_DIR_CREATE_ATTEMPTS {
+        let random = getrandom::u64()
+            .map_err(|err| format!("failed to choose prompt template output directory: {err}"))?;
+        let path = parent.join(format!(
+            "{}-{}-{random:016x}",
+            PROMPT_TEMPLATE_ARTIFACT_DIR_PREFIX,
+            std::process::id()
+        ));
+        match create_private_dir(&path) {
+            Ok(()) => return Ok(PromptTemplateOutputDir { path }),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(format!("failed to create {}: {}", path.display(), err)),
+        }
+    }
+    Err(format!(
+        "failed to allocate a unique prompt template output directory under {}",
+        parent.display()
+    ))
 }
 
 fn json_filter(value: MiniValue) -> Result<String, Error> {
@@ -428,10 +471,7 @@ fn write_full_template_command_stdout_artifact(
     template_output_dir: &Path,
     stdout: &[u8],
 ) -> Result<PathBuf, Error> {
-    let path = template_output_dir.join(format!(
-        "canon-template-output-sha256-{}.txt",
-        sha256_hex(stdout)
-    ));
+    let path = template_command_stdout_artifact_path(template_output_dir, stdout);
     // This artifact is part of the evaluator-readable prompt transcript, not
     // canon check state. The implementation writes it so the truncation line's
     // path is readable by the evaluator, and never reads it back to make
@@ -460,6 +500,16 @@ fn write_full_template_command_stdout_artifact(
             err
         ))),
     }
+}
+
+fn template_command_stdout_artifact_path(template_output_dir: &Path, stdout: &[u8]) -> PathBuf {
+    // `template_output_dir` is stable for one check run, and the file name is
+    // content-addressed by complete stdout bytes. Identical stdout therefore
+    // maps to the same full path within that `canon check` invocation.
+    template_output_dir.join(format!(
+        "canon-template-output-sha256-{}.txt",
+        sha256_hex(stdout)
+    ))
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -664,12 +714,82 @@ mod tests {
     }
 
     #[test]
-    fn prompt_template_output_dir_is_stable() {
-        let first = create_prompt_template_output_dir().unwrap();
-        let second = create_prompt_template_output_dir().unwrap();
+    fn prompt_template_output_dir_allocations_are_fresh() {
+        let first = allocate_prompt_template_output_dir_for_check_invocation().unwrap();
+        let second = allocate_prompt_template_output_dir_for_check_invocation().unwrap();
+
+        assert_ne!(first.path(), second.path());
+        assert!(first.path().is_dir());
+        assert!(second.path().is_dir());
+        for path in [first.path(), second.path()] {
+            assert!(path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(PROMPT_TEMPLATE_ARTIFACT_DIR_PREFIX));
+        }
+    }
+
+    #[test]
+    fn prompt_template_output_dir_does_not_reuse_fixed_temp_path() {
+        let fixed = std::env::temp_dir().join(PROMPT_TEMPLATE_ARTIFACT_DIR_PREFIX);
+
+        let output = allocate_prompt_template_output_dir_for_check_invocation().unwrap();
+
+        assert_ne!(output.path(), fixed);
+        assert!(output.path().is_dir());
+    }
+
+    #[test]
+    fn prompt_template_output_dir_cache_is_stable_within_invocation() {
+        let first;
+        {
+            let cache = PromptTemplateOutputDirCache::new();
+
+            first = cache.path_for_check_invocation().unwrap();
+            let second = cache.path_for_check_invocation().unwrap();
+
+            assert_eq!(first, second);
+            assert!(first.is_dir());
+        }
+        assert!(!first.exists());
+    }
+
+    #[test]
+    fn prompt_template_output_dir_caches_are_fresh_per_invocation() {
+        let first;
+        let second;
+        {
+            let first_cache = PromptTemplateOutputDirCache::new();
+            let second_cache = PromptTemplateOutputDirCache::new();
+
+            first = first_cache.path_for_check_invocation().unwrap();
+            second = second_cache.path_for_check_invocation().unwrap();
+
+            assert_ne!(first, second);
+            assert!(first.is_dir());
+            assert!(second.is_dir());
+        }
+        assert!(!first.exists());
+        assert!(!second.exists());
+    }
+
+    #[test]
+    fn template_command_stdout_path_is_deterministic_within_run_output_dir() {
+        let output_dir = test_output_dir("same-run-content-addressed");
+        let stdout = b"same complete stdout";
+
+        let first = template_command_stdout_artifact_path(&output_dir, stdout);
+        let second = template_command_stdout_artifact_path(&output_dir, stdout);
 
         assert_eq!(first, second);
-        assert!(first.is_dir());
+        assert_eq!(first.parent(), Some(output_dir.as_path()));
+        assert!(first
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("canon-template-output-sha256-"));
+        let _ = fs::remove_dir_all(output_dir);
     }
 
     #[test]

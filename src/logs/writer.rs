@@ -138,16 +138,23 @@ fn prepare_diagnostic_log(
     cache: &mut RepoInspectionCache,
 ) -> DiagnosticLogResult<PreparedDiagnosticLog> {
     let config = diagnostic_log_config(root)?;
+    if diagnostic_logs_explicitly_disabled(&config) {
+        let log_dir = root.join(CANON_LOG_DIR_GIT_PATH);
+        let path = log_dir.join(active_log_file_name(&config)?);
+        return Ok(PreparedDiagnosticLog {
+            log_dir,
+            path,
+            config,
+        });
+    }
     // CANON_LOG_DIR_GIT_PATH is `${CANON_STATE_DIR}/logs`; `git_path` resolves it
     // with `git rev-parse --git-path` so worktrees and nonstandard git-dir
     // layouts keep logs under Canon's git-owned state directory.
     let log_dir = cache
         .git_path(root, CANON_LOG_DIR_GIT_PATH)
         .map_err(|message| external_log_error("resolve diagnostic log directory", message))?;
-    if !diagnostic_logs_explicitly_disabled(&config) {
-        ensure_dir_without_symlinks(&log_dir)
-            .map_err(|message| external_log_error("create diagnostic log directory", message))?;
-    }
+    ensure_dir_without_symlinks(&log_dir)
+        .map_err(|message| external_log_error("create diagnostic log directory", message))?;
     let path = log_dir.join(active_log_file_name(&config)?);
     Ok(PreparedDiagnosticLog {
         log_dir,

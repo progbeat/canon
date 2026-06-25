@@ -227,9 +227,10 @@ pub(crate) fn narrowed_scope_is_accepted(
     // cannot make the recorded failure disappear. A fail that turns into pass
     // has the opposite shape, so the proposed scope omitted necessary failure
     // evidence and is too narrow to trust.
-    // Error responses do not verify the proposed scope as reusable. Verification
-    // `ScopeTooNarrow` rejects the proposal and leaves the initial answer as
-    // final; other verification errors remain human-review results.
+    // Error responses do not verify the proposed scope as reusable.
+    // Verification ScopeTooNarrow is a concrete q-scope rejection, so the
+    // initial answer remains the final response for the expectation. Other
+    // verification errors become final human-review results.
     if narrowed.error.is_some() {
         return false;
     }

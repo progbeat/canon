@@ -7,12 +7,12 @@ use crate::check::interrogation::state::{
 use crate::check::{evaluator_response_output_schema_for_scope, EvaluatorResponseSchemaScope};
 use crate::config_types::{AgentConfig, AGAINST_TREE_DIFF_FROM, DEFAULT_DIFF_FROM};
 use crate::evaluator::{
-    ask_once as ask_evaluator_once, create_prompt_template_output_dir, developer_instructions,
-    effective_thinking, evaluator_base_instructions, evaluator_turn_prompt,
-    is_context_window_failure, q_scope_is_full_project, session_failure_invalidates_thread,
-    write_thread_lifecycle_event, write_thread_restart_event, BaseInstructionsContext,
-    DeveloperInstructionsContext, EvaluatorError, EvaluatorResponseParseCache, EvaluatorRunner,
-    EvaluatorTurnContext, ParsedTurnResponse, ThreadLifecycleLog,
+    ask_once as ask_evaluator_once, developer_instructions, effective_thinking,
+    evaluator_base_instructions, evaluator_turn_prompt, is_context_window_failure,
+    q_scope_is_full_project, session_failure_invalidates_thread, write_thread_lifecycle_event,
+    write_thread_restart_event, BaseInstructionsContext, DeveloperInstructionsContext,
+    EvaluatorError, EvaluatorResponseParseCache, EvaluatorRunner, EvaluatorTurnContext,
+    ParsedTurnResponse, ThreadLifecycleLog,
 };
 use crate::logs::DiagnosticLogWriter;
 use crate::scope::sanitize_scope;
@@ -435,8 +435,10 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
     model: Option<&str>,
     last_pass: Option<&LastResult>,
 ) -> Result<InterrogationResult, EvaluatorError> {
-    let template_output_dir =
-        create_prompt_template_output_dir().map_err(EvaluatorError::message)?;
+    let template_output_dir = state
+        .prompt_template_output_dir_cache
+        .path_for_check_invocation()
+        .map_err(EvaluatorError::message)?;
     let diff_from = resolve_diff_from(runtime, expectation, last_pass)?;
     let mut template_artifact_paths = Vec::new();
     let prompt = evaluator_turn_prompt(

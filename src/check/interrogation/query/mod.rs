@@ -13,8 +13,7 @@ use crate::check::interrogation::{
 };
 use crate::config_types::{AgentConfig, DEFAULT_DIFF_FROM};
 use crate::evaluator::{
-    create_prompt_template_output_dir, effective_thinking, evaluator_turn_prompt, EvaluatorError,
-    EvaluatorRunner,
+    effective_thinking, evaluator_turn_prompt, EvaluatorError, EvaluatorRunner,
 };
 use crate::hash::full_scope;
 use crate::logs::DiagnosticLogWriter;
@@ -258,8 +257,10 @@ fn ask_once_with_model<R: EvaluatorRunner>(
     state: &mut InterrogationRunState,
     model: Option<&str>,
 ) -> Result<QueryResult, EvaluatorError> {
-    let template_output_dir =
-        create_prompt_template_output_dir().map_err(EvaluatorError::message)?;
+    let template_output_dir = state
+        .prompt_template_output_dir_cache
+        .path_for_check_invocation()
+        .map_err(EvaluatorError::message)?;
     let diff_from = query.resolved_diff_from(runtime)?;
     let mut template_artifact_paths = Vec::new();
     let prompt = evaluator_turn_prompt(

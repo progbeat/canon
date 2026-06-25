@@ -258,11 +258,24 @@ fn run_in_place_check_command(
     // in-place-prohibited expectation fields.
     let mut repo_cache = RepoInspectionCache::new();
     // In-place uses a fresh in-memory cache bundle only because the shared
-    // execution APIs accept cache handles. It does not create diagnostic logs,
-    // does not clean persistent cache directories, and passes an in-place
-    // runtime whose lower layers skip xpec reads/writes.
+    // execution APIs accept cache handles. It still writes runtime logs when
+    // logging is enabled, but it does not clean persistent cache directories,
+    // and passes an in-place runtime whose lower layers skip xpec reads/writes.
     let mut check_caches = CheckRunCaches::new();
-    let config = repo_cache.load_in_place_check_config(root, &command.config_path)?;
+    let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
+    let query_mode = command.query.is_some();
+    let query_start_field = if query_mode { Some(true) } else { None };
+    let config = match repo_cache.load_in_place_check_config(root, &command.config_path) {
+        Ok(config) => config,
+        Err(err) => {
+            return fail_check_before_selection(
+                &mut diagnostic_log,
+                query_start_field,
+                query_mode,
+                err,
+            )
+        }
+    };
     if let Some(question) = command.query.as_deref() {
         // In-place query mode remains the same one-off question path as
         // ordinary `canon check -q`; it is not a check-run report and does not
@@ -277,7 +290,7 @@ fn run_in_place_check_command(
             against_tree: None,
             no_sandbox: command.no_sandbox,
             in_place: true,
-            diagnostic_log: None,
+            diagnostic_log: Some(diagnostic_log),
             check_caches: &mut check_caches,
         })
         .map_err(CommandError::from);
@@ -287,7 +300,20 @@ fn run_in_place_check_command(
     // Persistent state is not consulted here; in-place compatibility is checked
     // only for selected expectations before any selected expectation is
     // evaluated.
-    let options = resolve_check_options_with_identities(&config, &identities, &command.options)?;
+    let options =
+        match resolve_check_options_with_identities(&config, &identities, &command.options) {
+            Ok(options) => options,
+            Err(err) => return fail_check_before_selection(&mut diagnostic_log, None, false, err),
+        };
+    write_check_lifecycle_start_event(
+        &mut diagnostic_log,
+        None,
+        options
+            .selected
+            .iter()
+            .map(|expectation| expectation.id.clone())
+            .collect(),
+    )?;
     let mut runner = LazyAppServerRunner::new_in_place(
         root,
         check_config_loads_plugins(&config),
@@ -320,7 +346,7 @@ fn run_in_place_check_command(
             interrupted: false,
         };
         return finish_completed_check(
-            None,
+            Some(&mut diagnostic_log),
             &mut result_output,
             &mut check_caches,
             &mut runner,
@@ -341,7 +367,7 @@ fn run_in_place_check_command(
         &options,
         &mut runner,
         CheckRunSideEffects {
-            diagnostic_log: None,
+            diagnostic_log: Some(&mut diagnostic_log),
             result_output: Some(&mut result_output),
             live_report_output: Some(shared_output.clone()),
             caches: &mut check_caches,
@@ -360,7 +386,7 @@ fn run_in_place_check_command(
         },
     };
     finish_completed_check(
-        None,
+        Some(&mut diagnostic_log),
         &mut result_output,
         &mut check_caches,
         &mut runner,

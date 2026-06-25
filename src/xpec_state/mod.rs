@@ -293,9 +293,9 @@ mod tests {
     use crate::git::{TreeSource, VisibleTreeOidCache};
     use crate::hash::full_scope;
     use crate::xpec_state::{
-        cached_last_result_for_expectation, refresh_reused_same_tree_last_result,
-        CachedLastResultKind, CachedLastResultLookup, CachedResultStatus, LastResult,
-        LastResultStatus, XpecStateCache,
+        cached_last_result_for_expectation, check_record_from_cached_result,
+        refresh_reused_same_tree_last_result, CachedLastResultKind, CachedLastResultLookup,
+        CachedResultStatus, LastResult, LastResultStatus, XpecStateCache,
     };
     use serde_json::{json, Value};
     use std::fs;
@@ -316,7 +316,7 @@ mod tests {
             .unwrap();
         let pass_json = read_json(&root, &expectation.id, "last-pass.json");
         assert_eq!(pass_json["status"], "pass");
-        assert!(pass_json["response"].get("qScopeSuggestion").is_none());
+        assert_eq!(pass_json["response"]["qScopeSuggestion"], json!(scope));
         assert_eq!(pass_json["checkedTreeOid"], "checked-tree");
         assert_eq!(pass_json["visibleTreeOid"], "visible-tree");
 
@@ -417,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn last_error_omits_invocation_local_response_suggestion() {
+    fn last_error_preserves_response_suggestion() {
         let root = git_project("last-error-suggestion-separate");
         let expectation = test_expectation();
         let mut cache = XpecStateCache::default();
@@ -437,12 +437,15 @@ mod tests {
 
         let error_json = read_json(&root, &expectation.id, "last-error.json");
         assert_eq!(error_json["qScope"], json!(scope));
-        assert!(error_json["response"].get("qScopeSuggestion").is_none());
+        assert_eq!(
+            error_json["response"]["qScopeSuggestion"],
+            json!(suggestion)
+        );
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
-    fn last_pass_omits_invocation_local_response_suggestion() {
+    fn last_pass_stores_applied_scope_and_response_suggestion_separately() {
         let root = git_project("last-pass-suggestion-separate");
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src/narrow.rs"), "narrow\n").unwrap();
@@ -469,12 +472,61 @@ mod tests {
 
         let pass_json = read_json(&root, &expectation.id, "last-pass.json");
         assert_eq!(pass_json["qScope"], json!(persisted_scope));
-        assert!(pass_json["response"].get("qScopeSuggestion").is_none());
+        assert_eq!(
+            pass_json["response"]["qScopeSuggestion"],
+            json!(full_scope())
+        );
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
-    fn last_result_response_omits_question_scope_suggestion() {
+    fn cached_record_preserves_response_question_scope_suggestion() {
+        let root = git_project("cached-record-suggestion");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/narrow.rs"), "narrow\n").unwrap();
+        fs::write(root.join("src/extra.rs"), "extra\n").unwrap();
+        git(&root, &["add", "src/narrow.rs", "src/extra.rs"]);
+
+        let expectation = test_expectation();
+        let q_scope = vec!["src/narrow.rs".to_string()];
+        let suggestion = vec!["src/extra.rs".to_string()];
+        let checked_tree_oid = TreeSource::Staged.tree_oid_for_prompt_diff(&root).unwrap();
+        let mut record = test_record(&expectation, &q_scope, "yes", None);
+        record.visible_tree_oid = VisibleTreeOidCache::new()
+            .visible_tree_oid(&root, &TreeSource::Staged, &expectation.agent, &q_scope)
+            .unwrap();
+        record.question_scope_suggestion = Some(suggestion.clone());
+
+        let mut cache = XpecStateCache::default();
+        cache
+            .write_last_result_for_record(&root, &checked_tree_oid, &expectation, &record)
+            .unwrap();
+
+        let hit = cached_last_result_for_expectation(
+            &root,
+            &TreeSource::Staged,
+            &expectation,
+            &mut cache,
+            &mut VisibleTreeOidCache::new(),
+            CachedLastResultLookup {
+                now: 2,
+                include_same_tree: true,
+                include_cooldown: true,
+            },
+        )
+        .unwrap()
+        .unwrap();
+        let cached_record = check_record_from_cached_result(&expectation, &hit);
+
+        assert_eq!(hit.status, CachedResultStatus::Pass);
+        assert_eq!(hit.kind, CachedLastResultKind::SameTree);
+        assert_eq!(cached_record.scope, q_scope);
+        assert_eq!(cached_record.question_scope_suggestion, Some(suggestion));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn last_result_response_preserves_question_scope_suggestion() {
         let root = git_project("last-result-no-suggestion");
         let expectation = test_expectation();
         let scope = full_scope();
@@ -486,7 +538,10 @@ mod tests {
             .unwrap();
 
         let pass_json = read_json(&root, &expectation.id, "last-pass.json");
-        assert!(pass_json["response"].get("qScopeSuggestion").is_none());
+        assert_eq!(
+            pass_json["response"]["qScopeSuggestion"],
+            json!(full_scope())
+        );
         let _ = fs::remove_dir_all(root);
     }
 

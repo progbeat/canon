@@ -24,9 +24,10 @@ only when files under `.canon/` prove a real contradiction.
 Treat it as a signal that the canon question is malformed, the evaluator input
 is wrong, or the evaluator instructions/setup are making the agent answer from
 the wrong material. Fix that cause when it is safely in scope, or tell the
-human when the canon itself needs correction. Do not accept `InvalidQuestion`
-just because the question text contains a general normative specification
-instead of naming implementation files.
+human when the canon itself needs correction. Do not classify
+`InvalidQuestion` as a readability issue. Do not accept `InvalidQuestion` just
+because the question text contains a general normative specification instead of
+naming implementation files.
 
 ## What if `InvalidQuestion` says no file states the rule?
 

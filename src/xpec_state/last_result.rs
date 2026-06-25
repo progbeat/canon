@@ -92,6 +92,17 @@ impl LastResult {
             .unwrap_or("")
             .to_string()
     }
+
+    fn question_scope_suggestion(&self) -> Option<Vec<String>> {
+        // Last-result `response` is the normalized evaluator response; the
+        // applied q-scope is stored separately in `qScope`.
+        self.response
+            .get("qScopeSuggestion")?
+            .as_array()?
+            .iter()
+            .map(|value| value.as_str().map(str::to_string))
+            .collect()
+    }
 }
 
 impl XpecStateCache {
@@ -346,6 +357,7 @@ pub(super) fn check_record_from_last_result(
     result: &LastResult,
 ) -> CheckRecord {
     let error = result.error().map(str::to_string);
+    let response_question_scope_suggestion = result.question_scope_suggestion();
     let observed = result
         .answer()
         .or_else(|| result.error())
@@ -361,11 +373,7 @@ pub(super) fn check_record_from_last_result(
         error,
         evidence: result.evidence(),
         scope: result.q_scope.clone(),
-        // qScopeSuggestion is not persisted, so cached records reconstructed
-        // from last-result state have no optional Suggested q-scope line.
-        // This preserves `canon check` output's "if available" behavior
-        // without writing invocation-local evaluator feedback to disk.
-        question_scope_suggestion: None,
+        question_scope_suggestion: response_question_scope_suggestion,
         visible_tree_oid: result.visible_tree_oid.clone().unwrap_or_default(),
         id: expectation.id.clone(),
         display_id: expectation.display_id.clone(),
@@ -376,6 +384,7 @@ pub(super) fn pass_record_from_cooldown_result(
     expectation: &SelectedExpectation,
     result: &LastResult,
 ) -> CheckRecord {
+    let response_question_scope_suggestion = result.question_scope_suggestion();
     CheckRecord {
         timestamp: result.response_timestamp.clone(),
         number: expectation.number,
@@ -386,10 +395,7 @@ pub(super) fn pass_record_from_cooldown_result(
         error: None,
         evidence: result.evidence(),
         scope: result.q_scope.clone(),
-        // Cooldown records come from persisted last-result state too; the
-        // applied q-scope is persisted separately, while the old evaluator
-        // suggestion remains invocation-local and unavailable for output.
-        question_scope_suggestion: None,
+        question_scope_suggestion: response_question_scope_suggestion,
         visible_tree_oid: result.visible_tree_oid.clone().unwrap_or_default(),
         id: expectation.id.clone(),
         display_id: expectation.display_id.clone(),
@@ -419,9 +425,13 @@ fn normalized_response_from_record(record: &CheckRecord) -> Value {
         response.insert("answer".to_string(), json!(record.observed));
     }
     response.insert("evidence".to_string(), json!(record.evidence));
-    // qScopeSuggestion is invocation-local evaluator feedback for narrowing.
-    // Persist the q-scope actually used in `qScope`, but do not write the
-    // transient suggestion into last-result response state.
+    if let Some(suggestion) = record.question_scope_suggestion.as_deref() {
+        assert!(
+            !suggestion.is_empty(),
+            "qScopeSuggestion must be non-empty when present"
+        );
+        response.insert("qScopeSuggestion".to_string(), json!(suggestion));
+    }
     Value::Object(response)
 }
 
@@ -491,6 +501,9 @@ fn validate_last_result(
     {
         return Err("response must contain evidence".to_string());
     }
+    if let Some(suggestion) = result.response.get("qScopeSuggestion") {
+        validate_response_question_scope_suggestion(suggestion)?;
+    }
     match expected_status {
         LastResultStatus::Pass => {
             if result.answer().is_none() {
@@ -533,6 +546,26 @@ fn validate_last_result(
             if result.visible_tree_oid.is_some() {
                 return Err("error must omit visibleTreeOid".to_string());
             }
+        }
+    }
+    Ok(())
+}
+
+fn validate_response_question_scope_suggestion(value: &Value) -> Result<(), String> {
+    let Some(items) = value.as_array() else {
+        return Err("response qScopeSuggestion must be an array".to_string());
+    };
+    if items.is_empty() {
+        return Err("response qScopeSuggestion must be non-empty".to_string());
+    }
+    for item in items {
+        let Some(path) = item.as_str() else {
+            return Err("response qScopeSuggestion items must be strings".to_string());
+        };
+        if path.is_empty() || path.contains(['\r', '\n']) {
+            return Err(
+                "response qScopeSuggestion items must be non-empty single-line strings".to_string(),
+            );
         }
     }
     Ok(())

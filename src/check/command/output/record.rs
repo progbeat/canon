@@ -269,9 +269,6 @@ pub(super) fn render_check_output_record_status_and_details(record: &CheckRecord
     output.push_str(&escape_check_output_text(&record.evidence));
     output.push('\n');
     if !is_error {
-        // The optional Suggested q-scope line is emitted only while an
-        // invocation-local evaluator suggestion is still available. Cached
-        // records reconstructed from persistent last-result state omit it.
         if let Some(suggestion) = record.question_scope_suggestion.as_deref() {
             output.push_str("Suggested q-scope: ");
             output.push_str(&compact_json_string_array(suggestion));
