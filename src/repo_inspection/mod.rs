@@ -4,6 +4,7 @@ use crate::check::{
     parse_tree_check_config_content_with_root, CHECK_PATH,
 };
 use crate::config_types::{CheckConfig, RawExpectationItem};
+use crate::fs_util::reject_symlink;
 use crate::git::{
     read_git_blobs, resolve_git_path, staged_tracked_files, StagedTrackedFile, TreeSource,
 };
@@ -14,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 type GitPathCacheKey = (PathBuf, String);
 type GeneratorPathsCacheKey = (PathBuf, PathBuf, String, String);
+type InPlaceFileContentCacheKey = (PathBuf, PathBuf);
 type StagedFileContentCacheKey = (PathBuf, PathBuf);
 type TreeFileContentCacheKey = (PathBuf, String, PathBuf);
 type CheckConfigCacheKey = (PathBuf, PathBuf, String, String);
@@ -26,6 +28,7 @@ pub(crate) struct RepoInspectionCache {
     generator_paths: BTreeMap<GeneratorPathsCacheKey, Result<Vec<String>, String>>,
     // Per-file decoded content is derived from the root-level staged blob
     // batch below; cache misses here do not spawn additional git processes.
+    in_place_file_contents: BTreeMap<InPlaceFileContentCacheKey, Result<String, String>>,
     staged_file_contents: BTreeMap<StagedFileContentCacheKey, Result<String, String>>,
     tree_file_contents: BTreeMap<TreeFileContentCacheKey, Result<String, String>>,
     staged_files: BTreeMap<PathBuf, Result<Vec<StagedTrackedFile>, String>>,
@@ -157,8 +160,18 @@ impl RepoInspectionCache {
     ) -> Result<String, String> {
         match source {
             CheckConfigSource::Tree(source) => self.tree_file_content(root, source, path),
-            CheckConfigSource::InPlace => in_place_file_content(root, path.as_ref()),
+            CheckConfigSource::InPlace => self.in_place_file_content(root, path.as_ref()),
         }
+    }
+
+    fn in_place_file_content(&mut self, root: &Path, path: &Path) -> Result<String, String> {
+        let key = (root.to_path_buf(), path.to_path_buf());
+        if let Some(cached) = self.in_place_file_contents.get(&key) {
+            return cached.clone();
+        }
+        let content = in_place_file_content_from_fs(root, path);
+        self.in_place_file_contents.insert(key, content.clone());
+        content
     }
 
     fn expand_tree_generator_paths(
@@ -333,7 +346,7 @@ impl RepoInspectionCache {
         config_path: &Path,
     ) -> Result<CheckConfig, String> {
         let source = CheckConfigSource::InPlace;
-        let content = in_place_file_content(root, config_path)?;
+        let content = self.in_place_file_content(root, config_path)?;
         let key = (
             root.to_path_buf(),
             config_path.to_path_buf(),
@@ -370,8 +383,9 @@ impl RepoInspectionCache {
     }
 }
 
-fn in_place_file_content(root: &Path, path: &Path) -> Result<String, String> {
+fn in_place_file_content_from_fs(root: &Path, path: &Path) -> Result<String, String> {
     let path = root.join(path);
+    reject_symlink(&path)?;
     fs::read_to_string(&path).map_err(|err| format!("failed to read {}: {}", path.display(), err))
 }
 
@@ -393,7 +407,7 @@ fn collect_in_place_files(root: &Path, dir: &Path, files: &mut Vec<String>) -> R
             .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
         if file_type.is_dir() {
             collect_in_place_files(root, &path, files)?;
-        } else if file_type.is_file() || file_type.is_symlink() {
+        } else if file_type.is_file() {
             let relative = path
                 .strip_prefix(root)
                 .map_err(|_| format!("failed to relativize {}", path.display()))?;
@@ -424,4 +438,67 @@ fn missing_staged_file_message(path: &Path) -> String {
         "failed to read staged {}: path is not in the staged index",
         path.display()
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[cfg(unix)]
+    #[test]
+    fn in_place_file_content_rejects_symlink() {
+        let root = test_root("in-place-file-content-rejects-symlink");
+        let outside = outside_test_file(&root);
+        fs::write(&outside, "secret").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("config.yml")).unwrap();
+
+        let error = in_place_file_content_from_fs(&root, Path::new("config.yml")).unwrap_err();
+
+        assert!(error.contains("refusing to use symlink"));
+        let _ = fs::remove_file(outside);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn in_place_file_listing_omits_symlinks() {
+        let root = test_root("in-place-file-listing-omits-symlinks");
+        fs::create_dir_all(root.join("specs")).unwrap();
+        fs::write(root.join("specs/real.md"), "real").unwrap();
+        let outside = outside_test_file(&root);
+        fs::write(&outside, "secret").unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("specs/link.md")).unwrap();
+
+        let files = in_place_file_listing(&root).unwrap();
+
+        assert_eq!(files, vec!["specs/real.md"]);
+        let _ = fs::remove_file(outside);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn test_root(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-tmp")
+            .join(format!("canon-test-{}-{}-{}", name, process::id(), unique));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn outside_test_file(root: &Path) -> PathBuf {
+        let file_name = root
+            .file_name()
+            .and_then(|file_name| file_name.to_str())
+            .unwrap_or("canon-test");
+        root.parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(format!("{file_name}-outside"))
+    }
 }
