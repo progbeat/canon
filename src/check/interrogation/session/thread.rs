@@ -2,7 +2,7 @@ use super::model_fallback::write_model_fallback_events;
 use crate::check::core::{InterrogationResult, SelectedExpectation};
 use crate::check::interrogation::finalize_interrogation_response;
 use crate::check::interrogation::state::{
-    evaluator_thread_reuse_key, CheckRuntime, InterrogationRunState,
+    evaluator_thread_reuse_key, CheckRuntime, EvaluatorThreadReuseKeyContext, InterrogationRunState,
 };
 use crate::check::{evaluator_response_output_schema_for_scope, EvaluatorResponseSchemaScope};
 use crate::config_types::{AgentConfig, AGAINST_TREE_DIFF_FROM, DEFAULT_DIFF_FROM};
@@ -12,7 +12,7 @@ use crate::evaluator::{
     q_scope_is_full_project, session_failure_invalidates_thread, write_thread_lifecycle_event,
     write_thread_restart_event, BaseInstructionsContext, DeveloperInstructionsContext,
     EvaluatorError, EvaluatorResponseParseCache, EvaluatorRunner, EvaluatorTurnContext,
-    ParsedTurnResponse, ThreadLifecycleLog,
+    EvaluatorTurnPromptContext, ParsedTurnResponse, ThreadLifecycleLog,
 };
 use crate::logs::DiagnosticLogWriter;
 use crate::scope::sanitize_scope;
@@ -58,16 +58,16 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         .last_pass
         .and_then(|last_pass| last_pass.visible_tree_oid.as_deref())
         .unwrap_or("");
-    let session_key = evaluator_thread_reuse_key(
-        request.agent,
-        request.enforced_scope,
-        request.model,
-        reuse_visible_tree_oid,
-        request.prompt,
-        request.question_context,
-        request.diff_from_tree_oid,
-        runtime.checked_tree_oid(),
-    )
+    let session_key = evaluator_thread_reuse_key(EvaluatorThreadReuseKeyContext {
+        agent: request.agent,
+        scope: request.enforced_scope,
+        model: request.model,
+        visible_tree_oid: reuse_visible_tree_oid,
+        turn_prompt: request.prompt,
+        question_context: request.question_context,
+        diff_base_tree_oid: request.diff_from_tree_oid,
+        checked_tree_oid: runtime.checked_tree_oid(),
+    })
     .map_err(EvaluatorError::message)?;
     // A restricted retry, q-scope verification, or different rendered diff
     // transcript misses this pool and starts a separate evaluator thread.
@@ -441,17 +441,17 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
         .map_err(EvaluatorError::message)?;
     let diff_from = resolve_diff_from(runtime, expectation, last_pass)?;
     let mut template_artifact_paths = Vec::new();
-    let prompt = evaluator_turn_prompt(
-        runtime.root,
-        &template_output_dir,
-        &mut template_artifact_paths,
-        &expectation.question,
-        &expectation.expected_answer,
-        runtime.is_in_place(),
-        &expectation.diff_from,
-        expectation.target.as_ref().map(|target| target.as_str()),
-        diff_from.last_pass,
-    )
+    let prompt = evaluator_turn_prompt(EvaluatorTurnPromptContext {
+        root: runtime.root,
+        template_output_dir: &template_output_dir,
+        template_artifact_paths: &mut template_artifact_paths,
+        question: &expectation.question,
+        expected_answer: &expectation.expected_answer,
+        in_place: runtime.is_in_place(),
+        diff_from: &expectation.diff_from,
+        target: expectation.target.as_ref().map(|target| target.as_str()),
+        last_pass: diff_from.last_pass,
+    })
     .map_err(EvaluatorError::message)?;
     let thinking = effective_thinking(&expectation.agent, expectation);
     let response = ask_with_reused_thread(

@@ -290,8 +290,10 @@ mod tests {
 
     #[test]
     fn top_level_ignore_is_reported_as_invalid_in_place_record() {
-        let mut config_agent = AgentConfig::default();
-        config_agent.ignore = vec!["target/**".to_string()];
+        let config_agent = AgentConfig {
+            ignore: vec!["target/**".to_string()],
+            ..AgentConfig::default()
+        };
         let expectation = selected_expectation();
 
         let records = invalid_in_place_expectation_records(&config_agent, &[expectation]).unwrap();

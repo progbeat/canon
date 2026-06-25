@@ -29,15 +29,19 @@ pub(crate) fn should_retry_full_scope_after_error(error: Option<&str>, scope: &[
     false
 }
 
+pub(crate) struct EvaluatorThreadReuseKeyContext<'a> {
+    pub(crate) agent: &'a AgentConfig,
+    pub(crate) scope: &'a [String],
+    pub(crate) model: Option<&'a str>,
+    pub(crate) visible_tree_oid: &'a str,
+    pub(crate) turn_prompt: &'a str,
+    pub(crate) question_context: &'a str,
+    pub(crate) diff_base_tree_oid: &'a str,
+    pub(crate) checked_tree_oid: &'a str,
+}
+
 pub(crate) fn evaluator_thread_reuse_key(
-    agent: &AgentConfig,
-    scope: &[String],
-    model: Option<&str>,
-    visible_tree_oid: &str,
-    turn_prompt: &str,
-    question_context: &str,
-    diff_base_tree_oid: &str,
-    checked_tree_oid: &str,
+    context: EvaluatorThreadReuseKeyContext<'_>,
 ) -> Result<String, String> {
     // Evaluator thread reuse is context reuse, not a deterministic result cache.
     // A reused thread keeps its original developer instructions and live
@@ -49,37 +53,37 @@ pub(crate) fn evaluator_thread_reuse_key(
     // evaluator task input. This protects answer correctness; started
     // expectation report liveness is owned by the check-run output layer.
     let mut key = String::new();
-    app_server_model_key(model).push_cache_key_part(&mut key);
+    app_server_model_key(context.model).push_cache_key_part(&mut key);
     key.push('\0');
-    key.push_str(visible_tree_oid);
+    key.push_str(context.visible_tree_oid);
     key.push('\0');
-    key.push_str(diff_base_tree_oid);
+    key.push_str(context.diff_base_tree_oid);
     key.push('\0');
-    key.push_str(checked_tree_oid);
+    key.push_str(context.checked_tree_oid);
     key.push('\0');
-    key.push_str(&turn_prompt.len().to_string());
+    key.push_str(&context.turn_prompt.len().to_string());
     key.push('\0');
-    key.push_str(turn_prompt);
+    key.push_str(context.turn_prompt);
     key.push('\0');
-    key.push_str(&question_context.len().to_string());
+    key.push_str(&context.question_context.len().to_string());
     key.push('\0');
-    key.push_str(question_context);
+    key.push_str(context.question_context);
     key.push('\0');
-    for plugin in &agent.plugins {
+    for plugin in &context.agent.plugins {
         key.push_str(&plugin.len().to_string());
         key.push('\0');
         key.push_str(plugin);
         key.push('\0');
     }
     key.push('\0');
-    for pattern in effective_ignore_patterns(agent)? {
+    for pattern in effective_ignore_patterns(context.agent)? {
         key.push_str(&pattern.len().to_string());
         key.push('\0');
         key.push_str(&pattern);
         key.push('\0');
     }
     key.push('\0');
-    for path in scope {
+    for path in context.scope {
         key.push_str(&path.len().to_string());
         key.push('\0');
         key.push_str(path);
@@ -371,38 +375,38 @@ mod tests {
     fn thread_reuse_key_includes_developer_instruction_tree_inputs() {
         let agent = AgentConfig::default();
         let scope = full_scope();
-        let base = evaluator_thread_reuse_key(
-            &agent,
-            &scope,
-            Some("model"),
-            "visible-tree",
-            "Does it pass?",
-            "instructions",
-            "base-a",
-            "checked-a",
-        )
+        let base = evaluator_thread_reuse_key(EvaluatorThreadReuseKeyContext {
+            agent: &agent,
+            scope: &scope,
+            model: Some("model"),
+            visible_tree_oid: "visible-tree",
+            turn_prompt: "Does it pass?",
+            question_context: "instructions",
+            diff_base_tree_oid: "base-a",
+            checked_tree_oid: "checked-a",
+        })
         .unwrap();
-        let different_base = evaluator_thread_reuse_key(
-            &agent,
-            &scope,
-            Some("model"),
-            "visible-tree",
-            "Does it pass?",
-            "instructions",
-            "base-b",
-            "checked-a",
-        )
+        let different_base = evaluator_thread_reuse_key(EvaluatorThreadReuseKeyContext {
+            agent: &agent,
+            scope: &scope,
+            model: Some("model"),
+            visible_tree_oid: "visible-tree",
+            turn_prompt: "Does it pass?",
+            question_context: "instructions",
+            diff_base_tree_oid: "base-b",
+            checked_tree_oid: "checked-a",
+        })
         .unwrap();
-        let different_checked = evaluator_thread_reuse_key(
-            &agent,
-            &scope,
-            Some("model"),
-            "visible-tree",
-            "Does it pass?",
-            "instructions",
-            "base-a",
-            "checked-b",
-        )
+        let different_checked = evaluator_thread_reuse_key(EvaluatorThreadReuseKeyContext {
+            agent: &agent,
+            scope: &scope,
+            model: Some("model"),
+            visible_tree_oid: "visible-tree",
+            turn_prompt: "Does it pass?",
+            question_context: "instructions",
+            diff_base_tree_oid: "base-a",
+            checked_tree_oid: "checked-b",
+        })
         .unwrap();
 
         assert_ne!(base, different_base);
@@ -413,27 +417,27 @@ mod tests {
     fn thread_reuse_key_includes_turn_prompt() {
         let agent = AgentConfig::default();
         let scope = full_scope();
-        let first = evaluator_thread_reuse_key(
-            &agent,
-            &scope,
-            Some("model"),
-            "visible-tree",
-            "Does alpha pass?",
-            "",
-            "base",
-            "checked",
-        )
+        let first = evaluator_thread_reuse_key(EvaluatorThreadReuseKeyContext {
+            agent: &agent,
+            scope: &scope,
+            model: Some("model"),
+            visible_tree_oid: "visible-tree",
+            turn_prompt: "Does alpha pass?",
+            question_context: "",
+            diff_base_tree_oid: "base",
+            checked_tree_oid: "checked",
+        })
         .unwrap();
-        let second = evaluator_thread_reuse_key(
-            &agent,
-            &scope,
-            Some("model"),
-            "visible-tree",
-            "Does beta pass?",
-            "",
-            "base",
-            "checked",
-        )
+        let second = evaluator_thread_reuse_key(EvaluatorThreadReuseKeyContext {
+            agent: &agent,
+            scope: &scope,
+            model: Some("model"),
+            visible_tree_oid: "visible-tree",
+            turn_prompt: "Does beta pass?",
+            question_context: "",
+            diff_base_tree_oid: "base",
+            checked_tree_oid: "checked",
+        })
         .unwrap();
 
         assert_ne!(first, second);

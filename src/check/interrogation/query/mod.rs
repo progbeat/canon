@@ -14,6 +14,7 @@ use crate::check::interrogation::{
 use crate::config_types::{AgentConfig, DEFAULT_DIFF_FROM};
 use crate::evaluator::{
     effective_thinking, evaluator_turn_prompt, EvaluatorError, EvaluatorRunner,
+    EvaluatorTurnPromptContext,
 };
 use crate::hash::full_scope;
 use crate::logs::DiagnosticLogWriter;
@@ -263,17 +264,17 @@ fn ask_once_with_model<R: EvaluatorRunner>(
         .map_err(EvaluatorError::message)?;
     let diff_from = query.resolved_diff_from(runtime)?;
     let mut template_artifact_paths = Vec::new();
-    let prompt = evaluator_turn_prompt(
-        runtime.root,
-        &template_output_dir,
-        &mut template_artifact_paths,
-        query.turn_question(),
-        query.expected_answer(),
-        runtime.is_in_place(),
-        query.diff_from(),
-        query.target(),
-        diff_from.last_pass,
-    )?;
+    let prompt = evaluator_turn_prompt(EvaluatorTurnPromptContext {
+        root: runtime.root,
+        template_output_dir: &template_output_dir,
+        template_artifact_paths: &mut template_artifact_paths,
+        question: query.turn_question(),
+        expected_answer: query.expected_answer(),
+        in_place: runtime.is_in_place(),
+        diff_from: query.diff_from(),
+        target: query.target(),
+        last_pass: diff_from.last_pass,
+    })?;
     let agent = query.agent(&runtime.config.agent);
     let response = ask_with_reused_thread(
         runtime,

@@ -75,25 +75,29 @@ pub(crate) fn developer_instructions(
     )
 }
 
+pub(crate) struct EvaluatorTurnPromptContext<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) template_output_dir: &'a Path,
+    pub(crate) template_artifact_paths: &'a mut Vec<PathBuf>,
+    pub(crate) question: &'a str,
+    pub(crate) expected_answer: &'a str,
+    pub(crate) in_place: bool,
+    pub(crate) diff_from: &'a str,
+    pub(crate) target: Option<&'a str>,
+    pub(crate) last_pass: Option<&'a LastResult>,
+}
+
 pub(crate) fn evaluator_turn_prompt(
-    root: &Path,
-    template_output_dir: &Path,
-    template_artifact_paths: &mut Vec<PathBuf>,
-    question: &str,
-    expected_answer: &str,
-    in_place: bool,
-    diff_from: &str,
-    target: Option<&str>,
-    last_pass: Option<&LastResult>,
+    context: EvaluatorTurnPromptContext<'_>,
 ) -> Result<String, String> {
-    let (diff_from, target, last_pass) = if in_place {
+    let (diff_from, target, last_pass) = if context.in_place {
         // In-place mode has no Git diff target or checkpoint context. The
         // caller validates selected expectations before interrogation; this
         // clamp keeps the rendered prompt diff-free even if an invalid in-place
         // expectation reaches this component.
         ("", None, None)
     } else {
-        (diff_from, target, last_pass)
+        (context.diff_from, context.target, context.last_pass)
     };
     // `diff_from` is template input for this fresh evaluator turn only. Cached
     // results are emitted without rendering this prompt. The turn template uses
@@ -101,14 +105,15 @@ pub(crate) fn evaluator_turn_prompt(
     // the checkpoint response or must render the expectation's default answer.
     // `target` is the same kind of per-turn prompt input; it is deliberately
     // not part of evaluator thread reuse.
-    let expectation_context = turn_prompt_expectation_context(expected_answer, diff_from, target);
+    let expectation_context =
+        turn_prompt_expectation_context(context.expected_answer, diff_from, target);
     render_minijinja_resource_template(
-        root,
-        template_output_dir,
-        template_artifact_paths,
+        context.root,
+        context.template_output_dir,
+        context.template_artifact_paths,
         EVALUATOR_TURN_PROMPT_TEMPLATE,
         json!({
-            "question": question,
+            "question": context.question,
             "expectation": expectation_context,
             "last_pass": last_pass,
         }),
@@ -885,17 +890,17 @@ mod tests {
         let output_dir = test_output_dir("turn-prompt");
         let mut artifact_paths = Vec::new();
 
-        let prompt = evaluator_turn_prompt(
-            Path::new("."),
-            &output_dir,
-            &mut artifact_paths,
-            "Does it pass?",
-            "yes",
-            false,
-            crate::config_types::DEFAULT_DIFF_FROM,
-            Some("diff"),
-            Some(&last_pass),
-        )
+        let prompt = evaluator_turn_prompt(EvaluatorTurnPromptContext {
+            root: Path::new("."),
+            template_output_dir: &output_dir,
+            template_artifact_paths: &mut artifact_paths,
+            question: "Does it pass?",
+            expected_answer: "yes",
+            in_place: false,
+            diff_from: crate::config_types::DEFAULT_DIFF_FROM,
+            target: Some("diff"),
+            last_pass: Some(&last_pass),
+        })
         .unwrap();
 
         assert!(prompt.contains("This question targets the Git diff."));
@@ -930,17 +935,17 @@ mod tests {
         let output_dir = test_output_dir("turn-prompt-against-tree");
         let mut artifact_paths = Vec::new();
 
-        let prompt = evaluator_turn_prompt(
-            Path::new("."),
-            &output_dir,
-            &mut artifact_paths,
-            "Does it pass?",
-            "yes",
-            false,
-            crate::config_types::AGAINST_TREE_DIFF_FROM,
-            Some("diff"),
-            Some(&last_pass),
-        )
+        let prompt = evaluator_turn_prompt(EvaluatorTurnPromptContext {
+            root: Path::new("."),
+            template_output_dir: &output_dir,
+            template_artifact_paths: &mut artifact_paths,
+            question: "Does it pass?",
+            expected_answer: "yes",
+            in_place: false,
+            diff_from: crate::config_types::AGAINST_TREE_DIFF_FROM,
+            target: Some("diff"),
+            last_pass: Some(&last_pass),
+        })
         .unwrap();
 
         assert!(prompt.contains("This question targets the Git diff."));
@@ -969,17 +974,17 @@ mod tests {
         let output_dir = test_output_dir("turn-prompt-in-place");
         let mut artifact_paths = Vec::new();
 
-        let prompt = evaluator_turn_prompt(
-            Path::new("."),
-            &output_dir,
-            &mut artifact_paths,
-            "Does it pass?",
-            "yes",
-            true,
-            crate::config_types::DEFAULT_DIFF_FROM,
-            Some("diff"),
-            Some(&last_pass),
-        )
+        let prompt = evaluator_turn_prompt(EvaluatorTurnPromptContext {
+            root: Path::new("."),
+            template_output_dir: &output_dir,
+            template_artifact_paths: &mut artifact_paths,
+            question: "Does it pass?",
+            expected_answer: "yes",
+            in_place: true,
+            diff_from: crate::config_types::DEFAULT_DIFF_FROM,
+            target: Some("diff"),
+            last_pass: Some(&last_pass),
+        })
         .unwrap();
 
         assert_eq!(prompt, "Does it pass?");

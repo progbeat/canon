@@ -10,7 +10,7 @@ pub(crate) use base::{
 };
 pub(crate) use prompt::{
     developer_instructions, evaluator_turn_prompt, DeveloperInstructionsContext,
-    PromptTemplateOutputDirCache,
+    EvaluatorTurnPromptContext, PromptTemplateOutputDirCache,
 };
 pub(crate) use response_cache::EvaluatorResponseParseCache;
 pub(crate) use types::{EvaluatorError, EvaluatorRunner};
