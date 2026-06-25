@@ -7,7 +7,7 @@ When `canon check` is run outside a Git worktree, in-place mode is selected auto
 In-place mode is evaluated against the directory as it exists at runtime.
 No separate Git-backed checked tree or visible tree is created.
 Evaluator context is not based on rendered Git diffs.
-Files in the checked directory are not hidden by q-scope, stored q-scope, expectation `ignore`, scope narrowing, or retry behavior.
+Files in the checked directory are not hidden.
 
 The evaluator is started in the checked directory.
 

@@ -49,7 +49,7 @@ When an interrogation has full project scope, its response schema omits `ScopeTo
 
 When a check mode never hides files from evaluator interrogations, response schemas omit `qScopeSuggestion`, and `canon check` does not perform follow-up interrogations.
 
-A fresh interrogation uses the stored q-scope for that expectation, or full project scope if no q-scope is stored.
+A fresh interrogation uses the `qScope` from the expectation's `last-pass.json`, or full project scope if no last pass result with `qScope` exists.
 
 A **follow-up interrogation** is an additional interrogation required by this policy for the same expectation after the initial interrogation receives an evaluator response.
 
