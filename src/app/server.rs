@@ -129,7 +129,7 @@ impl EvaluatorRunner for LazyAppServerRunner {
     fn start_session(
         &mut self,
         session_cwd: &Path,
-        template_output_dir: &Path,
+        template_artifact_paths: &[PathBuf],
         base_instructions: &str,
         developer_instructions: &str,
         agent: &AgentConfig,
@@ -139,7 +139,7 @@ impl EvaluatorRunner for LazyAppServerRunner {
     ) -> Result<String, EvaluatorError> {
         let result = self.inner()?.start_session(
             session_cwd,
-            template_output_dir,
+            template_artifact_paths,
             base_instructions,
             developer_instructions,
             agent,

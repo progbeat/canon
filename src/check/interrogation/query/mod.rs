@@ -261,9 +261,11 @@ fn ask_once_with_model<R: EvaluatorRunner>(
     let template_output_dir =
         create_prompt_template_output_dir().map_err(EvaluatorError::message)?;
     let diff_from = query.resolved_diff_from(runtime)?;
+    let mut template_artifact_paths = Vec::new();
     let prompt = evaluator_turn_prompt(
         runtime.root,
         &template_output_dir,
+        &mut template_artifact_paths,
         query.turn_question(),
         query.expected_answer(),
         runtime.is_in_place(),
@@ -287,6 +289,7 @@ fn ask_once_with_model<R: EvaluatorRunner>(
             diff_from_tree_oid: &diff_from.tree_oid,
             prompt: &prompt,
             template_output_dir: &template_output_dir,
+            template_artifact_paths: &template_artifact_paths,
             last_pass: diff_from.last_pass,
         },
     )?;

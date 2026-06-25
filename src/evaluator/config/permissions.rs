@@ -2,7 +2,7 @@ use super::{path_to_config_string, EvaluatorConfigError, EvaluatorConfigResult};
 use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(super) const FILESYSTEM_DENY: &str = "deny";
 pub(super) const EVALUATOR_FILESYSTEM_GLOB_SCAN_MAX_DEPTH: u64 = 32;
@@ -24,23 +24,16 @@ pub(crate) fn evaluator_working_tree_permissions(
     Ok(permissions)
 }
 
-pub(crate) fn evaluator_template_output_permissions(
-    template_output_dir: &Path,
+pub(crate) fn evaluator_template_artifact_permissions(
+    template_artifact_paths: &[PathBuf],
 ) -> EvaluatorConfigResult<BTreeMap<String, String>> {
     let mut permissions = BTreeMap::new();
-    insert_filesystem_permission(
-        &mut permissions,
-        path_to_config_string(template_output_dir, "evaluator template output dir")?,
-        "read",
-    )?;
-    insert_filesystem_permission(
-        &mut permissions,
-        path_to_config_string(
-            &template_output_dir.join("**"),
-            "evaluator template output dir glob",
-        )?,
-        "read",
-    )?;
+    for path in template_artifact_paths {
+        let path = path_to_config_string(path, "evaluator template artifact")?;
+        if !permissions.contains_key(&path) {
+            insert_filesystem_permission(&mut permissions, path, "read")?;
+        }
+    }
     Ok(permissions)
 }
 
@@ -214,17 +207,19 @@ mod tests {
     }
 
     #[test]
-    fn template_output_permissions_read_output_dir_and_children() {
+    fn template_artifact_permissions_read_only_artifact_files() {
         let output_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("target")
             .join("canon-template-output");
-        let permissions = evaluator_template_output_permissions(&output_dir).unwrap();
+        let artifact = output_dir.join("canon-template-output-sha256-abcd.txt");
+        let permissions =
+            evaluator_template_artifact_permissions(&[artifact.clone(), artifact.clone()]).unwrap();
         let root_key = path_to_config_string(&output_dir, "test output dir").unwrap();
-        let children_key =
-            path_to_config_string(&output_dir.join("**"), "test output children").unwrap();
+        let artifact_key = path_to_config_string(&artifact, "test output artifact").unwrap();
 
-        assert_eq!(permissions.get(&root_key), Some(&"read".to_string()));
-        assert_eq!(permissions.get(&children_key), Some(&"read".to_string()));
+        assert_eq!(permissions.get(&artifact_key), Some(&"read".to_string()));
+        assert!(!permissions.contains_key(&root_key));
+        assert_eq!(permissions.len(), 1);
     }
 
     #[cfg(unix)]

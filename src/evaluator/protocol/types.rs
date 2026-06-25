@@ -4,7 +4,7 @@ use crate::evaluator::EvaluatorProgress;
 use crate::logs::DiagnosticLogError;
 use crate::token_usage_types::EvaluatorTurnUsage;
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(crate) trait EvaluatorRunner {
     // Session startup prepares evaluator context but does not send the
@@ -15,7 +15,7 @@ pub(crate) trait EvaluatorRunner {
     fn start_session(
         &mut self,
         session_cwd: &Path,
-        template_output_dir: &Path,
+        template_artifact_paths: &[PathBuf],
         base_instructions: &str,
         developer_instructions: &str,
         agent: &AgentConfig,

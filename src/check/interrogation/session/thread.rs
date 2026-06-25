@@ -18,7 +18,7 @@ use crate::logs::DiagnosticLogWriter;
 use crate::scope::sanitize_scope;
 use crate::xpec_state::{LastResult, XpecStateCache};
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy)]
 pub(crate) struct ThreadTurnRequest<'a> {
@@ -31,6 +31,7 @@ pub(crate) struct ThreadTurnRequest<'a> {
     pub(crate) diff_from_tree_oid: &'a str,
     pub(crate) prompt: &'a str,
     pub(crate) template_output_dir: &'a Path,
+    pub(crate) template_artifact_paths: &'a [PathBuf],
     pub(crate) last_pass: Option<&'a LastResult>,
 }
 
@@ -248,9 +249,11 @@ fn start_thread_session<R: EvaluatorRunner>(
     // Render the developer-instructions resource template. `question_context`
     // is the value for that template's `expectation.instructions` input slot,
     // not a second prompt or instruction template.
+    let mut template_artifact_paths = request.template_artifact_paths.to_vec();
     let developer_instructions = developer_instructions(DeveloperInstructionsContext {
         root: runtime.root,
         template_output_dir: request.template_output_dir,
+        template_artifact_paths: &mut template_artifact_paths,
         in_place: runtime.is_in_place(),
         diff_from_tree_oid: request.diff_from_tree_oid,
         checked_tree_oid: runtime.checked_tree_oid(),
@@ -283,7 +286,7 @@ fn start_thread_session<R: EvaluatorRunner>(
         .unwrap_or(session_root.as_path());
     let created = match runner.start_session(
         session_cwd,
-        request.template_output_dir,
+        &template_artifact_paths,
         &base_instructions,
         &developer_instructions,
         request.agent,
@@ -435,9 +438,11 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
     let template_output_dir =
         create_prompt_template_output_dir().map_err(EvaluatorError::message)?;
     let diff_from = resolve_diff_from(runtime, expectation, last_pass)?;
+    let mut template_artifact_paths = Vec::new();
     let prompt = evaluator_turn_prompt(
         runtime.root,
         &template_output_dir,
+        &mut template_artifact_paths,
         &expectation.question,
         &expectation.expected_answer,
         runtime.is_in_place(),
@@ -465,6 +470,7 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
             diff_from_tree_oid: &diff_from.tree_oid,
             prompt: &prompt,
             template_output_dir: &template_output_dir,
+            template_artifact_paths: &template_artifact_paths,
             last_pass: diff_from.last_pass,
         },
     )?;

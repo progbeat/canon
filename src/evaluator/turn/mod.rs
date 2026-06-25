@@ -108,7 +108,7 @@ mod tests {
     use crate::token_usage_types::{EvaluatorTurnUsage, TokenUsage};
     use serde_json::json;
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn schema_valid_evidence_file_refs_do_not_trigger_repair() {
@@ -212,7 +212,7 @@ mod tests {
         fn start_session(
             &mut self,
             _session_cwd: &Path,
-            _template_output_dir: &Path,
+            _template_artifact_paths: &[PathBuf],
             _base_instructions: &str,
             _developer_instructions: &str,
             _agent: &AgentConfig,
