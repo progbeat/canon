@@ -660,8 +660,8 @@ mod tests {
         let rendered = developer_instructions_for_mode(false);
 
         assert!(rendered.contains("Use the transcript below only for context/navigation"));
-        assert!(rendered.contains("$ git diff --numstat"));
-        assert!(rendered.contains("$ git diff"));
+        assert!(rendered.contains("$ git diff --numstat $LHS_TREE $RHS_TREE"));
+        assert!(rendered.contains("$ git diff $LHS_TREE $RHS_TREE"));
         assert!(rendered.contains("$ enter-sandbox --scope [\"src\"] --ignore []"));
     }
 
