@@ -5,7 +5,12 @@ use std::time::{Duration, Instant};
 // handle, installs it on the evaluator runner, and records the non-initial
 // evaluator work kinds that have canon timeline markers: model fallback,
 // short-ID response retry, full-scope retry, and q-scope verification. The
-// evaluator turn request path records active-turn idle accumulation and
+// `check::interrogation::session::thread` records fresh-thread retries after
+// short-ID response errors through `record_short_id_response_retry_started`.
+// The evaluated-expectation path records q-scope verification through
+// `record_q_scope_verification_started`; the stdout live timeline writer in
+// `check::command::output::record` renders and flushes the due marker.
+// The evaluator turn request path records active-turn idle accumulation and
 // exhausted no-progress turn timeouts.
 // App-server control messages such as initialize and thread/start are session
 // setup, not evaluator work kinds in this timeline. When a non-initial
@@ -177,11 +182,9 @@ impl EvaluatorProgressState {
                 EvaluatorProgressMarker::QScopeVerification,
             ),
         ] {
-            if self
-                .events
-                .iter()
-                .any(|event| event.kind == kind && event.at > window_start && event.at <= marker_at)
-            {
+            if self.events.iter().any(|event| {
+                event.kind == kind && event.at >= window_start && event.at <= marker_at
+            }) {
                 return marker;
             }
         }
@@ -269,5 +272,49 @@ mod tests {
             .unwrap();
 
         assert_eq!(marker, Some(EvaluatorProgressMarker::ShortIdResponseRetry));
+        assert_eq!(EvaluatorProgressMarker::ShortIdResponseRetry.as_str(), "↻");
+    }
+
+    #[test]
+    fn q_scope_verification_marker_uses_canon_symbol() {
+        let progress = EvaluatorProgress::new();
+        let interval = Duration::from_secs(60);
+        let start = Instant::now();
+        let tick_at = start + interval;
+        let mut next_marker_at = tick_at;
+
+        progress
+            .state
+            .lock()
+            .unwrap()
+            .record_q_scope_verification_started_at(start + Duration::from_secs(30));
+
+        let marker = progress
+            .elapsed_marker_due(&mut next_marker_at, tick_at, interval)
+            .unwrap();
+
+        assert_eq!(marker, Some(EvaluatorProgressMarker::QScopeVerification));
+        assert_eq!(EvaluatorProgressMarker::QScopeVerification.as_str(), "↘");
+    }
+
+    #[test]
+    fn elapsed_marker_due_includes_window_start_boundary() {
+        let progress = EvaluatorProgress::new();
+        let interval = Duration::from_secs(60);
+        let start = Instant::now();
+        let tick_at = start + interval;
+        let mut next_marker_at = tick_at;
+
+        progress
+            .state
+            .lock()
+            .unwrap()
+            .record_q_scope_verification_started_at(start);
+
+        let marker = progress
+            .elapsed_marker_due(&mut next_marker_at, tick_at, interval)
+            .unwrap();
+
+        assert_eq!(marker, Some(EvaluatorProgressMarker::QScopeVerification));
     }
 }
