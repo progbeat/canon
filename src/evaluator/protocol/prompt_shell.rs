@@ -14,8 +14,12 @@ use unix as imp;
 #[cfg(windows)]
 use windows as imp;
 
-pub(crate) fn run_prompt_template_shell_command(root: &Path, command: &str) -> io::Result<Output> {
-    imp::run_prompt_template_shell_command(root, command)
+pub(crate) fn run_prompt_template_shell_command(
+    root: &Path,
+    command: &str,
+    env: &[(&str, &str)],
+) -> io::Result<Output> {
+    imp::run_prompt_template_shell_command(root, command, env)
 }
 
 pub(crate) fn quote_prompt_template_shell_arg(value: &str) -> Result<String, String> {

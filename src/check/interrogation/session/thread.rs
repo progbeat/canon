@@ -2,7 +2,9 @@ use super::model_fallback::write_model_fallback_events;
 use crate::check::core::{InterrogationResult, SelectedExpectation};
 use crate::check::interrogation::finalize_interrogation_response;
 use crate::check::interrogation::state::{
-    evaluator_thread_reuse_key, CheckRuntime, EvaluatorThreadReuseKeyContext, InterrogationRunState,
+    evaluator_prerender_thread_reuse_key, evaluator_rendered_thread_reuse_key, CheckRuntime,
+    InterrogationRunState, PrerenderEvaluatorThreadReuseKeyContext,
+    RenderedEvaluatorThreadReuseKeyContext,
 };
 use crate::check::{evaluator_response_output_schema_for_scope, EvaluatorResponseSchemaScope};
 use crate::config_types::{AgentConfig, AGAINST_TREE_DIFF_FROM, DEFAULT_DIFF_FROM};
@@ -11,8 +13,8 @@ use crate::evaluator::{
     evaluator_base_instructions, evaluator_turn_prompt, is_context_window_failure,
     q_scope_is_full_project, session_failure_invalidates_thread, write_thread_lifecycle_event,
     write_thread_restart_event, BaseInstructionsContext, DeveloperInstructionsContext,
-    EvaluatorError, EvaluatorResponseParseCache, EvaluatorRunner, EvaluatorTurnContext,
-    EvaluatorTurnPromptContext, ParsedTurnResponse, ThreadLifecycleLog, ThreadReuseLogContext,
+    EvaluatorError, EvaluatorRunner, EvaluatorTurnContext, EvaluatorTurnPromptContext,
+    ParsedTurnResponse, ThreadLifecycleLog, ThreadReuseLogContext,
 };
 use crate::logs::DiagnosticLogWriter;
 use crate::scope::{effective_ignore_patterns, sanitize_scope};
@@ -27,17 +29,24 @@ pub(crate) struct ThreadTurnRequest<'a> {
     pub(crate) model: Option<&'a str>,
     pub(crate) thinking: &'a str,
     pub(crate) expectation_id: Option<&'a str>,
+    pub(crate) short_id: &'a str,
     pub(crate) question_context: &'a str,
     pub(crate) diff_from_tree_oid: &'a str,
     pub(crate) prompt: &'a str,
     pub(crate) template_output_dir: &'a Path,
     pub(crate) template_artifact_paths: &'a [PathBuf],
     pub(crate) last_pass: Option<&'a LastResult>,
+    pub(crate) progress: Option<&'a crate::evaluator::EvaluatorProgress>,
 }
 
 pub(crate) struct ResolvedDiffFrom<'a> {
     pub(crate) tree_oid: String,
     pub(crate) last_pass: Option<&'a LastResult>,
+}
+
+struct ThreadSessionSelection {
+    lifecycle_log: ThreadLifecycleLog,
+    reused_existing_session: bool,
 }
 
 pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
@@ -59,27 +68,29 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         .and_then(|last_pass| last_pass.visible_tree_oid.as_deref())
         .unwrap_or("");
     let reuse_context = thread_reuse_log_context(runtime, request, reuse_visible_tree_oid)?;
-    let session_key = evaluator_thread_reuse_key(EvaluatorThreadReuseKeyContext {
-        agent: request.agent,
-        scope: request.enforced_scope,
-        model: request.model,
-        visible_tree_oid: reuse_visible_tree_oid,
-        turn_prompt: request.prompt,
-        question_context: request.question_context,
-        diff_base_tree_oid: request.diff_from_tree_oid,
-        checked_tree_oid: runtime.checked_tree_oid(),
-    })
-    .map_err(EvaluatorError::message)?;
+    let session_key =
+        evaluator_prerender_thread_reuse_key(PrerenderEvaluatorThreadReuseKeyContext {
+            agent: request.agent,
+            scope: request.enforced_scope,
+            model: request.model,
+            visible_tree_oid: reuse_visible_tree_oid,
+            question_context: request.question_context,
+            diff_base_tree_oid: request.diff_from_tree_oid,
+            checked_tree_oid: runtime.checked_tree_oid(),
+        })
+        .map_err(EvaluatorError::message)?;
     // A restricted retry, q-scope verification, or different rendered diff
     // transcript misses this pool and starts a separate evaluator thread.
     let existing_session = state
-        .thread_sessions_by_reuse_key
+        .thread_sessions_by_prerender_key
         .get(&session_key)
         .cloned();
-    let had_existing_session = existing_session.is_some();
-    let lifecycle_log = match existing_session {
-        Some(existing) => thread_reuse_log(state, existing, reuse_context.clone())?,
-        None => start_thread_session(
+    let selection = match existing_session {
+        Some(existing) => ThreadSessionSelection {
+            lifecycle_log: thread_reuse_log(state, existing, reuse_context.clone())?,
+            reused_existing_session: true,
+        },
+        None => start_or_reuse_thread_session_after_rendering(
             runtime,
             runner,
             state,
@@ -89,13 +100,13 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
             request,
         )?,
     };
-    let mut session_id = lifecycle_log.session_id.clone();
+    let mut session_id = selection.lifecycle_log.session_id.clone();
     // Runtime logs expose the effective instructions for every thread start or
     // reuse, so thread behavior can be audited from the log without reading
     // derived state.
     write_thread_lifecycle_event(
         diagnostic_log,
-        &lifecycle_log,
+        &selection.lifecycle_log,
         request.enforced_scope,
         request.model,
         request.thinking,
@@ -103,7 +114,52 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
     let response =
         match ask_current_session(runtime, runner, &session_id, state, diagnostic_log, request) {
             Ok(response) => response,
-            Err(err) if had_existing_session && is_context_window_failure(&err) => {
+            Err(err)
+                if err.kind() == Some(crate::evaluator::EvaluatorFailureKind::ShortIdResponse)
+                    && state.session_has_valid_response(&session_id) =>
+            {
+                if let Some(progress) = request.progress {
+                    progress.record_short_id_response_retry_started();
+                }
+                clear_thread_sessions_after_failure(state);
+                write_thread_restart_event(
+                    diagnostic_log,
+                    &selection.lifecycle_log,
+                    request.expectation_id,
+                    request.enforced_scope,
+                    request.model,
+                    err.message_str(),
+                );
+                let selection = start_or_reuse_thread_session_after_rendering(
+                    runtime,
+                    runner,
+                    state,
+                    &session_key,
+                    &current_visible_tree_oid,
+                    reuse_context.clone(),
+                    request,
+                )?;
+                session_id = selection.lifecycle_log.session_id.clone();
+                write_thread_lifecycle_event(
+                    diagnostic_log,
+                    &selection.lifecycle_log,
+                    request.enforced_scope,
+                    request.model,
+                    request.thinking,
+                );
+                match ask_current_session(
+                    runtime,
+                    runner,
+                    &session_id,
+                    state,
+                    diagnostic_log,
+                    request,
+                ) {
+                    Ok(response) => response,
+                    Err(err) => return fail_after_session_error(state, err),
+                }
+            }
+            Err(err) if selection.reused_existing_session && is_context_window_failure(&err) => {
                 clear_thread_sessions_after_failure(state);
                 write_model_fallback_events(
                     diagnostic_log,
@@ -114,13 +170,13 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
                 );
                 write_thread_restart_event(
                     diagnostic_log,
-                    &lifecycle_log,
+                    &selection.lifecycle_log,
                     request.expectation_id,
                     request.enforced_scope,
                     request.model,
                     err.message_str(),
                 );
-                let lifecycle_log = start_thread_session(
+                let selection = start_or_reuse_thread_session_after_rendering(
                     runtime,
                     runner,
                     state,
@@ -129,10 +185,10 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
                     reuse_context.clone(),
                     request,
                 )?;
-                session_id = lifecycle_log.session_id.clone();
+                session_id = selection.lifecycle_log.session_id.clone();
                 write_thread_lifecycle_event(
                     diagnostic_log,
-                    &lifecycle_log,
+                    &selection.lifecycle_log,
                     request.enforced_scope,
                     request.model,
                     request.thinking,
@@ -153,7 +209,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         };
     if !retire_thread_sessions_after_turn(state, runner.take_retired_sessions(), &session_id) {
         state
-            .thread_sessions_by_reuse_key
+            .thread_sessions_by_prerender_key
             .insert(session_key, session_id);
     }
     Ok(response)
@@ -182,7 +238,7 @@ fn ask_current_session<R: EvaluatorRunner>(
         runner,
         session_id,
         session_root.as_path(),
-        &mut state.parse_cache,
+        state,
         diagnostic_log,
         request,
     )
@@ -193,7 +249,7 @@ fn ask_in_thread<R: EvaluatorRunner>(
     runner: &mut R,
     session_id: &str,
     session_root: &Path,
-    parse_cache: &mut EvaluatorResponseParseCache,
+    state: &mut InterrogationRunState,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     request: ThreadTurnRequest<'_>,
 ) -> Result<ParsedTurnResponse, EvaluatorError> {
@@ -212,25 +268,32 @@ fn ask_in_thread<R: EvaluatorRunner>(
             request.enforced_scope,
         )
     };
-    let output_schema = evaluator_response_output_schema_for_scope(schema_scope);
+    let output_schema = evaluator_response_output_schema_for_scope(schema_scope, request.short_id);
+    let answered_short_ids = state.answered_short_ids_for_session(session_id);
     // The evaluator turn boundary owns agent.request/agent.response runtime
     // log events for the single evaluator request made by this turn.
-    ask_evaluator_once(
+    let response = ask_evaluator_once(
         runner,
         &turn,
         request.prompt,
         request.agent,
         schema_scope,
         &output_schema,
+        request.short_id,
+        &answered_short_ids,
         &visible_scope,
         session_root,
-        parse_cache,
+        &mut state.parse_cache,
         diagnostic_log,
         request.expectation_id,
-    )
+    )?;
+    if response.schema_valid {
+        state.record_session_answered_short_id(session_id, request.short_id);
+    }
+    Ok(response)
 }
 
-fn start_thread_session<R: EvaluatorRunner>(
+fn start_or_reuse_thread_session_after_rendering<R: EvaluatorRunner>(
     runtime: &CheckRuntime<'_>,
     runner: &mut R,
     state: &mut InterrogationRunState,
@@ -238,10 +301,11 @@ fn start_thread_session<R: EvaluatorRunner>(
     visible_tree_oid: &str,
     reuse_context: ThreadReuseLogContext,
     request: ThreadTurnRequest<'_>,
-) -> Result<ThreadLifecycleLog, EvaluatorError> {
+) -> Result<ThreadSessionSelection, EvaluatorError> {
     let visible_scope = runtime
         .visible_scope(request.agent, request.enforced_scope)
         .map_err(EvaluatorError::message)?;
+    let ignore = effective_ignore_patterns(request.agent).map_err(EvaluatorError::message)?;
     let visible_file_count = runtime.visible_file_count(
         &mut state.visible_tree_oid_cache,
         request.agent,
@@ -251,7 +315,7 @@ fn start_thread_session<R: EvaluatorRunner>(
         .session_root_for_scope(request.agent, request.enforced_scope, visible_tree_oid)
         .map_err(EvaluatorError::message)?;
     // Render the developer-instructions resource template. `question_context`
-    // is the value for that template's `expectation.instructions` input slot,
+    // is the value for that template's `xpec.instructions` input slot,
     // not a second prompt or instruction template.
     let mut template_artifact_paths = request.template_artifact_paths.to_vec();
     let developer_instructions = developer_instructions(DeveloperInstructionsContext {
@@ -262,6 +326,8 @@ fn start_thread_session<R: EvaluatorRunner>(
         diff_from_tree_oid: request.diff_from_tree_oid,
         checked_tree_oid: runtime.checked_tree_oid(),
         question_context: request.question_context,
+        q_scope: request.enforced_scope,
+        ignore: &ignore,
         visible_scope: &visible_scope,
         checked_file_count: runtime.checked_file_count(),
         visible_file_count,
@@ -273,6 +339,29 @@ fn start_thread_session<R: EvaluatorRunner>(
         full_scope: q_scope_is_full_project(request.enforced_scope),
     })
     .map_err(EvaluatorError::message)?;
+    let rendered_key =
+        evaluator_rendered_thread_reuse_key(RenderedEvaluatorThreadReuseKeyContext {
+            agent: request.agent,
+            model: request.model,
+            base_instructions: &base_instructions,
+            developer_instructions: &developer_instructions,
+        });
+    if let Some(existing) = state
+        .thread_sessions_by_rendered_instructions_key
+        .get(&rendered_key)
+        .cloned()
+    {
+        // This is the second evaluator-thread reuse lookup required by canon:
+        // after rendering instructions anyway, reuse a live thread whose
+        // rendered base/developer instructions are identical.
+        state
+            .thread_sessions_by_prerender_key
+            .insert(session_key.to_string(), existing.clone());
+        return Ok(ThreadSessionSelection {
+            lifecycle_log: thread_reuse_log(state, existing, reuse_context)?,
+            reused_existing_session: true,
+        });
+    }
     let session_isolation = if runtime.is_in_place() {
         // In-place mode starts the evaluator in the checked directory itself.
         // Moving that directory to an isolation path would make the evaluator
@@ -314,14 +403,20 @@ fn start_thread_session<R: EvaluatorRunner>(
         state.session_isolations.insert(created.clone(), isolation);
     }
     state
-        .thread_sessions_by_reuse_key
+        .thread_sessions_by_prerender_key
         .insert(session_key.to_string(), created.clone());
-    Ok(ThreadLifecycleLog {
-        event: "thread.start",
-        session_id: created,
-        base_instructions,
-        developer_instructions,
-        reuse_context,
+    state
+        .thread_sessions_by_rendered_instructions_key
+        .insert(rendered_key, created.clone());
+    Ok(ThreadSessionSelection {
+        lifecycle_log: ThreadLifecycleLog {
+            event: "thread.start",
+            session_id: created,
+            base_instructions,
+            developer_instructions,
+            reuse_context,
+        },
+        reused_existing_session: false,
     })
 }
 
@@ -370,8 +465,8 @@ fn thread_reuse_log_context(
 fn clear_thread_sessions_after_failure(state: &mut InterrogationRunState) {
     // Reuse applies only to successful, still-live evaluator threads for the
     // same model and visible-tree context. Technical app-server failures can
-    // retire the backing process, so keeping the old session ID would point at
-    // a stale or missing thread rather than preserving the same Codex thread.
+    // retire the backing process, and short-ID response errors deliberately
+    // discard the conversational context before a retry.
     state.clear_thread_sessions();
 }
 
@@ -385,7 +480,10 @@ fn retire_thread_sessions_after_turn(
     }
     let retired_sessions = retired_sessions.into_iter().collect::<BTreeSet<_>>();
     state
-        .thread_sessions_by_reuse_key
+        .thread_sessions_by_prerender_key
+        .retain(|_, session_id| !retired_sessions.contains(session_id));
+    state
+        .thread_sessions_by_rendered_instructions_key
         .retain(|_, session_id| !retired_sessions.contains(session_id));
     state
         .session_instructions
@@ -395,6 +493,9 @@ fn retire_thread_sessions_after_turn(
         .retain(|session_id, _| !retired_sessions.contains(session_id));
     state
         .session_roots_by_id
+        .retain(|session_id, _| !retired_sessions.contains(session_id));
+    state
+        .session_answered_short_ids
         .retain(|session_id, _| !retired_sessions.contains(session_id));
     state
         .session_isolations
@@ -422,6 +523,7 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
     xpec_state: &mut XpecStateCache,
     enforced_scope: &[String],
     model: Option<&str>,
+    progress: Option<&crate::evaluator::EvaluatorProgress>,
 ) -> Result<InterrogationResult, EvaluatorError> {
     // Expectation mode may start from a last-pass restricted scope, but
     // after sanitization this path shares query mode's first-turn construction:
@@ -444,6 +546,7 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
         &enforced_scope,
         model,
         last_pass.as_ref(),
+        progress,
     )
 }
 
@@ -457,6 +560,7 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
     enforced_scope: &[String],
     model: Option<&str>,
     last_pass: Option<&LastResult>,
+    progress: Option<&crate::evaluator::EvaluatorProgress>,
 ) -> Result<InterrogationResult, EvaluatorError> {
     let template_output_dir = state
         .prompt_template_output_dir_cache
@@ -468,6 +572,7 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
         root: runtime.root,
         template_output_dir: &template_output_dir,
         template_artifact_paths: &mut template_artifact_paths,
+        short_id: &expectation.display_id,
         question: &expectation.question,
         expected_answer: &expectation.expected_answer,
         in_place: runtime.is_in_place(),
@@ -488,6 +593,7 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
             model,
             thinking,
             expectation_id: Some(&expectation.id),
+            short_id: &expectation.display_id,
             // This is question-scoped canon config data. The implementation-owned
             // evaluator instruction source is the template in `resources/prompts/`;
             // this text is only a value embedded by that source.
@@ -497,6 +603,7 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
             template_output_dir: &template_output_dir,
             template_artifact_paths: &template_artifact_paths,
             last_pass: diff_from.last_pass,
+            progress,
         },
     )?;
     finalize_interrogation_response(

@@ -268,6 +268,7 @@ fn ask_once_with_model<R: EvaluatorRunner>(
         root: runtime.root,
         template_output_dir: &template_output_dir,
         template_artifact_paths: &mut template_artifact_paths,
+        short_id: query.short_id(),
         question: query.turn_question(),
         expected_answer: query.expected_answer(),
         in_place: runtime.is_in_place(),
@@ -287,12 +288,14 @@ fn ask_once_with_model<R: EvaluatorRunner>(
             model,
             thinking: query.thinking(&runtime.config.agent),
             expectation_id: query.expectation_id(),
+            short_id: query.short_id(),
             question_context: query.question_context(),
             diff_from_tree_oid: &diff_from.tree_oid,
             prompt: &prompt,
             template_output_dir: &template_output_dir,
             template_artifact_paths: &template_artifact_paths,
             last_pass: diff_from.last_pass,
+            progress: None,
         },
     )?;
     finalize_query_answer(
@@ -414,6 +417,12 @@ impl<'a> QueryRequest<'a> {
     fn expectation_id(&self) -> Option<&str> {
         self.expectation
             .map(|context| context.expectation.id.as_str())
+    }
+
+    fn short_id(&self) -> &str {
+        self.expectation
+            .map(|context| context.expectation.display_id.as_str())
+            .unwrap_or("q")
     }
 
     fn question_context(&self) -> &str {

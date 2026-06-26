@@ -487,7 +487,6 @@ mod tests {
     fn two_expectation_config() -> CheckConfig {
         CheckConfig {
             version: 1,
-            presets: Default::default(),
             agent: AgentConfig::implementation_default(),
             expectations: vec![
                 expectation("Does alpha pass?"),

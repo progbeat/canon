@@ -12,6 +12,8 @@ turns had little useful log detail between request and response.
 - Reject or retry evaluator evidence that argues from Git diff changedness, such
   as "the touched code only changes..." or "the diff does not add...". The diff
   is navigation context, not proof.
+- Reject or retry evaluator evidence that cites project paths absent from the
+  visible project.
 - Add a hard wall-clock timeout for evaluator turns, separate from the current
   no-progress/idle timeout. App-server activity or token updates should not let
   a simple turn run for many minutes without a failure or fallback.

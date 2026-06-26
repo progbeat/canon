@@ -4,7 +4,6 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone)]
 pub(crate) struct CheckConfig {
     pub(crate) version: u32,
-    pub(crate) presets: BTreeMap<String, ResolvedPresetConfig>,
     pub(crate) agent: AgentConfig,
     pub(crate) expectations: Vec<Expectation>,
 }

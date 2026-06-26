@@ -3,7 +3,7 @@ use crate::check::core::{
     ERROR_INVALID_QUESTION, ERROR_SCOPE_TOO_NARROW, INTERNAL_ERROR_UNPARSABLE,
 };
 use crate::check::run::selection::{minimal_unique_expectation_prefix, parse_cooldown};
-use crate::config_types::{AgentConfig, CheckConfig, Expectation, ResolvedPresetConfig};
+use crate::config_types::{AgentConfig, CheckConfig, Expectation};
 use crate::hash::expectation_id;
 use crate::logs::push_json_control_escape;
 use crate::scope::normalize_repo_path;
@@ -13,13 +13,7 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
     if config.version != 1 {
         return Err("check.yml version must be 1".to_string());
     }
-    if !config.presets.contains_key("default") {
-        return Err("check.yml presets must contain default".to_string());
-    }
-    for (name, preset) in &config.presets {
-        validate_agent_config(&preset.agent_config(), &format!("presets.{}", name))?;
-    }
-    validate_agent_config(&config.agent, "presets.default")?;
+    validate_agent_config(&config.agent, "config agent")?;
     if config.expectations.is_empty() {
         return Err("check.yml expectations must not be empty".to_string());
     }
@@ -161,7 +155,7 @@ fn push_config_error_unicode_escape(output: &mut String, ch: char) {
     }
 }
 
-fn validate_agent_config(agent: &AgentConfig, label: &str) -> Result<(), String> {
+pub(crate) fn validate_agent_config(agent: &AgentConfig, label: &str) -> Result<(), String> {
     for (index, model) in agent.models.iter().enumerate() {
         validate_optional_model(
             Some(model.as_str()),
@@ -324,16 +318,6 @@ pub(crate) fn check_config_loads_plugins(config: &CheckConfig) -> bool {
             .expectations
             .iter()
             .any(|expectation| !expectation.agent.plugins.is_empty())
-        || config.presets.values().any(resolved_preset_loads_plugins)
-}
-
-fn resolved_preset_loads_plugins(preset: &ResolvedPresetConfig) -> bool {
-    preset
-        .common
-        .settings
-        .plugins
-        .as_ref()
-        .is_some_and(|plugins| !plugins.is_empty())
 }
 
 pub(crate) fn validate_relative_config_path(value: &str, label: &str) -> Result<(), String> {
@@ -355,20 +339,14 @@ mod tests {
     use super::render_expectation_validation_error;
     use super::validate_check_config;
     use crate::check::core::ERROR_SCOPE_TOO_NARROW;
-    use crate::config_types::{
-        AgentConfig, CheckConfig, Expectation, ExpectationTarget, ResolvedPresetConfig,
-    };
-    use std::collections::BTreeMap;
+    use crate::config_types::{AgentConfig, CheckConfig, Expectation, ExpectationTarget};
 
     #[test]
     fn invalid_expected_answer_error_uses_expectation_block_format() {
         let question = "What is this project implemented in?";
         let agent = AgentConfig::default();
-        let mut presets = BTreeMap::new();
-        presets.insert("default".to_string(), preset(&agent));
         let config = CheckConfig {
             version: 1,
-            presets,
             agent: agent.clone(),
             expectations: vec![Expectation {
                 q: question.to_string(),
@@ -418,8 +396,6 @@ mod tests {
     #[test]
     fn duplicate_expectation_ids_are_rejected_even_when_targets_differ() {
         let agent = AgentConfig::default();
-        let mut presets = BTreeMap::new();
-        presets.insert("default".to_string(), preset(&agent));
         let expectation = |target| Expectation {
             q: "Does this behavior work?".to_string(),
             a: "yes".to_string(),
@@ -433,7 +409,6 @@ mod tests {
         };
         let config = CheckConfig {
             version: 1,
-            presets,
             agent: agent.clone(),
             expectations: vec![
                 expectation(None),
@@ -454,14 +429,5 @@ mod tests {
         push_config_error_unicode_escape(&mut escaped, '\u{1f600}');
 
         assert_eq!(escaped, "\\ud83d\\ude00");
-    }
-
-    fn preset(agent: &AgentConfig) -> ResolvedPresetConfig {
-        let mut preset = ResolvedPresetConfig::default();
-        preset.common.settings.models = Some(agent.models.clone());
-        preset.common.settings.thinking = Some(agent.thinking.clone());
-        preset.common.settings.ignore = Some(agent.ignore.clone());
-        preset.common.settings.plugins = Some(agent.plugins.clone());
-        preset
     }
 }

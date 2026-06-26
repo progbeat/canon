@@ -1,4 +1,6 @@
-use crate::check::config::validation::normalize_agent_ignore_pattern_for_config;
+use crate::check::config::validation::{
+    normalize_agent_ignore_pattern_for_config, validate_agent_config,
+};
 use crate::config_types::{
     AgentConfig, RawExpectationSettings, RawLegacyAgentConfig, RawPresetConfig,
     ResolvedPresetConfig,
@@ -97,7 +99,7 @@ fn resolve_preset(
         ResolvedPresetConfig::default()
     };
     apply_raw_preset(&mut agent, raw);
-    normalize_preset_config(&mut agent)?;
+    normalize_preset_config(name, &mut agent)?;
     resolving.remove(name);
     resolved.insert(name.to_string(), agent.clone());
     Ok(agent)
@@ -131,12 +133,13 @@ fn apply_raw_preset(preset: &mut ResolvedPresetConfig, raw: &RawPresetConfig) {
     }
 }
 
-fn normalize_preset_config(preset: &mut ResolvedPresetConfig) -> Result<(), String> {
+fn normalize_preset_config(name: &str, preset: &mut ResolvedPresetConfig) -> Result<(), String> {
     if let Some(ignore) = &mut preset.common.settings.ignore {
         for pattern in ignore {
             *pattern = normalize_agent_ignore_pattern_for_config(pattern)?;
         }
     }
+    validate_agent_config(&preset.agent_config(), &format!("presets.{}", name))?;
     Ok(())
 }
 

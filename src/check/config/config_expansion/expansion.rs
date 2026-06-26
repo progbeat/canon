@@ -11,6 +11,7 @@ use crate::repo_inspection::RepoInspectionCache;
 use std::collections::BTreeMap;
 use std::path::Path;
 
+#[cfg(test)]
 pub(crate) fn expand_raw_check_config(
     root: Option<&Path>,
     config_path: &Path,
@@ -18,12 +19,36 @@ pub(crate) fn expand_raw_check_config(
     cache: Option<&mut RepoInspectionCache>,
     source: CheckConfigSource,
 ) -> Result<CheckConfig, String> {
+    expand_raw_check_config_with_options(
+        root,
+        config_path,
+        raw,
+        cache,
+        source,
+        CheckConfigExpansionOptions::default(),
+    )
+}
+
+#[derive(Default)]
+pub(crate) struct CheckConfigExpansionOptions<'a> {
+    pub(crate) default_agent_preset: Option<&'a str>,
+}
+
+pub(crate) fn expand_raw_check_config_with_options(
+    root: Option<&Path>,
+    config_path: &Path,
+    raw: RawCheckConfig,
+    cache: Option<&mut RepoInspectionCache>,
+    source: CheckConfigSource,
+    options: CheckConfigExpansionOptions<'_>,
+) -> Result<CheckConfig, String> {
     let raw_presets = raw_presets_from_config(raw.presets, raw.agent)?;
     let resolved_presets = resolve_presets(raw_presets)?;
+    let default_agent_preset = options.default_agent_preset.unwrap_or("default");
     let default_agent = resolved_presets
-        .get("default")
+        .get(default_agent_preset)
         .map(ResolvedPresetConfig::agent_config)
-        .ok_or_else(|| "check.yml presets must contain default".to_string())?;
+        .ok_or_else(|| format!("unknown preset: {}", default_agent_preset))?;
     let expectations = {
         let mut expansion = RawExpectationExpansion {
             root,
@@ -38,7 +63,6 @@ pub(crate) fn expand_raw_check_config(
     };
     Ok(CheckConfig {
         version: raw.version,
-        presets: resolved_presets,
         agent: default_agent,
         expectations,
     })

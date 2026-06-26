@@ -4,12 +4,15 @@ mod include;
 mod presets;
 mod source;
 
-pub(crate) use expansion::expand_raw_check_config;
+pub(crate) use expansion::{expand_raw_check_config_with_options, CheckConfigExpansionOptions};
 pub(crate) use source::CheckConfigSource;
 
 #[cfg(test)]
 mod tests {
-    use super::{expand_raw_check_config, CheckConfigSource};
+    use super::{
+        expand_raw_check_config_with_options, expansion::expand_raw_check_config,
+        CheckConfigExpansionOptions, CheckConfigSource,
+    };
     use crate::config_types::{CooldownConfig, ExpectationTarget, RawCheckConfig};
     use crate::git::TreeSource;
     use crate::repo_inspection::RepoInspectionCache;
@@ -270,13 +273,6 @@ expectations:
         );
         assert_eq!(config.agent.thinking, "high");
         assert_eq!(config.agent.ignore, vec!["tmp/**".to_string()]);
-        assert_eq!(
-            config
-                .presets
-                .get("default")
-                .map(|preset| preset.agent_config()),
-            Some(config.agent)
-        );
     }
 
     #[test]
@@ -313,6 +309,42 @@ expectations:
         assert_eq!(expectation.agent.models, vec!["default-model".to_string()]);
         assert_eq!(expectation.agent.thinking, "high");
         assert_eq!(expectation.agent.ignore, vec!["tmp/**".to_string()]);
+    }
+
+    #[test]
+    fn default_agent_preset_option_only_changes_config_agent() {
+        let raw: RawCheckConfig = serde_saphyr::from_str(
+            r#"
+version: 1
+presets:
+  default:
+    models: ["default-model"]
+  smart:
+    models: ["smart-model"]
+expectations:
+  - q: "Does the default expectation preset stay default?"
+    a: "yes"
+"#,
+        )
+        .expect("parse raw check config");
+
+        let config = expand_raw_check_config_with_options(
+            None,
+            Path::new("check.yml"),
+            raw,
+            None,
+            CheckConfigSource::Tree(TreeSource::Staged),
+            CheckConfigExpansionOptions {
+                default_agent_preset: Some("smart"),
+            },
+        )
+        .expect("expand config");
+
+        assert_eq!(config.agent.models, vec!["smart-model".to_string()]);
+        assert_eq!(
+            config.expectations[0].agent.models,
+            vec!["default-model".to_string()]
+        );
     }
 
     #[test]

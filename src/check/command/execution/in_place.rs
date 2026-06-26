@@ -20,8 +20,8 @@ enum InPlaceProhibitedField {
     Target,
     // Cached Result owns normal `cooldown` behavior for Git-backed runs. This
     // variant is only the `canon check --in-place` mode-compatibility rule:
-    // only selected in-place expectations reject cooldown-cache behavior,
-    // because that mode treats persisted xpec history as absent.
+    // selected in-place expectations reject cooldown-cache behavior because
+    // that mode treats persisted xpec history as absent.
     CachedResultCooldown,
     Ignore,
 }
@@ -134,7 +134,7 @@ fn in_place_unsupported_fields(
     // These are parsed, valid check.yml fields. This table is only the
     // mode-compatibility list required by the in-place spec: in-place has no Git
     // tree, cached-result lookup, or path hiding, so these otherwise valid
-    // features are invalid only for expectations evaluated by that mode.
+    // features are invalid for expectations selected by that mode.
     IN_PLACE_SPEC_PROHIBITED_FIELDS
         .iter()
         .copied()
@@ -153,7 +153,6 @@ mod tests {
     use crate::config_types::{
         AgentConfig, CheckConfig, Expectation, ExpectationTarget, DEFAULT_DIFF_FROM,
     };
-    use std::collections::BTreeMap;
     use std::ffi::OsString;
 
     #[test]
@@ -246,7 +245,6 @@ mod tests {
     fn selected_records_ignore_unselected_invalid_expectations() {
         let mut config = CheckConfig {
             version: 1,
-            presets: BTreeMap::new(),
             agent: AgentConfig::default(),
             expectations: vec![
                 config_expectation("Can this pass?"),
@@ -265,6 +263,8 @@ mod tests {
         )
         .expect("valid selected");
 
+        // The in-place spec's selected expectations are the records selected
+        // for this run, not every collected config expectation.
         assert!(
             invalid_in_place_expectation_records(&config.agent, &selected)
                 .unwrap()
@@ -276,7 +276,6 @@ mod tests {
     fn in_place_config_records_reject_cooldown_without_making_it_invalid_config() {
         let mut config = CheckConfig {
             version: 1,
-            presets: BTreeMap::new(),
             agent: AgentConfig::default(),
             expectations: vec![config_expectation("Can this pass?")],
         };

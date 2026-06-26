@@ -54,6 +54,7 @@ pub(crate) enum EvaluatorFailureKind {
     ModelUnavailable,
     TurnTimeout,
     ContextWindow,
+    ShortIdResponse,
     UnknownAppServer,
 }
 
@@ -71,7 +72,7 @@ impl EvaluatorFailureKind {
     }
 
     pub(crate) fn invalidates_thread(self) -> bool {
-        self.is_model_technical()
+        self.is_model_technical() || matches!(self, EvaluatorFailureKind::ShortIdResponse)
     }
 }
 
@@ -116,7 +117,7 @@ mod tests {
     fn schema_valid_evidence_file_refs_do_not_trigger_repair() {
         let root = temp_root("schema-valid-evidence");
         let mut runner = RunnerWithResponses::new(vec![
-            r#"{"answer":"yes","evidence":"`src/hidden.rs` supports it.","qScopeSuggestion":["src/hidden.rs"]}"#,
+            r#"{"q":{"answer":"yes","evidence":"`src/hidden.rs` supports it.","qScopeSuggestion":["src/hidden.rs"]}}"#,
         ]);
         let mut parser_cache = EvaluatorResponseParseCache::new();
         let mut diagnostic_log = None;
@@ -128,6 +129,8 @@ mod tests {
             &AgentConfig::default(),
             crate::check::EvaluatorResponseSchemaScope::Restricted,
             &json!({"type": "object"}),
+            "q",
+            &[],
             &["src/visible.rs".to_string()],
             &root,
             &mut parser_cache,
@@ -158,6 +161,8 @@ mod tests {
             &AgentConfig::default(),
             crate::check::EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion,
             &json!({"type": "object"}),
+            "q",
+            &[],
             &[".".to_string()],
             &root,
             &mut parser_cache,

@@ -4,8 +4,9 @@ use std::time::{Duration, Instant};
 // Shared progress handle for one evaluated expectation. Check execution owns the
 // handle, installs it on the evaluator runner, and records the non-initial
 // evaluator work kinds that have canon timeline markers: model fallback,
-// full-scope retry, and q-scope verification. The evaluator turn request path
-// records active-turn idle accumulation and exhausted no-progress turn timeouts.
+// short-ID response retry, full-scope retry, and q-scope verification. The
+// evaluator turn request path records active-turn idle accumulation and
+// exhausted no-progress turn timeouts.
 // App-server control messages such as initialize and thread/start are session
 // setup, not evaluator work kinds in this timeline. When a non-initial
 // interrogation needs a fresh session, its caller records the fallback, retry,
@@ -25,6 +26,7 @@ pub(crate) enum EvaluatorProgressMarker {
     TurnTimeout,
     Idle,
     ModelFallback,
+    ShortIdResponseRetry,
     FullScopeRetry,
     QScopeVerification,
     NoHigherPriorityEvent,
@@ -35,6 +37,7 @@ enum EvaluatorProgressEventKind {
     TurnTimeout,
     Idle,
     ModelFallback,
+    ShortIdResponseRetry,
     FullScopeRetry,
     QScopeVerification,
 }
@@ -70,6 +73,12 @@ impl EvaluatorProgress {
     pub(crate) fn record_model_fallback_started(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.record_model_fallback_started_at(Instant::now());
+        }
+    }
+
+    pub(crate) fn record_short_id_response_retry_started(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.record_short_id_response_retry_started_at(Instant::now());
         }
     }
 
@@ -121,6 +130,10 @@ impl EvaluatorProgressState {
         self.record_marker_event(at, EvaluatorProgressEventKind::ModelFallback);
     }
 
+    fn record_short_id_response_retry_started_at(&mut self, at: Instant) {
+        self.record_marker_event(at, EvaluatorProgressEventKind::ShortIdResponseRetry);
+    }
+
     fn record_full_scope_retry_started_at(&mut self, at: Instant) {
         self.record_marker_event(at, EvaluatorProgressEventKind::FullScopeRetry);
     }
@@ -152,6 +165,10 @@ impl EvaluatorProgressState {
                 EvaluatorProgressMarker::ModelFallback,
             ),
             (
+                EvaluatorProgressEventKind::ShortIdResponseRetry,
+                EvaluatorProgressMarker::ShortIdResponseRetry,
+            ),
+            (
                 EvaluatorProgressEventKind::FullScopeRetry,
                 EvaluatorProgressMarker::FullScopeRetry,
             ),
@@ -178,6 +195,7 @@ impl EvaluatorProgressMarker {
             EvaluatorProgressMarker::TurnTimeout => "×",
             EvaluatorProgressMarker::Idle => "~",
             EvaluatorProgressMarker::ModelFallback => "⇄",
+            EvaluatorProgressMarker::ShortIdResponseRetry => "↻",
             EvaluatorProgressMarker::FullScopeRetry => "↗",
             EvaluatorProgressMarker::QScopeVerification => "↘",
             EvaluatorProgressMarker::NoHigherPriorityEvent => ".",
@@ -230,5 +248,26 @@ mod tests {
 
         assert_eq!(marker, Some(EvaluatorProgressMarker::FullScopeRetry));
         assert!(next_marker_at > tick_at);
+    }
+
+    #[test]
+    fn short_id_response_retry_marker_has_canon_priority() {
+        let progress = EvaluatorProgress::new();
+        let interval = Duration::from_secs(60);
+        let start = Instant::now();
+        let tick_at = start + interval;
+        let mut next_marker_at = tick_at;
+
+        {
+            let mut state = progress.state.lock().unwrap();
+            state.record_full_scope_retry_started_at(start + Duration::from_secs(10));
+            state.record_short_id_response_retry_started_at(start + Duration::from_secs(20));
+        }
+
+        let marker = progress
+            .elapsed_marker_due(&mut next_marker_at, tick_at, interval)
+            .unwrap();
+
+        assert_eq!(marker, Some(EvaluatorProgressMarker::ShortIdResponseRetry));
     }
 }

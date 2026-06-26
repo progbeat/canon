@@ -2,13 +2,19 @@ use std::io;
 use std::path::Path;
 use std::process::{Command, Output};
 
-pub(crate) fn run_prompt_template_shell_command(root: &Path, command: &str) -> io::Result<Output> {
-    Command::new("cmd")
+pub(crate) fn run_prompt_template_shell_command(
+    root: &Path,
+    shell_command: &str,
+    env: &[(&str, &str)],
+) -> io::Result<Output> {
+    let mut command = Command::new("cmd");
+    command
         .arg("/D")
         .arg("/V:OFF")
         .arg("/C")
-        .arg(command)
+        .arg(shell_command)
         .current_dir(root)
+        .envs(env.iter().copied())
         .output()
 }
 

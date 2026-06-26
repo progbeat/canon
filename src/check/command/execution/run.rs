@@ -5,7 +5,6 @@ use super::failure::{
 use super::in_place::{invalid_in_place_expectation_records, validate_in_place_global_config};
 use super::prepare::{prepare_check_execution, PrepareCheckExecutionOptions};
 use super::query::{run_check_query_command, CheckQueryCommand};
-use super::query_preset::check_config_with_query_preset;
 use super::trailer::{
     check_command_writes_agent_message, check_report_passed, write_check_trailer, CompletedCheckRun,
 };
@@ -67,7 +66,12 @@ pub(crate) fn run_check_command(
     let query_mode = command.query.is_some();
     let query_start_field = if query_mode { Some(true) } else { None };
     let mut check_caches = CheckRunCaches::new();
-    let config = match repo_cache.load_check_config(root, &command.config_path, &checked_tree) {
+    let config = match repo_cache.load_check_config_with_default_agent_preset(
+        root,
+        &command.config_path,
+        &checked_tree,
+        command.query_preset.as_deref(),
+    ) {
         Ok(config) => config,
         Err(err) => {
             return fail_check_before_selection(
@@ -91,8 +95,6 @@ pub(crate) fn run_check_command(
             &config,
             question,
             diagnostic_log,
-            query_start_field,
-            query_mode,
             &mut check_caches,
         );
     }
@@ -188,32 +190,11 @@ fn run_query_mode(
     config: &crate::config_types::CheckConfig,
     question: &str,
     diagnostic_log: DiagnosticLogWriter,
-    query_start_field: Option<bool>,
-    query_mode: bool,
     check_caches: &mut CheckRunCaches,
 ) -> Result<(), CommandError> {
-    let query_config_override;
-    let query_config = match command.query_preset.as_deref() {
-        Some(preset) => match check_config_with_query_preset(config, preset) {
-            Ok(config) => {
-                query_config_override = config;
-                &query_config_override
-            }
-            Err(err) => {
-                let mut diagnostic_log = diagnostic_log;
-                return fail_check_before_selection(
-                    &mut diagnostic_log,
-                    query_start_field,
-                    query_mode,
-                    err,
-                );
-            }
-        },
-        None => config,
-    };
     run_check_query_command(CheckQueryCommand {
         root,
-        config: query_config,
+        config,
         question,
         query_scope: &command.query_scope,
         query_scope_provided: command.query_scope_provided,
@@ -254,7 +235,7 @@ fn run_in_place_check_command(
     // Git-tree, query-scope, and cache controls, repo inspection reads this
     // directory directly, and `CheckRuntime::in_place` owns the evaluator view
     // with no persistent xpec state root. This command path only coordinates
-    // those interfaces and validates selected expectations for
+    // those interfaces and validates the expectations selected for this run for
     // in-place-prohibited expectation fields. A top-level ignore is global
     // path-hiding config, so it is rejected even when selectors choose no
     // expectation records to attach the error to.
@@ -267,7 +248,11 @@ fn run_in_place_check_command(
     let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
     let query_mode = command.query.is_some();
     let query_start_field = if query_mode { Some(true) } else { None };
-    let config = match repo_cache.load_in_place_check_config(root, &command.config_path) {
+    let config = match repo_cache.load_in_place_check_config_with_default_agent_preset(
+        root,
+        &command.config_path,
+        command.query_preset.as_deref(),
+    ) {
         Ok(config) => config,
         Err(err) => {
             return fail_check_before_selection(
@@ -300,8 +285,7 @@ fn run_in_place_check_command(
     let identities = expectation_identities(&config)?;
     // This resolves selector/keep-going controls from the expanded config.
     // Persistent state is not consulted here; in-place compatibility is checked
-    // only for selected expectations before any selected expectation is
-    // evaluated.
+    // for the CLI-resolved selected expectations before any one is evaluated.
     let options =
         match resolve_check_options_with_identities(&config, &identities, &command.options) {
             Ok(options) => options,

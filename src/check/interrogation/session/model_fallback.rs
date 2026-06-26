@@ -46,6 +46,7 @@ pub(crate) fn interrogate_expectation_with_model_fallbacks<R: EvaluatorRunner>(
                 xpec_state,
                 enforced_scope,
                 model,
+                progress,
             )
         },
     )

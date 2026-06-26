@@ -9,7 +9,7 @@ use crate::hash::full_scope;
 use crate::isolation::{NaiveIsolationGuard, NaiveIsolationPolicy};
 use crate::scope::{effective_ignore_patterns, visible_scope};
 use crate::staged::StagedWorktreeView;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 pub(crate) const IN_PLACE_VISIBLE_TREE_OID: &str = "in-place";
@@ -29,29 +29,25 @@ pub(crate) fn should_retry_full_scope_after_error(error: Option<&str>, scope: &[
     false
 }
 
-pub(crate) struct EvaluatorThreadReuseKeyContext<'a> {
+pub(crate) struct PrerenderEvaluatorThreadReuseKeyContext<'a> {
     pub(crate) agent: &'a AgentConfig,
     pub(crate) scope: &'a [String],
     pub(crate) model: Option<&'a str>,
     pub(crate) visible_tree_oid: &'a str,
-    pub(crate) turn_prompt: &'a str,
     pub(crate) question_context: &'a str,
     pub(crate) diff_base_tree_oid: &'a str,
     pub(crate) checked_tree_oid: &'a str,
 }
 
-pub(crate) fn evaluator_thread_reuse_key(
-    context: EvaluatorThreadReuseKeyContext<'_>,
+pub(crate) fn evaluator_prerender_thread_reuse_key(
+    context: PrerenderEvaluatorThreadReuseKeyContext<'_>,
 ) -> Result<String, String> {
-    // Evaluator thread reuse is context reuse, not a deterministic result cache.
-    // A reused thread keeps its original developer instructions and live
-    // thread-start context, so the key includes the model, the exact turn
-    // prompt, the inputs that render the current developer-instructions
-    // template, and the non-rendered context that changes the evaluator cwd or
-    // tools. The turn prompt is part of the key because a live Codex thread is
-    // conversational state, and each reused thread must stay tied to the same
-    // evaluator task input. This protects answer correctness; started
-    // expectation report liveness is owned by the check-run output layer.
+    // This is the cheap pre-render lookup key. It includes the evaluator model,
+    // stable inputs that determine the rendered base/developer instructions, and
+    // non-rendered live thread-start context such as tools and visible scope.
+    // The turn prompt is deliberately excluded: each evaluator turn supplies its
+    // own task input, while a reusable thread keeps only the base/developer
+    // instruction context from session startup.
     let mut key = String::new();
     app_server_model_key(context.model).push_cache_key_part(&mut key);
     key.push('\0');
@@ -60,10 +56,6 @@ pub(crate) fn evaluator_thread_reuse_key(
     key.push_str(context.diff_base_tree_oid);
     key.push('\0');
     key.push_str(context.checked_tree_oid);
-    key.push('\0');
-    key.push_str(&context.turn_prompt.len().to_string());
-    key.push('\0');
-    key.push_str(context.turn_prompt);
     key.push('\0');
     key.push_str(&context.question_context.len().to_string());
     key.push('\0');
@@ -90,6 +82,36 @@ pub(crate) fn evaluator_thread_reuse_key(
         key.push('\0');
     }
     Ok(key)
+}
+
+pub(crate) struct RenderedEvaluatorThreadReuseKeyContext<'a> {
+    pub(crate) agent: &'a AgentConfig,
+    pub(crate) model: Option<&'a str>,
+    pub(crate) base_instructions: &'a str,
+    pub(crate) developer_instructions: &'a str,
+}
+
+pub(crate) fn evaluator_rendered_thread_reuse_key(
+    context: RenderedEvaluatorThreadReuseKeyContext<'_>,
+) -> String {
+    let mut key = String::new();
+    app_server_model_key(context.model).push_cache_key_part(&mut key);
+    key.push('\0');
+    key.push_str(&context.base_instructions.len().to_string());
+    key.push('\0');
+    key.push_str(context.base_instructions);
+    key.push('\0');
+    key.push_str(&context.developer_instructions.len().to_string());
+    key.push('\0');
+    key.push_str(context.developer_instructions);
+    key.push('\0');
+    for plugin in &context.agent.plugins {
+        key.push_str(&plugin.len().to_string());
+        key.push('\0');
+        key.push_str(plugin);
+        key.push('\0');
+    }
+    key
 }
 
 pub(crate) struct CheckRuntime<'a> {
@@ -301,12 +323,16 @@ impl<'a> CheckRuntime<'a> {
 pub(crate) struct InterrogationRunState {
     pub(crate) session_isolations: BTreeMap<String, NaiveIsolationGuard>,
     // This is a run-level pool of evaluator threads, not one thread. The
-    // reuse key enforces the glossary's model/rendered-developer-instructions
-    // invariant and also splits on stricter live thread-start context.
-    pub(crate) thread_sessions_by_reuse_key: BTreeMap<String, String>,
+    // pre-render key is used before rendering instructions only to avoid
+    // rendering solely for the lookup.
+    pub(crate) thread_sessions_by_prerender_key: BTreeMap<String, String>,
+    // After instructions have been rendered anyway, this key lets identical
+    // rendered base/developer instructions reuse a live evaluator thread.
+    pub(crate) thread_sessions_by_rendered_instructions_key: BTreeMap<String, String>,
     pub(crate) session_base_instructions: BTreeMap<String, String>,
     pub(crate) session_instructions: BTreeMap<String, String>,
     pub(crate) session_roots_by_id: BTreeMap<String, PathBuf>,
+    pub(crate) session_answered_short_ids: BTreeMap<String, BTreeSet<String>>,
     pub(crate) visible_tree_oid_cache: VisibleTreeOidCache,
     pub(crate) parse_cache: EvaluatorResponseParseCache,
     pub(crate) prompt_template_output_dir_cache: PromptTemplateOutputDirCache,
@@ -322,10 +348,12 @@ impl InterrogationRunState {
         };
         Ok(InterrogationRunState {
             session_isolations: BTreeMap::new(),
-            thread_sessions_by_reuse_key: BTreeMap::new(),
+            thread_sessions_by_prerender_key: BTreeMap::new(),
+            thread_sessions_by_rendered_instructions_key: BTreeMap::new(),
             session_base_instructions: BTreeMap::new(),
             session_instructions: BTreeMap::new(),
             session_roots_by_id: BTreeMap::new(),
+            session_answered_short_ids: BTreeMap::new(),
             visible_tree_oid_cache: VisibleTreeOidCache::new(),
             parse_cache: EvaluatorResponseParseCache::new(),
             prompt_template_output_dir_cache: PromptTemplateOutputDirCache::new(),
@@ -339,10 +367,12 @@ impl InterrogationRunState {
 
     pub(crate) fn clear_thread_sessions(&mut self) {
         self.session_isolations.clear();
-        self.thread_sessions_by_reuse_key.clear();
+        self.thread_sessions_by_prerender_key.clear();
+        self.thread_sessions_by_rendered_instructions_key.clear();
         self.session_base_instructions.clear();
         self.session_instructions.clear();
         self.session_roots_by_id.clear();
+        self.session_answered_short_ids.clear();
     }
 
     pub(crate) fn isolate_session_root(
@@ -365,6 +395,26 @@ impl InterrogationRunState {
         }
         Ok(())
     }
+
+    pub(crate) fn answered_short_ids_for_session(&self, session_id: &str) -> Vec<String> {
+        self.session_answered_short_ids
+            .get(session_id)
+            .map(|ids| ids.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn session_has_valid_response(&self, session_id: &str) -> bool {
+        self.session_answered_short_ids
+            .get(session_id)
+            .is_some_and(|ids| !ids.is_empty())
+    }
+
+    pub(crate) fn record_session_answered_short_id(&mut self, session_id: &str, short_id: &str) {
+        self.session_answered_short_ids
+            .entry(session_id.to_string())
+            .or_default()
+            .insert(short_id.to_string());
+    }
 }
 
 #[cfg(test)]
@@ -375,70 +425,58 @@ mod tests {
     fn thread_reuse_key_includes_developer_instruction_tree_inputs() {
         let agent = AgentConfig::default();
         let scope = full_scope();
-        let base = evaluator_thread_reuse_key(EvaluatorThreadReuseKeyContext {
+        let base = evaluator_prerender_thread_reuse_key(PrerenderEvaluatorThreadReuseKeyContext {
             agent: &agent,
             scope: &scope,
             model: Some("model"),
             visible_tree_oid: "visible-tree",
-            turn_prompt: "Does it pass?",
             question_context: "instructions",
             diff_base_tree_oid: "base-a",
             checked_tree_oid: "checked-a",
         })
         .unwrap();
-        let different_base = evaluator_thread_reuse_key(EvaluatorThreadReuseKeyContext {
-            agent: &agent,
-            scope: &scope,
-            model: Some("model"),
-            visible_tree_oid: "visible-tree",
-            turn_prompt: "Does it pass?",
-            question_context: "instructions",
-            diff_base_tree_oid: "base-b",
-            checked_tree_oid: "checked-a",
-        })
-        .unwrap();
-        let different_checked = evaluator_thread_reuse_key(EvaluatorThreadReuseKeyContext {
-            agent: &agent,
-            scope: &scope,
-            model: Some("model"),
-            visible_tree_oid: "visible-tree",
-            turn_prompt: "Does it pass?",
-            question_context: "instructions",
-            diff_base_tree_oid: "base-a",
-            checked_tree_oid: "checked-b",
-        })
-        .unwrap();
+        let different_base =
+            evaluator_prerender_thread_reuse_key(PrerenderEvaluatorThreadReuseKeyContext {
+                agent: &agent,
+                scope: &scope,
+                model: Some("model"),
+                visible_tree_oid: "visible-tree",
+                question_context: "instructions",
+                diff_base_tree_oid: "base-b",
+                checked_tree_oid: "checked-a",
+            })
+            .unwrap();
+        let different_checked =
+            evaluator_prerender_thread_reuse_key(PrerenderEvaluatorThreadReuseKeyContext {
+                agent: &agent,
+                scope: &scope,
+                model: Some("model"),
+                visible_tree_oid: "visible-tree",
+                question_context: "instructions",
+                diff_base_tree_oid: "base-a",
+                checked_tree_oid: "checked-b",
+            })
+            .unwrap();
 
         assert_ne!(base, different_base);
         assert_ne!(base, different_checked);
     }
 
     #[test]
-    fn thread_reuse_key_includes_turn_prompt() {
+    fn rendered_thread_reuse_key_includes_rendered_instructions() {
         let agent = AgentConfig::default();
-        let scope = full_scope();
-        let first = evaluator_thread_reuse_key(EvaluatorThreadReuseKeyContext {
+        let first = evaluator_rendered_thread_reuse_key(RenderedEvaluatorThreadReuseKeyContext {
             agent: &agent,
-            scope: &scope,
             model: Some("model"),
-            visible_tree_oid: "visible-tree",
-            turn_prompt: "Does alpha pass?",
-            question_context: "",
-            diff_base_tree_oid: "base",
-            checked_tree_oid: "checked",
-        })
-        .unwrap();
-        let second = evaluator_thread_reuse_key(EvaluatorThreadReuseKeyContext {
+            base_instructions: "base",
+            developer_instructions: "developer-a",
+        });
+        let second = evaluator_rendered_thread_reuse_key(RenderedEvaluatorThreadReuseKeyContext {
             agent: &agent,
-            scope: &scope,
             model: Some("model"),
-            visible_tree_oid: "visible-tree",
-            turn_prompt: "Does beta pass?",
-            question_context: "",
-            diff_base_tree_oid: "base",
-            checked_tree_oid: "checked",
-        })
-        .unwrap();
+            base_instructions: "base",
+            developer_instructions: "developer-b",
+        });
 
         assert_ne!(first, second);
     }
@@ -448,7 +486,6 @@ mod tests {
         let root = PathBuf::from("/tmp/canon-in-place-runtime");
         let config = CheckConfig {
             version: 1,
-            presets: Default::default(),
             agent: AgentConfig::default(),
             expectations: Vec::new(),
         };
@@ -478,7 +515,6 @@ mod tests {
         let root = PathBuf::from("/tmp/canon-in-place-runtime");
         let config = CheckConfig {
             version: 1,
-            presets: Default::default(),
             agent: AgentConfig::default(),
             expectations: Vec::new(),
         };

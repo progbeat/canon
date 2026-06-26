@@ -1,12 +1,23 @@
-use crate::check::{parse_evaluator_response, EvaluatorResponseSchemaScope, ParsedAnswer};
+use crate::check::{
+    parse_evaluator_response_for_short_id, EvaluatorResponseParseError,
+    EvaluatorResponseSchemaScope, ParsedAnswer,
+};
 use crate::config_types::AgentConfig;
 use crate::scope::effective_ignore_patterns;
 use std::collections::BTreeMap;
 
 #[derive(Default)]
 pub(crate) struct EvaluatorResponseParseCache {
-    values:
-        BTreeMap<(String, Vec<String>, EvaluatorResponseSchemaScope), Result<ParsedAnswer, String>>,
+    values: BTreeMap<
+        (
+            String,
+            Vec<String>,
+            EvaluatorResponseSchemaScope,
+            String,
+            Vec<String>,
+        ),
+        Result<ParsedAnswer, EvaluatorResponseParseError>,
+    >,
 }
 
 impl EvaluatorResponseParseCache {
@@ -19,16 +30,21 @@ impl EvaluatorResponseParseCache {
         text: &str,
         agent: &AgentConfig,
         schema_scope: EvaluatorResponseSchemaScope,
-    ) -> Result<ParsedAnswer, String> {
+        short_id: &str,
+        answered_short_ids: &[String],
+    ) -> Result<ParsedAnswer, EvaluatorResponseParseError> {
         let key = (
             text.to_string(),
-            effective_ignore_patterns(agent)?,
+            effective_ignore_patterns(agent).map_err(EvaluatorResponseParseError::Schema)?,
             schema_scope,
+            short_id.to_string(),
+            answered_short_ids.to_vec(),
         );
         if let Some(parsed) = self.values.get(&key) {
             return parsed.clone();
         }
-        let parsed = parse_evaluator_response(text, schema_scope);
+        let parsed =
+            parse_evaluator_response_for_short_id(text, schema_scope, short_id, answered_short_ids);
         self.values.insert(key, parsed.clone());
         parsed
     }

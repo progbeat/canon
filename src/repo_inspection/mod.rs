@@ -1,7 +1,8 @@
 use crate::check::CheckConfigSource;
 use crate::check::{
-    expand_staged_generator_paths_from_listing, parse_check_config_content_with_root_and_source,
-    parse_tree_check_config_content_with_root, CHECK_PATH,
+    expand_staged_generator_paths_from_listing,
+    parse_check_config_content_with_root_and_source_and_default_agent_preset,
+    parse_tree_check_config_content_with_root_and_default_agent_preset, CHECK_PATH,
 };
 use crate::config_types::{CheckConfig, RawExpectationItem};
 use crate::fs_util::reject_symlink;
@@ -18,7 +19,7 @@ type GeneratorPathsCacheKey = (PathBuf, PathBuf, String, String);
 type InPlaceFileContentCacheKey = (PathBuf, PathBuf);
 type StagedFileContentCacheKey = (PathBuf, PathBuf);
 type TreeFileContentCacheKey = (PathBuf, String, PathBuf);
-type CheckConfigCacheKey = (PathBuf, PathBuf, String, String);
+type CheckConfigCacheKey = (PathBuf, PathBuf, String, String, Option<String>);
 type IncludedExpectationsCacheKey = (String, String);
 type StagedBlobContents = BTreeMap<Vec<u8>, Vec<u8>>;
 
@@ -319,31 +320,44 @@ impl RepoInspectionCache {
         config_path: &Path,
         source: &TreeSource,
     ) -> Result<CheckConfig, String> {
+        self.load_check_config_with_default_agent_preset(root, config_path, source, None)
+    }
+
+    pub(crate) fn load_check_config_with_default_agent_preset(
+        &mut self,
+        root: &Path,
+        config_path: &Path,
+        source: &TreeSource,
+        default_agent_preset: Option<&str>,
+    ) -> Result<CheckConfig, String> {
         let content = self.tree_file_content(root, source, config_path)?;
         let key = (
             root.to_path_buf(),
             config_path.to_path_buf(),
             content.clone(),
             source.cache_key(),
+            default_agent_preset.map(str::to_string),
         );
         if let Some(cached) = self.check_configs.get(&key) {
             return cached.clone();
         }
-        let parsed = parse_tree_check_config_content_with_root(
+        let parsed = parse_tree_check_config_content_with_root_and_default_agent_preset(
             root,
             config_path,
             &content,
             self,
             source.clone(),
+            default_agent_preset,
         );
         self.check_configs.insert(key, parsed.clone());
         parsed
     }
 
-    pub(crate) fn load_in_place_check_config(
+    pub(crate) fn load_in_place_check_config_with_default_agent_preset(
         &mut self,
         root: &Path,
         config_path: &Path,
+        default_agent_preset: Option<&str>,
     ) -> Result<CheckConfig, String> {
         let source = CheckConfigSource::InPlace;
         let content = self.in_place_file_content(root, config_path)?;
@@ -352,16 +366,18 @@ impl RepoInspectionCache {
             config_path.to_path_buf(),
             content.clone(),
             source.cache_key(),
+            default_agent_preset.map(str::to_string),
         );
         if let Some(cached) = self.check_configs.get(&key) {
             return cached.clone();
         }
-        let parsed = parse_check_config_content_with_root_and_source(
+        let parsed = parse_check_config_content_with_root_and_source_and_default_agent_preset(
             root,
             config_path,
             &content,
             self,
             source,
+            default_agent_preset,
         );
         self.check_configs.insert(key, parsed.clone());
         parsed

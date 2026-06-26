@@ -29,8 +29,10 @@ pub(crate) struct DeveloperInstructionsContext<'a> {
     pub(crate) in_place: bool,
     pub(crate) diff_from_tree_oid: &'a str,
     pub(crate) checked_tree_oid: &'a str,
-    // Data for the resource template's `expectation.instructions` variable.
+    // Data for the resource template's `xpec.instructions` variable.
     pub(crate) question_context: &'a str,
+    pub(crate) q_scope: &'a [String],
+    pub(crate) ignore: &'a [String],
     pub(crate) visible_scope: &'a [String],
     pub(crate) checked_file_count: usize,
     pub(crate) visible_file_count: usize,
@@ -58,18 +60,19 @@ pub(crate) fn developer_instructions(
         context.template_output_dir,
         context.template_artifact_paths,
         DEVELOPER_INSTRUCTIONS_TEMPLATE,
+        &[
+            ("LHS_TREE", context.diff_from_tree_oid),
+            ("RHS_TREE", context.checked_tree_oid),
+        ],
         json!({
-            // This object is template input only. Its key spelling follows
-            // the resource-template contract; this renderer does not define a
-            // second implementation-owned evaluator instruction source.
-            "expectation": {
+            "xpec": {
                 "instructions": context.question_context,
+                "q_scope": context.q_scope,
+                "ignore": context.ignore,
+                "visible_scope": context.visible_scope,
             },
             "in_place": context.in_place,
-            "diff_from_tree_oid": context.diff_from_tree_oid,
-            "checked_tree_oid": context.checked_tree_oid,
             "last_pass": context.last_pass,
-            "visible_scope": context.visible_scope,
             "num_invisible_files": files_not_selected_by_visible_scope_pathspec,
         }),
     )
@@ -79,6 +82,7 @@ pub(crate) struct EvaluatorTurnPromptContext<'a> {
     pub(crate) root: &'a Path,
     pub(crate) template_output_dir: &'a Path,
     pub(crate) template_artifact_paths: &'a mut Vec<PathBuf>,
+    pub(crate) short_id: &'a str,
     pub(crate) question: &'a str,
     pub(crate) expected_answer: &'a str,
     pub(crate) in_place: bool,
@@ -101,31 +105,40 @@ pub(crate) fn evaluator_turn_prompt(
     };
     // `diff_from` is template input for this fresh evaluator turn only. Cached
     // results are emitted without rendering this prompt. The turn template uses
-    // `expectation.diff_from` to choose whether a target-diff prompt can reuse
-    // the checkpoint response or must render the expectation's default answer.
+    // `xpec.diff_from` to choose whether a target-diff prompt can reuse the
+    // checkpoint response or must render the xpec's default answer.
     // `target` is the same kind of per-turn prompt input; it is deliberately
     // not part of evaluator thread reuse.
-    let expectation_context =
-        turn_prompt_expectation_context(context.expected_answer, diff_from, target);
+    let xpec_context = turn_prompt_xpec_context(
+        context.short_id,
+        context.question,
+        context.expected_answer,
+        diff_from,
+        target,
+    );
     render_minijinja_resource_template(
         context.root,
         context.template_output_dir,
         context.template_artifact_paths,
         EVALUATOR_TURN_PROMPT_TEMPLATE,
+        &[],
         json!({
-            "question": context.question,
-            "expectation": expectation_context,
+            "xpec": xpec_context,
             "last_pass": last_pass,
         }),
     )
 }
 
-fn turn_prompt_expectation_context(
+fn turn_prompt_xpec_context(
+    short_id: &str,
+    question: &str,
     expected_answer: &str,
     diff_from: &str,
     target: Option<&str>,
 ) -> JsonValue {
     json!({
+        "short_id": short_id,
+        "q": question,
         "a": expected_answer,
         "diff_from": diff_from,
         "target": target.unwrap_or(""),
@@ -137,6 +150,7 @@ fn render_minijinja_resource_template(
     template_output_dir: &Path,
     template_artifact_paths: &mut Vec<PathBuf>,
     template: &str,
+    template_shell_env: &[(&str, &str)],
     context: JsonValue,
 ) -> Result<String, String> {
     let mut environment = Environment::new();
@@ -145,6 +159,10 @@ fn render_minijinja_resource_template(
     environment.add_filter("shargs", shell_args_filter);
     let command_root = root.to_path_buf();
     let command_output_dir = template_output_dir.to_path_buf();
+    let command_env = template_shell_env
+        .iter()
+        .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+        .collect::<Vec<_>>();
     let command_artifact_paths = Arc::new(Mutex::new(Vec::new()));
     let sh_transcript_markers = ShTranscriptMarkers::new()?;
     let filter_transcript_markers = sh_transcript_markers.clone();
@@ -156,6 +174,7 @@ fn render_minijinja_resource_template(
                 &command_root,
                 &command_output_dir,
                 filter_artifact_paths.as_ref(),
+                &command_env,
                 command,
                 kwargs,
             )?;
@@ -171,10 +190,11 @@ fn render_minijinja_resource_template(
     let rendered = render_with_repository_cwd(root, || template.render(context))
         .map_err(|err| format!("failed to render prompt template: {}", err))?;
     template_artifact_paths.extend(command_artifact_paths.lock().unwrap().iter().cloned());
-    // Canon trims only outer template whitespace. Internal sentinels protect
-    // `sh` transcript text at prompt boundaries so command display text,
-    // stdout text, saved stdout bytes, and the truncation marker keep their
-    // specified spelling.
+    // This is the final rendered prompt trim required by Prompt Templates. It
+    // is separate from `sh` command-body trimming in `shell_transcript_filter`.
+    // Internal sentinels protect `sh` transcript text at prompt boundaries so
+    // command display text, stdout text, saved stdout bytes, and the
+    // truncation marker keep their specified spelling.
     Ok(trim_rendered_prompt_template_output(
         &rendered,
         &sh_transcript_markers,
@@ -368,9 +388,11 @@ fn shell_transcript_filter(
     root: &Path,
     template_output_dir: &Path,
     template_artifact_paths: &Mutex<Vec<PathBuf>>,
+    template_shell_env: &[(String, String)],
     command: String,
     kwargs: Kwargs,
 ) -> Result<String, Error> {
+    let command = command.trim().to_string();
     let display = kwargs
         .get::<Option<String>>("display")
         .map_err(|err| template_error(err.to_string()))?
@@ -381,7 +403,11 @@ fn shell_transcript_filter(
     // The prompt-template `sh` filter is defined to run the rendered block body
     // as a shell command. That CWD-sensitive template operation runs from the
     // repository root without mutating the parent process cwd.
-    let output = run_prompt_template_shell_command(root, &command)
+    let env_refs = template_shell_env
+        .iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
+    let output = run_prompt_template_shell_command(root, &command, &env_refs)
         .map_err(|err| template_error(format!("failed to run prompt template command: {err}")))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -636,7 +662,7 @@ mod tests {
         assert!(rendered.contains("Use the transcript below only for context/navigation"));
         assert!(rendered.contains("$ git diff --numstat"));
         assert!(rendered.contains("$ git diff"));
-        assert!(rendered.contains("$ enter-sandbox --scope [\"src\"]"));
+        assert!(rendered.contains("$ enter-sandbox --scope [\"src\"] --ignore []"));
     }
 
     #[test]
@@ -710,6 +736,7 @@ mod tests {
             &output_dir,
             &mut artifact_paths,
             " \n{% filter sh(display=\"printf kept\") %}printf '  kept\\n'{% endfilter %}\n ",
+            &[],
             json!({}),
         )
         .unwrap();
@@ -843,6 +870,7 @@ mod tests {
         });
         let mut artifact_paths = Vec::new();
         let visible_scope = vec!["src".to_string()];
+        let ignore = Vec::new();
         let rendered = developer_instructions(DeveloperInstructionsContext {
             root: Path::new("."),
             template_output_dir: &output_dir,
@@ -851,6 +879,8 @@ mod tests {
             diff_from_tree_oid: "HEAD",
             checked_tree_oid: "HEAD",
             question_context: "Custom expectation instructions.",
+            q_scope: &visible_scope,
+            ignore: &ignore,
             visible_scope: &visible_scope,
             checked_file_count: 10,
             visible_file_count: 5,
@@ -894,6 +924,7 @@ mod tests {
             root: Path::new("."),
             template_output_dir: &output_dir,
             template_artifact_paths: &mut artifact_paths,
+            short_id: "e",
             question: "Does it pass?",
             expected_answer: "yes",
             in_place: false,
@@ -904,15 +935,16 @@ mod tests {
         .unwrap();
 
         assert!(prompt.contains("This question targets the Git diff."));
-        assert!(prompt.contains("Return the previous valid response if it still holds:"));
-        assert!(prompt.contains(r#""answer": "yes""#));
-        assert!(prompt.contains(r#""evidence": "`src/a.rs`""#));
+        assert!(prompt.contains("Use this prior evaluation if it still holds:"));
+        assert!(prompt.contains(r#"{"e":"Does it pass?"}"#));
+        assert!(prompt.contains(r#""answer":"yes""#));
+        assert!(prompt.contains(r#""evidence":"`src/a.rs`""#));
         // The turn prompt provides this response literal to the evaluator. The
         // base instruction to keep a provided response's qScopeSuggestion
         // refers to this rendered literal, not the stored last-pass response
         // that was used as template input.
-        assert!(prompt.contains(r#""qScopeSuggestion": ["."]"#));
-        assert!(!prompt.contains(r#""qScopeSuggestion": ["src/a.rs"]"#));
+        assert!(prompt.contains(r#""qScopeSuggestion":["."]"#));
+        assert!(!prompt.contains(r#""qScopeSuggestion":["src/a.rs"]"#));
         let _ = fs::remove_dir_all(output_dir);
     }
 
@@ -939,6 +971,7 @@ mod tests {
             root: Path::new("."),
             template_output_dir: &output_dir,
             template_artifact_paths: &mut artifact_paths,
+            short_id: "e",
             question: "Does it pass?",
             expected_answer: "yes",
             in_place: false,
@@ -949,9 +982,9 @@ mod tests {
         .unwrap();
 
         assert!(prompt.contains("This question targets the Git diff."));
-        assert!(prompt.contains(r#""evidence": """#));
-        assert!(prompt.contains(r#""answer": "yes""#));
-        assert!(!prompt.contains(r#""answer": "no""#));
+        assert!(prompt.contains(r#""evidence":"""#));
+        assert!(prompt.contains(r#""answer":"yes""#));
+        assert!(!prompt.contains(r#""answer":"no""#));
         let _ = fs::remove_dir_all(output_dir);
     }
 
@@ -978,6 +1011,7 @@ mod tests {
             root: Path::new("."),
             template_output_dir: &output_dir,
             template_artifact_paths: &mut artifact_paths,
+            short_id: "e",
             question: "Does it pass?",
             expected_answer: "yes",
             in_place: true,
@@ -987,7 +1021,7 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(prompt, "Does it pass?");
+        assert_eq!(prompt, r#"{"e":"Does it pass?"}"#);
         let _ = fs::remove_dir_all(output_dir);
     }
 
@@ -1001,6 +1035,7 @@ mod tests {
             &output_dir,
             &mut artifact_paths,
             "\n  {{ value }}  \n",
+            &[],
             json!({ "value": "answer" }),
         )
         .unwrap();

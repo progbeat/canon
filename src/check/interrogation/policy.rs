@@ -330,7 +330,6 @@ mod tests {
         let agent = AgentConfig::default();
         let config = CheckConfig {
             version: 1,
-            presets: Default::default(),
             agent: agent.clone(),
             expectations: Vec::new(),
         };
@@ -365,7 +364,6 @@ mod tests {
         let agent = AgentConfig::default();
         let config = CheckConfig {
             version: 1,
-            presets: Default::default(),
             agent: agent.clone(),
             expectations: Vec::new(),
         };

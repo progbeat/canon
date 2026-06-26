@@ -141,7 +141,6 @@ mod tests {
     use crate::git::{TreeSource, VisibleTreeOidCache};
     use crate::hash::full_scope;
     use crate::time::format_record_timestamp;
-    use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
     use std::process;
@@ -256,7 +255,6 @@ mod tests {
     fn test_config(agent: &AgentConfig) -> CheckConfig {
         CheckConfig {
             version: 1,
-            presets: BTreeMap::new(),
             agent: agent.clone(),
             expectations: vec![Expectation {
                 q: "Does it pass?".to_string(),

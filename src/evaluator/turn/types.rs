@@ -36,6 +36,7 @@ pub(crate) struct ParsedTurnResponse {
     pub(crate) answer: ParsedAnswer,
     pub(crate) usage: Option<TokenUsage>,
     pub(crate) context_compacted: bool,
+    pub(crate) schema_valid: bool,
 }
 
 pub(super) struct RawTurnResponse {
