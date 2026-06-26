@@ -11,7 +11,9 @@ mod types;
 
 pub(crate) use attempt::ask_once;
 pub(crate) use logging::{write_thread_lifecycle_event, write_thread_restart_event};
-pub(crate) use types::{EvaluatorTurnContext, ParsedTurnResponse, ThreadLifecycleLog};
+pub(crate) use types::{
+    EvaluatorTurnContext, ParsedTurnResponse, ThreadLifecycleLog, ThreadReuseLogContext,
+};
 
 pub(crate) fn evaluator_models(agent: &AgentConfig) -> Vec<Option<String>> {
     if agent.models.is_empty() {

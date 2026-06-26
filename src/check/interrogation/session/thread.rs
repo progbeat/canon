@@ -12,10 +12,10 @@ use crate::evaluator::{
     q_scope_is_full_project, session_failure_invalidates_thread, write_thread_lifecycle_event,
     write_thread_restart_event, BaseInstructionsContext, DeveloperInstructionsContext,
     EvaluatorError, EvaluatorResponseParseCache, EvaluatorRunner, EvaluatorTurnContext,
-    EvaluatorTurnPromptContext, ParsedTurnResponse, ThreadLifecycleLog,
+    EvaluatorTurnPromptContext, ParsedTurnResponse, ThreadLifecycleLog, ThreadReuseLogContext,
 };
 use crate::logs::DiagnosticLogWriter;
-use crate::scope::sanitize_scope;
+use crate::scope::{effective_ignore_patterns, sanitize_scope};
 use crate::xpec_state::{LastResult, XpecStateCache};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -58,6 +58,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         .last_pass
         .and_then(|last_pass| last_pass.visible_tree_oid.as_deref())
         .unwrap_or("");
+    let reuse_context = thread_reuse_log_context(runtime, request, reuse_visible_tree_oid)?;
     let session_key = evaluator_thread_reuse_key(EvaluatorThreadReuseKeyContext {
         agent: request.agent,
         scope: request.enforced_scope,
@@ -77,13 +78,14 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         .cloned();
     let had_existing_session = existing_session.is_some();
     let lifecycle_log = match existing_session {
-        Some(existing) => thread_reuse_log(state, existing)?,
+        Some(existing) => thread_reuse_log(state, existing, reuse_context.clone())?,
         None => start_thread_session(
             runtime,
             runner,
             state,
             &session_key,
             &current_visible_tree_oid,
+            reuse_context.clone(),
             request,
         )?,
     };
@@ -124,6 +126,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
                     state,
                     &session_key,
                     &current_visible_tree_oid,
+                    reuse_context.clone(),
                     request,
                 )?;
                 session_id = lifecycle_log.session_id.clone();
@@ -233,6 +236,7 @@ fn start_thread_session<R: EvaluatorRunner>(
     state: &mut InterrogationRunState,
     session_key: &str,
     visible_tree_oid: &str,
+    reuse_context: ThreadReuseLogContext,
     request: ThreadTurnRequest<'_>,
 ) -> Result<ThreadLifecycleLog, EvaluatorError> {
     let visible_scope = runtime
@@ -317,12 +321,14 @@ fn start_thread_session<R: EvaluatorRunner>(
         session_id: created,
         base_instructions,
         developer_instructions,
+        reuse_context,
     })
 }
 
 fn thread_reuse_log(
     state: &InterrogationRunState,
     session_id: String,
+    reuse_context: ThreadReuseLogContext,
 ) -> Result<ThreadLifecycleLog, EvaluatorError> {
     let Some(base_instructions) = state.session_base_instructions.get(&session_id).cloned() else {
         return Err(EvaluatorError::message(format!(
@@ -341,6 +347,23 @@ fn thread_reuse_log(
         session_id,
         base_instructions,
         developer_instructions,
+        reuse_context,
+    })
+}
+
+fn thread_reuse_log_context(
+    runtime: &CheckRuntime<'_>,
+    request: ThreadTurnRequest<'_>,
+    visible_tree_oid: &str,
+) -> Result<ThreadReuseLogContext, EvaluatorError> {
+    Ok(ThreadReuseLogContext {
+        visible_tree_oid: visible_tree_oid.to_string(),
+        diff_base_tree_oid: request.diff_from_tree_oid.to_string(),
+        checked_tree_oid: runtime.checked_tree_oid().to_string(),
+        turn_prompt: request.prompt.to_string(),
+        question_context: request.question_context.to_string(),
+        plugins: request.agent.plugins.clone(),
+        ignore: effective_ignore_patterns(request.agent).map_err(EvaluatorError::message)?,
     })
 }
 

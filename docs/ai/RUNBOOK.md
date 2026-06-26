@@ -65,15 +65,15 @@ visibility/prompt contract problem rather than an implementation problem.
 
 ## Before Changing Q-scope Or Prompt Behavior
 
-Inspect stored q-scopes, recent `thread.start` scopes, and the actual response
-schema first. Git-backed full-project scope still hides ignored files and should
-not be treated as no-hidden-files/in-place mode.
+Inspect last-pass `qScope`, recent `thread.start` scopes, and the actual
+response schema first. Git-backed full-project scope still hides ignored files
+and should not be treated as no-hidden-files/in-place mode.
 
 ## `canon check --in-place`
 
 It still follows normal selected-expectation ordering, but it does not use
-persistent state for cache reuse, stored q-scopes, cooldowns, follow-up
-interrogations, or last-result writes.
+persistent state for cache reuse, last-pass q-scope seeding, cooldowns,
+follow-up interrogations, or last-result writes.
 
 ## Evaluator Cites Unrelated Files
 

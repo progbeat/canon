@@ -68,6 +68,7 @@ fn required_runtime_log_fields(event: &str) -> Option<&'static [&'static str]> {
             "thinking",
             "baseInstructions",
             "developerInstructions",
+            "reuseContext",
         ]),
         "check.finish" => Some(&["query"]),
         _ => None,

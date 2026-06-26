@@ -2,7 +2,7 @@ use super::failure::{
     fail_check_after_start, fail_check_before_selection, finish_check_error_report,
     CheckErrorReportFinish,
 };
-use super::in_place::invalid_in_place_expectation_records;
+use super::in_place::{invalid_in_place_expectation_records, validate_in_place_global_config};
 use super::prepare::{prepare_check_execution, PrepareCheckExecutionOptions};
 use super::query::{run_check_query_command, CheckQueryCommand};
 use super::query_preset::check_config_with_query_preset;
@@ -255,7 +255,9 @@ fn run_in_place_check_command(
     // directory directly, and `CheckRuntime::in_place` owns the evaluator view
     // with no persistent xpec state root. This command path only coordinates
     // those interfaces and validates selected expectations for
-    // in-place-prohibited expectation fields.
+    // in-place-prohibited expectation fields. A top-level ignore is global
+    // path-hiding config, so it is rejected even when selectors choose no
+    // expectation records to attach the error to.
     let mut repo_cache = RepoInspectionCache::new();
     // In-place uses a fresh in-memory cache bundle only because the shared
     // execution APIs accept cache handles. It still writes runtime logs when
@@ -305,6 +307,11 @@ fn run_in_place_check_command(
             Ok(options) => options,
             Err(err) => return fail_check_before_selection(&mut diagnostic_log, None, false, err),
         };
+    if options.selected.is_empty() {
+        if let Err(err) = validate_in_place_global_config(&config.agent) {
+            return fail_check_before_selection(&mut diagnostic_log, None, false, err);
+        }
+    }
     write_check_lifecycle_start_event(
         &mut diagnostic_log,
         None,
@@ -358,8 +365,8 @@ fn run_in_place_check_command(
     let runtime = CheckRuntime::in_place(root, &config, command.no_sandbox);
     // The in-place runtime makes `run_check_with_runner_and_caches` build a
     // direct Evaluate-only work queue: no pass snapshot, same-tree cache,
-    // cooldown cache, stored q-scope, xpec ordering, or cached-result output is
-    // read. The completed records are returned in this invocation's
+    // cooldown cache, xpec ordering, or cached-result output is read. The
+    // completed records are returned in this invocation's
     // CheckRunReport; the runtime exposes no persistent check-state root for
     // xpec last-result or live-report files.
     let records_result = run_check_with_runner_and_caches(

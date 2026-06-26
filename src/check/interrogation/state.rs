@@ -167,8 +167,8 @@ impl<'a> CheckRuntime<'a> {
     pub(crate) fn evaluator_interrogations_never_hide_files(&self) -> bool {
         // In-place mode is the check mode whose selected expectations are
         // evaluated against the checked directory as-is. Its evaluator
-        // interrogations never hide files through q-scope, stored q-scope,
-        // expectation ignore, scope narrowing, or retry behavior.
+        // interrogations never hide files through q-scope, expectation ignore,
+        // scope narrowing, or retry behavior.
         self.is_in_place()
     }
 
@@ -255,20 +255,20 @@ impl<'a> CheckRuntime<'a> {
     ) -> Result<Vec<String>, String> {
         if self.is_in_place() {
             // In-place q-scopes are normalized to full project scope. CLI
-            // parsing rejects `--scope` in this mode, while stored q-scopes
+            // parsing rejects `--scope` in this mode, while last-pass q-scopes
             // and evaluator qScopeSuggestion values cannot hide files.
             return Ok(full_scope());
         }
         visible_scope(agent, scope)
     }
 
-    pub(crate) fn fresh_scope_without_persistent_q_scope(&self) -> Option<Vec<String>> {
+    pub(crate) fn fresh_scope_without_persistent_history(&self) -> Option<Vec<String>> {
         match &self.mode {
             CheckRuntimeMode::Materialized { .. } => None,
-            // In-place mode never reads persistent check state, so there is no
-            // stored q-scope available in that runtime. This is the
-            // Interrogation Policy's "no q-scope is stored" case: fresh
-            // interrogations start at full project scope.
+            // In-place mode treats persisted xpec last-result history as
+            // absent. This is the Interrogation Policy's "no last pass result
+            // with qScope exists" case: fresh interrogations start at full
+            // project scope.
             CheckRuntimeMode::InPlace => Some(full_scope()),
         }
     }
@@ -462,7 +462,7 @@ mod tests {
             full_scope()
         );
         assert_eq!(
-            runtime.fresh_scope_without_persistent_q_scope().unwrap(),
+            runtime.fresh_scope_without_persistent_history().unwrap(),
             full_scope()
         );
         assert_eq!(

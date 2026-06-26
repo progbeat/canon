@@ -1,4 +1,4 @@
-use super::in_place::validate_in_place_query_expectation;
+use super::in_place::{validate_in_place_global_config, validate_in_place_query_expectation};
 use crate::app::LazyAppServerRunner;
 use crate::check::command::output::write_query_output;
 use crate::check::command::{
@@ -7,7 +7,7 @@ use crate::check::command::{
 };
 use crate::check::core::errors::error_record_from_interrogation_error;
 use crate::check::core::QueryResult;
-use crate::check::interrogation::policy::initial_visible_scope_for_expectation;
+use crate::check::interrogation::policy::initial_q_scope_for_fresh_interrogation;
 use crate::check::interrogation::query::{
     query_human_review_reason, run_query_with_runner, QueryExpectationContext, QueryRequest,
 };
@@ -186,29 +186,22 @@ fn run_prepared_query(
         // in-place compatibility validation.
         if let Some(expectation) = query_expectation.as_ref() {
             validate_in_place_query_expectation(&config.agent, expectation)?;
+        } else {
+            validate_in_place_global_config(&config.agent)?;
         }
         *enforced_scope = runtime
-            .fresh_scope_without_persistent_q_scope()
+            .fresh_scope_without_persistent_history()
             .expect("in-place query has no persistent q-scope");
     } else if let Some(expectation) = query_expectation.as_ref() {
         if !query_scope_provided {
-            *enforced_scope = initial_visible_scope_for_expectation(
+            *enforced_scope = initial_q_scope_for_fresh_interrogation(
                 root,
-                runtime
-                    .tree_source()
-                    .ok_or_else(|| "missing query tree source".to_string())?,
                 expectation,
                 &mut check_caches.xpec_state,
-                &mut check_caches.visible_tree_oid,
             )?;
         }
     }
-    // Explicit `-s` changes the scope used for this query, but a matched
-    // q/a-only expectation still records the result produced under that scope.
-    // It must not seed future check runs because the scope was chosen by the
-    // caller rather than accepted by interrogation policy.
     let persist_expectation_record = query_expectation.is_some();
-    let seed_stored_q_scope = !query_scope_provided;
     // Query mode always asks the evaluator; it does not reuse cached results.
     // A matched q/a expectation reads only the last pass so query prompts can
     // preserve checkpoint context for that expectation.
@@ -249,7 +242,6 @@ fn run_prepared_query(
                 runtime.checked_tree_oid(),
                 check_caches,
                 persist_expectation_record && !runtime.is_in_place(),
-                seed_stored_q_scope,
                 query_expectation.as_ref(),
                 enforced_scope,
                 &err,
@@ -263,7 +255,6 @@ fn run_prepared_query(
         runtime.checked_tree_oid(),
         check_caches,
         persist_expectation_record && !runtime.is_in_place(),
-        seed_stored_q_scope,
         &result,
     )?;
     if let Some(reason) = query_human_review_reason(&result) {
@@ -281,7 +272,6 @@ fn persist_query_error_result(
     checked_tree_oid: &str,
     check_caches: &mut CheckRunCaches,
     should_persist: bool,
-    seed_stored_q_scope: bool,
     expectation: Option<&SelectedExpectation>,
     scope: &[String],
     error: &str,
@@ -300,14 +290,7 @@ fn persist_query_error_result(
         error,
         &mut check_caches.visible_tree_oid,
     )?;
-    write_query_last_result(
-        root,
-        checked_tree_oid,
-        check_caches,
-        expectation,
-        &record,
-        seed_stored_q_scope,
-    )
+    write_query_last_result(root, checked_tree_oid, check_caches, expectation, &record)
 }
 
 fn persist_query_result(
@@ -315,7 +298,6 @@ fn persist_query_result(
     checked_tree_oid: &str,
     check_caches: &mut CheckRunCaches,
     should_persist: bool,
-    seed_stored_q_scope: bool,
     result: &QueryResult,
 ) -> Result<(), String> {
     if !should_persist {
@@ -330,7 +312,6 @@ fn persist_query_result(
         check_caches,
         &record.expectation,
         &record.record,
-        seed_stored_q_scope,
     )
 }
 
@@ -340,26 +321,11 @@ fn write_query_last_result(
     check_caches: &mut CheckRunCaches,
     expectation: &SelectedExpectation,
     record: &CheckRecord,
-    seed_stored_q_scope: bool,
 ) -> Result<(), String> {
-    let result = if seed_stored_q_scope {
-        check_caches.xpec_state.write_last_result_for_record(
-            root,
-            checked_tree_oid,
-            expectation,
-            record,
-        )
-    } else {
-        check_caches
-            .xpec_state
-            .write_last_result_for_record_without_stored_q_scope_seed(
-                root,
-                checked_tree_oid,
-                expectation,
-                record,
-            )
-    };
-    result.map(|_| ())
+    check_caches
+        .xpec_state
+        .write_last_result_for_record(root, checked_tree_oid, expectation, record)
+        .map(|_| ())
 }
 
 fn write_successful_query_output(
@@ -487,7 +453,7 @@ mod tests {
         };
         let mut caches = CheckRunCaches::new();
 
-        persist_query_result(&root, "checked-tree", &mut caches, true, true, &result).unwrap();
+        persist_query_result(&root, "checked-tree", &mut caches, true, &result).unwrap();
 
         let last_error = caches
             .xpec_state

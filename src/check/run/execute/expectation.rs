@@ -6,10 +6,10 @@ use crate::check::command::output::{
 use crate::check::core::errors::{error_record_from_visible_tree_oid, INTERNAL_ERROR_UNPARSABLE};
 use crate::check::core::{CheckOptions, CheckRecord, SelectedExpectation, ERROR_SCOPE_TOO_NARROW};
 use crate::check::interrogation::policy::{
-    initial_visible_scope_for_expectation, interrogate_or_error_record, narrowed_scope_is_accepted,
-    question_scope_suggestion_scope_for_unused_follow_up, turn_exceeds_break_after_tokens,
-    turn_has_context_compaction, write_scope_narrowing_event, InterrogationCall,
-    PolicyInterrogationResult,
+    initial_q_scope_for_fresh_interrogation, interrogate_or_error_record,
+    narrowed_scope_is_accepted, question_scope_suggestion_scope_for_unused_follow_up,
+    turn_exceeds_break_after_tokens, turn_has_context_compaction, write_scope_narrowing_event,
+    InterrogationCall, PolicyInterrogationResult,
 };
 use crate::check::interrogation::state::{
     should_retry_full_scope_after_error, CheckRuntime, InterrogationRunState,
@@ -64,19 +64,13 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     }
 
     let mut verified_q_scope =
-        if let Some(scope) = context.runtime.fresh_scope_without_persistent_q_scope() {
+        if let Some(scope) = context.runtime.fresh_scope_without_persistent_history() {
             scope
         } else {
-            let tree_source = context
-                .runtime
-                .tree_source()
-                .ok_or_else(|| "missing Git tree source".to_string())?;
-            match initial_visible_scope_for_expectation(
+            match initial_q_scope_for_fresh_interrogation(
                 context.runtime.root,
-                tree_source,
                 expectation,
                 &mut context.caches.xpec_state,
-                &mut context.caches.visible_tree_oid,
             ) {
                 Ok(scope) => scope,
                 Err(error) => {

@@ -79,6 +79,13 @@ pub(super) fn validate_in_place_query_expectation(
     ))
 }
 
+pub(super) fn validate_in_place_global_config(config_agent: &AgentConfig) -> Result<(), String> {
+    if config_agent.ignore.is_empty() {
+        return Ok(());
+    }
+    Err("configured ignore invalid in in-place mode".to_string())
+}
+
 pub(super) fn invalid_in_place_expectation_records(
     config_agent: &AgentConfig,
     expectations: &[SelectedExpectation],
@@ -308,6 +315,20 @@ mod tests {
             records[0].evidence,
             "configured ignore invalid in in-place mode"
         );
+    }
+
+    #[test]
+    fn top_level_ignore_is_invalid_without_selected_expectation() {
+        let config_agent = AgentConfig {
+            ignore: vec!["target/**".to_string()],
+            ..AgentConfig::default()
+        };
+
+        assert_eq!(
+            validate_in_place_global_config(&config_agent).unwrap_err(),
+            "configured ignore invalid in in-place mode"
+        );
+        validate_in_place_global_config(&AgentConfig::default()).unwrap();
     }
 
     fn selected_expectation() -> SelectedExpectation {

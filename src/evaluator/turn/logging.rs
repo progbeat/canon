@@ -140,6 +140,7 @@ pub(crate) fn write_thread_lifecycle_event(
                 thinking,
                 base_instructions: &lifecycle_log.base_instructions,
                 developer_instructions: &lifecycle_log.developer_instructions,
+                reuse_context: &lifecycle_log.reuse_context,
             },
         )
     });

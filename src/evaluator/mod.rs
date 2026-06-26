@@ -19,4 +19,5 @@ pub(crate) use turn::{
     is_model_technical_failure, model_label, record_from_response,
     session_failure_invalidates_thread, write_thread_lifecycle_event, write_thread_restart_event,
     EvaluatorFailureKind, EvaluatorTurnContext, ParsedTurnResponse, ThreadLifecycleLog,
+    ThreadReuseLogContext,
 };

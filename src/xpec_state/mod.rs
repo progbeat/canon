@@ -343,6 +343,7 @@ mod tests {
 
         let last_json = read_json(&root, &expectation.id, "last.json");
         assert_eq!(last_json, error_json);
+        assert!(!last_result_path(&root, &expectation.id, "stored-q-scope.json").exists());
 
         let _ = fs::remove_dir_all(root);
     }
@@ -395,6 +396,52 @@ mod tests {
         assert!(fail_json.get("checkedTreeOid").is_none());
         assert_eq!(fail_json["visibleTreeOid"], "visible-tree");
         assert!(!last_result_path(&root, &expectation.id, "last-error.json").exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn last_pass_q_scope_ignores_fail_and_error_results() {
+        let root = git_project("last-pass-q-scope-only");
+        let expectation = test_expectation();
+        let mut cache = XpecStateCache::default();
+        let pass_scope = vec!["src/pass.rs".to_string()];
+        let fail_scope = vec!["src/fail.rs".to_string()];
+        let error_scope = vec!["src/error.rs".to_string()];
+
+        write_last_result_fixture(
+            &root,
+            &expectation,
+            test_last_result(LastResultStatus::Fail, &fail_scope, "1970-01-01T00:00:02Z"),
+        );
+        write_last_result_fixture(
+            &root,
+            &expectation,
+            test_last_result(
+                LastResultStatus::Error,
+                &error_scope,
+                "1970-01-01T00:00:03Z",
+            ),
+        );
+
+        assert!(cache
+            .read_last_pass_q_scope(&root, &expectation)
+            .unwrap()
+            .is_none());
+
+        write_last_result_fixture(
+            &root,
+            &expectation,
+            test_last_result(LastResultStatus::Pass, &pass_scope, "1970-01-01T00:00:01Z"),
+        );
+
+        let mut cache = XpecStateCache::default();
+        assert_eq!(
+            cache
+                .read_last_pass_q_scope(&root, &expectation)
+                .unwrap()
+                .unwrap(),
+            pass_scope
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -813,76 +860,6 @@ mod tests {
         assert_eq!(
             hit.result.checked_tree_oid.as_deref(),
             Some(checked_tree_oid.as_str())
-        );
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn stored_q_scope_uses_latest_result() {
-        let root = git_project("stored-q-scope-latest-result");
-        let expectation = test_expectation();
-        let mut cache = XpecStateCache::default();
-        let pass_scope = vec!["src/pass.rs".to_string()];
-        let fail_scope = vec!["src/fail.rs".to_string()];
-        let error_scope = vec!["src/error.rs".to_string()];
-
-        write_last_result_fixture(
-            &root,
-            &expectation,
-            test_last_result(LastResultStatus::Pass, &pass_scope, "1970-01-01T00:00:01Z"),
-        );
-        write_last_result_fixture(
-            &root,
-            &expectation,
-            test_last_result(LastResultStatus::Fail, &fail_scope, "1970-01-01T00:00:02Z"),
-        );
-        write_last_result_fixture(
-            &root,
-            &expectation,
-            test_last_result(
-                LastResultStatus::Error,
-                &error_scope,
-                "1970-01-01T00:00:03Z",
-            ),
-        );
-
-        assert_eq!(
-            cache
-                .read_stored_q_scope(&root, &expectation)
-                .unwrap()
-                .unwrap(),
-            error_scope
-        );
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn stored_q_scope_ignores_unseeded_results() {
-        let root = git_project("stored-q-scope-ignores-unseeded");
-        let expectation = test_expectation();
-        let mut cache = XpecStateCache::default();
-        let seeded_scope = vec!["src/seeded.rs".to_string()];
-        let unseeded_scope = vec!["src/unseeded.rs".to_string()];
-        let seeded = test_record(&expectation, &seeded_scope, "no", None);
-        cache
-            .write_last_result_for_record(&root, "checked-tree", &expectation, &seeded)
-            .unwrap();
-        let unseeded = test_record(&expectation, &unseeded_scope, "yes", None);
-        cache
-            .write_last_result_for_record_without_stored_q_scope_seed(
-                &root,
-                "checked-tree",
-                &expectation,
-                &unseeded,
-            )
-            .unwrap();
-
-        assert_eq!(
-            cache
-                .read_stored_q_scope(&root, &expectation)
-                .unwrap()
-                .unwrap(),
-            seeded_scope
         );
         let _ = fs::remove_dir_all(root);
     }

@@ -178,10 +178,11 @@ evaluator after the visible scope is applied.
 ## Visible scope
 
 The scope applied to a staged tracked tree for an evaluator interrogation. It is
-formed from the stored q-scope for the expectation, or full project scope when
-no q-scope is stored. Configured ignore patterns are normalized as
-project-relative pathspec items, converted to excluding pathspec items, and
-applied last.
+formed from the interrogation q-scope plus configured ignore exclusions. A fresh
+interrogation starts from the `qScope` in the expectation's `last-pass.json`, or
+full project scope when no last pass is available. Configured ignore patterns
+are normalized as project-relative pathspec items, converted to excluding
+pathspec items, and applied last.
 
 ## Visible tree
 
@@ -205,21 +206,19 @@ otherwise it serializes and hashes a synthetic tree object with the
 repository's object hash algorithm. `staged::worktree` uses that same OID when
 materializing evaluator-visible trees.
 
-`check::interrogation::policy::initial_visible_scope_for_expectation` forms the
-base q-scope from `xpec_state::XpecStateCache::read_stored_q_scope`, or full
-project scope when no q-scope has been stored. `xpec_state::last_result`
-implements that method by reading `stored-q-scope.json` when present, otherwise
-falling back to the newest status-specific last-result file, including pass,
-fail, and error results. `staged::worktree::StagedWorktreeView::materialize_visible_scope`
+`check::interrogation::policy::initial_q_scope_for_fresh_interrogation` forms
+the base q-scope from the expectation's `last-pass.json`, or full project scope
+when no last pass result exists. `xpec_state::last_result` reads and writes the
+status-specific last-result files. `staged::worktree::StagedWorktreeView::materialize_visible_scope`
 then applies the visible scope before creating the evaluator working tree.
 
 `check::core::EvaluatorResponseJson` parses evaluator evidence and the required
 `qScopeSuggestion` value. `check::interrogation::policy` treats suggestions as
 unverified claims until an independent verification turn accepts them.
 `xpec_state` persists status-specific last-result files with `qScope`,
-`visibleScope`, and status-dependent tree OIDs. It reads q-scope history when
-seeding future interrogations and reads pass/fail last results when checking
-same-tree cached results.
+`visibleScope`, and status-dependent tree OIDs. It reads last-pass `qScope`
+when seeding future interrogations and reads pass/fail last results when
+checking same-tree cached results.
 
 `evaluator::protocol::prompt` renders the prompt templates stored under
 `resources/prompts/` with MiniJinja. The developer-instructions template is
