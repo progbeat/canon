@@ -40,6 +40,9 @@
 - q: "Can `canon check` make a non-initial evaluator request whose request kind has no dedicated progress timeline marker symbol?"
   a: no
 
+- q: 'Does `canon check` enforce: if a started expectation report finishes because of an evaluator no-progress turn timeout, `assert progress_timeline[-2:] == "~×"`?'
+  a: yes
+
 - q: "Does `canon check` assert that user-visible final results never have `error: \"ScopeTooNarrow\"`?"
   a: yes
 
