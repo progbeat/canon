@@ -2,7 +2,6 @@ use std::io;
 use std::path::Path;
 use std::process::Output;
 
-#[cfg(unix)]
 mod posix;
 #[cfg(unix)]
 mod unix;
