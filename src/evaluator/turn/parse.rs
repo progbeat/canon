@@ -5,7 +5,6 @@ use crate::check::{
 use crate::config_types::AgentConfig;
 use crate::evaluator::protocol::response_cache::response_excerpt;
 use crate::evaluator::EvaluatorResponseParseCache;
-use std::path::Path;
 
 pub(super) fn parse_visible_evaluator_response(
     parser_cache: &mut EvaluatorResponseParseCache,
@@ -14,8 +13,6 @@ pub(super) fn parse_visible_evaluator_response(
     schema_scope: EvaluatorResponseSchemaScope,
     short_id: &str,
     answered_short_ids: &[String],
-    _visible_scope: &[String],
-    _session_root: &Path,
 ) -> Result<ParsedAnswer, EvaluatorResponseParseError> {
     // Response parsing enforces only the evaluator response schema. Evidence
     // text remains evaluator-provided justification, not check-run input.

@@ -29,7 +29,7 @@ pub(crate) struct CheckCommandArgs {
     pub(crate) in_place: bool,
     pub(crate) no_sandbox: bool,
     pub(crate) query: Option<String>,
-    pub(crate) query_preset: Option<String>,
+    pub(crate) default_agent_preset: Option<String>,
     pub(crate) query_scope: Vec<String>,
     pub(crate) query_scope_provided: bool,
     pub(crate) options: RawCheckOptions,

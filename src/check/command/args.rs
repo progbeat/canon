@@ -55,7 +55,7 @@ pub(crate) fn parse_check_command_args(
         }
         None => None,
     };
-    let query_preset = match matches.get_one::<OsString>("preset") {
+    let default_agent_preset = match matches.get_one::<OsString>("preset") {
         Some(value) => {
             let value = arg_to_string(value)?;
             if value.trim().is_empty() {
@@ -92,7 +92,7 @@ pub(crate) fn parse_check_command_args(
     if query.is_none() && !query_scope.is_empty() {
         return Err("canon check -s/--scope requires -q".to_string());
     }
-    if query.is_none() && query_preset.is_some() {
+    if query.is_none() && default_agent_preset.is_some() {
         return Err("canon check --preset requires -q".to_string());
     }
     if query.is_some() {
@@ -109,7 +109,7 @@ pub(crate) fn parse_check_command_args(
         in_place,
         no_sandbox: matches.get_flag("no_sandbox"),
         query,
-        query_preset,
+        default_agent_preset,
         query_scope,
         query_scope_provided,
         options,
@@ -296,7 +296,7 @@ mod tests {
         let command = parse(&["-q", "Can this pass?", "--preset", "smart"]).unwrap();
 
         assert_eq!(command.query.as_deref(), Some("Can this pass?"));
-        assert_eq!(command.query_preset.as_deref(), Some("smart"));
+        assert_eq!(command.default_agent_preset.as_deref(), Some("smart"));
     }
 
     #[test]

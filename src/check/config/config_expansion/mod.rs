@@ -354,6 +354,8 @@ expectations:
 version: 1
 presets:
   default:
+    q: "Does the preset supply defaults?"
+    a: "yes"
     instructions: "Use the preset instructions."
     diff-from: master
     target: diff
@@ -361,8 +363,7 @@ presets:
     models: ["preset-model"]
     thinking: high
 expectations:
-  - q: "Does the preset supply defaults?"
-    a: "yes"
+  - {}
 "#,
         )
         .expect("parse raw check config");
@@ -377,6 +378,8 @@ expectations:
         .expect("expand config");
 
         let expectation = &config.expectations[0];
+        assert_eq!(expectation.q, "Does the preset supply defaults?");
+        assert_eq!(expectation.a, "yes");
         assert_eq!(expectation.question_context, "Use the preset instructions.");
         assert_eq!(expectation.diff_from, "master");
         assert_eq!(expectation.target, Some(ExpectationTarget::Diff));
@@ -386,6 +389,85 @@ expectations:
         );
         assert_eq!(expectation.agent.models, vec!["preset-model".to_string()]);
         assert_eq!(expectation.agent.thinking, "high");
+    }
+
+    #[test]
+    fn preset_supplies_generator_field_defaults() {
+        let root = test_root("preset-generator-field-defaults");
+        git(&root, &["init"]);
+        fs::create_dir_all(root.join("specs")).unwrap();
+        fs::write(root.join("specs/alpha.md"), "Alpha spec").unwrap();
+        git(&root, &["add", "specs/alpha.md"]);
+        let raw: RawCheckConfig = serde_saphyr::from_str(
+            r#"
+version: 1
+presets:
+  default:
+    path: "specs/*.md"
+    q_template: |
+      {{content}}
+      ---
+      Is this preset-generated spec implemented?
+    a: "yes"
+expectations:
+  - {}
+"#,
+        )
+        .expect("parse raw check config");
+        let mut cache = RepoInspectionCache::new();
+
+        let config = expand_raw_check_config(
+            Some(&root),
+            Path::new("check.yml"),
+            raw,
+            Some(&mut cache),
+            CheckConfigSource::Tree(TreeSource::Staged),
+        )
+        .expect("expand config");
+
+        assert_eq!(config.expectations.len(), 1);
+        assert_eq!(
+            config.expectations[0].q,
+            "Alpha spec\n---\nIs this preset-generated spec implemented?\n"
+        );
+        assert_eq!(config.expectations[0].a, "yes");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn item_shape_fields_prevent_preset_shape_defaults_from_overriding_form() {
+        let raw: RawCheckConfig = serde_saphyr::from_str(
+            r#"
+version: 1
+presets:
+  default:
+    include: "expects/*.yml"
+    path: "specs/*.md"
+    q_template: "Generated: {{content}}"
+    q: "Does the preset question lose?"
+    a: "no"
+expectations:
+  - q: "Does the explicit item stay explicit?"
+    a: "yes"
+"#,
+        )
+        .expect("parse raw check config");
+
+        let config = expand_raw_check_config(
+            None,
+            Path::new("check.yml"),
+            raw,
+            None,
+            CheckConfigSource::Tree(TreeSource::Staged),
+        )
+        .expect("expand config");
+
+        assert_eq!(config.expectations.len(), 1);
+        assert_eq!(
+            config.expectations[0].q,
+            "Does the explicit item stay explicit?"
+        );
+        assert_eq!(config.expectations[0].a, "yes");
     }
 
     #[test]
@@ -430,6 +512,8 @@ expectations:
 version: 1
 presets:
   default:
+    q: "Does the preset lose?"
+    a: "no"
     instructions: "Preset instructions."
     diff-from: master
     cooldown: 7d
@@ -455,6 +539,8 @@ expectations:
         .expect("expand config");
 
         let expectation = &config.expectations[0];
+        assert_eq!(expectation.q, "Does the item win?");
+        assert_eq!(expectation.a, "yes");
         assert_eq!(expectation.question_context, "Item instructions.");
         assert_eq!(expectation.diff_from, "HEAD~1");
         assert_eq!(

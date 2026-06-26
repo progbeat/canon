@@ -21,8 +21,8 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
     output_schema: &Value,
     short_id: &str,
     answered_short_ids: &[String],
-    visible_scope: &[String],
-    session_root: &Path,
+    _visible_scope: &[String],
+    _session_root: &Path,
     parser_cache: &mut EvaluatorResponseParseCache,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     expectation_id: Option<&str>,
@@ -46,8 +46,6 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
         schema_scope,
         short_id,
         answered_short_ids,
-        visible_scope,
-        session_root,
     ) {
         Ok(answer) => (answer, true),
         Err(err) if err.is_short_id_response_error() => {

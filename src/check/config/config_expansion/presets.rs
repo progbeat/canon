@@ -66,6 +66,11 @@ fn raw_preset_from_legacy_agent(agent: RawLegacyAgentConfig) -> RawPresetConfig 
     }
     models.extend(agent.model.fallbacks);
     RawPresetConfig {
+        q: None,
+        q_template: None,
+        a: None,
+        path: None,
+        include: None,
         question_context: None,
         diff_from: None,
         target: None,
@@ -106,6 +111,21 @@ fn resolve_preset(
 }
 
 fn apply_raw_preset(preset: &mut ResolvedPresetConfig, raw: &RawPresetConfig) {
+    if let Some(q) = &raw.q {
+        preset.q = Some(q.clone());
+    }
+    if let Some(q_template) = &raw.q_template {
+        preset.q_template = Some(q_template.clone());
+    }
+    if let Some(a) = &raw.a {
+        preset.a = Some(a.clone());
+    }
+    if let Some(path) = &raw.path {
+        preset.path = Some(path.clone());
+    }
+    if let Some(include) = &raw.include {
+        preset.include = Some(include.clone());
+    }
     let common = &mut preset.common;
     if let Some(context) = &raw.question_context {
         common.question_context = Some(context.clone());

@@ -61,8 +61,8 @@ pub(crate) fn developer_instructions(
         context.template_artifact_paths,
         DEVELOPER_INSTRUCTIONS_TEMPLATE,
         &[
-            ("LHS_TREE", context.diff_from_tree_oid),
-            ("RHS_TREE", context.checked_tree_oid),
+            ("BASE_TREE", context.diff_from_tree_oid),
+            ("CHECKED_TREE", context.checked_tree_oid),
         ],
         json!({
             "xpec": {
@@ -660,8 +660,8 @@ mod tests {
         let rendered = developer_instructions_for_mode(false);
 
         assert!(rendered.contains("Use the transcript below only for context/navigation"));
-        assert!(rendered.contains("$ git diff --numstat $LHS_TREE $RHS_TREE"));
-        assert!(rendered.contains("$ git diff $LHS_TREE $RHS_TREE"));
+        assert!(rendered.contains("$ git diff --numstat $BASE_TREE $CHECKED_TREE"));
+        assert!(rendered.contains("$ git diff $BASE_TREE $CHECKED_TREE"));
         assert!(rendered.contains("$ enter-sandbox --scope [\"src\"] --ignore []"));
     }
 

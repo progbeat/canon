@@ -33,6 +33,7 @@ pub(crate) struct PrerenderEvaluatorThreadReuseKeyContext<'a> {
     pub(crate) agent: &'a AgentConfig,
     pub(crate) scope: &'a [String],
     pub(crate) model: Option<&'a str>,
+    pub(crate) thinking: &'a str,
     pub(crate) visible_tree_oid: &'a str,
     pub(crate) question_context: &'a str,
     pub(crate) diff_base_tree_oid: &'a str,
@@ -50,6 +51,10 @@ pub(crate) fn evaluator_prerender_thread_reuse_key(
     // instruction context from session startup.
     let mut key = String::new();
     app_server_model_key(context.model).push_cache_key_part(&mut key);
+    key.push('\0');
+    key.push_str(&context.thinking.len().to_string());
+    key.push('\0');
+    key.push_str(context.thinking);
     key.push('\0');
     key.push_str(context.visible_tree_oid);
     key.push('\0');
@@ -87,6 +92,7 @@ pub(crate) fn evaluator_prerender_thread_reuse_key(
 pub(crate) struct RenderedEvaluatorThreadReuseKeyContext<'a> {
     pub(crate) agent: &'a AgentConfig,
     pub(crate) model: Option<&'a str>,
+    pub(crate) thinking: &'a str,
     pub(crate) base_instructions: &'a str,
     pub(crate) developer_instructions: &'a str,
 }
@@ -96,6 +102,10 @@ pub(crate) fn evaluator_rendered_thread_reuse_key(
 ) -> String {
     let mut key = String::new();
     app_server_model_key(context.model).push_cache_key_part(&mut key);
+    key.push('\0');
+    key.push_str(&context.thinking.len().to_string());
+    key.push('\0');
+    key.push_str(context.thinking);
     key.push('\0');
     key.push_str(&context.base_instructions.len().to_string());
     key.push('\0');
@@ -429,6 +439,7 @@ mod tests {
             agent: &agent,
             scope: &scope,
             model: Some("model"),
+            thinking: "medium",
             visible_tree_oid: "visible-tree",
             question_context: "instructions",
             diff_base_tree_oid: "base-a",
@@ -440,6 +451,7 @@ mod tests {
                 agent: &agent,
                 scope: &scope,
                 model: Some("model"),
+                thinking: "medium",
                 visible_tree_oid: "visible-tree",
                 question_context: "instructions",
                 diff_base_tree_oid: "base-b",
@@ -451,15 +463,29 @@ mod tests {
                 agent: &agent,
                 scope: &scope,
                 model: Some("model"),
+                thinking: "medium",
                 visible_tree_oid: "visible-tree",
                 question_context: "instructions",
                 diff_base_tree_oid: "base-a",
                 checked_tree_oid: "checked-b",
             })
             .unwrap();
+        let different_thinking =
+            evaluator_prerender_thread_reuse_key(PrerenderEvaluatorThreadReuseKeyContext {
+                agent: &agent,
+                scope: &scope,
+                model: Some("model"),
+                thinking: "high",
+                visible_tree_oid: "visible-tree",
+                question_context: "instructions",
+                diff_base_tree_oid: "base-a",
+                checked_tree_oid: "checked-a",
+            })
+            .unwrap();
 
         assert_ne!(base, different_base);
         assert_ne!(base, different_checked);
+        assert_ne!(base, different_thinking);
     }
 
     #[test]
@@ -468,17 +494,27 @@ mod tests {
         let first = evaluator_rendered_thread_reuse_key(RenderedEvaluatorThreadReuseKeyContext {
             agent: &agent,
             model: Some("model"),
+            thinking: "medium",
             base_instructions: "base",
             developer_instructions: "developer-a",
         });
         let second = evaluator_rendered_thread_reuse_key(RenderedEvaluatorThreadReuseKeyContext {
             agent: &agent,
             model: Some("model"),
+            thinking: "medium",
             base_instructions: "base",
             developer_instructions: "developer-b",
         });
+        let third = evaluator_rendered_thread_reuse_key(RenderedEvaluatorThreadReuseKeyContext {
+            agent: &agent,
+            model: Some("model"),
+            thinking: "high",
+            base_instructions: "base",
+            developer_instructions: "developer-a",
+        });
 
         assert_ne!(first, second);
+        assert_ne!(first, third);
     }
 
     #[test]

@@ -73,6 +73,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
             agent: request.agent,
             scope: request.enforced_scope,
             model: request.model,
+            thinking: request.thinking,
             visible_tree_oid: reuse_visible_tree_oid,
             question_context: request.question_context,
             diff_base_tree_oid: request.diff_from_tree_oid,
@@ -119,7 +120,9 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
                     && state.session_has_valid_response(&session_id) =>
             {
                 if let Some(progress) = request.progress {
-                    progress.record_short_id_response_retry_started();
+                    // Canon `↻`: a fresh-thread retry after a short-ID response
+                    // error started.
+                    progress.record_fresh_thread_retry_after_short_id_response_error_started();
                 }
                 clear_thread_sessions_after_failure(state);
                 write_thread_restart_event(
@@ -343,6 +346,7 @@ fn start_or_reuse_thread_session_after_rendering<R: EvaluatorRunner>(
         evaluator_rendered_thread_reuse_key(RenderedEvaluatorThreadReuseKeyContext {
             agent: request.agent,
             model: request.model,
+            thinking: request.thinking,
             base_instructions: &base_instructions,
             developer_instructions: &developer_instructions,
         });

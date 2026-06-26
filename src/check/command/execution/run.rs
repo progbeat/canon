@@ -70,7 +70,7 @@ pub(crate) fn run_check_command(
         root,
         &command.config_path,
         &checked_tree,
-        command.query_preset.as_deref(),
+        command.default_agent_preset.as_deref(),
     ) {
         Ok(config) => config,
         Err(err) => {
@@ -192,6 +192,9 @@ fn run_query_mode(
     diagnostic_log: DiagnosticLogWriter,
     check_caches: &mut CheckRunCaches,
 ) -> Result<(), CommandError> {
+    // Query mode receives the same already-expanded `CheckConfig` as normal
+    // check execution. Preset selection is over by this point; query.rs can only
+    // consume fields stored on `CheckConfig` and its expectations.
     run_check_query_command(CheckQueryCommand {
         root,
         config,
@@ -251,7 +254,7 @@ fn run_in_place_check_command(
     let config = match repo_cache.load_in_place_check_config_with_default_agent_preset(
         root,
         &command.config_path,
-        command.query_preset.as_deref(),
+        command.default_agent_preset.as_deref(),
     ) {
         Ok(config) => config,
         Err(err) => {

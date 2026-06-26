@@ -6,18 +6,18 @@ use crate::config_types::AgentConfig;
 use crate::scope::effective_ignore_patterns;
 use std::collections::BTreeMap;
 
+type ParseCacheKey = (
+    String,
+    Vec<String>,
+    EvaluatorResponseSchemaScope,
+    String,
+    Vec<String>,
+);
+type ParseCacheValue = Result<ParsedAnswer, EvaluatorResponseParseError>;
+
 #[derive(Default)]
 pub(crate) struct EvaluatorResponseParseCache {
-    values: BTreeMap<
-        (
-            String,
-            Vec<String>,
-            EvaluatorResponseSchemaScope,
-            String,
-            Vec<String>,
-        ),
-        Result<ParsedAnswer, EvaluatorResponseParseError>,
-    >,
+    values: BTreeMap<ParseCacheKey, ParseCacheValue>,
 }
 
 impl EvaluatorResponseParseCache {

@@ -57,6 +57,16 @@ impl Default for AgentConfig {
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawPresetConfig {
     #[serde(default)]
+    pub(crate) q: Option<String>,
+    #[serde(default)]
+    pub(crate) q_template: Option<String>,
+    #[serde(default)]
+    pub(crate) a: Option<String>,
+    #[serde(default)]
+    pub(crate) path: Option<String>,
+    #[serde(default)]
+    pub(crate) include: Option<String>,
+    #[serde(default)]
     // Human-authored expectation context data inherited by expectation items.
     // Despite the config key name, this is not an implementation-owned
     // evaluator-agent instruction source; only resource templates under
@@ -84,6 +94,11 @@ pub(crate) struct RawPresetConfig {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ResolvedPresetConfig {
+    pub(crate) q: Option<String>,
+    pub(crate) q_template: Option<String>,
+    pub(crate) a: Option<String>,
+    pub(crate) path: Option<String>,
+    pub(crate) include: Option<String>,
     pub(crate) common: RawExpectationCommonConfig,
 }
 
@@ -215,6 +230,7 @@ pub(crate) struct CooldownMappingConfig {
 
 #[derive(Debug, Clone)]
 pub(crate) enum RawExpectationItem {
+    Unresolved(RawExpectationFields),
     Explicit(RawExplicitExpectation),
     // The Expectations spec calls both `include` and `path`/`q_template`/`a`
     // forms generator items. Internally they stay split so config expansion can
@@ -226,6 +242,7 @@ pub(crate) enum RawExpectationItem {
 impl RawExpectationItem {
     pub(crate) fn common_config_mut(&mut self) -> &mut RawExpectationCommonConfig {
         match self {
+            RawExpectationItem::Unresolved(item) => &mut item.common,
             RawExpectationItem::Explicit(item) => &mut item.common,
             RawExpectationItem::Generator(item) => &mut item.common,
             RawExpectationItem::Include(item) => &mut item.common,
@@ -269,11 +286,43 @@ pub(crate) struct RawIncludeExpectation {
     pub(crate) common: RawExpectationCommonConfig,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct RawExpectationFields {
+    pub(crate) q: Option<String>,
+    pub(crate) q_template: Option<String>,
+    pub(crate) a: Option<String>,
+    pub(crate) path: Option<String>,
+    pub(crate) include: Option<String>,
+    pub(crate) common: RawExpectationCommonConfig,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum RawExpectationItemForm {
+    Explicit,
+    Generator,
+    Include,
+}
+
+impl RawExpectationFields {
+    pub(crate) fn item_form(&self) -> Option<RawExpectationItemForm> {
+        if self.include.is_some() {
+            return Some(RawExpectationItemForm::Include);
+        }
+        if self.path.is_some() || self.q_template.is_some() {
+            return Some(RawExpectationItemForm::Generator);
+        }
+        if self.q.is_some() {
+            return Some(RawExpectationItemForm::Explicit);
+        }
+        None
+    }
+}
+
 #[derive(Debug, Deserialize)]
 // Expectation items intentionally omit `deny_unknown_fields`: the expectations
 // spec allows extra fields so external IDs or annotations can stay in check files
 // without affecting canon's explicit/generator/include expansion.
-struct RawExpectationFields {
+struct RawExpectationFieldValues {
     #[serde(default)]
     q: Option<String>,
     #[serde(default)]
@@ -308,19 +357,9 @@ struct RawExpectationFields {
     plugins: Option<Vec<String>>,
 }
 
-impl<'de> Deserialize<'de> for RawExpectationItem {
-    fn deserialize<D>(deserializer: D) -> Result<RawExpectationItem, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let fields = RawExpectationFields::deserialize(deserializer)?;
-        RawExpectationItem::from_fields(fields).map_err(serde::de::Error::custom)
-    }
-}
-
-impl RawExpectationItem {
-    fn from_fields(fields: RawExpectationFields) -> Result<RawExpectationItem, &'static str> {
-        let RawExpectationFields {
+impl From<RawExpectationFieldValues> for RawExpectationFields {
+    fn from(fields: RawExpectationFieldValues) -> RawExpectationFields {
+        let RawExpectationFieldValues {
             q,
             q_template,
             a,
@@ -336,20 +375,93 @@ impl RawExpectationItem {
             ignore,
             plugins,
         } = fields;
-        let settings = RawExpectationSettings {
-            preset,
-            models,
-            thinking,
-            ignore,
-            plugins,
-        };
-        let common = RawExpectationCommonConfig {
-            question_context,
-            diff_from,
-            target,
-            cooldown,
-            settings,
-        };
+        RawExpectationFields {
+            q,
+            q_template,
+            a,
+            path,
+            include,
+            common: RawExpectationCommonConfig {
+                question_context,
+                diff_from,
+                target,
+                cooldown,
+                settings: RawExpectationSettings {
+                    preset,
+                    models,
+                    thinking,
+                    ignore,
+                    plugins,
+                },
+            },
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RawExpectationItem {
+    fn deserialize<D>(deserializer: D) -> Result<RawExpectationItem, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let fields = RawExpectationFieldValues::deserialize(deserializer)?;
+        Ok(RawExpectationItem::Unresolved(fields.into()))
+    }
+}
+
+impl RawExpectationItem {
+    pub(crate) fn from_fields_with_form(
+        fields: RawExpectationFields,
+        form: Option<RawExpectationItemForm>,
+    ) -> Result<RawExpectationItem, &'static str> {
+        let RawExpectationFields {
+            q,
+            q_template,
+            a,
+            path,
+            include,
+            common,
+        } = fields;
+        match form {
+            Some(RawExpectationItemForm::Include) => {
+                return match include {
+                    Some(include) => Ok(RawExpectationItem::Include(RawIncludeExpectation {
+                        include,
+                        common,
+                    })),
+                    None => Err("generator must contain include"),
+                };
+            }
+            Some(RawExpectationItemForm::Generator) => {
+                return match (q_template, path, a) {
+                    (Some(q_template), Some(path), Some(a)) => {
+                        Ok(RawExpectationItem::Generator(RawGeneratorExpectation {
+                            generated_question_format: q_template,
+                            path,
+                            a,
+                            common,
+                        }))
+                    }
+                    (Some(_), None, _) => Err("generator must contain path"),
+                    (Some(_), Some(_), None) => Err("must contain a"),
+                    (None, Some(_), _) => Err("generator must contain q_template"),
+                    _ => Err("invalid expectation item"),
+                };
+            }
+            Some(RawExpectationItemForm::Explicit) => {
+                return match (q, a) {
+                    (Some(q), Some(a)) => {
+                        Ok(RawExpectationItem::Explicit(RawExplicitExpectation {
+                            q,
+                            a,
+                            common,
+                        }))
+                    }
+                    (Some(_), None) => Err("must contain a"),
+                    _ => Err("invalid expectation item"),
+                };
+            }
+            None => {}
+        }
         if let Some(include) = include {
             return Ok(RawExpectationItem::Include(RawIncludeExpectation {
                 include,

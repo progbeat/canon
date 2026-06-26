@@ -46,8 +46,7 @@ mod tests {
         assert!(rendered.contains("normative text in the question itself"));
         assert!(rendered.contains("absence of a separate policy file"));
         assert!(rendered.contains("response schema includes `qScopeSuggestion`"));
-        assert!(rendered.contains("Do not use diff hunks as evidence"));
-        assert!(rendered.contains("removed diff line is not current content"));
+        assert!(rendered.contains("transcript paths are not verification"));
         assert!(rendered.contains("Do not widen `qScopeSuggestion`"));
     }
 
@@ -62,6 +61,9 @@ mod tests {
         assert!(rendered.contains("ScopeTooNarrow"));
         assert!(rendered.contains("InvalidQuestion"));
         assert!(rendered.contains("qScopeSuggestion"));
+        assert!(rendered.contains("absent from the visible project"));
+        assert!(rendered.contains("Answer `no` from absence"));
+        assert!(rendered.contains("visible scope covers the search domain"));
     }
 
     #[test]

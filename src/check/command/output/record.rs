@@ -58,6 +58,7 @@ impl FinishedExpectationReportOutput {
 
 struct ElapsedProgressTimelineState {
     next_marker_at: Instant,
+    progress_timeline_tail: [Option<EvaluatorProgressMarker>; 2],
 }
 
 pub(crate) fn start_expectation_report_output(
@@ -80,6 +81,7 @@ pub(crate) fn start_expectation_report_output(
     let first_elapsed_marker_at = Instant::now() + PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL;
     let elapsed_timeline = Arc::new(Mutex::new(ElapsedProgressTimelineState {
         next_marker_at: first_elapsed_marker_at,
+        progress_timeline_tail: [None, None],
     }));
     let worker_timeline = elapsed_timeline.clone();
     let mut progress_output = output.clone();
@@ -96,6 +98,7 @@ pub(crate) fn start_expectation_report_output(
                     Instant::now(),
                 )?;
                 if let Some(marker) = marker {
+                    record_progress_marker(&worker_timeline, marker)?;
                     write_stdout_record(
                         &mut progress_output,
                         marker.as_str().as_bytes(),
@@ -131,11 +134,14 @@ impl StartedExpectationReportOutput {
         let _ = self.stop_progress_worker();
         let mut output = self.output.clone();
         if self.prefix_completed {
-            let marker = match self.due_elapsed_progress_marker() {
-                Ok(marker) => marker,
+            let markers = match self.due_elapsed_progress_markers() {
+                Ok(markers) => markers,
                 Err(_) => return FinishedExpectationReportOutput::with_stdout_completion_failed(),
             };
-            if let Some(marker) = marker {
+            for marker in markers {
+                if record_progress_marker(&self.timeline, marker).is_err() {
+                    return FinishedExpectationReportOutput::with_stdout_completion_failed();
+                }
                 if write_stdout_record(
                     &mut output,
                     marker.as_str().as_bytes(),
@@ -145,6 +151,9 @@ impl StartedExpectationReportOutput {
                 {
                     return FinishedExpectationReportOutput::with_stdout_completion_failed();
                 }
+            }
+            if assert_final_no_progress_turn_timeout_suffix(&self.timeline, record).is_err() {
+                return FinishedExpectationReportOutput::with_stdout_completion_failed();
             }
         }
         let result_suffix = if self.prefix_completed {
@@ -169,9 +178,50 @@ impl StartedExpectationReportOutput {
             .map_err(|_| "check live report progress thread panicked".to_string())?
     }
 
-    fn due_elapsed_progress_marker(&self) -> Result<Option<EvaluatorProgressMarker>, String> {
-        elapsed_progress_marker_due(&self.progress, &self.timeline, Instant::now())
+    fn due_elapsed_progress_markers(&self) -> Result<Vec<EvaluatorProgressMarker>, String> {
+        completion_progress_markers_due(&self.progress, &self.timeline, Instant::now())
     }
+}
+
+fn record_progress_marker(
+    timeline: &Arc<Mutex<ElapsedProgressTimelineState>>,
+    marker: EvaluatorProgressMarker,
+) -> Result<(), String> {
+    let mut timeline = timeline
+        .lock()
+        .map_err(|_| "check live report progress state poisoned".to_string())?;
+    let next_tail = [timeline.progress_timeline_tail[1], Some(marker)];
+    timeline.progress_timeline_tail = next_tail;
+    Ok(())
+}
+
+fn assert_final_no_progress_turn_timeout_suffix(
+    timeline: &Arc<Mutex<ElapsedProgressTimelineState>>,
+    record: &CheckRecord,
+) -> Result<(), String> {
+    if !record.requires_human_review() {
+        return Ok(());
+    }
+    let timeline = timeline
+        .lock()
+        .map_err(|_| "check live report progress state poisoned".to_string())?;
+    if timeline.progress_timeline_tail[1] == Some(EvaluatorProgressMarker::TurnTimeout) {
+        assert_progress_timeline_suffix_is_idle_then_timeout(timeline.progress_timeline_tail);
+    }
+    Ok(())
+}
+
+fn assert_progress_timeline_suffix_is_idle_then_timeout(
+    progress_timeline_tail: [Option<EvaluatorProgressMarker>; 2],
+) {
+    assert_eq!(
+        progress_timeline_tail,
+        [
+            Some(EvaluatorProgressMarker::Idle),
+            Some(EvaluatorProgressMarker::TurnTimeout)
+        ],
+        "assert progress_timeline[-2:] == \"~×\" for no-progress turn timeout"
+    );
 }
 
 fn elapsed_progress_marker_due(
@@ -183,6 +233,21 @@ fn elapsed_progress_marker_due(
         .lock()
         .map_err(|_| "check live report progress state poisoned".to_string())?;
     progress.elapsed_marker_due(
+        &mut timeline.next_marker_at,
+        now,
+        PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL,
+    )
+}
+
+fn completion_progress_markers_due(
+    progress: &EvaluatorProgress,
+    timeline: &Arc<Mutex<ElapsedProgressTimelineState>>,
+    now: Instant,
+) -> Result<Vec<EvaluatorProgressMarker>, String> {
+    let mut timeline = timeline
+        .lock()
+        .map_err(|_| "check live report progress state poisoned".to_string())?;
+    progress.completion_markers_due(
         &mut timeline.next_marker_at,
         now,
         PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL,
@@ -277,4 +342,59 @@ pub(super) fn render_check_output_record_status_and_details(record: &CheckRecord
         }
     }
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        assert_final_no_progress_turn_timeout_suffix, record_progress_marker,
+        ElapsedProgressTimelineState,
+    };
+    use crate::check::core::{CheckRecord, CheckResult, INTERNAL_ERROR_UNPARSABLE};
+    use crate::evaluator::EvaluatorProgressMarker;
+    use std::sync::{Arc, Mutex};
+    use std::time::Instant;
+
+    #[test]
+    fn turn_timeout_progress_marker_is_allowed_after_idle() {
+        let timeline = test_timeline();
+
+        record_progress_marker(&timeline, EvaluatorProgressMarker::Idle).unwrap();
+        record_progress_marker(&timeline, EvaluatorProgressMarker::TurnTimeout).unwrap();
+        assert_final_no_progress_turn_timeout_suffix(&timeline, &timeout_error_record()).unwrap();
+    }
+
+    #[test]
+    #[should_panic(expected = "assert progress_timeline[-2:] == \"~×\"")]
+    fn final_turn_timeout_progress_marker_asserts_idle_predecessor() {
+        let timeline = test_timeline();
+
+        record_progress_marker(&timeline, EvaluatorProgressMarker::TurnTimeout).unwrap();
+        assert_final_no_progress_turn_timeout_suffix(&timeline, &timeout_error_record()).unwrap();
+    }
+
+    fn test_timeline() -> Arc<Mutex<ElapsedProgressTimelineState>> {
+        Arc::new(Mutex::new(ElapsedProgressTimelineState {
+            next_marker_at: Instant::now(),
+            progress_timeline_tail: [None, None],
+        }))
+    }
+
+    fn timeout_error_record() -> CheckRecord {
+        CheckRecord {
+            timestamp: "1970-01-01T00:00:00Z".to_string(),
+            number: 1,
+            result: CheckResult::Fail,
+            question: Some("Does it pass?".to_string()),
+            expected_answer: Some("yes".to_string()),
+            observed: INTERNAL_ERROR_UNPARSABLE.to_string(),
+            error: Some(INTERNAL_ERROR_UNPARSABLE.to_string()),
+            evidence: "technical timeout".to_string(),
+            scope: vec![".".to_string()],
+            question_scope_suggestion: None,
+            visible_tree_oid: "visible".to_string(),
+            id: "11111111111111111111".to_string(),
+            display_id: "j".to_string(),
+        }
+    }
 }

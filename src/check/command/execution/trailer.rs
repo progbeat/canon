@@ -91,7 +91,7 @@ mod tests {
             in_place: false,
             no_sandbox: false,
             query: None,
-            query_preset: None,
+            default_agent_preset: None,
             query_scope: Vec::new(),
             query_scope_provided: false,
             options: RawCheckOptions::default(),

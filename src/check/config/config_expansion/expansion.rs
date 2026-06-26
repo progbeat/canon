@@ -4,7 +4,7 @@ use super::presets::{apply_expectation_settings, raw_presets_from_config, resolv
 use super::source::CheckConfigSource;
 use crate::config_types::{
     AgentConfig, CheckConfig, Expectation, ExpectationTarget, RawCheckConfig,
-    RawExpectationCommonConfig, RawExpectationItem, RawExpectationSettings,
+    RawExpectationCommonConfig, RawExpectationFields, RawExpectationItem, RawExpectationSettings,
     RawGeneratorExpectation, RawIncludeExpectation, ResolvedPresetConfig, DEFAULT_DIFF_FROM,
 };
 use crate::repo_inspection::RepoInspectionCache;
@@ -42,6 +42,9 @@ pub(crate) fn expand_raw_check_config_with_options(
     source: CheckConfigSource,
     options: CheckConfigExpansionOptions<'_>,
 ) -> Result<CheckConfig, String> {
+    // Raw expansion is the only layer that consumes preset names. Command
+    // execution receives the returned `CheckConfig`, which carries resolved
+    // agent/expectation fields and no preset map to inspect later.
     let raw_presets = raw_presets_from_config(raw.presets, raw.agent)?;
     let resolved_presets = resolve_presets(raw_presets)?;
     let default_agent_preset = options.default_agent_preset.unwrap_or("default");
@@ -84,6 +87,10 @@ impl RawExpectationExpansion<'_> {
         items: Vec<RawExpectationItem>,
     ) -> Result<(), String> {
         for (index, item) in items.into_iter().enumerate() {
+            let item_number = index + 1;
+            let item = self
+                .resolve_expectation_item(item)
+                .map_err(|err| format!("expectation {}: {}", item_number, err))?;
             match item {
                 RawExpectationItem::Explicit(item) => {
                     let common = self.resolve_expectation_common(item.common)?;
@@ -95,7 +102,6 @@ impl RawExpectationExpansion<'_> {
                         cooldown,
                         settings,
                     } = common;
-                    let item_number = index + 1;
                     let question_context = resolved_question_context(question_context);
                     // Keep the literal `diff-from` selection here. Prompt rendering
                     // resolves it to a tree in `resolve_diff_from`, where the check
@@ -125,6 +131,7 @@ impl RawExpectationExpansion<'_> {
                 RawExpectationItem::Include(item) => {
                     self.expand_include(config_path, index, item)?
                 }
+                RawExpectationItem::Unresolved(_) => unreachable!("resolved item is classified"),
             }
         }
         Ok(())
@@ -254,6 +261,28 @@ impl RawExpectationExpansion<'_> {
         apply_preset_defaults(&mut common, &preset.common);
         Ok(common)
     }
+
+    fn resolve_expectation_item(
+        &self,
+        item: RawExpectationItem,
+    ) -> Result<RawExpectationItem, String> {
+        let RawExpectationItem::Unresolved(mut fields) = item else {
+            return Ok(item);
+        };
+        let preset_name = fields
+            .common
+            .settings
+            .preset
+            .as_deref()
+            .unwrap_or("default");
+        let preset = self
+            .presets
+            .get(preset_name)
+            .ok_or_else(|| format!("unknown preset: {}", preset_name))?;
+        let item_form = fields.item_form();
+        apply_item_preset_defaults(&mut fields, preset);
+        RawExpectationItem::from_fields_with_form(fields, item_form).map_err(str::to_string)
+    }
 }
 
 fn resolved_common_is_question_answer_only(common: &RawExpectationCommonConfig) -> bool {
@@ -299,6 +328,25 @@ fn apply_preset_defaults(
     if common.settings.plugins.is_none() {
         common.settings.plugins = preset.settings.plugins.clone();
     }
+}
+
+fn apply_item_preset_defaults(fields: &mut RawExpectationFields, preset: &ResolvedPresetConfig) {
+    if fields.q.is_none() {
+        fields.q = preset.q.clone();
+    }
+    if fields.q_template.is_none() {
+        fields.q_template = preset.q_template.clone();
+    }
+    if fields.a.is_none() {
+        fields.a = preset.a.clone();
+    }
+    if fields.path.is_none() {
+        fields.path = preset.path.clone();
+    }
+    if fields.include.is_none() {
+        fields.include = preset.include.clone();
+    }
+    apply_preset_defaults(&mut fields.common, &preset.common);
 }
 
 fn resolved_question_context(context: Option<String>) -> String {

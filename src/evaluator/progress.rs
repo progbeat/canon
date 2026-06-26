@@ -4,14 +4,15 @@ use std::time::{Duration, Instant};
 // Shared progress handle for one evaluated expectation. Check execution owns the
 // handle, installs it on the evaluator runner, and records the non-initial
 // evaluator work kinds that have canon timeline markers: model fallback,
-// short-ID response retry, full-scope retry, and q-scope verification. The
-// `check::interrogation::session::thread` records fresh-thread retries after
-// short-ID response errors through `record_short_id_response_retry_started`.
-// The evaluated-expectation path records q-scope verification through
-// `record_q_scope_verification_started`; the stdout live timeline writer in
-// `check::command::output::record` renders and flushes the due marker.
-// The evaluator turn request path records active-turn idle accumulation and
-// exhausted no-progress turn timeouts.
+// fresh-thread retry after a short-ID response error, full-scope retry, and
+// q-scope verification. `src/check/interrogation/session/model_fallback.rs`
+// records `⇄`; `src/check/interrogation/session/thread.rs` records `↻` through
+// `record_fresh_thread_retry_after_short_id_response_error_started`;
+// `src/check/run/execute/expectation.rs` records `↗` and `↘`; and
+// `src/app/process/transport.rs` records active-turn idle accumulation `~` and
+// exhausted no-progress turn timeouts `×`.
+// The stdout live timeline writer in `check::command::output::record` renders
+// and flushes the due marker.
 // App-server control messages such as initialize and thread/start are session
 // setup, not evaluator work kinds in this timeline. When a non-initial
 // interrogation needs a fresh session, its caller records the fallback, retry,
@@ -31,7 +32,8 @@ pub(crate) enum EvaluatorProgressMarker {
     TurnTimeout,
     Idle,
     ModelFallback,
-    ShortIdResponseRetry,
+    // Canon `↻`: a fresh-thread retry after a short-ID response error started.
+    FreshThreadRetryAfterShortIdResponseError,
     FullScopeRetry,
     QScopeVerification,
     NoHigherPriorityEvent,
@@ -42,7 +44,7 @@ enum EvaluatorProgressEventKind {
     TurnTimeout,
     Idle,
     ModelFallback,
-    ShortIdResponseRetry,
+    FreshThreadRetryAfterShortIdResponseError,
     FullScopeRetry,
     QScopeVerification,
 }
@@ -81,9 +83,10 @@ impl EvaluatorProgress {
         }
     }
 
-    pub(crate) fn record_short_id_response_retry_started(&self) {
+    pub(crate) fn record_fresh_thread_retry_after_short_id_response_error_started(&self) {
         if let Ok(mut state) = self.state.lock() {
-            state.record_short_id_response_retry_started_at(Instant::now());
+            state
+                .record_fresh_thread_retry_after_short_id_response_error_started_at(Instant::now());
         }
     }
 
@@ -120,6 +123,38 @@ impl EvaluatorProgress {
         *next_marker_at = now + interval;
         Ok(Some(marker))
     }
+
+    pub(crate) fn completion_markers_due(
+        &self,
+        next_marker_at: &mut Instant,
+        now: Instant,
+        interval: Duration,
+    ) -> Result<Vec<EvaluatorProgressMarker>, String> {
+        if interval.is_zero() {
+            return Ok(Vec::new());
+        }
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| "evaluator progress state poisoned".to_string())?;
+        let mut markers = Vec::new();
+        let terminal_turn_timeout_due =
+            state.has_event_before_or_at(EvaluatorProgressEventKind::TurnTimeout, now);
+        if *next_marker_at <= now {
+            let marker_at = *next_marker_at;
+            let window_start = marker_at - interval;
+            markers.push(state.marker_for_window(window_start, marker_at));
+            state.events.retain(|event| event.at > marker_at);
+            *next_marker_at = now + interval;
+        }
+        if terminal_turn_timeout_due {
+            state.events.retain(|event| event.at > now);
+            if markers.last() != Some(&EvaluatorProgressMarker::TurnTimeout) {
+                markers.push(EvaluatorProgressMarker::TurnTimeout);
+            }
+        }
+        Ok(markers)
+    }
 }
 
 impl EvaluatorProgressState {
@@ -135,8 +170,11 @@ impl EvaluatorProgressState {
         self.record_marker_event(at, EvaluatorProgressEventKind::ModelFallback);
     }
 
-    fn record_short_id_response_retry_started_at(&mut self, at: Instant) {
-        self.record_marker_event(at, EvaluatorProgressEventKind::ShortIdResponseRetry);
+    fn record_fresh_thread_retry_after_short_id_response_error_started_at(&mut self, at: Instant) {
+        self.record_marker_event(
+            at,
+            EvaluatorProgressEventKind::FreshThreadRetryAfterShortIdResponseError,
+        );
     }
 
     fn record_full_scope_retry_started_at(&mut self, at: Instant) {
@@ -170,8 +208,8 @@ impl EvaluatorProgressState {
                 EvaluatorProgressMarker::ModelFallback,
             ),
             (
-                EvaluatorProgressEventKind::ShortIdResponseRetry,
-                EvaluatorProgressMarker::ShortIdResponseRetry,
+                EvaluatorProgressEventKind::FreshThreadRetryAfterShortIdResponseError,
+                EvaluatorProgressMarker::FreshThreadRetryAfterShortIdResponseError,
             ),
             (
                 EvaluatorProgressEventKind::FullScopeRetry,
@@ -190,6 +228,12 @@ impl EvaluatorProgressState {
         }
         EvaluatorProgressMarker::NoHigherPriorityEvent
     }
+
+    fn has_event_before_or_at(&self, kind: EvaluatorProgressEventKind, now: Instant) -> bool {
+        self.events
+            .iter()
+            .any(|event| event.kind == kind && event.at <= now)
+    }
 }
 
 impl EvaluatorProgressMarker {
@@ -198,7 +242,7 @@ impl EvaluatorProgressMarker {
             EvaluatorProgressMarker::TurnTimeout => "×",
             EvaluatorProgressMarker::Idle => "~",
             EvaluatorProgressMarker::ModelFallback => "⇄",
-            EvaluatorProgressMarker::ShortIdResponseRetry => "↻",
+            EvaluatorProgressMarker::FreshThreadRetryAfterShortIdResponseError => "↻",
             EvaluatorProgressMarker::FullScopeRetry => "↗",
             EvaluatorProgressMarker::QScopeVerification => "↘",
             EvaluatorProgressMarker::NoHigherPriorityEvent => ".",
@@ -254,7 +298,7 @@ mod tests {
     }
 
     #[test]
-    fn short_id_response_retry_marker_has_canon_priority() {
+    fn fresh_thread_retry_after_short_id_response_error_marker_has_canon_priority() {
         let progress = EvaluatorProgress::new();
         let interval = Duration::from_secs(60);
         let start = Instant::now();
@@ -264,15 +308,23 @@ mod tests {
         {
             let mut state = progress.state.lock().unwrap();
             state.record_full_scope_retry_started_at(start + Duration::from_secs(10));
-            state.record_short_id_response_retry_started_at(start + Duration::from_secs(20));
+            state.record_fresh_thread_retry_after_short_id_response_error_started_at(
+                start + Duration::from_secs(20),
+            );
         }
 
         let marker = progress
             .elapsed_marker_due(&mut next_marker_at, tick_at, interval)
             .unwrap();
 
-        assert_eq!(marker, Some(EvaluatorProgressMarker::ShortIdResponseRetry));
-        assert_eq!(EvaluatorProgressMarker::ShortIdResponseRetry.as_str(), "↻");
+        assert_eq!(
+            marker,
+            Some(EvaluatorProgressMarker::FreshThreadRetryAfterShortIdResponseError)
+        );
+        assert_eq!(
+            EvaluatorProgressMarker::FreshThreadRetryAfterShortIdResponseError.as_str(),
+            "↻"
+        );
     }
 
     #[test]
@@ -316,5 +368,65 @@ mod tests {
             .unwrap();
 
         assert_eq!(marker, Some(EvaluatorProgressMarker::QScopeVerification));
+    }
+
+    #[test]
+    fn completion_markers_due_emit_overdue_idle_then_terminal_turn_timeout() {
+        let progress = EvaluatorProgress::new();
+        let interval = Duration::from_secs(60);
+        let start = Instant::now();
+        let mut next_marker_at = start + interval;
+
+        {
+            let mut state = progress.state.lock().unwrap();
+            state.record_no_progress_timeout_accumulating_at(start + Duration::from_secs(10));
+            state.record_turn_timeout_at(start + Duration::from_secs(119));
+        }
+
+        let markers = progress
+            .completion_markers_due(
+                &mut next_marker_at,
+                start + Duration::from_secs(119),
+                interval,
+            )
+            .unwrap();
+        assert_eq!(
+            markers,
+            vec![
+                EvaluatorProgressMarker::Idle,
+                EvaluatorProgressMarker::TurnTimeout
+            ]
+        );
+        assert_eq!(next_marker_at, start + Duration::from_secs(179));
+    }
+
+    #[test]
+    fn completion_markers_due_keeps_terminal_turn_timeout_before_overdue_window() {
+        let progress = EvaluatorProgress::new();
+        let interval = Duration::from_secs(60);
+        let start = Instant::now();
+        let mut next_marker_at = start + Duration::from_secs(120);
+
+        progress
+            .state
+            .lock()
+            .unwrap()
+            .record_turn_timeout_at(start + Duration::from_secs(30));
+
+        let markers = progress
+            .completion_markers_due(
+                &mut next_marker_at,
+                start + Duration::from_secs(130),
+                interval,
+            )
+            .unwrap();
+
+        assert_eq!(
+            markers,
+            vec![
+                EvaluatorProgressMarker::NoHigherPriorityEvent,
+                EvaluatorProgressMarker::TurnTimeout
+            ]
+        );
     }
 }

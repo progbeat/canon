@@ -44,6 +44,13 @@ question. Inspect the actual code path before changing behavior. If evidence
 contradicts the current file, check whether the evaluator read a removed diff
 hunk as current code.
 
+## Diff Transcript Leakage
+
+When evidence cites a deleted-but-real file or symbol, inspect recent
+`thread.start` events and template full-output paths. The evaluator may have
+seen LHS/deleted diff content in the navigation transcript and mistaken it for
+the checked tree. Do not call this a hallucination until that leak is ruled out.
+
 ## Evidence Proving The Wrong Property
 
 Treat it as unsupported for that expectation. For example, evidence that a
@@ -68,6 +75,8 @@ visibility/prompt contract problem rather than an implementation problem.
 Inspect last-pass `qScope`, recent `thread.start` scopes, and the actual
 response schema first. Git-backed full-project scope still hides ignored files
 and should not be treated as no-hidden-files/in-place mode.
+For restricted-scope absence checks, `no` requires the visible scope to cover
+the search domain; otherwise expect `ScopeTooNarrow` or a wider retry.
 
 ## Preset Evidence
 
@@ -75,6 +84,10 @@ and should not be treated as no-hidden-files/in-place mode.
 resolved runtime config after preset defaults are applied. Do not fix evidence
 that only says "`CheckConfig` lacks presets" by reintroducing preset lookup
 after raw config expansion; verify the preset expansion path first.
+
+Classify raw expectation items after applying preset defaults, but preserve any
+form selected by item-owned fields. Presets can provide structural fields such
+as `q`, `a`, `q_template`, `path`, and `include`.
 
 ## `canon check --in-place`
 

@@ -52,10 +52,11 @@ impl DiagnosticLogWriter {
     // `${CANON_STATE_DIR}/logs/0.jsonl`, rotation keeps older JSONL files in
     // that directory, and every `write_event` call renders, appends, flushes,
     // and prunes one complete runtime-log object. `logs::render` validates the
-    // common fields and known event schemas, while `logs::events` and
-    // `check::interrogation::session` route check lifecycle, thread
+    // common fields and known event schemas, while `logs::events`,
+    // `check::interrogation::session`, and
+    // `check::interrogation::result::records` route check lifecycle, thread
     // lifecycle/restart, agent request/response/failure, token-usage, cache,
-    // and record events through this writer.
+    // record, and query-result events through this writer.
     #[cfg(test)]
     pub(crate) fn create(root: &Path) -> DiagnosticLogResult<DiagnosticLogWriter> {
         let mut cache = RepoInspectionCache::new();

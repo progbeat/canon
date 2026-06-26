@@ -1,6 +1,14 @@
 #!/usr/bin/env sh
 set -eu
 
+if [ "${1:-}" = "canon" ]; then
+  shift
+fi
+
+if [ "$#" -eq 0 ]; then
+  set -- help
+fi
+
 tmpdir="${TMPDIR:-/scratch/tmp}"
 codex_home="${CODEX_HOME:-/scratch/codex-home}"
 mkdir -p \

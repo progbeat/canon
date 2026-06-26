@@ -178,6 +178,9 @@ fn run_prepared_query(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     check_caches: &mut CheckRunCaches,
 ) -> Result<(), String> {
+    // `config` is already expanded: command `--preset` can only choose the
+    // default agent during raw expansion, before query mode consumes resolved
+    // expectation/config fields here.
     let query_expectation = query_expectation_context(config, question)?;
     if runtime.is_in_place() {
         // Query mode has no expectation selectors. The only selected
