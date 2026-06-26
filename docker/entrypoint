@@ -39,10 +39,9 @@ fi
 # evaluator tree under /scratch/sandbox.
 unset CANON_SECRET_DIR
 if [ "${1:-}" = "check" ]; then
-  canon_command="$1"
   shift
   # Preserve the user-supplied check arguments and insert Canon's container-only
   # sandbox mode before any selectors or `--` separator.
-  set -- "$canon_command" --no-sandbox "$@"
+  set -- check --no-sandbox "$@"
 fi
 exec canon "$@"

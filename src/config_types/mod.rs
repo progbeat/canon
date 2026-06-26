@@ -2,6 +2,9 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone)]
+// Resolved runtime config for check execution. `RawCheckConfig` is the parsed
+// check.yml schema with the canon `presets` mapping; expansion resolves preset
+// defaults into this type's agent and expectation fields.
 pub(crate) struct CheckConfig {
     pub(crate) version: u32,
     pub(crate) agent: AgentConfig,
@@ -10,6 +13,7 @@ pub(crate) struct CheckConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
+// Parsed check.yml schema before preset resolution.
 pub(crate) struct RawCheckConfig {
     pub(crate) version: u32,
     #[serde(default)]

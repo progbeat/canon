@@ -69,6 +69,13 @@ Inspect last-pass `qScope`, recent `thread.start` scopes, and the actual
 response schema first. Git-backed full-project scope still hides ignored files
 and should not be treated as no-hidden-files/in-place mode.
 
+## Preset Evidence
+
+`RawCheckConfig` is the check.yml schema with `presets`; `CheckConfig` is the
+resolved runtime config after preset defaults are applied. Do not fix evidence
+that only says "`CheckConfig` lacks presets" by reintroducing preset lookup
+after raw config expansion; verify the preset expansion path first.
+
 ## `canon check --in-place`
 
 It still follows normal selected-expectation ordering, but it does not use

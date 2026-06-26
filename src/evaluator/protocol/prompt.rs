@@ -50,11 +50,11 @@ pub(crate) fn developer_instructions(
         .checked_file_count
         .checked_sub(context.visible_file_count)
         .ok_or("visible file count exceeds checked file count")?;
-    // The transcript intentionally has two levels of diff evidence: unscoped
-    // `git diff --numstat` for change discovery, then scoped detailed `git
-    // diff` for inspectable content. If the summary shows a changed path whose
-    // details are outside `visible_scope`, the evaluator has enough context to
-    // return ScopeTooNarrow rather than treating the path as nonexistent.
+    // The transcript intentionally has two scoped diff views over
+    // `visible_scope`: `git diff --numstat` for change discovery, then detailed
+    // `git diff` for inspectable content. Template display text omits the
+    // pathspec so developer instructions show the relevant tree OIDs without
+    // repeating noisy scope arguments.
     render_minijinja_resource_template(
         context.root,
         context.template_output_dir,
