@@ -20,9 +20,9 @@ git diff --numstat "$LHS_TREE" "$RHS_TREE" -- {{ xpec.visible_scope|shargs }}
 git diff "$LHS_TREE" "$RHS_TREE" -- {{ xpec.visible_scope|shargs }}
 {% endfilter %}
 
-$ enter-sandbox --scope {{ xpec.visible_scope|json }}
+$ enter-sandbox --scope {{ xpec.q_scope|json }} --ignore {{ xpec.ignore|json }}
 You are now in the read-only sandbox. Git commands are unavailable.
-{{ num_invisible_files }} project files are hidden because they are likely unnecessary to answer the question.
+{{ num_invisible_files }} project files are hidden because they are likely not relevant.
 ```
 {% endif -%}
 ````
