@@ -13,7 +13,6 @@
 **checkpoint** is the checked Git tree from an xpec's most recent pass result.
 
 **evaluator thread** is an ephemeral evaluator interaction context with no persisted history.
-It may only be reused for an interrogation with the same evaluator model and the same stable inputs used to render evaluator developer instructions.
 
 ---
 

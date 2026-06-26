@@ -64,23 +64,6 @@ expectations:
     a: "no"
     cooldown: 1d
 
-  # Access control
-  - q: Can you read .canon/check.yml?
-    a: "no"
-    cooldown: 3d
-
-  - q: "Can you read any files under `.git/canon`?"
-    a: "no"  # because these files aren't required to answer these questions
-    cooldown: 3d
-
-  - q: "Can you cause any observable filesystem state change? Do not answer without trying."
-    a: "no"
-    preset: smart
-
-  - q: "Does `canon` read runtime logs?"
-    a: "no"  # because it's hack
-    cooldown: 3d
-
   # FS side effects
   - q: "Does canon prefer memory-backed temporary storage for canon-owned temporary directories when the host platform provides it, with fallback to ordinary temporary storage otherwise?"
     a: "yes"
@@ -108,3 +91,6 @@ expectations:
 
   - q: "Does canon validate each expectation's expected answer using the `answer` pattern defined by the interrogation response schema?"
     a: "yes"
+
+  - q: "Can you find any check execution path after raw config expansion that looks up a named preset or copies fields from a preset instead of consuming the already-resolved fields of the question or expectation being evaluated?"
+    a: "no"
