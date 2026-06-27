@@ -18,3 +18,5 @@ elif every cached result is a pass:
 else:
     selected = empty  # cached failures must be fixed first
 ```
+
+Expectations matched by explicit selectors are forced selections. They must not be deselected by cached results or by later selection logic.
