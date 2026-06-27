@@ -1,5 +1,6 @@
 use super::StagedWorktreeView;
 use crate::git::{git_object_oid_has_known_shape, StagedTrackedFile};
+use crate::scope::path_bytes_in_scope;
 use std::collections::BTreeMap;
 
 pub(super) struct VisibleTree {
@@ -22,17 +23,31 @@ impl StagedWorktreeView {
         if !git_object_oid_has_known_shape(visible_tree_oid) {
             return Err("visibleTreeOid must be a Git object ID hex string".to_string());
         }
-        // The caller passes the complete visible scope, including configured
-        // ignore exclusions. This is the only path selection used to derive the
-        // visible tree's file entries from the checked Git tree.
-        let entry_paths = self
-            .source
-            .tracked_files_for_pathspecs(&self.source_root, visible_scope)?;
+        let checked_files = self.source.tracked_files(&self.source_root)?;
+        let entry_paths =
+            checked_paths_selected_by_visible_scope_pathspec(checked_files, visible_scope)?;
         Ok(VisibleTree {
             oid: visible_tree_oid.to_string(),
             entry_paths,
         })
     }
+}
+
+fn checked_paths_selected_by_visible_scope_pathspec(
+    checked_files: Vec<StagedTrackedFile>,
+    visible_scope_pathspec: &[String],
+) -> Result<Vec<StagedTrackedFile>, String> {
+    // The caller passes the complete visible scope, including configured ignore
+    // exclusions. Apply that pathspec with Canon's matcher instead of delegating
+    // a mixed include/exclude pathspec list back to Git; this keeps
+    // materialization aligned with visible-tree OID calculation.
+    let mut selected = Vec::new();
+    for file in checked_files {
+        if path_bytes_in_scope(&file.path, visible_scope_pathspec)? {
+            selected.push(file);
+        }
+    }
+    Ok(selected)
 }
 
 impl VisibleTree {

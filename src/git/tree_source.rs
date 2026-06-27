@@ -1,7 +1,6 @@
 use super::program::{
-    empty_tree_oid, git_head_tree_exists, resolve_tree_oid, staged_tracked_files,
-    staged_tracked_files_for_pathspecs, staged_tree_oid, tree_tracked_files,
-    tree_tracked_files_for_pathspecs, StagedTrackedFile,
+    empty_tree_oid, git_head_tree_exists, resolve_tree_oid, staged_tracked_files, staged_tree_oid,
+    tree_tracked_files, StagedTrackedFile,
 };
 use std::path::Path;
 
@@ -54,19 +53,6 @@ impl TreeSource {
         match self {
             TreeSource::Staged => staged_tracked_files(root),
             TreeSource::Git { tree_oid, .. } => tree_tracked_files(root, tree_oid),
-        }
-    }
-
-    pub(crate) fn tracked_files_for_pathspecs(
-        &self,
-        root: &Path,
-        pathspecs: &[String],
-    ) -> Result<Vec<StagedTrackedFile>, String> {
-        match self {
-            TreeSource::Staged => staged_tracked_files_for_pathspecs(root, pathspecs),
-            TreeSource::Git { tree_oid, .. } => {
-                tree_tracked_files_for_pathspecs(root, tree_oid, pathspecs)
-            }
         }
     }
 

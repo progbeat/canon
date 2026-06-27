@@ -181,6 +181,38 @@ mod tests {
     }
 
     #[test]
+    fn materialized_visible_tree_keeps_file_scope_with_unrelated_exclusions() {
+        let root = git_project("staged-snapshot-file-scope-with-exclusions");
+        fs::create_dir_all(root.join("docker")).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("docker/entrypoint"), "#!/bin/sh\n").unwrap();
+        fs::write(root.join("src/hidden.rs"), "fn hidden() {}\n").unwrap();
+        Command::new("git")
+            .args(["add", "docker/entrypoint", "src/hidden.rs"])
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
+        let mut agent = empty_test_agent();
+        agent.ignore = vec!["src/**".to_string()];
+        let q_scope = vec!["docker/entrypoint".to_string()];
+        let visible_scope = crate::scope::visible_scope(&agent, &q_scope).unwrap();
+        let staged_view =
+            StagedWorktreeView::apply_for_tree_source(&root, TreeSource::Staged).unwrap();
+        let visible_tree_oid = visible_tree_oid_cache
+            .visible_tree_oid(&root, &TreeSource::Staged, &agent, &q_scope)
+            .unwrap();
+        let scope_root = staged_view
+            .materialize_visible_scope(&visible_scope, &visible_tree_oid)
+            .unwrap();
+
+        assert!(scope_root.join("docker/entrypoint").is_file());
+        assert!(!scope_root.join("src").exists());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn materialization_rejects_non_oid_tree_root_name() {
         let root = git_project("staged-snapshot-reject-tree-root-escape");
         let visible_scope = full_scope();

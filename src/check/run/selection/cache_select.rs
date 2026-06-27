@@ -48,6 +48,13 @@ pub(crate) fn select_expectations_after_cache(
     now: u64,
     cached_failure_mode: CachedFailureMode,
 ) -> Result<CacheFilteredCheckWork, String> {
+    if options.selectors_provided {
+        return Ok(CacheFilteredCheckWork {
+            to_evaluate: options.selected.clone(),
+            cached_hits: Vec::new(),
+        });
+    }
+
     let mut to_evaluate = Vec::new();
     let mut cached_hits = Vec::new();
     let mut cached_failure_seen = false;
@@ -137,7 +144,7 @@ mod tests {
     }
 
     #[test]
-    fn selector_mode_reuses_cache_without_stopping_uncached_work() {
+    fn selector_mode_forces_evaluation_despite_cached_results() {
         let root = git_project("selector-cache-continues");
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src/lib.rs"), "pub fn demo() {}\n").unwrap();
@@ -167,9 +174,10 @@ mod tests {
             true,
             CachedFailureMode::Continue,
         );
-        assert_eq!(work.cached_hits.len(), 1);
-        assert_eq!(work.to_evaluate.len(), 1);
-        assert_eq!(work.to_evaluate[0].id, "def456");
+        assert!(work.cached_hits.is_empty());
+        assert_eq!(work.to_evaluate.len(), 2);
+        assert_eq!(work.to_evaluate[0].id, "abc123");
+        assert_eq!(work.to_evaluate[1].id, "def456");
         let _ = fs::remove_dir_all(root);
     }
 

@@ -93,13 +93,6 @@ pub(crate) fn staged_tracked_files(root: &Path) -> Result<Vec<StagedTrackedFile>
     tracked_files_for_pathspecs(root, None, &[])
 }
 
-pub(super) fn staged_tracked_files_for_pathspecs(
-    root: &Path,
-    pathspecs: &[String],
-) -> Result<Vec<StagedTrackedFile>, String> {
-    tracked_files_for_pathspecs(root, None, pathspecs)
-}
-
 pub(crate) fn resolve_tree_oid(root: &Path, treeish: &str) -> Result<String, String> {
     let output = Command::new("git")
         .arg("-C")
