@@ -62,6 +62,8 @@ mod tests {
         assert!(rendered.contains("InvalidQuestion"));
         assert!(rendered.contains("qScopeSuggestion"));
         assert!(rendered.contains("absent from the visible project"));
+        assert!(rendered.contains("Before answering from visible project evidence"));
+        assert!(!rendered.contains("Before answering, determine"));
         assert!(rendered.contains("question's search domain"));
         assert!(rendered
             .contains("hidden files are likely not relevant is only a scope-selection hint"));

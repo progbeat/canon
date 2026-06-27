@@ -44,6 +44,12 @@ question. Inspect the actual code path before changing behavior. If evidence
 contradicts the current file, check whether the evaluator read a removed diff
 hunk as current code.
 
+## Diff-target Fast Path
+
+For `target: diff`, do not force file reads before reusing the turn prompt's
+previous valid response. Require reads only to prove a new answer or
+`ScopeTooNarrow`.
+
 ## Diff Transcript Leakage
 
 When evidence cites a deleted-but-real file or symbol, inspect recent
