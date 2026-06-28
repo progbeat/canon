@@ -115,7 +115,8 @@ fn selected_expectations_after_default_cache_policy(
         // Selected Expectations default policy: when any cached result is a
         // non-pass, selected expectations for evaluator work are empty until
         // that cached failure is fixed. This is pre-evaluation selection, not
-        // canon-check-order stopping after an evaluated result.
+        // canon-check-order stopping after an evaluated result; an empty
+        // selected set creates no evaluation queue for check order to sort.
         Vec::new()
     } else {
         uncached

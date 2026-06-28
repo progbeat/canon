@@ -43,6 +43,7 @@ mod tests {
 
         assert!(!rendered.contains("ScopeTooNarrow"));
         assert!(rendered.contains("InvalidQuestion"));
+        assert!(rendered.contains("substantive answer"));
         assert!(rendered.contains("normative text in the question itself"));
         assert!(rendered.contains("absence of a separate policy file"));
         assert!(rendered.contains("response schema includes `qScopeSuggestion`"));
@@ -51,6 +52,7 @@ mod tests {
         assert!(rendered.contains("Configured ignore exclusions are not missing visibility"));
         assert!(rendered.contains("project view incomplete"));
         assert!(rendered.contains("Do not widen `qScopeSuggestion`"));
+        assert!(rendered.contains("not `InvalidQuestion` reasons"));
     }
 
     #[test]
@@ -63,6 +65,7 @@ mod tests {
 
         assert!(rendered.contains("ScopeTooNarrow"));
         assert!(rendered.contains("InvalidQuestion"));
+        assert!(rendered.contains("substantive answer"));
         assert!(rendered.contains("qScopeSuggestion"));
         assert!(rendered.contains("absent from the visible project"));
         assert!(rendered.contains("These restricted-scope rules are active only"));
@@ -81,6 +84,7 @@ mod tests {
         assert!(rendered.contains("verify with `rg --files` or a direct read/search"));
         assert!(rendered.contains("Answer `no` from absence"));
         assert!(rendered.contains("visible scope covers the search domain"));
+        assert!(rendered.contains("not `InvalidQuestion` reasons"));
     }
 
     #[test]
