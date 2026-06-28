@@ -382,7 +382,7 @@ fn allocate_prompt_template_artifact_dir_from_candidates(
         .iter()
         .chain(fallback_candidates.iter())
     {
-        match allocate_prompt_template_artifact_dir_in(&parent) {
+        match allocate_prompt_template_artifact_dir_in(parent) {
             Ok(dir) => return Ok(dir),
             Err(err) => errors.push(err),
         }
