@@ -652,8 +652,8 @@ presets:
 expectations:
   - q: "Does the item win?"
     a: "yes"
-    instructions: "Item instructions."
-    diff-from: HEAD~1
+    instructions: " Item instructions. "
+    diff-from: " HEAD~1 "
     cooldown: 1d
     thinking: high
 "#,
@@ -672,8 +672,8 @@ expectations:
         let expectation = &config.expectations[0];
         assert_eq!(expectation.q, "Does the item win?");
         assert_eq!(expectation.a, "yes");
-        assert_eq!(expectation.question_context, "Item instructions.");
-        assert_eq!(expectation.diff_from, "HEAD~1");
+        assert_eq!(expectation.question_context, " Item instructions. ");
+        assert_eq!(expectation.diff_from, " HEAD~1 ");
         assert_eq!(
             expectation.cooldown,
             Some(CooldownConfig::Compact("1d".to_string()))

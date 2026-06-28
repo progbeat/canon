@@ -80,6 +80,8 @@ struct RawExpectationExpansion<'a> {
     expectations: Vec<Expectation>,
 }
 
+// This impl is the raw config expansion boundary. It may consume named presets;
+// check execution receives only the resolved `Expectation` values it produces.
 impl RawExpectationExpansion<'_> {
     fn expand_items(
         &mut self,
@@ -89,11 +91,11 @@ impl RawExpectationExpansion<'_> {
         for (index, item) in items.into_iter().enumerate() {
             let item_number = index + 1;
             let item = self
-                .resolve_expectation_item(item)
+                .resolve_raw_expectation_item(item)
                 .map_err(|err| format!("expectation {}: {}", item_number, err))?;
             match item {
                 RawExpectationItem::Explicit(item) => {
-                    let common = self.resolve_expectation_common(item.common)?;
+                    let common = self.resolve_raw_expectation_common(item.common)?;
                     let question_answer_only = resolved_common_is_question_answer_only(&common);
                     let RawExpectationCommonConfig {
                         question_context,
@@ -146,7 +148,7 @@ impl RawExpectationExpansion<'_> {
         let item_number = index + 1;
         let files = self.expand_paths(config_path, &item.path, item_number, "path")?;
         let uses_content = item.generated_question_format.contains("{{content}}");
-        let common = self.resolve_expectation_common(item.common)?;
+        let common = self.resolve_raw_expectation_common(item.common)?;
         let target = resolve_expectation_target(common.target.clone())
             .map_err(|err| format!("expectation {} target: {}", item_number, err))?;
         // Keep the literal `diff-from` selection here. Prompt rendering resolves
@@ -252,7 +254,7 @@ impl RawExpectationExpansion<'_> {
         Ok(agent)
     }
 
-    fn resolve_expectation_common(
+    fn resolve_raw_expectation_common(
         &self,
         mut common: RawExpectationCommonConfig,
     ) -> Result<RawExpectationCommonConfig, String> {
@@ -261,11 +263,11 @@ impl RawExpectationExpansion<'_> {
             .presets
             .get(preset)
             .ok_or_else(|| format!("unknown preset: {}", preset))?;
-        apply_preset_defaults(&mut common, &preset.common);
+        apply_raw_expansion_common_preset_defaults(&mut common, &preset.common);
         Ok(common)
     }
 
-    fn resolve_expectation_item(
+    fn resolve_raw_expectation_item(
         &self,
         item: RawExpectationItem,
     ) -> Result<RawExpectationItem, String> {
@@ -283,7 +285,7 @@ impl RawExpectationExpansion<'_> {
             .get(preset_name)
             .ok_or_else(|| format!("unknown preset: {}", preset_name))?;
         let declared_form = fields.declared_item_form();
-        apply_item_preset_defaults(&mut fields, preset);
+        apply_raw_expansion_item_preset_defaults(&mut fields, preset);
         let resolved_form = declared_form.or_else(|| fields.declared_item_form());
         RawExpectationItem::from_fields_with_resolved_form(fields, resolved_form)
             .map_err(str::to_string)
@@ -305,7 +307,7 @@ fn resolved_common_settings_are_empty(settings: &RawExpectationSettings) -> bool
         && settings.plugins.is_none()
 }
 
-fn apply_preset_defaults(
+fn apply_raw_expansion_common_preset_defaults(
     common: &mut RawExpectationCommonConfig,
     preset: &RawExpectationCommonConfig,
 ) {
@@ -335,7 +337,10 @@ fn apply_preset_defaults(
     }
 }
 
-fn apply_item_preset_defaults(fields: &mut RawExpectationFields, preset: &ResolvedPresetConfig) {
+fn apply_raw_expansion_item_preset_defaults(
+    fields: &mut RawExpectationFields,
+    preset: &ResolvedPresetConfig,
+) {
     if fields.q.is_none() {
         fields.q = preset.q.clone();
     }
@@ -351,22 +356,15 @@ fn apply_item_preset_defaults(fields: &mut RawExpectationFields, preset: &Resolv
     if fields.include.is_none() {
         fields.include = preset.include.clone();
     }
-    apply_preset_defaults(&mut fields.common, &preset.common);
+    apply_raw_expansion_common_preset_defaults(&mut fields.common, &preset.common);
 }
 
 fn resolved_question_context(context: Option<String>) -> String {
-    // Normalize human-authored canon data before prompt rendering; this config
-    // layer does not define evaluator prompt templates.
-    context.as_deref().map(str::trim).unwrap_or("").to_string()
+    context.unwrap_or_default()
 }
 
 fn resolved_expectation_diff_from(diff_from: Option<String>) -> String {
-    diff_from
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(DEFAULT_DIFF_FROM)
-        .to_string()
+    diff_from.unwrap_or_else(|| DEFAULT_DIFF_FROM.to_string())
 }
 
 fn resolve_expectation_target(target: Option<String>) -> Result<Option<ExpectationTarget>, String> {

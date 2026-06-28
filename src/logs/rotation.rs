@@ -47,6 +47,8 @@ pub(crate) fn rotate_diagnostic_logs_with_config(
     if should_rotate {
         rotate_active_diagnostic_logs(log_dir, files)?;
     }
+    // Rotated runtime logs are retained within the configured total size
+    // budget. Pruning enforces that bound instead of changing event semantics.
     prune_diagnostic_logs_to_limit(log_dir, config)?;
     Ok(())
 }

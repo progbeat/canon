@@ -15,6 +15,8 @@ const DEFAULT_DIAGNOSTIC_LOG_CONFIG: DiagnosticLogConfig = DiagnosticLogConfig {
 
 #[derive(Clone, Copy)]
 pub(crate) struct DiagnosticLogConfig {
+    // Runtime logging is enabled only with a positive max size. A zero max
+    // size is the configured off switch, not a request to write zero-byte logs.
     pub(crate) max_bytes: u64,
     pub(crate) explicitly_disabled: bool,
     pub(crate) files: &'static [&'static str],

@@ -189,7 +189,16 @@ impl NaiveIsolationGuard {
             Ok(()) => {
                 self.active = false;
             }
-            Err(err) => errors.push(err),
+            Err(err) => {
+                errors.push(err);
+                if let Err(hide_err) = self.hide() {
+                    errors.push(format!(
+                        "failed to hide unrestored isolated path {}: {}",
+                        self.isolated_path.display(),
+                        hide_err
+                    ));
+                }
+            }
         }
         if errors.is_empty() {
             Ok(())
@@ -366,6 +375,33 @@ mod tests {
         assert_eq!(dir_mode(&second_project), 0o555);
         let _ = platform::set_private_dir_permissions(&first_project);
         let _ = platform::set_private_dir_permissions(&second_project);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn naive_isolation_hides_unrestored_path_when_original_reappears() {
+        let root = test_root("naive-isolation-hide-unrestored");
+        let sandbox = root.join("sandbox");
+        let project = root.join("repository");
+        platform::create_private_dir_all(&project).unwrap();
+        fs::write(project.join("file.txt"), "isolated").unwrap();
+        let mut policy = NaiveIsolationPolicy::with_dirs(None, sandbox.clone()).unwrap();
+        let isolated_path;
+
+        {
+            let guard = policy.isolate(&project).unwrap();
+            isolated_path = guard.path().to_path_buf();
+            platform::create_private_dir_all(&project).unwrap();
+            fs::write(project.join("file.txt"), "replacement").unwrap();
+        }
+
+        assert_eq!(dir_mode(&isolated_path), 0o000);
+        assert_eq!(
+            fs::read_to_string(project.join("file.txt")).unwrap(),
+            "replacement"
+        );
+        fs::set_permissions(&isolated_path, fs::Permissions::from_mode(0o700)).unwrap();
         let _ = fs::remove_dir_all(root);
     }
 
