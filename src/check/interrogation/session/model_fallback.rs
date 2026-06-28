@@ -271,8 +271,10 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root =
-            std::env::temp_dir().join(format!("canon-test-{name}-{}-{unique}", process::id()));
+        let root = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("canon-test-{name}-{}-{unique}", process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         root
