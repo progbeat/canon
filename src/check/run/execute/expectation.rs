@@ -64,6 +64,9 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     }
 
     let mut verified_q_scope =
+        // In-place mode reaches this branch because its canon says persisted
+        // xpec history is absent. That is the interrogation-policy case where
+        // no last pass result with qScope exists.
         if let Some(scope) = context.runtime.fresh_scope_without_persistent_history() {
             scope
         } else {
@@ -304,7 +307,7 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
             &proposed_scope,
             accepted,
         )?;
-        if q_scope_verification_record_replaces_initial(initial_result, &narrowed.record) {
+        if q_scope_verification_result_becomes_final(initial_result, &narrowed.record) {
             interrogation = narrowed;
         }
     }
@@ -317,11 +320,14 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
     })
 }
 
-fn q_scope_verification_record_replaces_initial(
+fn q_scope_verification_result_becomes_final(
     initial_result: crate::check::core::CheckResult,
     narrowed: &CheckRecord,
 ) -> bool {
     if narrowed.error.as_deref() == Some(ERROR_SCOPE_TOO_NARROW) {
+        // The verification result is not final here: it only proves that the
+        // proposed narrowed q-scope is too narrow, so the initial answer remains
+        // the final evaluator response for the expectation.
         return false;
     }
     narrowed.error.is_some() || narrowed_scope_is_accepted(initial_result, narrowed)
@@ -473,7 +479,7 @@ fn finish_expectation_with_error_record<R: EvaluatorRunner>(
 #[cfg(test)]
 mod tests {
     use super::{
-        q_scope_verification_record_replaces_initial, user_visible_final_check_record,
+        q_scope_verification_result_becomes_final, user_visible_final_check_record,
         FORBIDDEN_FINAL_CHECK_SCOPE_ERROR,
     };
     use crate::check::core::errors::INTERNAL_ERROR_UNPARSABLE;
@@ -486,7 +492,7 @@ mod tests {
     fn q_scope_verification_scope_too_narrow_rejects_scope_without_replacing_initial_result() {
         let narrowed = test_record(CheckResult::Fail, Some(ERROR_SCOPE_TOO_NARROW));
 
-        assert!(!q_scope_verification_record_replaces_initial(
+        assert!(!q_scope_verification_result_becomes_final(
             CheckResult::Pass,
             &narrowed
         ));
@@ -496,7 +502,7 @@ mod tests {
     fn q_scope_verification_invalid_question_replaces_initial_result() {
         let narrowed = test_record(CheckResult::Fail, Some(ERROR_INVALID_QUESTION));
 
-        assert!(q_scope_verification_record_replaces_initial(
+        assert!(q_scope_verification_result_becomes_final(
             CheckResult::Pass,
             &narrowed
         ));
@@ -507,11 +513,11 @@ mod tests {
         let fail = test_record(CheckResult::Fail, None);
         let pass = test_record(CheckResult::Pass, None);
 
-        assert!(q_scope_verification_record_replaces_initial(
+        assert!(q_scope_verification_result_becomes_final(
             CheckResult::Pass,
             &fail
         ));
-        assert!(!q_scope_verification_record_replaces_initial(
+        assert!(!q_scope_verification_result_becomes_final(
             CheckResult::Fail,
             &pass
         ));

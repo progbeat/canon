@@ -47,6 +47,9 @@ pub(crate) fn run_check_command(
     reset_check_interrupted();
     let command = parse_check_command_args(args, default_in_place)?;
     if command.in_place {
+        // In-place exits before the Git-backed check path below. That path may
+        // read or clean persistent xpec state; in-place may write runtime logs
+        // only.
         return run_in_place_check_command(root, &command, started);
     }
     let checked_tree = TreeSource::resolve(root, &command.tree, "--tree")?;
@@ -238,10 +241,8 @@ fn run_in_place_check_command(
     // Git-tree, query-scope, and cache controls, repo inspection reads this
     // directory directly, and `CheckRuntime::in_place` owns the evaluator view
     // with no persistent xpec state root. This command path only coordinates
-    // those interfaces and validates the expectations selected for this run for
-    // in-place-prohibited expectation fields. A top-level ignore is global
-    // path-hiding config, so it is rejected even when selectors choose no
-    // expectation records to attach the error to.
+    // those interfaces and rejects selected expectations that use
+    // in-place-prohibited fields before evaluator work starts.
     let mut repo_cache = RepoInspectionCache::new();
     // In-place uses a fresh in-memory cache bundle only because the shared
     // execution APIs accept cache handles. It still writes runtime logs when
@@ -269,7 +270,10 @@ fn run_in_place_check_command(
     if let Some(question) = command.query.as_deref() {
         // In-place query mode remains the same one-off question path as
         // ordinary `canon check -q`; it is not a check-run report and does not
-        // finish through the check-run summary/trailer path.
+        // finish through the check-run summary/trailer path. Query execution
+        // validates only the q/a expectation selected by the query, if any;
+        // unrelated collected expectations are not selected evaluator work for
+        // this invocation.
         return run_check_query_command(CheckQueryCommand {
             root,
             config: &config,
@@ -287,17 +291,14 @@ fn run_in_place_check_command(
     }
     let identities = expectation_identities(&config)?;
     // This resolves selector/keep-going controls from the expanded config.
-    // Persistent state is not consulted here; in-place compatibility is checked
-    // for the CLI-resolved selected expectations before any one is evaluated.
+    // Persistent state is not consulted here.
     let options =
         match resolve_check_options_with_identities(&config, &identities, &command.options) {
             Ok(options) => options,
             Err(err) => return fail_check_before_selection(&mut diagnostic_log, None, false, err),
         };
-    if options.selected.is_empty() {
-        if let Err(err) = validate_in_place_global_config(&config.agent) {
-            return fail_check_before_selection(&mut diagnostic_log, None, false, err);
-        }
+    if let Err(err) = validate_in_place_global_config(&config.agent) {
+        return fail_check_before_selection(&mut diagnostic_log, None, false, err);
     }
     write_check_lifecycle_start_event(
         &mut diagnostic_log,
@@ -318,8 +319,8 @@ fn run_in_place_check_command(
     let mut result_output = shared_output.clone();
     let invalid_records = invalid_in_place_expectation_records(&config.agent, &options.selected)?;
     if !invalid_records.is_empty() {
-        // In-place compatibility errors are result records. Each selected
-        // invalid expectation is printed with its short ID before the summary.
+        // In-place compatibility errors are result records. Each invalid
+        // selected expectation is printed with its short ID before the summary.
         {
             let mut output = Some(&mut result_output as &mut dyn Write);
             for record in &invalid_records {

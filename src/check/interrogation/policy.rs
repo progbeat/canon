@@ -29,6 +29,8 @@ use crate::xpec_state::XpecStateCache;
 //   `src/check/interrogation/session/thread.rs`
 // - configured model list and thinking expansion for retries:
 //   `src/check/interrogation/state.rs`
+// A q-scope verification `ScopeTooNarrow` rejects the proposed narrowed scope;
+// the initial answer remains the final response.
 // A whole-policy audit needs all of these code paths; a narrower q-scope can
 // verify only the policy clauses owned by the included files.
 

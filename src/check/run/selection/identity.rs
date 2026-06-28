@@ -7,6 +7,9 @@ use std::ffi::OsString;
 
 const EXCLUSION_SELECTOR_PREFIX: &str = "not:";
 
+// This module owns CLI expectation selector identity matching only.
+// Interrogation policy starts after selected expectations enter check
+// execution and the interrogation/session modules.
 #[derive(Debug, Clone)]
 pub(crate) struct ExpectationIdentity {
     pub(crate) id: String,
@@ -57,7 +60,9 @@ pub(crate) fn select_expectations_with_identities(
                 }
             }
         }
-        selected_indexes.retain(|index| !excluded_indexes.contains(index));
+        if !has_include {
+            selected_indexes.retain(|index| !excluded_indexes.contains(index));
+        }
     }
 
     selected_indexes
@@ -231,7 +236,7 @@ mod tests {
     }
 
     #[test]
-    fn exclusion_selector_filters_explicit_includes() {
+    fn exclusion_selector_does_not_filter_explicit_includes() {
         let config = two_expectation_config();
         let identities = expectation_identities(&config).unwrap();
         let selectors = [
@@ -243,8 +248,9 @@ mod tests {
         let selected =
             select_expectations_with_identities(&config, &identities, &selectors).unwrap();
 
-        assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].id, identities[1].id);
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected[0].id, identities[0].id);
+        assert_eq!(selected[1].id, identities[1].id);
     }
 
     #[test]

@@ -14,15 +14,16 @@ use crate::evaluator::{
     q_scope_is_full_project, session_failure_invalidates_thread, write_thread_lifecycle_event,
     write_thread_restart_event, BaseInstructionsContext, DeveloperInstructionsContext,
     EvaluatorError, EvaluatorRunner, EvaluatorTurnContext, EvaluatorTurnPromptContext,
-    ParsedTurnResponse, ThreadLifecycleLog, ThreadReuseLogContext,
+    ParsedTurnResponse, PromptTemplateArtifactDir, ThreadLifecycleLog, ThreadReuseLogContext,
 };
 use crate::logs::DiagnosticLogWriter;
 use crate::scope::{effective_ignore_patterns, sanitize_scope};
 use crate::xpec_state::{LastResult, XpecStateCache};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct ThreadTurnRequest<'a> {
     pub(crate) agent: &'a AgentConfig,
     pub(crate) enforced_scope: &'a [String],
@@ -33,7 +34,7 @@ pub(crate) struct ThreadTurnRequest<'a> {
     pub(crate) question_context: &'a str,
     pub(crate) diff_from_tree_oid: &'a str,
     pub(crate) prompt: &'a str,
-    pub(crate) template_output_dir: &'a Path,
+    pub(crate) template_artifact_dir: PromptTemplateArtifactDir,
     pub(crate) template_artifact_paths: &'a [PathBuf],
     pub(crate) last_pass: Option<&'a LastResult>,
     pub(crate) progress: Option<&'a crate::evaluator::EvaluatorProgress>,
@@ -67,7 +68,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         .last_pass
         .and_then(|last_pass| last_pass.visible_tree_oid.as_deref())
         .unwrap_or("");
-    let reuse_context = thread_reuse_log_context(runtime, request, reuse_visible_tree_oid)?;
+    let reuse_context = thread_reuse_log_context(runtime, &request, reuse_visible_tree_oid)?;
     let session_key =
         evaluator_prerender_thread_reuse_key(PrerenderEvaluatorThreadReuseKeyContext {
             agent: request.agent,
@@ -98,7 +99,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
             &session_key,
             &current_visible_tree_oid,
             reuse_context.clone(),
-            request,
+            &request,
         )?,
     };
     let mut session_id = selection.lifecycle_log.session_id.clone();
@@ -112,104 +113,111 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         request.model,
         request.thinking,
     );
-    let response =
-        match ask_current_session(runtime, runner, &session_id, state, diagnostic_log, request) {
-            Ok(response) => response,
-            Err(err)
-                if err.kind() == Some(crate::evaluator::EvaluatorFailureKind::ShortIdResponse)
-                    && state.session_has_valid_response(&session_id) =>
-            {
-                if let Some(progress) = request.progress {
-                    // Canon `↻`: a fresh-thread retry after a short-ID response
-                    // error started.
-                    progress.record_fresh_thread_retry_after_short_id_response_error_started();
-                }
-                clear_thread_sessions_after_failure(state);
-                write_thread_restart_event(
-                    diagnostic_log,
-                    &selection.lifecycle_log,
-                    request.expectation_id,
-                    request.enforced_scope,
-                    request.model,
-                    err.message_str(),
-                );
-                let selection = start_or_reuse_thread_session_after_rendering(
-                    runtime,
-                    runner,
-                    state,
-                    &session_key,
-                    &current_visible_tree_oid,
-                    reuse_context.clone(),
-                    request,
-                )?;
-                session_id = selection.lifecycle_log.session_id.clone();
-                write_thread_lifecycle_event(
-                    diagnostic_log,
-                    &selection.lifecycle_log,
-                    request.enforced_scope,
-                    request.model,
-                    request.thinking,
-                );
-                match ask_current_session(
-                    runtime,
-                    runner,
-                    &session_id,
-                    state,
-                    diagnostic_log,
-                    request,
-                ) {
-                    Ok(response) => response,
-                    Err(err) => return fail_after_session_error(state, err),
-                }
+    let response = match ask_current_session(
+        runtime,
+        runner,
+        &session_id,
+        state,
+        diagnostic_log,
+        &request,
+    ) {
+        Ok(response) => response,
+        Err(err)
+            if err.kind() == Some(crate::evaluator::EvaluatorFailureKind::ShortIdResponse)
+                && state.session_has_valid_response(&session_id) =>
+        {
+            if let Some(progress) = request.progress {
+                // Canon `↻`: a fresh-thread retry after a short-ID response
+                // error started.
+                progress.record_fresh_thread_retry_after_short_id_response_error_started();
             }
-            Err(err) if selection.reused_existing_session && is_context_window_failure(&err) => {
-                clear_thread_sessions_after_failure(state);
-                write_model_fallback_events(
-                    diagnostic_log,
-                    request.expectation_id,
-                    request.model,
-                    None,
-                    err.message_str(),
-                );
-                write_thread_restart_event(
-                    diagnostic_log,
-                    &selection.lifecycle_log,
-                    request.expectation_id,
-                    request.enforced_scope,
-                    request.model,
-                    err.message_str(),
-                );
-                let selection = start_or_reuse_thread_session_after_rendering(
-                    runtime,
-                    runner,
-                    state,
-                    &session_key,
-                    &current_visible_tree_oid,
-                    reuse_context.clone(),
-                    request,
-                )?;
-                session_id = selection.lifecycle_log.session_id.clone();
-                write_thread_lifecycle_event(
-                    diagnostic_log,
-                    &selection.lifecycle_log,
-                    request.enforced_scope,
-                    request.model,
-                    request.thinking,
-                );
-                match ask_current_session(
-                    runtime,
-                    runner,
-                    &session_id,
-                    state,
-                    diagnostic_log,
-                    request,
-                ) {
-                    Ok(response) => response,
-                    Err(err) => return fail_after_session_error(state, err),
-                }
+            clear_thread_sessions_after_failure(state);
+            write_thread_restart_event(
+                diagnostic_log,
+                &selection.lifecycle_log,
+                request.expectation_id,
+                request.enforced_scope,
+                request.model,
+                err.message_str(),
+            );
+            let selection = start_or_reuse_thread_session_after_rendering(
+                runtime,
+                runner,
+                state,
+                &session_key,
+                &current_visible_tree_oid,
+                reuse_context.clone(),
+                &request,
+            )?;
+            session_id = selection.lifecycle_log.session_id.clone();
+            write_thread_lifecycle_event(
+                diagnostic_log,
+                &selection.lifecycle_log,
+                request.enforced_scope,
+                request.model,
+                request.thinking,
+            );
+            match ask_current_session(
+                runtime,
+                runner,
+                &session_id,
+                state,
+                diagnostic_log,
+                &request,
+            ) {
+                Ok(response) => response,
+                Err(err) => return fail_after_session_error(state, err),
             }
-            Err(err) => return fail_after_session_error(state, err),
-        };
+        }
+        Err(err) if selection.reused_existing_session && is_context_window_failure(&err) => {
+            clear_thread_sessions_after_failure(state);
+            write_model_fallback_events(
+                diagnostic_log,
+                request.expectation_id,
+                request.model,
+                None,
+                err.message_str(),
+            )
+            .map_err(|err| EvaluatorError::message(err.to_string()))?;
+            write_thread_restart_event(
+                diagnostic_log,
+                &selection.lifecycle_log,
+                request.expectation_id,
+                request.enforced_scope,
+                request.model,
+                err.message_str(),
+            );
+            let selection = start_or_reuse_thread_session_after_rendering(
+                runtime,
+                runner,
+                state,
+                &session_key,
+                &current_visible_tree_oid,
+                reuse_context.clone(),
+                &request,
+            )?;
+            session_id = selection.lifecycle_log.session_id.clone();
+            write_thread_lifecycle_event(
+                diagnostic_log,
+                &selection.lifecycle_log,
+                request.enforced_scope,
+                request.model,
+                request.thinking,
+            );
+            match ask_current_session(
+                runtime,
+                runner,
+                &session_id,
+                state,
+                diagnostic_log,
+                &request,
+            ) {
+                Ok(response) => response,
+                Err(err) => return fail_after_session_error(state, err),
+            }
+        }
+        Err(err) => return fail_after_session_error(state, err),
+    };
     if !retire_thread_sessions_after_turn(state, runner.take_retired_sessions(), &session_id) {
         state
             .thread_sessions_by_prerender_key
@@ -224,7 +232,7 @@ fn ask_current_session<R: EvaluatorRunner>(
     session_id: &str,
     state: &mut InterrogationRunState,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    request: ThreadTurnRequest<'_>,
+    request: &ThreadTurnRequest<'_>,
 ) -> Result<ParsedTurnResponse, EvaluatorError> {
     let Some(session_root) = state.session_roots_by_id.get(session_id).cloned() else {
         return Err(EvaluatorError::message(format!(
@@ -254,7 +262,7 @@ fn ask_in_thread<R: EvaluatorRunner>(
     session_root: &Path,
     state: &mut InterrogationRunState,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    request: ThreadTurnRequest<'_>,
+    request: &ThreadTurnRequest<'_>,
 ) -> Result<ParsedTurnResponse, EvaluatorError> {
     let turn = EvaluatorTurnContext {
         session_id,
@@ -303,7 +311,7 @@ fn start_or_reuse_thread_session_after_rendering<R: EvaluatorRunner>(
     session_key: &str,
     visible_tree_oid: &str,
     reuse_context: ThreadReuseLogContext,
-    request: ThreadTurnRequest<'_>,
+    request: &ThreadTurnRequest<'_>,
 ) -> Result<ThreadSessionSelection, EvaluatorError> {
     let visible_scope = runtime
         .visible_scope(request.agent, request.enforced_scope)
@@ -323,7 +331,7 @@ fn start_or_reuse_thread_session_after_rendering<R: EvaluatorRunner>(
     let mut template_artifact_paths = request.template_artifact_paths.to_vec();
     let developer_instructions = developer_instructions(DeveloperInstructionsContext {
         root: runtime.root,
-        template_output_dir: request.template_output_dir,
+        template_artifact_dir: request.template_artifact_dir.clone(),
         template_artifact_paths: &mut template_artifact_paths,
         in_place: runtime.is_in_place(),
         diff_from_tree_oid: request.diff_from_tree_oid,
@@ -452,7 +460,7 @@ fn thread_reuse_log(
 
 fn thread_reuse_log_context(
     runtime: &CheckRuntime<'_>,
-    request: ThreadTurnRequest<'_>,
+    request: &ThreadTurnRequest<'_>,
     visible_tree_oid: &str,
 ) -> Result<ThreadReuseLogContext, EvaluatorError> {
     Ok(ThreadReuseLogContext {
@@ -566,15 +574,13 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
     last_pass: Option<&LastResult>,
     progress: Option<&crate::evaluator::EvaluatorProgress>,
 ) -> Result<InterrogationResult, EvaluatorError> {
-    let template_output_dir = state
-        .prompt_template_output_dir_cache
-        .path_for_check_invocation()
-        .map_err(EvaluatorError::message)?;
     let diff_from = resolve_diff_from(runtime, expectation, last_pass)?;
+    let template_artifact_dir =
+        PromptTemplateArtifactDir::Lazy(Arc::clone(&state.prompt_template_output_dir_cache));
     let mut template_artifact_paths = Vec::new();
     let prompt = evaluator_turn_prompt(EvaluatorTurnPromptContext {
         root: runtime.root,
-        template_output_dir: &template_output_dir,
+        template_artifact_dir: template_artifact_dir.clone(),
         template_artifact_paths: &mut template_artifact_paths,
         short_id: &expectation.display_id,
         question: &expectation.question,
@@ -604,7 +610,7 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
             question_context: &expectation.question_context,
             diff_from_tree_oid: &diff_from.tree_oid,
             prompt: &prompt,
-            template_output_dir: &template_output_dir,
+            template_artifact_dir,
             template_artifact_paths: &template_artifact_paths,
             last_pass: diff_from.last_pass,
             progress,

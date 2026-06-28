@@ -83,6 +83,19 @@ response schema first. Git-backed full-project scope still hides ignored files
 and should not be treated as no-hidden-files/in-place mode.
 For restricted-scope absence checks, `no` requires the visible scope to cover
 the search domain; otherwise expect `ScopeTooNarrow` or a wider retry.
+Spec-compliance questions usually search the implementation as a whole; a
+restricted visible scope should become `ScopeTooNarrow`, not `InvalidQuestion`.
+For q-scope verification, `ScopeTooNarrow` rejects the proposed narrower scope;
+it is not the final response when the initial answer is kept.
+One-off query q-scope verification has no expected-answer pass/fail matrix;
+accept the narrowed result only when the answer string is unchanged.
+For in-place compatibility, validate collected config before evaluator work;
+do not let selectors hide configured diff-from/target/cooldown/ignore.
+Canon-check-order sorts remaining selected work; cached-failure default
+selection can clear the evaluate queue before ordering applies.
+For target-diff project-quality "can you find any..." questions, treat the
+change set as broad unless the question names paths; stale narrow q-scopes can
+survive selector reruns.
 
 ## Preset Evidence
 

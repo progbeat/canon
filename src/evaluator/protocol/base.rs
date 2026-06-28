@@ -47,6 +47,9 @@ mod tests {
         assert!(rendered.contains("absence of a separate policy file"));
         assert!(rendered.contains("response schema includes `qScopeSuggestion`"));
         assert!(rendered.contains("transcript paths are not verification"));
+        assert!(rendered.contains("not active instructions or complete behavior evidence"));
+        assert!(rendered.contains("Configured ignore exclusions are not missing visibility"));
+        assert!(rendered.contains("project view incomplete"));
         assert!(rendered.contains("Do not widen `qScopeSuggestion`"));
     }
 
@@ -62,11 +65,19 @@ mod tests {
         assert!(rendered.contains("InvalidQuestion"));
         assert!(rendered.contains("qScopeSuggestion"));
         assert!(rendered.contains("absent from the visible project"));
+        assert!(rendered.contains("These restricted-scope rules are active only"));
         assert!(rendered.contains("Before answering from visible project evidence"));
         assert!(!rendered.contains("Before answering, determine"));
         assert!(rendered.contains("question's search domain"));
+        assert!(rendered.contains("specification compliance"));
+        assert!(rendered.contains("target-diff changes"));
+        assert!(rendered.contains("can you find"));
+        assert!(rendered.contains("answered from absence"));
+        assert!(rendered.contains("visible examples are acceptable"));
+        assert!(rendered.contains("paths found during inspection do not"));
         assert!(rendered
             .contains("hidden files are likely not relevant is only a scope-selection hint"));
+        assert!(rendered.contains("Configured ignore exclusions do not count"));
         assert!(rendered.contains("verify with `rg --files` or a direct read/search"));
         assert!(rendered.contains("Answer `no` from absence"));
         assert!(rendered.contains("visible scope covers the search domain"));

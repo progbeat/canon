@@ -239,17 +239,6 @@ pub(crate) enum RawExpectationItem {
     Include(RawIncludeExpectation),
 }
 
-impl RawExpectationItem {
-    pub(crate) fn common_config_mut(&mut self) -> &mut RawExpectationCommonConfig {
-        match self {
-            RawExpectationItem::Unresolved(item) => &mut item.common,
-            RawExpectationItem::Explicit(item) => &mut item.common,
-            RawExpectationItem::Generator(item) => &mut item.common,
-            RawExpectationItem::Include(item) => &mut item.common,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RawExpectationCommonConfig {
     // Raw config data shared by presets, explicit expectations, generated
@@ -283,7 +272,7 @@ pub(crate) struct RawGeneratorExpectation {
 #[derive(Debug, Clone)]
 pub(crate) struct RawIncludeExpectation {
     pub(crate) include: String,
-    pub(crate) common: RawExpectationCommonConfig,
+    pub(crate) generated_item_defaults: RawExpectationFields,
 }
 
 #[derive(Debug, Clone)]
@@ -303,18 +292,34 @@ pub(crate) enum RawExpectationItemForm {
     Include,
 }
 
-impl RawExpectationFields {
-    pub(crate) fn item_form(&self) -> Option<RawExpectationItemForm> {
-        if self.include.is_some() {
-            return Some(RawExpectationItemForm::Include);
+impl RawExpectationItemForm {
+    pub(crate) fn from_shape_fields(
+        has_q: bool,
+        has_q_template: bool,
+        has_path: bool,
+        has_include: bool,
+    ) -> Option<Self> {
+        if has_include {
+            return Some(Self::Include);
         }
-        if self.path.is_some() || self.q_template.is_some() {
-            return Some(RawExpectationItemForm::Generator);
+        if has_path || has_q_template {
+            return Some(Self::Generator);
         }
-        if self.q.is_some() {
-            return Some(RawExpectationItemForm::Explicit);
+        if has_q {
+            return Some(Self::Explicit);
         }
         None
+    }
+}
+
+impl RawExpectationFields {
+    pub(crate) fn declared_item_form(&self) -> Option<RawExpectationItemForm> {
+        RawExpectationItemForm::from_shape_fields(
+            self.q.is_some(),
+            self.q_template.is_some(),
+            self.path.is_some(),
+            self.include.is_some(),
+        )
     }
 }
 
@@ -409,9 +414,9 @@ impl<'de> Deserialize<'de> for RawExpectationItem {
 }
 
 impl RawExpectationItem {
-    pub(crate) fn from_fields_with_form(
+    pub(crate) fn from_fields_with_resolved_form(
         fields: RawExpectationFields,
-        form: Option<RawExpectationItemForm>,
+        resolved_form: Option<RawExpectationItemForm>,
     ) -> Result<RawExpectationItem, &'static str> {
         let RawExpectationFields {
             q,
@@ -421,14 +426,24 @@ impl RawExpectationItem {
             include,
             common,
         } = fields;
-        match form {
+        // Preset defaults are already applied here. The implementation default
+        // for a missing required shape field is still no value, so after
+        // item/preset/default resolution the config is invalid.
+        match resolved_form {
             Some(RawExpectationItemForm::Include) => {
                 return match include {
                     Some(include) => Ok(RawExpectationItem::Include(RawIncludeExpectation {
                         include,
-                        common,
+                        generated_item_defaults: RawExpectationFields {
+                            q,
+                            q_template,
+                            a,
+                            path,
+                            include: None,
+                            common,
+                        },
                     })),
-                    None => Err("generator must contain include"),
+                    None => Err("missing required field after default resolution: include"),
                 };
             }
             Some(RawExpectationItemForm::Generator) => {
@@ -441,9 +456,15 @@ impl RawExpectationItem {
                             common,
                         }))
                     }
-                    (Some(_), None, _) => Err("generator must contain path"),
-                    (Some(_), Some(_), None) => Err("must contain a"),
-                    (None, Some(_), _) => Err("generator must contain q_template"),
+                    (Some(_), None, _) => {
+                        Err("missing required field after default resolution: path")
+                    }
+                    (Some(_), Some(_), None) => {
+                        Err("missing required field after default resolution: a")
+                    }
+                    (None, Some(_), _) => {
+                        Err("missing required field after default resolution: q_template")
+                    }
                     _ => Err("invalid expectation item"),
                 };
             }
@@ -456,7 +477,7 @@ impl RawExpectationItem {
                             common,
                         }))
                     }
-                    (Some(_), None) => Err("must contain a"),
+                    (Some(_), None) => Err("missing required field after default resolution: a"),
                     _ => Err("invalid expectation item"),
                 };
             }
@@ -465,7 +486,14 @@ impl RawExpectationItem {
         if let Some(include) = include {
             return Ok(RawExpectationItem::Include(RawIncludeExpectation {
                 include,
-                common,
+                generated_item_defaults: RawExpectationFields {
+                    q,
+                    q_template,
+                    a,
+                    path,
+                    include: None,
+                    common,
+                },
             }));
         }
         match (q, q_template, path, a) {
@@ -483,12 +511,22 @@ impl RawExpectationItem {
                 common,
             })),
             fields => match fields {
-                (Some(_), _, _, None) => Err("must contain a"),
-                (None, Some(_), None, _) => Err("generator must contain path"),
-                (None, Some(_), Some(_), None) => Err("must contain a"),
-                (None, None, Some(_), _) => Err("generator must contain q_template"),
-                (None, None, None, Some(_)) => Err("must contain q or q_template"),
-                (None, None, None, None) => Err("must contain q, q_template, or include"),
+                (Some(_), _, _, None) => Err("missing required field after default resolution: a"),
+                (None, Some(_), None, _) => {
+                    Err("missing required field after default resolution: path")
+                }
+                (None, Some(_), Some(_), None) => {
+                    Err("missing required field after default resolution: a")
+                }
+                (None, None, Some(_), _) => {
+                    Err("missing required field after default resolution: q_template")
+                }
+                (None, None, None, Some(_)) => {
+                    Err("missing required field after default resolution: q or q_template")
+                }
+                (None, None, None, None) => Err(
+                    "missing required field after default resolution: q, q_template, or include",
+                ),
                 _ => Err("invalid expectation item"),
             },
         }

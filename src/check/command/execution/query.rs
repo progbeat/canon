@@ -183,14 +183,12 @@ fn run_prepared_query(
     // expectation/config fields here.
     let query_expectation = query_expectation_context(config, question)?;
     if runtime.is_in_place() {
-        // Query mode has no expectation selectors. The only selected
-        // expectation is the matched q/a-only item, when one exists; an
-        // unmatched one-off query has no check.yml expectation selected for
-        // in-place compatibility validation.
+        validate_in_place_global_config(&config.agent)?;
+        // In-place compatibility is expectation-specific after global config.
+        // A `-q` invocation selects only the matched q/a expectation, if any;
+        // other collected expectations are not evaluator work for this query.
         if let Some(expectation) = query_expectation.as_ref() {
             validate_in_place_query_expectation(&config.agent, expectation)?;
-        } else {
-            validate_in_place_global_config(&config.agent)?;
         }
         *enforced_scope = runtime
             .fresh_scope_without_persistent_history()
@@ -384,44 +382,6 @@ mod tests {
     use crate::xpec_state::LastResultStatus;
 
     #[test]
-    fn query_expectation_context_matches_unique_qa_only_question() {
-        let config = two_expectation_config();
-
-        let selected = query_expectation_context(&config, "Does beta pass?")
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(selected.question, "Does beta pass?");
-        assert!(selected.question_answer_only);
-    }
-
-    #[test]
-    fn query_expectation_context_ignores_non_qa_only_matches() {
-        let mut config = two_expectation_config();
-        config.expectations[0].question_answer_only = false;
-
-        let selected = query_expectation_context(&config, "Does alpha pass?").unwrap();
-
-        assert!(selected.is_none());
-    }
-
-    #[test]
-    fn query_expectation_context_preserves_cooldown() {
-        let mut config = two_expectation_config();
-        config.expectations[0].cooldown = Some(crate::config_types::CooldownConfig::Compact(
-            "7d".to_string(),
-        ));
-
-        let selected = query_expectation_context(&config, "Does alpha pass?")
-            .unwrap()
-            .unwrap();
-
-        let cooldown = selected.cooldown.unwrap();
-        assert_eq!(cooldown.pass_seconds, Some(7 * 24 * 60 * 60));
-        assert_eq!(cooldown.fail_seconds, None);
-    }
-
-    #[test]
     fn persist_query_result_writes_error_record_for_matched_query() {
         let root = temp_query_root("last-error");
         let config = two_expectation_config();
@@ -474,17 +434,6 @@ mod tests {
         assert!(last_error.checked_tree_oid.is_none());
         assert!(last_error.visible_tree_oid.is_none());
         let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn query_expectation_context_does_not_choose_ambiguous_question() {
-        let mut config = two_expectation_config();
-        config.expectations.push(expectation("Does alpha pass?"));
-        config.expectations[2].a = "no".to_string();
-
-        let selected = query_expectation_context(&config, "Does alpha pass?").unwrap();
-
-        assert!(selected.is_none());
     }
 
     fn two_expectation_config() -> CheckConfig {

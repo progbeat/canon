@@ -9,7 +9,7 @@ use crate::init::run_init;
 use crate::project::{git_project_root, project_root_or_current};
 use clap::Command as ClapCommand;
 use std::env;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,7 +79,7 @@ impl BuiltinCommand {
                 let current_dir = env::current_dir()
                     .map_err(|err| format!("failed to read current dir: {err}"))?;
                 let git_root = git_project_root(&current_dir).ok();
-                let explicit_in_place = args.iter().any(|arg| arg == "--in-place");
+                let explicit_in_place = args_include_option_before_separator(args, "--in-place");
                 let default_in_place = git_root.is_none();
                 // This is only the in-place root-selection rule. The rest of
                 // the in-place contract is split across check command parsing
@@ -107,5 +107,37 @@ impl BuiltinCommand {
                 run_gate_command(&root, args)
             }
         }
+    }
+}
+
+fn args_include_option_before_separator(args: &[OsString], option: &str) -> bool {
+    args.iter()
+        .take_while(|arg| arg.as_os_str() != OsStr::new("--"))
+        .any(|arg| arg == option)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::args_include_option_before_separator;
+    use std::ffi::OsString;
+
+    fn os_args(args: &[&str]) -> Vec<OsString> {
+        args.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn option_scan_stops_at_separator() {
+        assert!(!args_include_option_before_separator(
+            &os_args(&["--", "--in-place"]),
+            "--in-place"
+        ));
+    }
+
+    #[test]
+    fn option_scan_finds_option_before_separator() {
+        assert!(args_include_option_before_separator(
+            &os_args(&["--in-place", "--", "--ignored"]),
+            "--in-place"
+        ));
     }
 }

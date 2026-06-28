@@ -136,6 +136,70 @@ expectations:
     }
 
     #[test]
+    fn include_generator_fields_are_item_defaults() {
+        let root = test_root("include-generator-field-defaults");
+        git(&root, &["init"]);
+        fs::create_dir_all(root.join("expects")).unwrap();
+        fs::create_dir_all(root.join("expects/specs")).unwrap();
+        fs::write(root.join("expects/specs/alpha.md"), "Alpha spec").unwrap();
+        fs::write(
+            root.join("expects/included.yml"),
+            r#"
+- q: "Does the include answer apply?"
+- path: "specs/*.md"
+- q_template: "Child generated: {{content}}"
+"#,
+        )
+        .unwrap();
+        git(
+            &root,
+            &["add", "expects/included.yml", "expects/specs/alpha.md"],
+        );
+        let raw: RawCheckConfig = serde_saphyr::from_str(
+            r#"
+version: 1
+presets:
+  default: {}
+expectations:
+  - include: "expects/*.yml"
+    path: "specs/*.md"
+    q_template: "Inherited generated: {{content}}"
+    a: "yes"
+"#,
+        )
+        .expect("parse raw check config");
+        let mut cache = RepoInspectionCache::new();
+
+        let config = expand_raw_check_config(
+            Some(&root),
+            Path::new("check.yml"),
+            raw,
+            Some(&mut cache),
+            CheckConfigSource::Tree(TreeSource::Staged),
+        )
+        .expect("expand config");
+
+        let questions = config
+            .expectations
+            .iter()
+            .map(|expectation| expectation.q.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            questions,
+            vec![
+                "Does the include answer apply?",
+                "Inherited generated: Alpha spec",
+                "Child generated: Alpha spec",
+            ]
+        );
+        assert!(config
+            .expectations
+            .iter()
+            .all(|expectation| expectation.a == "yes"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn unsupported_expectation_target_is_rejected_during_expansion() {
         let raw: RawCheckConfig = serde_saphyr::from_str(
             r#"
@@ -468,6 +532,73 @@ expectations:
             "Does the explicit item stay explicit?"
         );
         assert_eq!(config.expectations[0].a, "yes");
+    }
+
+    #[test]
+    fn preset_supplies_missing_fields_for_declared_explicit_items() {
+        let raw: RawCheckConfig = serde_saphyr::from_str(
+            r#"
+version: 1
+presets:
+  default:
+    a: "yes"
+expectations:
+  - q: "Does the item question use the preset answer?"
+"#,
+        )
+        .expect("parse raw check config");
+
+        let config = expand_raw_check_config(
+            None,
+            Path::new("check.yml"),
+            raw,
+            None,
+            CheckConfigSource::Tree(TreeSource::Staged),
+        )
+        .expect("expand config");
+
+        assert_eq!(config.expectations.len(), 1);
+        assert_eq!(
+            config.expectations[0].q,
+            "Does the item question use the preset answer?"
+        );
+        assert_eq!(config.expectations[0].a, "yes");
+    }
+
+    #[test]
+    fn preset_supplies_missing_fields_for_declared_generator_items() {
+        let root = test_root("preset-declared-generator-fields");
+        git(&root, &["init"]);
+        fs::create_dir_all(root.join("specs")).unwrap();
+        fs::write(root.join("specs/alpha.md"), "Alpha spec").unwrap();
+        git(&root, &["add", "specs/alpha.md"]);
+        let raw: RawCheckConfig = serde_saphyr::from_str(
+            r#"
+version: 1
+presets:
+  default:
+    path: "specs/*.md"
+    a: "yes"
+expectations:
+  - q_template: "Generated: {{content}}"
+"#,
+        )
+        .expect("parse raw check config");
+        let mut cache = RepoInspectionCache::new();
+
+        let config = expand_raw_check_config(
+            Some(&root),
+            Path::new("check.yml"),
+            raw,
+            Some(&mut cache),
+            CheckConfigSource::Tree(TreeSource::Staged),
+        )
+        .expect("expand config");
+
+        assert_eq!(config.expectations.len(), 1);
+        assert_eq!(config.expectations[0].q, "Generated: Alpha spec");
+        assert_eq!(config.expectations[0].a, "yes");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

@@ -412,7 +412,7 @@ impl EvaluatorResponseJson {
 
 pub(crate) fn parse_evaluator_response_json(
     text: &str,
-    schema_scope: EvaluatorResponseSchemaScope,
+    _schema_scope: EvaluatorResponseSchemaScope,
     short_id: &str,
     answered_short_ids: &[String],
 ) -> Result<EvaluatorResponseJson, EvaluatorResponseParseError> {
@@ -443,27 +443,24 @@ pub(crate) fn parse_evaluator_response_json(
             )));
         }
     }
+    if !object.contains_key(short_id) {
+        return Err(EvaluatorResponseParseError::ShortIdResponse(format!(
+            "evaluator response did not contain short ID `{}`",
+            short_id
+        )));
+    }
+    if let Some(key) = object.keys().find(|key| key.as_str() != short_id) {
+        return Err(EvaluatorResponseParseError::ShortIdResponse(format!(
+            "evaluator response returned unrequested short ID `{}`",
+            key
+        )));
+    }
     for value in object.values_mut() {
         normalize_output_schema_null_placeholders(value)?;
     }
-    let response = object.remove(short_id).ok_or_else(|| {
-        EvaluatorResponseParseError::ShortIdResponse(format!(
-            "evaluator response did not contain short ID `{}`",
-            short_id
-        ))
-    })?;
-    for (key, value) in object {
-        let response =
-            serde_json::from_value::<EvaluatorResponseJson>(value.clone()).map_err(|err| {
-                EvaluatorResponseParseError::Schema(format!(
-                    "failed to parse evaluator JSON response for short ID `{}`: {}",
-                    key, err
-                ))
-            })?;
-        response
-            .validate_schema(schema_scope)
-            .map_err(EvaluatorResponseParseError::Schema)?;
-    }
+    let response = object
+        .remove(short_id)
+        .expect("requested short ID was checked above");
     serde_json::from_value::<EvaluatorResponseJson>(response).map_err(|err| {
         EvaluatorResponseParseError::Schema(format!(
             "failed to parse evaluator JSON response for short ID `{}`: {}",
@@ -660,6 +657,26 @@ mod tests {
             EvaluatorResponseParseError::ShortIdResponse(_)
         ));
         assert!(error.contains("already answered"));
+    }
+
+    #[test]
+    fn evaluator_response_rejects_unrequested_short_id() {
+        let error = super::parse_evaluator_response_for_short_id(
+            r#"{
+                "q":{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":["."]},
+                "other":{"answer":"yes","evidence":"`src/lib.rs`","qScopeSuggestion":["."]}
+            }"#,
+            EvaluatorResponseSchemaScope::Restricted,
+            "q",
+            &[],
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            EvaluatorResponseParseError::ShortIdResponse(_)
+        ));
+        assert!(error.contains("unrequested short ID `other`"));
     }
 
     #[test]

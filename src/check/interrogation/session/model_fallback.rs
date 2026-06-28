@@ -65,13 +65,19 @@ pub(crate) fn run_with_model_fallbacks<T>(
     ) -> Result<T, EvaluatorError>,
 ) -> Result<T, String> {
     let mut failures = Vec::new();
+    let mut diagnostic_log_error = None;
     let models = state.models_in_retry_order(agent);
     for (model_index, model) in models.iter().enumerate() {
         if check_interrupted() {
             return Err("interrupted".to_string());
         }
         match attempt(state, diagnostic_log, model.as_deref()) {
-            Ok(result) => return Ok(result),
+            Ok(result) => {
+                return match diagnostic_log_error {
+                    Some(err) => Err(err),
+                    None => Ok(result),
+                };
+            }
             Err(err) if is_model_technical_failure(&err) => {
                 let next_model = models.get(model_index + 1);
                 if next_model.is_some() {
@@ -91,13 +97,15 @@ pub(crate) fn run_with_model_fallbacks<T>(
                     // thread, so the next model must start from fresh sessions.
                     state.clear_thread_sessions();
                 }
-                write_model_fallback_events(
+                if let Err(err) = write_model_fallback_events(
                     diagnostic_log,
                     expectation_id,
                     model.as_deref(),
                     next_model.and_then(Option::as_deref),
                     err.message_str(),
-                );
+                ) {
+                    diagnostic_log_error.get_or_insert_with(|| err.to_string());
+                }
                 failures.push(format!(
                     "{}: {}",
                     model_label(model.as_deref()),
@@ -107,10 +115,11 @@ pub(crate) fn run_with_model_fallbacks<T>(
             Err(err) => return Err(err.to_string()),
         }
     }
-    Err(format!(
-        "all evaluator models failed: {}",
-        failures.join("; ")
-    ))
+    let fallback_error = format!("all evaluator models failed: {}", failures.join("; "));
+    match diagnostic_log_error {
+        Some(err) => Err(err),
+        None => Err(fallback_error),
+    }
 }
 
 pub(crate) fn write_model_fallback_events(
@@ -119,13 +128,11 @@ pub(crate) fn write_model_fallback_events(
     model: Option<&str>,
     next_model: Option<&str>,
     error: &str,
-) {
+) -> crate::logs::DiagnosticLogResult<()> {
     let Some(writer) = diagnostic_log.as_deref_mut() else {
-        return;
+        return Ok(());
     };
-    // Fallback decisions must remain driven by evaluator errors; diagnostic
-    // event write failures are non-functional observability failures.
-    let _ = writer.write_event(
+    writer.write_event(
         "warn",
         "model.failure",
         &[
@@ -133,9 +140,9 @@ pub(crate) fn write_model_fallback_events(
             ("model", json!(model)),
             ("error", json!(error)),
         ],
-    );
+    )?;
     if let Some(next_model) = next_model {
-        let _ = writer.write_event(
+        writer.write_event(
             "warn",
             "model.fallback",
             &[
@@ -144,8 +151,9 @@ pub(crate) fn write_model_fallback_events(
                 ("to", json!(next_model)),
                 ("reason", json!(error)),
             ],
-        );
+        )?;
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -155,6 +163,10 @@ mod tests {
     use crate::config_types::AgentConfig;
     use crate::evaluator::{EvaluatorError, EvaluatorFailureKind, EvaluatorProgress};
     use crate::logs::DiagnosticLogWriter;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process::{self, Command};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn model_fallback_tries_configured_models_in_order() {
@@ -191,5 +203,78 @@ mod tests {
             attempts,
             vec![Some("first".to_string()), Some("second".to_string())]
         );
+    }
+
+    #[test]
+    fn model_fallback_defers_diagnostic_log_error_until_after_retry() {
+        let root = temp_git_repo("model-fallback-log-error");
+        git(&root, &["config", "canon.logs.maxSize", "1"]);
+        let mut writer = DiagnosticLogWriter::create(&root).unwrap();
+        let mut diagnostic_log = Some(&mut writer);
+        let agent = AgentConfig {
+            models: vec!["first".to_string(), "second".to_string()],
+            ..AgentConfig::default()
+        };
+        let mut state = InterrogationRunState::new(true).unwrap();
+        let mut attempts = Vec::new();
+
+        let err = run_with_model_fallbacks(
+            &agent,
+            &mut state,
+            &mut diagnostic_log,
+            Some("test-expectation"),
+            None,
+            |_state, _diagnostic_log, model| {
+                attempts.push(model.map(str::to_string));
+                if attempts.len() == 1 {
+                    return Err(EvaluatorError::failure(
+                        EvaluatorFailureKind::ModelUnavailable,
+                        "first model unavailable",
+                    ));
+                }
+                Ok("ok")
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            attempts,
+            vec![Some("first".to_string()), Some("second".to_string())]
+        );
+        assert!(err.contains("runtime log record is too large"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn temp_git_repo(name: &str) -> PathBuf {
+        let root = temp_root(name);
+        git(&root, &["init"]);
+        root
+    }
+
+    fn git(root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn temp_root(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("canon-test-{name}-{}-{unique}", process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
     }
 }

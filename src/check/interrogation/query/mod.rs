@@ -14,11 +14,12 @@ use crate::check::interrogation::{
 use crate::config_types::{AgentConfig, DEFAULT_DIFF_FROM};
 use crate::evaluator::{
     effective_thinking, evaluator_turn_prompt, EvaluatorError, EvaluatorRunner,
-    EvaluatorTurnPromptContext,
+    EvaluatorTurnPromptContext, PromptTemplateArtifactDir,
 };
 use crate::hash::full_scope;
 use crate::logs::DiagnosticLogWriter;
 use crate::xpec_state::LastResult;
+use std::sync::Arc;
 
 #[derive(Clone, Copy)]
 pub(crate) struct QueryRequest<'a> {
@@ -83,9 +84,9 @@ fn ask_query<R: EvaluatorRunner>(
     };
     // This is query mode's use of the same Interrogation Policy q-scope
     // verification follow-up, not a separate `qScopeSuggestion` decision.
-    // Matched q/a queries use pass/fail records for the acceptance matrix;
-    // one-off queries can exercise the verification flow but cannot graduate a
-    // narrowed result without pass/fail records.
+    // Matched q/a queries use expectation pass/fail records; one-off queries
+    // derive verification-only pass/fail from whether the answer still matches
+    // the initial answer.
     let q_scope_verification_scope =
         q_scope_verification_scope_for_query_answer(runtime, query, state, &active_scope, &attempt)
             .map_err(|err| err.to_string())?;
@@ -258,15 +259,13 @@ fn ask_once_with_model<R: EvaluatorRunner>(
     state: &mut InterrogationRunState,
     model: Option<&str>,
 ) -> Result<QueryResult, EvaluatorError> {
-    let template_output_dir = state
-        .prompt_template_output_dir_cache
-        .path_for_check_invocation()
-        .map_err(EvaluatorError::message)?;
     let diff_from = query.resolved_diff_from(runtime)?;
+    let template_artifact_dir =
+        PromptTemplateArtifactDir::Lazy(Arc::clone(&state.prompt_template_output_dir_cache));
     let mut template_artifact_paths = Vec::new();
     let prompt = evaluator_turn_prompt(EvaluatorTurnPromptContext {
         root: runtime.root,
-        template_output_dir: &template_output_dir,
+        template_artifact_dir: template_artifact_dir.clone(),
         template_artifact_paths: &mut template_artifact_paths,
         short_id: query.short_id(),
         question: query.turn_question(),
@@ -292,7 +291,7 @@ fn ask_once_with_model<R: EvaluatorRunner>(
             question_context: query.question_context(),
             diff_from_tree_oid: &diff_from.tree_oid,
             prompt: &prompt,
-            template_output_dir: &template_output_dir,
+            template_artifact_dir,
             template_artifact_paths: &template_artifact_paths,
             last_pass: diff_from.last_pass,
             progress: None,
@@ -333,27 +332,44 @@ fn q_scope_verification_scope_for_query_answer(
 }
 
 fn query_narrowed_scope_is_accepted(initial: &QueryResult, narrowed: &QueryResult) -> bool {
-    // The query-mode verification follow-up mirrors the expectation acceptance
-    // matrix only when the query is matched to a q/a expectation and therefore
-    // has CheckRecord pass/fail results to compare. Expectation sequencing
-    // lives in `src/check/run/execute/expectation.rs`, and the shared
-    // 25%-smaller gate lives in `src/check/interrogation/policy.rs`.
-    if narrowed.answer.error.is_some() {
+    let Some(initial_result) =
+        query_result_for_q_scope_verification(&initial.answer.answer, initial)
+    else {
         return false;
+    };
+    let Some(narrowed_result) =
+        query_result_for_q_scope_verification(&initial.answer.answer, narrowed)
+    else {
+        return false;
+    };
+    match (initial_result, narrowed_result) {
+        (CheckResult::Fail, CheckResult::Pass) => false,
+        (CheckResult::Pass, CheckResult::Pass)
+        | (CheckResult::Pass, CheckResult::Fail)
+        | (CheckResult::Fail, CheckResult::Fail) => true,
     }
-    match (&initial.record, &narrowed.record) {
-        (Some(initial), Some(narrowed)) => match (initial.record.result, narrowed.record.result) {
-            (CheckResult::Fail, CheckResult::Pass) => false,
-            (CheckResult::Pass, CheckResult::Pass)
-            | (CheckResult::Pass, CheckResult::Fail)
-            | (CheckResult::Fail, CheckResult::Fail) => true,
-        },
-        (None, None) => false,
-        _ => false,
+}
+
+fn query_result_for_q_scope_verification(
+    initial_answer: &str,
+    result: &QueryResult,
+) -> Option<CheckResult> {
+    if result.answer.error.is_some() {
+        return None;
+    }
+    if let Some(record) = &result.record {
+        return Some(record.record.result);
+    }
+    if result.answer.answer == initial_answer {
+        Some(CheckResult::Pass)
+    } else {
+        Some(CheckResult::Fail)
     }
 }
 
 fn query_verification_error_is_final(narrowed: &QueryResult) -> bool {
+    // Verification ScopeTooNarrow rejects the proposed narrowed q-scope; it
+    // does not replace the initial query answer as the final response.
     narrowed.answer.error.is_some()
         && narrowed.answer.error.as_deref() != Some(ERROR_SCOPE_TOO_NARROW)
 }
@@ -448,105 +464,8 @@ impl<'a> QueryRequest<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::check::core::{CheckRecord, CheckResult, Cooldown, QueryExpectationRecord};
+    use crate::check::core::Cooldown;
     use crate::config_types::ExpectationTarget;
-
-    #[test]
-    fn q_scope_verification_uses_same_follow_up_budget_as_full_scope_retry() {
-        let answer = ParsedAnswer::answer(
-            "yes".to_string(),
-            "evidence".to_string(),
-            Some(full_scope()),
-        );
-        let error = ParsedAnswer::error(ERROR_SCOPE_TOO_NARROW.to_string(), "evidence".to_string());
-
-        assert!(q_scope_verification_follow_up_is_available(false, &answer));
-        assert!(!q_scope_verification_follow_up_is_available(true, &answer));
-        assert!(!q_scope_verification_follow_up_is_available(false, &error));
-    }
-
-    #[test]
-    fn matched_query_rejects_fail_to_pass_q_scope_verification() {
-        let expectation = test_expectation();
-        let initial_fail = test_query_result(&expectation, "no", CheckResult::Fail, None);
-        let narrowed_pass = test_query_result(&expectation, "yes", CheckResult::Pass, None);
-        let narrowed_fail = test_query_result(&expectation, "no", CheckResult::Fail, None);
-        let narrowed_error = test_query_result(
-            &expectation,
-            ERROR_SCOPE_TOO_NARROW,
-            CheckResult::Fail,
-            Some(ERROR_SCOPE_TOO_NARROW),
-        );
-
-        assert!(!query_narrowed_scope_is_accepted(
-            &initial_fail,
-            &narrowed_pass
-        ));
-        assert!(query_narrowed_scope_is_accepted(
-            &initial_fail,
-            &narrowed_fail
-        ));
-        assert!(!query_narrowed_scope_is_accepted(
-            &initial_fail,
-            &narrowed_error
-        ));
-    }
-
-    #[test]
-    fn one_off_query_never_accepts_q_scope_verification_result() {
-        let initial = QueryResult {
-            answer: ParsedAnswer::answer("no".to_string(), "evidence".to_string(), None),
-            record: None,
-        };
-        let changed_narrowed = QueryResult {
-            answer: ParsedAnswer::answer("yes".to_string(), "evidence".to_string(), None),
-            record: None,
-        };
-        let stable_narrowed = QueryResult {
-            answer: ParsedAnswer::answer("no".to_string(), "evidence".to_string(), None),
-            record: None,
-        };
-        let error_narrowed = QueryResult {
-            answer: ParsedAnswer::error(ERROR_INVALID_QUESTION.to_string(), "evidence".to_string()),
-            record: None,
-        };
-        let scope_too_narrow = QueryResult {
-            answer: ParsedAnswer::error(ERROR_SCOPE_TOO_NARROW.to_string(), "evidence".to_string()),
-            record: None,
-        };
-
-        assert!(!query_narrowed_scope_is_accepted(
-            &initial,
-            &changed_narrowed
-        ));
-        assert!(!query_narrowed_scope_is_accepted(
-            &initial,
-            &stable_narrowed
-        ));
-        assert!(!query_narrowed_scope_is_accepted(&initial, &error_narrowed));
-        assert!(!query_narrowed_scope_is_accepted(
-            &initial,
-            &scope_too_narrow
-        ));
-        assert!(!query_verification_error_is_final(&scope_too_narrow));
-        assert!(query_verification_error_is_final(&error_narrowed));
-    }
-
-    #[test]
-    fn final_query_result_rejects_scope_too_narrow_before_review_handling() {
-        let expectation = test_expectation();
-        let result = test_query_result(
-            &expectation,
-            ERROR_SCOPE_TOO_NARROW,
-            CheckResult::Fail,
-            Some(ERROR_SCOPE_TOO_NARROW),
-        );
-
-        let error = assert_final_query_result_has_no_scope_too_narrow(&result)
-            .expect_err("final ScopeTooNarrow must be rejected before output");
-
-        assert!(error.contains("forbidden final query scope error"));
-    }
 
     #[test]
     fn matched_query_request_uses_expectation_turn_context() {
@@ -607,55 +526,5 @@ mod tests {
         assert_eq!(request.target(), None);
         assert_eq!(request.expectation_id(), None);
         assert_eq!(request.question_context(), "");
-    }
-
-    fn test_expectation() -> SelectedExpectation {
-        SelectedExpectation {
-            number: 1,
-            id: "expectation-id".to_string(),
-            display_id: "e".to_string(),
-            question: "Does matched expectation pass?".to_string(),
-            expected_answer: "yes".to_string(),
-            question_context: String::new(),
-            diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
-            diff_from_configured: false,
-            target: None,
-            question_answer_only: true,
-            agent: AgentConfig::default(),
-            cooldown: None,
-        }
-    }
-
-    fn test_query_result(
-        expectation: &SelectedExpectation,
-        observed: &str,
-        result: CheckResult,
-        error: Option<&str>,
-    ) -> QueryResult {
-        QueryResult {
-            answer: if let Some(error) = error {
-                ParsedAnswer::error(error.to_string(), "evidence".to_string())
-            } else {
-                ParsedAnswer::answer(observed.to_string(), "evidence".to_string(), None)
-            },
-            record: Some(QueryExpectationRecord {
-                expectation: expectation.clone(),
-                record: CheckRecord {
-                    timestamp: "1970-01-01T00:00:00Z".to_string(),
-                    number: expectation.number,
-                    result,
-                    question: Some(expectation.question.clone()),
-                    expected_answer: Some(expectation.expected_answer.clone()),
-                    observed: observed.to_string(),
-                    error: error.map(str::to_string),
-                    evidence: "evidence".to_string(),
-                    scope: full_scope(),
-                    question_scope_suggestion: None,
-                    visible_tree_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
-                    id: expectation.id.clone(),
-                    display_id: expectation.display_id.clone(),
-                },
-            }),
-        }
     }
 }

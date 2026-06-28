@@ -1,5 +1,11 @@
+use super::prompt_artifact_permissions::{
+    set_template_artifact_create_mode, set_template_artifact_file_permissions,
+};
 use super::prompt_shell::{quote_prompt_template_shell_arg, run_prompt_template_shell_command};
-use crate::platform::create_private_dir;
+use crate::platform::{
+    create_private_dir, memory_backed_temporary_parent_candidates,
+    ordinary_temporary_parent_candidates,
+};
 use crate::process_cwd::with_current_dir;
 use crate::xpec_state::LastResult;
 use minijinja::value::{Kwargs, Value as MiniValue};
@@ -24,7 +30,7 @@ const EVALUATOR_TURN_PROMPT_TEMPLATE: &str =
 
 pub(crate) struct DeveloperInstructionsContext<'a> {
     pub(crate) root: &'a Path,
-    pub(crate) template_output_dir: &'a Path,
+    pub(crate) template_artifact_dir: PromptTemplateArtifactDir,
     pub(crate) template_artifact_paths: &'a mut Vec<PathBuf>,
     pub(crate) in_place: bool,
     pub(crate) diff_from_tree_oid: &'a str,
@@ -57,7 +63,7 @@ pub(crate) fn developer_instructions(
     // repeating noisy scope arguments.
     render_minijinja_resource_template(
         context.root,
-        context.template_output_dir,
+        context.template_artifact_dir,
         context.template_artifact_paths,
         DEVELOPER_INSTRUCTIONS_TEMPLATE,
         &[
@@ -80,7 +86,7 @@ pub(crate) fn developer_instructions(
 
 pub(crate) struct EvaluatorTurnPromptContext<'a> {
     pub(crate) root: &'a Path,
-    pub(crate) template_output_dir: &'a Path,
+    pub(crate) template_artifact_dir: PromptTemplateArtifactDir,
     pub(crate) template_artifact_paths: &'a mut Vec<PathBuf>,
     pub(crate) short_id: &'a str,
     pub(crate) question: &'a str,
@@ -118,7 +124,7 @@ pub(crate) fn evaluator_turn_prompt(
     );
     render_minijinja_resource_template(
         context.root,
-        context.template_output_dir,
+        context.template_artifact_dir,
         context.template_artifact_paths,
         EVALUATOR_TURN_PROMPT_TEMPLATE,
         &[],
@@ -147,7 +153,7 @@ fn turn_prompt_xpec_context(
 
 fn render_minijinja_resource_template(
     root: &Path,
-    template_output_dir: &Path,
+    template_artifact_dir: PromptTemplateArtifactDir,
     template_artifact_paths: &mut Vec<PathBuf>,
     template: &str,
     template_shell_env: &[(&str, &str)],
@@ -158,7 +164,6 @@ fn render_minijinja_resource_template(
     environment.add_filter("shq", shell_quote_filter);
     environment.add_filter("shargs", shell_args_filter);
     let command_root = root.to_path_buf();
-    let command_output_dir = template_output_dir.to_path_buf();
     let command_env = template_shell_env
         .iter()
         .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
@@ -172,7 +177,7 @@ fn render_minijinja_resource_template(
         move |command: String, kwargs: Kwargs| -> Result<String, Error> {
             let transcript = shell_transcript_filter(
                 &command_root,
-                &command_output_dir,
+                &template_artifact_dir,
                 filter_artifact_paths.as_ref(),
                 &command_env,
                 command,
@@ -295,6 +300,23 @@ pub(crate) struct PromptTemplateOutputDirCache {
     dir: OnceLock<PromptTemplateOutputDir>,
 }
 
+#[derive(Clone)]
+pub(crate) enum PromptTemplateArtifactDir {
+    Lazy(Arc<PromptTemplateOutputDirCache>),
+    #[cfg(test)]
+    Fixed(PathBuf),
+}
+
+impl PromptTemplateArtifactDir {
+    fn path(&self) -> Result<PathBuf, String> {
+        match self {
+            PromptTemplateArtifactDir::Lazy(cache) => cache.path_for_prompt_artifacts(),
+            #[cfg(test)]
+            PromptTemplateArtifactDir::Fixed(path) => Ok(path.clone()),
+        }
+    }
+}
+
 impl PromptTemplateOutputDirCache {
     pub(crate) fn new() -> PromptTemplateOutputDirCache {
         PromptTemplateOutputDirCache {
@@ -302,11 +324,11 @@ impl PromptTemplateOutputDirCache {
         }
     }
 
-    pub(crate) fn path_for_check_invocation(&self) -> Result<PathBuf, String> {
+    pub(crate) fn path_for_prompt_artifacts(&self) -> Result<PathBuf, String> {
         if let Some(dir) = self.dir.get() {
             return Ok(dir.path().to_path_buf());
         }
-        let dir = allocate_prompt_template_output_dir_for_check_invocation()?;
+        let dir = allocate_prompt_template_artifact_dir()?;
         let path = dir.path().to_path_buf();
         if self.dir.set(dir).is_err() {
             return Ok(self
@@ -336,12 +358,47 @@ impl Drop for PromptTemplateOutputDir {
     }
 }
 
-fn allocate_prompt_template_output_dir_for_check_invocation(
+fn allocate_prompt_template_artifact_dir() -> Result<PromptTemplateOutputDir, String> {
+    // Prompt Templates require oversized command output to be exposed through
+    // evaluator-readable temp files. This allocator returns a private artifact
+    // directory; `PromptTemplateOutputDirCache` shares one directory across the
+    // prompt renders that may need to reference those transcript artifacts.
+    let memory_backed_candidates = memory_backed_temporary_parent_candidates();
+    let fallback_candidates = ordinary_temporary_parent_candidates();
+    allocate_prompt_template_artifact_dir_from_candidates(
+        &memory_backed_candidates,
+        &fallback_candidates,
+    )
+}
+
+fn allocate_prompt_template_artifact_dir_from_candidates(
+    memory_backed_candidates: &[PathBuf],
+    fallback_candidates: &[PathBuf],
 ) -> Result<PromptTemplateOutputDir, String> {
-    // This allocator intentionally returns a fresh private directory per call.
-    // Production check runs call it through `PromptTemplateOutputDirCache`,
-    // which caches one returned path for every prompt render in that invocation.
-    let parent = std::env::temp_dir();
+    // Canon-owned temporary directories prefer memory-backed parents when the
+    // host provides one; ordinary temporary parents are only the fallback path.
+    let mut errors = Vec::new();
+    for parent in memory_backed_candidates
+        .iter()
+        .chain(fallback_candidates.iter())
+    {
+        match allocate_prompt_template_artifact_dir_in(&parent) {
+            Ok(dir) => return Ok(dir),
+            Err(err) => errors.push(err),
+        }
+    }
+    Err(format!(
+        "failed to allocate a unique prompt template output directory: {}",
+        errors.join("; ")
+    ))
+}
+
+fn allocate_prompt_template_artifact_dir_in(
+    parent: &Path,
+) -> Result<PromptTemplateOutputDir, String> {
+    if !parent.is_dir() {
+        return Err(format!("{} is not a directory", parent.display()));
+    }
     for _ in 0..PROMPT_TEMPLATE_ARTIFACT_DIR_CREATE_ATTEMPTS {
         let random = getrandom::u64()
             .map_err(|err| format!("failed to choose prompt template output directory: {err}"))?;
@@ -386,7 +443,7 @@ fn shell_args_filter(value: MiniValue) -> Result<String, Error> {
 
 fn shell_transcript_filter(
     root: &Path,
-    template_output_dir: &Path,
+    template_artifact_dir: &PromptTemplateArtifactDir,
     template_artifact_paths: &Mutex<Vec<PathBuf>>,
     template_shell_env: &[(String, String)],
     command: String,
@@ -425,7 +482,7 @@ fn shell_transcript_filter(
     // begin/end sentinel lines are part of the Prompt Templates contract.
     transcript.push_str(&truncated_template_command_output(
         &output.stdout,
-        template_output_dir,
+        template_artifact_dir,
         template_artifact_paths,
     )?);
     if !transcript.ends_with('\n') {
@@ -436,7 +493,7 @@ fn shell_transcript_filter(
 
 fn truncated_template_command_output(
     stdout: &[u8],
-    template_output_dir: &Path,
+    template_artifact_dir: &PromptTemplateArtifactDir,
     template_artifact_paths: &Mutex<Vec<PathBuf>>,
 ) -> Result<String, Error> {
     if stdout.len() <= TEMPLATE_OUTPUT_HEAD_BYTES {
@@ -446,8 +503,9 @@ fn truncated_template_command_output(
     // boundary. The Prompt Templates spec deliberately exposes a readable file
     // containing the same command stdout so the evaluator can inspect more of
     // an already-visible transcript when the head is insufficient. Canon never
-    // reads this artifact back as invocation state.
-    let path = write_full_template_command_stdout_artifact(template_output_dir, stdout)?;
+    // reads this artifact back as check-run state.
+    let template_output_dir = template_artifact_dir.path().map_err(template_error)?;
+    let path = write_full_template_command_stdout_artifact(&template_output_dir, stdout)?;
     template_artifact_paths.lock().unwrap().push(path.clone());
     let (mut head, head_lines) = template_command_stdout_head(stdout);
     if !head.ends_with('\n') {
@@ -536,7 +594,7 @@ fn write_full_template_command_stdout_artifact(
 fn template_command_stdout_artifact_path(template_output_dir: &Path, stdout: &[u8]) -> PathBuf {
     // `template_output_dir` is stable for one check run, and the file name is
     // content-addressed by complete stdout bytes. Identical stdout therefore
-    // maps to the same full path within that `canon check` invocation.
+    // maps to the same full path within that check run.
     template_output_dir.join(format!(
         "canon-template-output-sha256-{}.txt",
         sha256_hex(stdout)
@@ -624,26 +682,6 @@ fn template_artifact_open_options() -> fs::OpenOptions {
     options
 }
 
-#[cfg(unix)]
-fn set_template_artifact_create_mode(options: &mut fs::OpenOptions) {
-    use std::os::unix::fs::OpenOptionsExt;
-    options.mode(0o600);
-}
-
-#[cfg(not(unix))]
-fn set_template_artifact_create_mode(_options: &mut fs::OpenOptions) {}
-
-#[cfg(unix)]
-fn set_template_artifact_file_permissions(file: &fs::File) -> io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    file.set_permissions(fs::Permissions::from_mode(0o600))
-}
-
-#[cfg(not(unix))]
-fn set_template_artifact_file_permissions(_file: &fs::File) -> io::Result<()> {
-    Ok(())
-}
-
 fn template_error(message: String) -> Error {
     Error::new(ErrorKind::InvalidOperation, message)
 }
@@ -683,9 +721,12 @@ mod tests {
             .collect::<String>();
         let output_dir = test_output_dir("truncate");
         let artifact_paths = Mutex::new(Vec::new());
-        let rendered =
-            truncated_template_command_output(output.as_bytes(), &output_dir, &artifact_paths)
-                .unwrap();
+        let rendered = truncated_template_command_output(
+            output.as_bytes(),
+            &PromptTemplateArtifactDir::Fixed(output_dir.clone()),
+            &artifact_paths,
+        )
+        .unwrap();
 
         assert!(rendered.contains("[truncated: showing first "));
         assert!(rendered.contains("; full output: "));
@@ -703,12 +744,18 @@ mod tests {
         let output_dir = test_output_dir("dedupe");
         let artifact_paths = Mutex::new(Vec::new());
 
-        let first =
-            truncated_template_command_output(output.as_bytes(), &output_dir, &artifact_paths)
-                .unwrap();
-        let second =
-            truncated_template_command_output(output.as_bytes(), &output_dir, &artifact_paths)
-                .unwrap();
+        let first = truncated_template_command_output(
+            output.as_bytes(),
+            &PromptTemplateArtifactDir::Fixed(output_dir.clone()),
+            &artifact_paths,
+        )
+        .unwrap();
+        let second = truncated_template_command_output(
+            output.as_bytes(),
+            &PromptTemplateArtifactDir::Fixed(output_dir.clone()),
+            &artifact_paths,
+        )
+        .unwrap();
         let first_path = PathBuf::from(full_output_path_from_rendered(&first));
         let second_path = PathBuf::from(full_output_path_from_rendered(&second));
 
@@ -733,7 +780,7 @@ mod tests {
 
         let rendered = render_minijinja_resource_template(
             Path::new("."),
-            &output_dir,
+            PromptTemplateArtifactDir::Fixed(output_dir.clone()),
             &mut artifact_paths,
             " \n{% filter sh(display=\"printf kept\") %}printf '  kept\\n'{% endfilter %}\n ",
             &[],
@@ -747,8 +794,8 @@ mod tests {
 
     #[test]
     fn prompt_template_output_dir_allocations_are_fresh() {
-        let first = allocate_prompt_template_output_dir_for_check_invocation().unwrap();
-        let second = allocate_prompt_template_output_dir_for_check_invocation().unwrap();
+        let first = allocate_prompt_template_artifact_dir().unwrap();
+        let second = allocate_prompt_template_artifact_dir().unwrap();
 
         assert_ne!(first.path(), second.path());
         assert!(first.path().is_dir());
@@ -766,20 +813,63 @@ mod tests {
     fn prompt_template_output_dir_does_not_reuse_fixed_temp_path() {
         let fixed = std::env::temp_dir().join(PROMPT_TEMPLATE_ARTIFACT_DIR_PREFIX);
 
-        let output = allocate_prompt_template_output_dir_for_check_invocation().unwrap();
+        let output = allocate_prompt_template_artifact_dir().unwrap();
 
         assert_ne!(output.path(), fixed);
         assert!(output.path().is_dir());
     }
 
     #[test]
-    fn prompt_template_output_dir_cache_is_stable_within_invocation() {
+    fn prompt_template_output_dir_prefers_memory_backed_parent() {
+        let memory_backed_parent = test_output_dir("memory-backed-parent");
+        let fallback_parent = test_output_dir("fallback-parent");
+        let memory_backed_candidates = vec![memory_backed_parent.clone()];
+        let fallback_candidates = vec![fallback_parent.clone()];
+
+        let output = allocate_prompt_template_artifact_dir_from_candidates(
+            &memory_backed_candidates,
+            &fallback_candidates,
+        )
+        .unwrap();
+        let output_path = output.path().to_path_buf();
+
+        assert!(output_path.starts_with(&memory_backed_parent));
+        assert!(!output_path.starts_with(&fallback_parent));
+        drop(output);
+        let _ = fs::remove_dir_all(memory_backed_parent);
+        let _ = fs::remove_dir_all(fallback_parent);
+    }
+
+    #[test]
+    fn prompt_template_output_dir_falls_back_when_memory_backed_parent_is_unavailable() {
+        let missing_parent = std::env::temp_dir().join(format!(
+            "canon-missing-memory-backed-parent-{}",
+            std::process::id()
+        ));
+        let fallback_parent = test_output_dir("fallback-parent");
+        let memory_backed_candidates = vec![missing_parent];
+        let fallback_candidates = vec![fallback_parent.clone()];
+
+        let output = allocate_prompt_template_artifact_dir_from_candidates(
+            &memory_backed_candidates,
+            &fallback_candidates,
+        )
+        .unwrap();
+        let output_path = output.path().to_path_buf();
+
+        assert!(output_path.starts_with(&fallback_parent));
+        drop(output);
+        let _ = fs::remove_dir_all(fallback_parent);
+    }
+
+    #[test]
+    fn prompt_template_output_dir_cache_reuses_artifact_dir() {
         let first;
         {
             let cache = PromptTemplateOutputDirCache::new();
 
-            first = cache.path_for_check_invocation().unwrap();
-            let second = cache.path_for_check_invocation().unwrap();
+            first = cache.path_for_prompt_artifacts().unwrap();
+            let second = cache.path_for_prompt_artifacts().unwrap();
 
             assert_eq!(first, second);
             assert!(first.is_dir());
@@ -788,15 +878,15 @@ mod tests {
     }
 
     #[test]
-    fn prompt_template_output_dir_caches_are_fresh_per_invocation() {
+    fn prompt_template_output_dir_caches_use_distinct_artifact_dirs() {
         let first;
         let second;
         {
             let first_cache = PromptTemplateOutputDirCache::new();
             let second_cache = PromptTemplateOutputDirCache::new();
 
-            first = first_cache.path_for_check_invocation().unwrap();
-            second = second_cache.path_for_check_invocation().unwrap();
+            first = first_cache.path_for_prompt_artifacts().unwrap();
+            second = second_cache.path_for_prompt_artifacts().unwrap();
 
             assert_ne!(first, second);
             assert!(first.is_dir());
@@ -835,8 +925,12 @@ mod tests {
         let output_dir = test_output_dir("raw-bytes");
         let artifact_paths = Mutex::new(Vec::new());
 
-        let rendered =
-            truncated_template_command_output(&output, &output_dir, &artifact_paths).unwrap();
+        let rendered = truncated_template_command_output(
+            &output,
+            &PromptTemplateArtifactDir::Fixed(output_dir.clone()),
+            &artifact_paths,
+        )
+        .unwrap();
         let path = full_output_path_from_rendered(&rendered);
         let saved = fs::read(path).unwrap();
 
@@ -873,7 +967,7 @@ mod tests {
         let ignore = Vec::new();
         let rendered = developer_instructions(DeveloperInstructionsContext {
             root: Path::new("."),
-            template_output_dir: &output_dir,
+            template_artifact_dir: PromptTemplateArtifactDir::Fixed(output_dir.clone()),
             template_artifact_paths: &mut artifact_paths,
             in_place,
             diff_from_tree_oid: "HEAD",
@@ -922,7 +1016,7 @@ mod tests {
 
         let prompt = evaluator_turn_prompt(EvaluatorTurnPromptContext {
             root: Path::new("."),
-            template_output_dir: &output_dir,
+            template_artifact_dir: PromptTemplateArtifactDir::Fixed(output_dir.clone()),
             template_artifact_paths: &mut artifact_paths,
             short_id: "e",
             question: "Does it pass?",
@@ -969,7 +1063,7 @@ mod tests {
 
         let prompt = evaluator_turn_prompt(EvaluatorTurnPromptContext {
             root: Path::new("."),
-            template_output_dir: &output_dir,
+            template_artifact_dir: PromptTemplateArtifactDir::Fixed(output_dir.clone()),
             template_artifact_paths: &mut artifact_paths,
             short_id: "e",
             question: "Does it pass?",
@@ -1009,7 +1103,7 @@ mod tests {
 
         let prompt = evaluator_turn_prompt(EvaluatorTurnPromptContext {
             root: Path::new("."),
-            template_output_dir: &output_dir,
+            template_artifact_dir: PromptTemplateArtifactDir::Fixed(output_dir.clone()),
             template_artifact_paths: &mut artifact_paths,
             short_id: "e",
             question: "Does it pass?",
@@ -1032,7 +1126,7 @@ mod tests {
 
         let rendered = render_minijinja_resource_template(
             Path::new("."),
-            &output_dir,
+            PromptTemplateArtifactDir::Fixed(output_dir.clone()),
             &mut artifact_paths,
             "\n  {{ value }}  \n",
             &[],

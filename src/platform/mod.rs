@@ -140,12 +140,20 @@ pub(crate) fn create_private_dir_all(path: &Path) -> io::Result<()> {
     imp::create_private_dir_all(path)
 }
 
-pub(crate) fn memory_backed_staged_snapshot_parent_candidates() -> Vec<PathBuf> {
+pub(crate) fn memory_backed_temporary_parent_candidates() -> Vec<PathBuf> {
     imp::memory_backed_staged_snapshot_parent_candidates()
 }
 
-pub(crate) fn ordinary_staged_snapshot_parent_candidates() -> Vec<PathBuf> {
+pub(crate) fn ordinary_temporary_parent_candidates() -> Vec<PathBuf> {
     imp::ordinary_staged_snapshot_parent_candidates()
+}
+
+pub(crate) fn memory_backed_staged_snapshot_parent_candidates() -> Vec<PathBuf> {
+    memory_backed_temporary_parent_candidates()
+}
+
+pub(crate) fn ordinary_staged_snapshot_parent_candidates() -> Vec<PathBuf> {
+    ordinary_temporary_parent_candidates()
 }
 
 fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {

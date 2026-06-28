@@ -57,7 +57,6 @@ mod tests {
             ("reason", json!("initial")),
             ("error", json!("missing evaluator turn usage")),
             ("response", json!({"sessionId": "thread", "text": "{}"})),
-            ("tokenUsageUnavailable", json!(true)),
         ];
 
         render_runtime_log_event("error", "agent.turn_error", &fields).unwrap();

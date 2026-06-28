@@ -12,6 +12,7 @@ use crate::logs::rotation::{
     prune_diagnostic_logs_to_limit, rotate_active_diagnostic_logs,
     rotate_diagnostic_logs_with_config,
 };
+use crate::project::git_project_root;
 use crate::repo_inspection::RepoInspectionCache;
 use crate::state_paths::CANON_LOG_DIR_GIT_PATH;
 use serde_json::{json, Value};
@@ -139,23 +140,46 @@ fn prepare_diagnostic_log(
     cache: &mut RepoInspectionCache,
 ) -> DiagnosticLogResult<PreparedDiagnosticLog> {
     let config = diagnostic_log_config(root)?;
+    prepare_diagnostic_log_with_config(root, cache, config)
+}
+
+fn prepare_diagnostic_log_with_config(
+    root: &Path,
+    cache: &mut RepoInspectionCache,
+    config: DiagnosticLogConfig,
+) -> DiagnosticLogResult<PreparedDiagnosticLog> {
     if diagnostic_logs_explicitly_disabled(&config) {
-        let log_dir = root.join(CANON_LOG_DIR_GIT_PATH);
-        let path = log_dir.join(active_log_file_name(&config)?);
-        return Ok(PreparedDiagnosticLog {
-            log_dir,
-            path,
-            config,
-        });
+        return disabled_diagnostic_log(root, config);
     }
     // CANON_LOG_DIR_GIT_PATH is `${CANON_STATE_DIR}/logs`; `git_path` resolves it
     // with `git rev-parse --git-path` so worktrees and nonstandard git-dir
     // layouts keep logs under Canon's git-owned state directory.
-    let log_dir = cache
-        .git_path(root, CANON_LOG_DIR_GIT_PATH)
-        .map_err(|message| external_log_error("resolve diagnostic log directory", message))?;
+    let log_dir = match cache.git_path(root, CANON_LOG_DIR_GIT_PATH) {
+        Ok(log_dir) => log_dir,
+        Err(_) if git_project_root(root).is_err() => root.join(CANON_LOG_DIR_GIT_PATH),
+        Err(message) => {
+            return Err(external_log_error(
+                "resolve diagnostic log directory",
+                message,
+            ));
+        }
+    };
     ensure_dir_without_symlinks(&log_dir)
         .map_err(|message| external_log_error("create diagnostic log directory", message))?;
+    let path = log_dir.join(active_log_file_name(&config)?);
+    Ok(PreparedDiagnosticLog {
+        log_dir,
+        path,
+        config,
+    })
+}
+
+fn disabled_diagnostic_log(
+    root: &Path,
+    config: DiagnosticLogConfig,
+) -> DiagnosticLogResult<PreparedDiagnosticLog> {
+    debug_assert!(diagnostic_logs_explicitly_disabled(&config));
+    let log_dir = root.join(CANON_LOG_DIR_GIT_PATH);
     let path = log_dir.join(active_log_file_name(&config)?);
     Ok(PreparedDiagnosticLog {
         log_dir,
@@ -195,4 +219,60 @@ fn write_runtime_log_event_with_rotation(
     append_runtime_log_event_to_file(path, &mut file, &line)?;
     drop(file);
     prune_diagnostic_logs_to_limit(log_dir, config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        diagnostic_logs_explicitly_disabled, prepare_diagnostic_log_with_config,
+        DiagnosticLogConfig,
+    };
+    use crate::repo_inspection::RepoInspectionCache;
+    use crate::state_paths::CANON_LOG_DIR_GIT_PATH;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::process;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static LOG_FILES: [&str; 1] = ["0.jsonl"];
+
+    #[test]
+    fn diagnostic_logs_use_fallback_dir_when_git_path_is_unavailable() {
+        let root = temp_root("diagnostic-logs-no-git");
+        let mut cache = RepoInspectionCache::new();
+        let config = DiagnosticLogConfig {
+            max_bytes: 1024,
+            explicitly_disabled: false,
+            files: &LOG_FILES,
+        };
+
+        let prepared = prepare_diagnostic_log_with_config(&root, &mut cache, config).unwrap();
+
+        assert!(!diagnostic_logs_explicitly_disabled(&prepared.config));
+        assert_eq!(
+            prepared.path,
+            root.join(CANON_LOG_DIR_GIT_PATH).join("0.jsonl")
+        );
+        let mut writer = super::DiagnosticLogWriter {
+            path: prepared.path.clone(),
+            log_dir: prepared.log_dir,
+            config: prepared.config,
+        };
+        writer.write_event("info", "test.event", &[]).unwrap();
+        assert!(prepared.path.is_file());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    fn temp_root(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("canon-test-{name}-{}-{unique}", process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
 }

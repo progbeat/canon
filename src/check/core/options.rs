@@ -3,7 +3,8 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 pub(crate) struct CheckOptions {
-    // CLI-expanded selected expectations before check-only work-saving filters.
+    // CLI-expanded selected expectations before cache filtering finalizes the
+    // mutable Selected Expectations set for evaluator work.
     pub(crate) selected: Vec<SelectedExpectation>,
     pub(crate) selectors_provided: bool,
     // `--keep-going` continues after non-pass results among selected

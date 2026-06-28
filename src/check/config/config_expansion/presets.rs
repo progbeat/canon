@@ -56,7 +56,7 @@ pub(super) fn apply_expectation_settings(
     if let Some(plugins) = &settings.plugins {
         agent.plugins = plugins.clone();
     }
-    normalize_agent_config(agent.clone()).map(|normalized| *agent = normalized)
+    normalize_agent_config(agent)
 }
 
 fn raw_preset_from_legacy_agent(agent: RawLegacyAgentConfig) -> RawPresetConfig {
@@ -163,9 +163,9 @@ fn normalize_preset_config(name: &str, preset: &mut ResolvedPresetConfig) -> Res
     Ok(())
 }
 
-fn normalize_agent_config(mut agent: AgentConfig) -> Result<AgentConfig, String> {
+fn normalize_agent_config(agent: &mut AgentConfig) -> Result<(), String> {
     for pattern in &mut agent.ignore {
         *pattern = normalize_agent_ignore_pattern_for_config(pattern)?;
     }
-    Ok(agent)
+    Ok(())
 }

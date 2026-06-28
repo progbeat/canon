@@ -11,6 +11,7 @@ use crate::scope::{effective_ignore_patterns, visible_scope};
 use crate::staged::StagedWorktreeView;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub(crate) const IN_PLACE_VISIBLE_TREE_OID: &str = "in-place";
 const IN_PLACE_VISIBLE_FILE_COUNT: usize = 1;
@@ -345,7 +346,7 @@ pub(crate) struct InterrogationRunState {
     pub(crate) session_answered_short_ids: BTreeMap<String, BTreeSet<String>>,
     pub(crate) visible_tree_oid_cache: VisibleTreeOidCache,
     pub(crate) parse_cache: EvaluatorResponseParseCache,
-    pub(crate) prompt_template_output_dir_cache: PromptTemplateOutputDirCache,
+    pub(crate) prompt_template_output_dir_cache: Arc<PromptTemplateOutputDirCache>,
     isolation_policy: Option<NaiveIsolationPolicy>,
 }
 
@@ -366,7 +367,7 @@ impl InterrogationRunState {
             session_answered_short_ids: BTreeMap::new(),
             visible_tree_oid_cache: VisibleTreeOidCache::new(),
             parse_cache: EvaluatorResponseParseCache::new(),
-            prompt_template_output_dir_cache: PromptTemplateOutputDirCache::new(),
+            prompt_template_output_dir_cache: Arc::new(PromptTemplateOutputDirCache::new()),
             isolation_policy,
         })
     }

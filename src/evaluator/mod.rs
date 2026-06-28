@@ -12,7 +12,7 @@ pub(crate) use protocol::{
     developer_instructions, evaluator_base_instructions, evaluator_turn_prompt,
     q_scope_is_full_project, BaseInstructionsContext, DeveloperInstructionsContext, EvaluatorError,
     EvaluatorResponseParseCache, EvaluatorRunner, EvaluatorTurnPromptContext,
-    PromptTemplateOutputDirCache,
+    PromptTemplateArtifactDir, PromptTemplateOutputDirCache,
 };
 pub(crate) use turn::{
     ask_once, effective_thinking, evaluator_models, is_context_window_failure,

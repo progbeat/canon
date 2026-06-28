@@ -1,5 +1,5 @@
 use super::generator::render_generator_expectation_question;
-use super::include::inherit_include_fields;
+use super::include::merge_include_generator_fields_as_item_fields;
 use super::presets::{apply_expectation_settings, raw_presets_from_config, resolve_presets};
 use super::source::CheckConfigSource;
 use crate::config_types::{
@@ -189,7 +189,10 @@ impl RawExpectationExpansion<'_> {
             let result = (|| {
                 let content = self.read_expanded_file(&file)?;
                 let mut included = self.parse_included_items(&file, &content)?;
-                inherit_include_fields(&mut included, &item.common);
+                merge_include_generator_fields_as_item_fields(
+                    &mut included,
+                    &item.generated_item_defaults,
+                );
                 self.expand_items(Path::new(&file), included)
             })();
             self.include_stack.pop();
@@ -279,9 +282,11 @@ impl RawExpectationExpansion<'_> {
             .presets
             .get(preset_name)
             .ok_or_else(|| format!("unknown preset: {}", preset_name))?;
-        let item_form = fields.item_form();
+        let declared_form = fields.declared_item_form();
         apply_item_preset_defaults(&mut fields, preset);
-        RawExpectationItem::from_fields_with_form(fields, item_form).map_err(str::to_string)
+        let resolved_form = declared_form.or_else(|| fields.declared_item_form());
+        RawExpectationItem::from_fields_with_resolved_form(fields, resolved_form)
+            .map_err(str::to_string)
     }
 }
 

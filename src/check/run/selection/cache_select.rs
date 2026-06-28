@@ -9,9 +9,10 @@ use crate::xpec_state::XpecStateCache;
 use std::path::Path;
 
 pub(crate) struct CacheFilteredCheckWork {
-    // Expectations that still require evaluator work. Cached hits are excluded
-    // from this queue and are not selected evaluations.
-    pub(crate) to_evaluate: Vec<SelectedExpectation>,
+    // Final selected expectations for evaluator work after cache filtering.
+    // Cached hits are excluded from this queue and are not selected
+    // evaluations.
+    pub(crate) selected_for_evaluation: Vec<SelectedExpectation>,
     pub(crate) cached_hits: Vec<CachedExpectationHit>,
 }
 
@@ -40,6 +41,9 @@ pub(crate) struct CacheFilterContext<'a, 'log> {
 // this function, because the in-place spec has no persistent last-result reads
 // and therefore no same-tree or cooldown cache lookup.
 //
+// This layer only partitions work by cache availability. The execution layer
+// orders cached hits and remaining evaluations together before running them.
+//
 // This function receives command-independent `CheckOptions`; CLI/trailer policy
 // stays in the command layer before and after this selection step.
 pub(crate) fn select_expectations_after_cache(
@@ -50,12 +54,12 @@ pub(crate) fn select_expectations_after_cache(
 ) -> Result<CacheFilteredCheckWork, String> {
     if options.selectors_provided {
         return Ok(CacheFilteredCheckWork {
-            to_evaluate: options.selected.clone(),
+            selected_for_evaluation: options.selected.clone(),
             cached_hits: Vec::new(),
         });
     }
 
-    let mut to_evaluate = Vec::new();
+    let mut uncached = Vec::new();
     let mut cached_hits = Vec::new();
     let mut cached_failure_seen = false;
     for expectation in options.selected.clone() {
@@ -82,25 +86,40 @@ pub(crate) fn select_expectations_after_cache(
                 }
                 cached_hits.push(CachedExpectationHit { expectation, hit });
             }
-            None => to_evaluate.push(expectation),
+            None => uncached.push(expectation),
         }
     }
+    let selected_for_evaluation = selected_expectations_after_default_cache_policy(
+        cached_failure_seen,
+        uncached,
+        cached_failure_mode,
+    );
     if cached_failure_seen && cached_failure_mode == CachedFailureMode::StopDefaultSelection {
-        // Selected Expectations default policy: when a no-selector run sees a
-        // cached failure, the selected queue is empty until that cached failure
-        // is fixed. This is before evaluation starts, so canon-check-order's
-        // evaluated-expectation ordering and stop-after-non-pass rule is not
-        // reached for the cleared expectations.
-        to_evaluate.clear();
         cached_hits =
             order_by_latest_non_pass(context.root, cached_hits, context.xpec_state, |hit| {
                 &hit.expectation
             })?;
     }
     Ok(CacheFilteredCheckWork {
-        to_evaluate,
+        selected_for_evaluation,
         cached_hits,
     })
+}
+
+fn selected_expectations_after_default_cache_policy(
+    cached_failure_seen: bool,
+    uncached: Vec<SelectedExpectation>,
+    cached_failure_mode: CachedFailureMode,
+) -> Vec<SelectedExpectation> {
+    if cached_failure_seen && cached_failure_mode == CachedFailureMode::StopDefaultSelection {
+        // Selected Expectations default policy: when any cached result is a
+        // non-pass, selected expectations for evaluator work are empty until
+        // that cached failure is fixed. This is pre-evaluation selection, not
+        // canon-check-order stopping after an evaluated result.
+        Vec::new()
+    } else {
+        uncached
+    }
 }
 
 #[cfg(test)]
@@ -139,7 +158,7 @@ mod tests {
 
         let work = cache_filtered_work(&root, &source, expectation);
         assert_eq!(work.cached_hits.len(), 1);
-        assert!(work.to_evaluate.is_empty());
+        assert!(work.selected_for_evaluation.is_empty());
         let _ = fs::remove_dir_all(root);
     }
 
@@ -175,9 +194,46 @@ mod tests {
             CachedFailureMode::Continue,
         );
         assert!(work.cached_hits.is_empty());
-        assert_eq!(work.to_evaluate.len(), 2);
-        assert_eq!(work.to_evaluate[0].id, "abc123");
-        assert_eq!(work.to_evaluate[1].id, "def456");
+        assert_eq!(work.selected_for_evaluation.len(), 2);
+        assert_eq!(work.selected_for_evaluation[0].id, "abc123");
+        assert_eq!(work.selected_for_evaluation[1].id, "def456");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn default_cached_failure_leaves_uncached_expectations_unselected_for_evaluation() {
+        let root = git_project("default-cached-failure-clears-evaluate-queue");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub fn demo() {}\n").unwrap();
+        git(&root, &["add", "src/lib.rs"]);
+
+        let cached_expectation = test_expectation();
+        let uncached_expectation = test_expectation_with_identity(2, "def456", "d");
+        let source = TreeSource::Staged;
+        let scope = full_scope();
+        let checked_tree_oid = source.tree_oid_for_prompt_diff(&root).unwrap();
+        let visible_tree_oid = VisibleTreeOidCache::new()
+            .visible_tree_oid(&root, &source, &cached_expectation.agent, &scope)
+            .unwrap();
+        XpecStateCache::default()
+            .write_last_result_for_record(
+                &root,
+                &checked_tree_oid,
+                &cached_expectation,
+                &test_record(&cached_expectation, &scope, "no", visible_tree_oid),
+            )
+            .unwrap();
+
+        let work = cache_filtered_work_with_mode(
+            &root,
+            &source,
+            vec![cached_expectation, uncached_expectation],
+            false,
+            CachedFailureMode::StopDefaultSelection,
+        );
+
+        assert_eq!(work.cached_hits.len(), 1);
+        assert!(work.selected_for_evaluation.is_empty());
         let _ = fs::remove_dir_all(root);
     }
 

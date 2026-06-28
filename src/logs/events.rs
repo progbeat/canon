@@ -252,7 +252,6 @@ fn append_turn_usage_fields(
 
 fn append_missing_turn_usage_fields(fields: &mut Vec<(&'static str, Value)>, session_id: &str) {
     fields.push(("threadId", json!(session_id)));
-    fields.push(("tokenUsageUnavailable", json!(true)));
 }
 
 fn token_usage_log_value(usage: TokenUsage) -> Value {

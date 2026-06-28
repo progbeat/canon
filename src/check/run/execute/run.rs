@@ -94,12 +94,16 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 CachedFailureMode::StopDefaultSelection
             },
         ));
+        // `check_work.selected_for_evaluation` is already the final mutable
+        // Selected Expectations set for evaluator work after cached-result
+        // policy. The canon-check-order policy begins from this post-cache set;
+        // cached hits below are report-only and do not start evaluator work.
         // Cached hits reuse results while evaluate items still require evaluator
         // work, but both are ordered together for the public check run.
         run_try!(order_check_work(
             root,
             check_work.cached_hits,
-            check_work.to_evaluate,
+            check_work.selected_for_evaluation,
             &mut caches.xpec_state,
         ))
     };
@@ -189,14 +193,14 @@ enum CheckWorkItem {
 fn order_check_work(
     root: &Path,
     cached_hits: Vec<CachedExpectationHit>,
-    to_evaluate: Vec<SelectedExpectation>,
+    selected_for_evaluation: Vec<SelectedExpectation>,
     xpec_state: &mut crate::xpec_state::XpecStateCache,
 ) -> Result<Vec<CheckWorkItem>, String> {
     let work = cached_hits
         .into_iter()
         .map(|hit| CheckWorkItem::Cached(Box::new(hit)))
         .chain(
-            to_evaluate
+            selected_for_evaluation
                 .into_iter()
                 .map(|expectation| CheckWorkItem::Evaluate(Box::new(expectation))),
         )
