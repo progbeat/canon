@@ -1,3 +1,4 @@
+use super::in_place::{validate_in_place_global_config, validate_in_place_query_expectation};
 use crate::app::LazyAppServerRunner;
 use crate::check::command::output::write_query_output;
 use crate::check::command::{
@@ -6,7 +7,7 @@ use crate::check::command::{
 };
 use crate::check::core::errors::error_record_from_interrogation_error;
 use crate::check::core::QueryResult;
-use crate::check::interrogation::policy::initial_visible_scope_for_expectation;
+use crate::check::interrogation::policy::initial_q_scope_for_fresh_interrogation;
 use crate::check::interrogation::query::{
     query_human_review_reason, run_query_with_runner, QueryExpectationContext, QueryRequest,
 };
@@ -14,6 +15,7 @@ use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::interrogation::{
     write_query_lifecycle_finish_event, write_query_lifecycle_start_event,
 };
+use crate::check::run::selection::selected_expectation_at;
 use crate::check::{expectation_identities, CheckRecord, CheckRunCaches, SelectedExpectation};
 use crate::config_types::CheckConfig;
 use crate::git::TreeSource;
@@ -28,10 +30,11 @@ pub(crate) struct CheckQueryCommand<'a> {
     pub(crate) question: &'a str,
     pub(crate) query_scope: &'a [String],
     pub(crate) query_scope_provided: bool,
-    pub(crate) tree_source: &'a TreeSource,
-    pub(crate) against_tree: &'a TreeSource,
+    pub(crate) tree_source: Option<&'a TreeSource>,
+    pub(crate) against_tree: Option<&'a TreeSource>,
     pub(crate) no_sandbox: bool,
-    pub(crate) diagnostic_log: DiagnosticLogWriter,
+    pub(crate) in_place: bool,
+    pub(crate) diagnostic_log: Option<DiagnosticLogWriter>,
     pub(crate) check_caches: &'a mut CheckRunCaches,
 }
 
@@ -45,10 +48,14 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
         tree_source,
         against_tree,
         no_sandbox,
-        mut diagnostic_log,
+        in_place,
+        diagnostic_log,
         check_caches,
     } = command;
-    write_query_lifecycle_start_event(&mut diagnostic_log).map_err(|err| err.to_string())?;
+    let mut diagnostic_log = diagnostic_log;
+    if let Some(writer) = diagnostic_log.as_mut() {
+        write_query_lifecycle_start_event(writer).map_err(|err| err.to_string())?;
+    }
     let result = run_started_check_query_command(StartedCheckQueryCommand {
         root,
         config,
@@ -58,12 +65,14 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
         tree_source,
         against_tree,
         no_sandbox,
-        diagnostic_log: &mut diagnostic_log,
+        in_place,
+        diagnostic_log: diagnostic_log.as_mut(),
         check_caches,
     });
     let finish_error = result.as_ref().err().map(String::as_str);
-    write_query_lifecycle_finish_event(&mut diagnostic_log, finish_error)
-        .map_err(|err| err.to_string())?;
+    if let Some(writer) = diagnostic_log.as_mut() {
+        write_query_lifecycle_finish_event(writer, finish_error).map_err(|err| err.to_string())?;
+    }
     result
 }
 
@@ -73,10 +82,11 @@ struct StartedCheckQueryCommand<'a, 'b> {
     question: &'a str,
     query_scope: &'a [String],
     query_scope_provided: bool,
-    tree_source: &'a TreeSource,
-    against_tree: &'a TreeSource,
+    tree_source: Option<&'a TreeSource>,
+    against_tree: Option<&'a TreeSource>,
     no_sandbox: bool,
-    diagnostic_log: &'b mut DiagnosticLogWriter,
+    in_place: bool,
+    diagnostic_log: Option<&'b mut DiagnosticLogWriter>,
     check_caches: &'a mut CheckRunCaches,
 }
 
@@ -92,67 +102,136 @@ fn run_started_check_query_command(
         tree_source,
         against_tree,
         no_sandbox,
-        diagnostic_log,
+        in_place,
+        mut diagnostic_log,
         check_caches,
     } = command;
     let mut enforced_scope = query_enforced_scope(query_scope)?;
-    let mut execution = prepare_check_execution(
-        root,
-        config,
-        PrepareCheckExecutionOptions {
-            tree_source,
-            against_tree,
+    let mut in_place_runner;
+    let (runtime, runner): (CheckRuntime<'_>, &mut LazyAppServerRunner) = if in_place {
+        in_place_runner = LazyAppServerRunner::new_in_place(
+            root,
+            crate::check::config::validation::check_config_loads_plugins(config),
+            &config.agent,
             no_sandbox,
-        },
-        &mut check_caches.visible_tree_oid,
-    )?;
-    let runtime = CheckRuntime::materialized(
+        )?;
+        (
+            CheckRuntime::in_place(root, config, no_sandbox),
+            &mut in_place_runner,
+        )
+    } else {
+        let tree_source = tree_source.ok_or_else(|| "missing query tree source".to_string())?;
+        let against_tree = against_tree.ok_or_else(|| "missing query against tree".to_string())?;
+        let mut execution = prepare_check_execution(
+            root,
+            config,
+            PrepareCheckExecutionOptions {
+                tree_source,
+                against_tree,
+                no_sandbox,
+            },
+            &mut check_caches.visible_tree_oid,
+        )?;
+        let runtime = CheckRuntime::materialized(
+            root,
+            &execution.staged_view,
+            &execution.tree_source,
+            execution.tree_context.clone(),
+            config,
+            no_sandbox,
+        );
+        let runner = &mut execution.runner;
+        return run_prepared_query(
+            root,
+            runtime,
+            runner,
+            config,
+            question,
+            query_scope_provided,
+            &mut enforced_scope,
+            &mut diagnostic_log,
+            check_caches,
+        );
+    };
+    run_prepared_query(
         root,
-        &execution.staged_view,
-        &execution.tree_source,
-        execution.tree_context.clone(),
+        runtime,
+        runner,
         config,
-        no_sandbox,
-    );
+        question,
+        query_scope_provided,
+        &mut enforced_scope,
+        &mut diagnostic_log,
+        check_caches,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_prepared_query(
+    root: &Path,
+    runtime: CheckRuntime<'_>,
+    runner: &mut LazyAppServerRunner,
+    config: &CheckConfig,
+    question: &str,
+    query_scope_provided: bool,
+    enforced_scope: &mut Vec<String>,
+    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    check_caches: &mut CheckRunCaches,
+) -> Result<(), String> {
+    // `config` is already expanded: command `--preset` can only choose the
+    // default agent during raw expansion, before query mode consumes resolved
+    // expectation/config fields here.
     let query_expectation = query_expectation_context(config, question)?;
-    if let Some(expectation) = query_expectation.as_ref() {
+    if runtime.is_in_place() {
+        validate_in_place_global_config(&config.agent)?;
+        // In-place compatibility is expectation-specific after global config.
+        // A `-q` invocation selects only the matched q/a expectation, if any;
+        // other collected expectations are not evaluator work for this query.
+        if let Some(expectation) = query_expectation.as_ref() {
+            validate_in_place_query_expectation(&config.agent, expectation)?;
+        }
+        *enforced_scope = runtime
+            .fresh_scope_without_persistent_history()
+            .expect("in-place query has no persistent q-scope");
+    } else if let Some(expectation) = query_expectation.as_ref() {
         if !query_scope_provided {
-            enforced_scope = initial_visible_scope_for_expectation(
+            *enforced_scope = initial_q_scope_for_fresh_interrogation(
                 root,
-                &execution.tree_source,
                 expectation,
                 &mut check_caches.xpec_state,
-                &mut check_caches.visible_tree_oid,
             )?;
         }
     }
-    // Explicit `-s` changes the scope used for this query, but a matched
-    // q/a-only expectation still records the result produced under that scope.
-    // It must not seed future check runs because the scope was chosen by the
-    // caller rather than accepted by interrogation policy.
     let persist_expectation_record = query_expectation.is_some();
-    let seed_stored_q_scope = !query_scope_provided;
-    let query_last_pass = query_expectation
-        .as_ref()
-        .map(|expectation| check_caches.xpec_state.read_last_pass(root, expectation))
-        .transpose()?
-        .flatten();
+    // Query mode always asks the evaluator; it does not reuse cached results.
+    // A matched q/a expectation reads only the last pass so query prompts can
+    // preserve checkpoint context for that expectation.
+    let query_last_pass = if runtime.is_in_place() {
+        None
+    } else {
+        query_expectation
+            .as_ref()
+            .map(|expectation| check_caches.xpec_state.read_last_pass(root, expectation))
+            .transpose()?
+            .flatten()
+    };
     let expectation = query_expectation
         .as_ref()
         .map(|expectation| QueryExpectationContext {
             expectation,
             last_pass: query_last_pass.as_ref(),
         });
-    let mut interrogation_run_state = InterrogationRunState::new(runtime.no_sandbox())?;
+    let mut interrogation_run_state =
+        InterrogationRunState::new(runtime.no_sandbox() || runtime.is_in_place())?;
     let result = run_query_with_runner(
         &runtime,
         QueryRequest {
             question,
-            enforced_scope: &enforced_scope,
+            enforced_scope,
             expectation,
         },
-        &mut execution.runner,
-        Some(diagnostic_log),
+        runner,
+        diagnostic_log.as_deref_mut(),
         &mut interrogation_run_state,
     );
     let result = match result {
@@ -161,31 +240,29 @@ fn run_started_check_query_command(
             persist_query_error_result(
                 root,
                 &runtime,
-                &execution.tree_context.checked_tree_oid,
+                runtime.checked_tree_oid(),
                 check_caches,
-                persist_expectation_record,
-                seed_stored_q_scope,
+                persist_expectation_record && !runtime.is_in_place(),
                 query_expectation.as_ref(),
-                &enforced_scope,
+                enforced_scope,
                 &err,
             )?;
-            print_query_token_usage(&mut execution.runner)?;
+            print_query_token_usage(runner)?;
             return Err(err);
         }
     };
     persist_query_result(
         root,
-        &execution.tree_context.checked_tree_oid,
+        runtime.checked_tree_oid(),
         check_caches,
-        persist_expectation_record,
-        seed_stored_q_scope,
+        persist_expectation_record && !runtime.is_in_place(),
         &result,
     )?;
     if let Some(reason) = query_human_review_reason(&result) {
-        print_query_token_usage(&mut execution.runner)?;
+        print_query_token_usage(runner)?;
         return Err(format!("query requires human review: {}", reason));
     }
-    write_successful_query_output(&result, &mut execution.runner)?;
+    write_successful_query_output(&result, runner)?;
     Ok(())
 }
 
@@ -196,7 +273,6 @@ fn persist_query_error_result(
     checked_tree_oid: &str,
     check_caches: &mut CheckRunCaches,
     should_persist: bool,
-    seed_stored_q_scope: bool,
     expectation: Option<&SelectedExpectation>,
     scope: &[String],
     error: &str,
@@ -215,14 +291,7 @@ fn persist_query_error_result(
         error,
         &mut check_caches.visible_tree_oid,
     )?;
-    write_query_last_result(
-        root,
-        checked_tree_oid,
-        check_caches,
-        expectation,
-        &record,
-        seed_stored_q_scope,
-    )
+    write_query_last_result(root, checked_tree_oid, check_caches, expectation, &record)
 }
 
 fn persist_query_result(
@@ -230,7 +299,6 @@ fn persist_query_result(
     checked_tree_oid: &str,
     check_caches: &mut CheckRunCaches,
     should_persist: bool,
-    seed_stored_q_scope: bool,
     result: &QueryResult,
 ) -> Result<(), String> {
     if !should_persist {
@@ -245,7 +313,6 @@ fn persist_query_result(
         check_caches,
         &record.expectation,
         &record.record,
-        seed_stored_q_scope,
     )
 }
 
@@ -255,26 +322,11 @@ fn write_query_last_result(
     check_caches: &mut CheckRunCaches,
     expectation: &SelectedExpectation,
     record: &CheckRecord,
-    seed_stored_q_scope: bool,
 ) -> Result<(), String> {
-    let result = if seed_stored_q_scope {
-        check_caches.xpec_state.write_last_result_for_record(
-            root,
-            checked_tree_oid,
-            expectation,
-            record,
-        )
-    } else {
-        check_caches
-            .xpec_state
-            .write_last_result_for_record_without_stored_q_scope_seed(
-                root,
-                checked_tree_oid,
-                expectation,
-                record,
-            )
-    };
-    result.map(|_| ())
+    check_caches
+        .xpec_state
+        .write_last_result_for_record(root, checked_tree_oid, expectation, record)
+        .map(|_| ())
 }
 
 fn write_successful_query_output(
@@ -312,29 +364,11 @@ fn query_expectation_context(
     let [index] = matches.as_slice() else {
         return Ok(None);
     };
-    let identity = identities
-        .get(*index)
-        .ok_or_else(|| "expectation identity count mismatch".to_string())?;
-    let expectation = config
-        .expectations
-        .get(*index)
-        .ok_or_else(|| "expectation identity count mismatch".to_string())?;
-    // This is not check-run selection. It only recovers the q/a-only
-    // expectation context needed for plain `canon check -q <q>` to use the
-    // same prompt and state inputs as `canon check <ID>`.
-    Ok(Some(SelectedExpectation {
-        number: *index + 1,
-        id: identity.id.clone(),
-        display_id: identity.display_id.clone(),
-        question: expectation.q.clone(),
-        expected_answer: expectation.a.clone(),
-        instructions: expectation.instructions.clone(),
-        diff_from: expectation.diff_from.clone(),
-        target: expectation.target.clone(),
-        question_answer_only: expectation.question_answer_only,
-        agent: expectation.agent.clone(),
-        cooldown: None,
-    }))
+    // This is query-mode selection, not check-run selector expansion. Only a
+    // q/a-only expectation can be selected here; if a text-matching
+    // expectation has diff, cache, path-hiding, or instruction fields, it is a
+    // non-q/a expectation and the query remains an unmatched one-off question.
+    selected_expectation_at(config, &identities, *index, true).map(Some)
 }
 
 #[cfg(test)]
@@ -346,28 +380,6 @@ mod tests {
     use crate::config_types::{AgentConfig, Expectation};
     use crate::hash::full_scope;
     use crate::xpec_state::LastResultStatus;
-
-    #[test]
-    fn query_expectation_context_matches_unique_qa_only_question() {
-        let config = two_expectation_config();
-
-        let selected = query_expectation_context(&config, "Does beta pass?")
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(selected.question, "Does beta pass?");
-        assert!(selected.question_answer_only);
-    }
-
-    #[test]
-    fn query_expectation_context_ignores_non_qa_only_matches() {
-        let mut config = two_expectation_config();
-        config.expectations[0].question_answer_only = false;
-
-        let selected = query_expectation_context(&config, "Does alpha pass?").unwrap();
-
-        assert!(selected.is_none());
-    }
 
     #[test]
     fn persist_query_result_writes_error_record_for_matched_query() {
@@ -404,7 +416,7 @@ mod tests {
         };
         let mut caches = CheckRunCaches::new();
 
-        persist_query_result(&root, "checked-tree", &mut caches, true, true, &result).unwrap();
+        persist_query_result(&root, "checked-tree", &mut caches, true, &result).unwrap();
 
         let last_error = caches
             .xpec_state
@@ -424,21 +436,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    #[test]
-    fn query_expectation_context_does_not_choose_ambiguous_question() {
-        let mut config = two_expectation_config();
-        config.expectations.push(expectation("Does alpha pass?"));
-        config.expectations[2].a = "no".to_string();
-
-        let selected = query_expectation_context(&config, "Does alpha pass?").unwrap();
-
-        assert!(selected.is_none());
-    }
-
     fn two_expectation_config() -> CheckConfig {
         CheckConfig {
             version: 1,
-            presets: Default::default(),
             agent: AgentConfig::implementation_default(),
             expectations: vec![
                 expectation("Does alpha pass?"),
@@ -451,8 +451,9 @@ mod tests {
         Expectation {
             q: question.to_string(),
             a: "yes".to_string(),
-            instructions: String::new(),
+            question_context: String::new(),
             diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
+            diff_from_configured: false,
             target: None,
             question_answer_only: true,
             agent: AgentConfig::implementation_default(),

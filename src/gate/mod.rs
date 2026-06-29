@@ -17,6 +17,9 @@ use std::ffi::OsString;
 use std::path::Path;
 
 pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), CommandError> {
+    // Gate failure diagnostics have two ownership points: CLI dispatch handles
+    // root-resolution failures before this function, and this module handles
+    // failures after a project root exists.
     // CLI validation happens before the gate pass/fail decision. These
     // unsupported-option errors are usage errors, not `GateFailed` outcomes.
     if !args.is_empty() {
@@ -24,7 +27,7 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
             "canon gate does not accept arguments\n▷ Run `canon gate` without arguments.".into(),
         );
     }
-    let changed_paths = gate_result_or_failure(staged_changed_path_bytes(root))?;
+    let changed_paths = gate_command_result(staged_changed_path_bytes(root))?;
     // `canon check` prints "Commit the staged changes NOW!" only when this
     // same HEAD-vs-staged regression count is zero. In that same-tree commit
     // case, remaining expectation failures are not gate failures; only a
@@ -45,14 +48,21 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
 
 fn gate_regression_count(root: &Path) -> Result<usize, CommandError> {
     let mut repo_cache = RepoInspectionCache::new();
-    let config =
-        match repo_cache.load_check_config(root, Path::new(CHECK_PATH), &TreeSource::Staged) {
-            Ok(config) => config,
-            Err(_) => return Ok(0),
-        };
+    // The regression baseline is the committed canon. Staged canon edits are
+    // handled by the gate decision after this count is known.
+    let config_source = gate_command_result(TreeSource::resolve_default_against_tree(
+        root,
+        crate::git::DEFAULT_AGAINST_TREE_ARG,
+        false,
+    ))?;
+    let config = match repo_cache.load_check_config(root, Path::new(CHECK_PATH), &config_source) {
+        Ok(config) => config,
+        Err(err) if gate_check_config_is_missing(&err) => return Ok(0),
+        Err(err) => return gate_command_result(Err(err)),
+    };
     let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
     let mut xpec_state = XpecStateCache::default();
-    gate_result_or_failure(gate_regression_count_with_config(
+    gate_command_result(gate_regression_count_with_config(
         root,
         &config,
         &mut xpec_state,
@@ -62,6 +72,9 @@ fn gate_regression_count(root: &Path) -> Result<usize, CommandError> {
 
 enum GateDecision {
     Pass,
+    // This is not "any non-pass result". It is the gate-only blocking
+    // shape that also prevents same-tree `canon check` from saying to commit:
+    // a prior HEAD pass now has a staged fail.
     RegressionFailure,
     MixedCanonChangeFailure,
 }
@@ -76,27 +89,40 @@ fn gate_decision(num_regressions: usize, changed_paths: &[Vec<u8>]) -> GateDecis
     GateDecision::Pass
 }
 
-fn gate_result_or_failure<T>(result: Result<T, String>) -> Result<T, CommandError> {
+fn gate_command_result<T>(result: Result<T, String>) -> Result<T, CommandError> {
     match result {
         Ok(value) => Ok(value),
         Err(err) => {
-            write_stderr_line(&format!("canon gate: {}", err))?;
-            write_stderr_line(gate_error_advice())?;
+            write_gate_error(&err).map_err(CommandError::from)?;
             Err(CommandError::GateFailed)
         }
     }
 }
 
+fn write_gate_error(err: &str) -> Result<(), String> {
+    write_stderr_line(&format!("canon gate: {}\n{}", err, gate_error_advice()))
+}
+
+fn gate_check_config_is_missing(err: &str) -> bool {
+    err.starts_with(&format!("failed to read {CHECK_PATH} from "))
+        && err.ends_with(": path is not in the selected tree")
+}
+
 fn has_mixed_canon_and_non_canon_changes(changed_paths: &[Vec<u8>]) -> bool {
-    let has_canon_change = changed_paths
-        .iter()
-        .any(|path| is_canon_project_path_bytes(path));
+    let has_canon_change = has_canon_staged_change(changed_paths);
     has_canon_change && !is_canon_only_staged_change_bytes(changed_paths)
 }
 
+fn has_canon_staged_change(changed_paths: &[Vec<u8>]) -> bool {
+    changed_paths
+        .iter()
+        .any(|path| is_canon_project_path_bytes(path))
+}
+
 fn write_mixed_canon_change_failure() -> Result<(), String> {
-    write_stderr_line("canon gate: .canon/** changes must not be mixed with non-.canon changes")?;
-    write_stderr_line("▷ Ask human to handle .canon/ changes.")
+    write_stderr_line(
+        "canon gate: .canon/** changes must not be mixed with non-.canon changes\n▷ Ask human to handle .canon/ changes.",
+    )
 }
 
 pub(crate) fn gate_regression_count_with_config(
@@ -192,8 +218,10 @@ fn write_gate_regression_failure() -> Result<(), String> {
     // Gate output stays generic by canon: even expectation-related failures
     // are reported without expectation IDs or per-expectation lines. `canon
     // check` is the command that prints individual expectation records.
-    write_stderr_line("canon gate: staged changes regress cached canon results")?;
-    write_stderr_line(gate_regression_advice())
+    write_stderr_line(&format!(
+        "canon gate: staged changes regress cached canon results\n{}",
+        gate_regression_advice()
+    ))
 }
 
 pub(crate) fn gate_regression_advice() -> &'static str {
@@ -261,4 +289,29 @@ fn gate_cache_result_for_tree_at(
 pub(crate) enum GateComparisonTree {
     StagedIndex,
     Head,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{gate_decision, GateDecision};
+
+    #[test]
+    fn gate_decision_prioritizes_regressions_over_canon_only_pass() {
+        let changed_paths = vec![b".canon/check.yml".to_vec()];
+
+        assert!(matches!(
+            gate_decision(1, &changed_paths),
+            GateDecision::RegressionFailure
+        ));
+    }
+
+    #[test]
+    fn gate_decision_passes_same_tree_commit_shape_without_regressions() {
+        let changed_paths = vec![b"src/lib.rs".to_vec()];
+
+        assert!(matches!(
+            gate_decision(0, &changed_paths),
+            GateDecision::Pass
+        ));
+    }
 }

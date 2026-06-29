@@ -1,4 +1,6 @@
-use crate::check::config::validation::normalize_agent_ignore_pattern_for_config;
+use crate::check::config::validation::{
+    normalize_agent_ignore_pattern_for_config, validate_agent_config,
+};
 use crate::config_types::{
     AgentConfig, RawExpectationSettings, RawLegacyAgentConfig, RawPresetConfig,
     ResolvedPresetConfig,
@@ -54,7 +56,7 @@ pub(super) fn apply_expectation_settings(
     if let Some(plugins) = &settings.plugins {
         agent.plugins = plugins.clone();
     }
-    normalize_agent_config(agent.clone()).map(|normalized| *agent = normalized)
+    normalize_agent_config(agent)
 }
 
 fn raw_preset_from_legacy_agent(agent: RawLegacyAgentConfig) -> RawPresetConfig {
@@ -64,7 +66,12 @@ fn raw_preset_from_legacy_agent(agent: RawLegacyAgentConfig) -> RawPresetConfig 
     }
     models.extend(agent.model.fallbacks);
     RawPresetConfig {
-        instructions: None,
+        q: None,
+        q_template: None,
+        a: None,
+        path: None,
+        include: None,
+        question_context: None,
         diff_from: None,
         target: None,
         cooldown: None,
@@ -97,16 +104,31 @@ fn resolve_preset(
         ResolvedPresetConfig::default()
     };
     apply_raw_preset(&mut agent, raw);
-    normalize_preset_config(&mut agent)?;
+    normalize_preset_config(name, &mut agent)?;
     resolving.remove(name);
     resolved.insert(name.to_string(), agent.clone());
     Ok(agent)
 }
 
 fn apply_raw_preset(preset: &mut ResolvedPresetConfig, raw: &RawPresetConfig) {
+    if let Some(q) = &raw.q {
+        preset.q = Some(q.clone());
+    }
+    if let Some(q_template) = &raw.q_template {
+        preset.q_template = Some(q_template.clone());
+    }
+    if let Some(a) = &raw.a {
+        preset.a = Some(a.clone());
+    }
+    if let Some(path) = &raw.path {
+        preset.path = Some(path.clone());
+    }
+    if let Some(include) = &raw.include {
+        preset.include = Some(include.clone());
+    }
     let common = &mut preset.common;
-    if let Some(instructions) = &raw.instructions {
-        common.instructions = Some(instructions.clone());
+    if let Some(context) = &raw.question_context {
+        common.question_context = Some(context.clone());
     }
     if let Some(diff_from) = &raw.diff_from {
         common.diff_from = Some(diff_from.clone());
@@ -131,18 +153,19 @@ fn apply_raw_preset(preset: &mut ResolvedPresetConfig, raw: &RawPresetConfig) {
     }
 }
 
-fn normalize_preset_config(preset: &mut ResolvedPresetConfig) -> Result<(), String> {
+fn normalize_preset_config(name: &str, preset: &mut ResolvedPresetConfig) -> Result<(), String> {
     if let Some(ignore) = &mut preset.common.settings.ignore {
         for pattern in ignore {
             *pattern = normalize_agent_ignore_pattern_for_config(pattern)?;
         }
     }
+    validate_agent_config(&preset.agent_config(), &format!("presets.{}", name))?;
     Ok(())
 }
 
-fn normalize_agent_config(mut agent: AgentConfig) -> Result<AgentConfig, String> {
+fn normalize_agent_config(agent: &mut AgentConfig) -> Result<(), String> {
     for pattern in &mut agent.ignore {
         *pattern = normalize_agent_ignore_pattern_for_config(pattern)?;
     }
-    Ok(agent)
+    Ok(())
 }

@@ -14,7 +14,7 @@ use std::process::{Child, Command, Stdio};
 impl AppServerRunner {
     pub(crate) fn new(
         root: &Path,
-        state_root: &Path,
+        state_root: Option<&Path>,
         load_plugins: bool,
         agent: &AgentConfig,
         no_sandbox: bool,
@@ -55,7 +55,7 @@ impl AppServerRunner {
         let (messages, reader) = spawn_app_server_reader(stdout);
         let (stderr, stderr_reader) = spawn_app_server_stderr_reader(stderr);
         let mut runner = AppServerRunner {
-            app_server_state_root: state_root.to_path_buf(),
+            app_server_state_root: state_root.map(Path::to_path_buf),
             child,
             stdin,
             messages,
@@ -73,7 +73,7 @@ impl AppServerRunner {
             no_sandbox,
             startup_args: Some(app_server_args),
         };
-        runner.send_request(
+        runner.send_control_request(
             "initialize",
             json!({
                 "clientInfo": {

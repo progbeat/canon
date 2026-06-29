@@ -4,50 +4,64 @@
 
 Each evaluator task input is rendered from the turn prompt template.
 
-An evaluator response must be a single JSON object matching the JSON Schema selected for that interrogation's q-scope.
+An evaluator response must be a single JSON object matching the JSON Schema selected for that interrogation.
 
 An interrogation is **restricted-scope** when its q-scope is not full project scope.
 For this policy, **full project scope** means the q-scope `["."]` before configured ignore exclusions are applied to form the visible scope.
 
-A restricted-scope interrogation uses this JSON Schema:
+A restricted-scope interrogation uses this base response schema:
 
 ```json
 {
   "type": "object",
-  "properties": {
-    "answer": {
-      "type": "string",
-      "pattern": "^[-_a-z0-9]+$"
-    },
-    "error": {
-      "type": "string",
-      "enum": ["ScopeTooNarrow", "InvalidQuestion"]
-    },
-    "evidence": {
-      "type": "string"
-    },
-    "qScopeSuggestion": {
-      "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "string",
-        "minLength": 1,
-        "pattern": "^[^\\r\\n]*$"
-      }
-    }
+  "propertyNames": {
+    "pattern": "^[A-Za-z0-9]+$"
   },
-  "required": ["evidence", "qScopeSuggestion"],
-  "oneOf": [
-    {"required": ["answer"], "not": { "required": ["error"] }},
-    {"required": ["error"], "not": { "required": ["answer"] }}
-  ],
-  "additionalProperties": false
+  "additionalProperties": {
+    "type": "object",
+    "properties": {
+      "error": {
+        "type": "string",
+        "enum": ["ScopeTooNarrow", "InvalidQuestion"]
+      },
+      "answer": {
+        "type": "string",
+        "pattern": "^[-_a-z0-9]+$"
+      },
+      "evidence": {
+        "type": "string"
+      },
+      "qScopeSuggestion": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^\\r\\n]*$"
+        }
+      }
+    },
+    "required": ["evidence", "qScopeSuggestion"],
+    "oneOf": [
+      {"required": ["answer"], "not": { "required": ["error"] }},
+      {"required": ["error"], "not": { "required": ["answer"] }}
+    ],
+    "additionalProperties": false
+  }
 }
 ```
 
-A full-project-scope interrogation uses the same response schema except that `error.enum` is `["InvalidQuestion"]`.
+An evaluator response must contain each unanswered interrogation requested by that evaluator turn as a property named by that interrogation's short ID; the property's value is the interrogation result.
 
-A fresh interrogation uses the stored q-scope for that expectation, or full project scope if no q-scope is stored.
+A **short-ID response error** is an evaluator response that violates that requirement, or returns a short ID that was already answered on the same evaluator thread.
+If a short-ID response error occurs after the evaluator thread has already produced a valid response, `canon check` discards that evaluator thread and retries the interrogation on a fresh evaluator thread.
+If a short-ID response error occurs on the evaluator thread's first evaluator turn, `canon check` reports an error for that interrogation without a fresh-thread retry.
+
+When an interrogation has full project scope, its response schema omits `ScopeTooNarrow` from `error.enum`.
+
+When a check mode never hides files from evaluator interrogations, response schemas omit `qScopeSuggestion`, and `canon check` does not perform follow-up interrogations.
+
+A fresh interrogation uses the `qScope` from the expectation's `last-pass.json`, or full project scope if no last pass result with `qScope` exists.
 
 A **follow-up interrogation** is an additional interrogation required by this policy for the same expectation after the initial interrogation receives an evaluator response.
 

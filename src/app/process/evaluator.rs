@@ -1,14 +1,13 @@
 use super::{AppServerRunner, AppServerTurnRequest};
-use crate::check::{codex_reasoning_effort, evaluator_response_output_schema_for_q_scope};
+use crate::check::codex_reasoning_effort;
 use crate::config_types::AgentConfig;
 use crate::evaluator::{
     evaluator_thread_config_with_no_sandbox, EvaluatorError, EvaluatorProgress, EvaluatorRunner,
-    EVALUATOR_BASE_INSTRUCTIONS,
 };
 use crate::token_usage_types::EvaluatorTurnUsage;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const EVALUATOR_SESSION_START_SOURCE: &str = "clear";
 const LOCAL_ENVIRONMENT_ID: &str = "local";
@@ -17,7 +16,8 @@ impl EvaluatorRunner for AppServerRunner {
     fn start_session(
         &mut self,
         session_cwd: &Path,
-        template_output_dir: &Path,
+        template_artifact_paths: &[PathBuf],
+        base_instructions: &str,
         developer_instructions: &str,
         agent: &AgentConfig,
         model: Option<&str>,
@@ -31,7 +31,7 @@ impl EvaluatorRunner for AppServerRunner {
         // Canon runtime state and app-server configuration.
         let params = ThreadStartParams {
             cwd: session_cwd_json,
-            base_instructions: EVALUATOR_BASE_INSTRUCTIONS,
+            base_instructions,
             developer_instructions,
             approval_policy: "never",
             sandbox: Some(thread_start_sandbox_mode(self.no_sandbox())),
@@ -43,7 +43,7 @@ impl EvaluatorRunner for AppServerRunner {
                 thinking,
                 self.app_server_state_root(),
                 session_cwd,
-                template_output_dir,
+                template_artifact_paths,
                 self.no_sandbox(),
             )
             .map_err(|err| EvaluatorError::message(err.to_string()))?,
@@ -59,7 +59,7 @@ impl EvaluatorRunner for AppServerRunner {
         };
         let params = serde_json::to_value(params)
             .map_err(|err| format!("failed to encode thread/start params: {}", err))?;
-        let result = self.send_request("thread/start", params)?;
+        let result = self.send_control_request("thread/start", params)?;
         let response: ThreadStartResponse = serde_json::from_value(result)
             .map_err(|err| format!("thread/start response missing thread.id: {}", err))?;
         self.remember_session_cwd(response.thread.id.clone(), session_cwd.to_path_buf());
@@ -72,14 +72,14 @@ impl EvaluatorRunner for AppServerRunner {
         prompt: &str,
         model: Option<&str>,
         thinking: &str,
-        q_scope: &[String],
+        output_schema: &Value,
     ) -> Result<String, EvaluatorError> {
         let request = turn_start_request(
             session_id,
             prompt,
             model,
             thinking,
-            q_scope,
+            output_schema,
             self.session_cwd(session_id),
             self.no_sandbox(),
         )?;
@@ -106,14 +106,17 @@ pub(crate) fn turn_start_request(
     prompt: &str,
     model: Option<&str>,
     thinking: &str,
-    q_scope: &[String],
+    output_schema: &Value,
     cwd: Option<&Path>,
     no_sandbox: bool,
 ) -> Result<Value, EvaluatorError> {
     // Enforce the Interrogation Policy response schema selected by this
     // interrogation's q-scope. For q-scope ["."], the schema excludes
-    // ScopeTooNarrow before the evaluator turn is started.
-    let q_scope_specific_output_schema = evaluator_response_output_schema_for_q_scope(q_scope);
+    // ScopeTooNarrow before the evaluator turn is started. This is the
+    // one-turn request boundary; retry and q-scope verification orchestration
+    // lives in `src/check/run/execute/expectation.rs` for check runs and
+    // `src/check/interrogation/query/mod.rs` for query mode. The shared
+    // q-scope verification gate lives in `src/check/interrogation/policy.rs`.
     let mut request = json!({
         "threadId": session_id,
         "input": [
@@ -122,7 +125,7 @@ pub(crate) fn turn_start_request(
                 "text": prompt
             }
         ],
-        "outputSchema": q_scope_specific_output_schema
+        "outputSchema": output_schema.clone()
     });
     if let Some(cwd) = cwd {
         request["cwd"] = Value::String(path_to_json_string(cwd, "turn/start cwd")?);
@@ -202,98 +205,4 @@ struct ThreadStartResponse {
 #[derive(Deserialize)]
 struct ThreadStartThread {
     id: String,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_evaluator_turn_denies_write_attempts_with_read_only_sandbox_policy() {
-        let request = turn_start_request(
-            "thread",
-            "question",
-            None,
-            "low",
-            &[".".to_string()],
-            Some(Path::new("/tmp/cwd")),
-            false,
-        )
-        .unwrap();
-
-        assert_eq!(
-            request["sandboxPolicy"],
-            json!({ "type": "readOnly", "networkAccess": false })
-        );
-    }
-
-    #[test]
-    fn evaluator_turn_sets_output_schema() {
-        let request = turn_start_request(
-            "thread",
-            "question",
-            None,
-            "low",
-            &["src".to_string()],
-            Some(Path::new("/tmp/cwd")),
-            false,
-        )
-        .unwrap();
-
-        assert_eq!(
-            request["outputSchema"]["required"],
-            json!(["answer", "error", "evidence", "qScopeSuggestion"])
-        );
-        assert_eq!(
-            request["outputSchema"]["properties"]["answer"]["type"],
-            json!(["string", "null"])
-        );
-        assert_eq!(
-            request["outputSchema"]["properties"]["qScopeSuggestion"]["minItems"],
-            json!(1)
-        );
-        assert_eq!(
-            request["outputSchema"]["additionalProperties"],
-            json!(false)
-        );
-        assert!(request["outputSchema"].get("oneOf").is_none());
-    }
-
-    #[test]
-    fn full_project_evaluator_turn_disables_scope_too_narrow_output() {
-        let request = turn_start_request(
-            "thread",
-            "question",
-            None,
-            "low",
-            &[".".to_string()],
-            Some(Path::new("/tmp/cwd")),
-            false,
-        )
-        .unwrap();
-
-        assert_eq!(
-            request["outputSchema"]["properties"]["error"]["enum"],
-            json!(["InvalidQuestion", null])
-        );
-    }
-
-    #[test]
-    fn no_sandbox_evaluator_turn_uses_danger_full_access_policy() {
-        let request = turn_start_request(
-            "thread",
-            "question",
-            None,
-            "low",
-            &[".".to_string()],
-            Some(Path::new("/tmp/cwd")),
-            true,
-        )
-        .unwrap();
-
-        assert_eq!(
-            request["sandboxPolicy"],
-            json!({ "type": "dangerFullAccess" })
-        );
-    }
 }

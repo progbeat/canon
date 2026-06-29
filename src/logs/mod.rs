@@ -8,6 +8,9 @@ mod rotation;
 mod writer;
 
 pub(crate) use error::{DiagnosticLogError, DiagnosticLogResult};
+// `logs::events` contains generic lifecycle/boundary helpers. Query result
+// events are emitted from `check::interrogation::result::records`, beside
+// `QueryResult` finalization, because those events are query-result specific.
 pub(crate) use events::{
     write_agent_failure_event, write_agent_missing_usage_event, write_agent_request_event,
     write_agent_response_event, write_cache_cleanup_event, write_check_finish_event,

@@ -3,112 +3,56 @@ use crate::check::command::output::{
 };
 use crate::check::core::{CheckRecord, SelectedExpectation};
 use crate::evaluator::EvaluatorProgress;
-use crate::fs_util::{ensure_dir_without_symlinks, reject_symlink};
-use crate::git::resolve_git_path;
-use crate::state_paths::CANON_LIVE_REPORT_DIR_GIT_PATH;
-use crate::time::{format_record_timestamp, unix_timestamp};
-use serde_json::{json, Value};
-use std::fs;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use crate::output::write_stderr_line;
+use std::path::Path;
 
-// State-backed live expectation reports have only start and finish operations.
-// The state file is written before the public short-ID prefix, so even a later
-// interruption or public-output failure has already reported the expectation.
-// There is intentionally no cancel operation.
-pub(super) struct StateBackedLiveExpectationReport {
+pub(super) struct LiveExpectationReport {
     output: StartedExpectationReportOutput,
-    state_path: PathBuf,
 }
 
 pub(super) fn start_live_expectation_report(
-    root: &Path,
-    output: &Option<SharedCheckOutput>,
+    _state_root: Option<&Path>,
+    output: &SharedCheckOutput,
     expectation: &SelectedExpectation,
-) -> Result<Option<StateBackedLiveExpectationReport>, String> {
-    let Some(output) = output.as_ref() else {
-        return Ok(None);
-    };
-    let state_path = live_report_state_path(root, expectation)?;
-    // Write and flush a canon-owned report marker before the public short-ID
-    // prefix. If public output later fails or the process is interrupted after
-    // the prefix, this state file is still a report for the expectation.
-    write_live_report_state(
-        &state_path,
-        json!({
-            "timestamp": format_record_timestamp(unix_timestamp()?),
-            "status": "started",
-            "id": expectation.id,
-            "displayId": expectation.display_id,
-            "question": expectation.question,
-        }),
-    )?;
-    Ok(Some(StateBackedLiveExpectationReport {
+) -> Result<LiveExpectationReport, String> {
+    // The flushed `<short ID>.` prefix is already public output for this
+    // expectation: it starts the report before evaluator work. This module owns
+    // public output only; the structured `CheckRunReport` remains the report
+    // owner. Every command-controlled fallible or interrupted post-start path
+    // calls this component with either the normal result or an ERROR record,
+    // then continues into the structured report.
+    Ok(LiveExpectationReport {
         output: start_expectation_report_output(output.clone(), &expectation.display_id),
-        state_path,
-    }))
+    })
 }
 
-impl StateBackedLiveExpectationReport {
+impl LiveExpectationReport {
     pub(super) fn progress(&self) -> EvaluatorProgress {
         self.output.progress()
     }
 
-    pub(super) fn finish_public_output_or_keep_state_report(self, record: &CheckRecord) {
-        let _ = write_live_report_state(
-            &self.state_path,
-            json!({
-                "timestamp": record.timestamp,
-                "status": "completed",
-                "id": record.id,
-                "displayId": record.display_id,
-                "result": record.result,
-                "question": record.question_text(),
-                "expected": record.expected_answer_text(),
-                "observed": record.observed,
-                "error": record.error,
-                "evidence": record.evidence,
-                "visibleScope": record.scope,
-                "visibleTreeOid": record.visible_tree_oid,
-            }),
-        );
-        if self.output.finish_with_record(record) {
-            // Public output already contains the report; keep the state file
-            // only for interrupted or public-output-failure cases.
-            let _ = fs::remove_file(&self.state_path);
-        } else {
-            // Both public sinks refused the completion. The completed state
-            // report above remains under CANON_STATE_DIR/live-reports.
+    pub(super) fn finish_public_output_before_structured_report(self, record: &CheckRecord) {
+        let finished = self.output.finish_with_record(record);
+        if finished.stdout_completion_failed() {
+            // If stdout accepted the short-ID prefix but cannot receive the
+            // completed result, stderr gets an emergency public-output notice.
+            // The notice does not own reporting: the CheckRecord still flows to
+            // the structured report after this function returns.
+            let _ = write_stderr_line(&emergency_completion_notice_line(record));
         }
     }
 }
 
-fn live_report_state_path(
-    root: &Path,
-    expectation: &SelectedExpectation,
-) -> Result<PathBuf, String> {
-    let dir = resolve_git_path(root, CANON_LIVE_REPORT_DIR_GIT_PATH)?;
-    Ok(dir.join(format!("{}.json", expectation.id)))
-}
-
-fn write_live_report_state(path: &Path, value: Value) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        ensure_dir_without_symlinks(parent)?;
-    }
-    reject_symlink(path)?;
-    // Live reports are single-record snapshots. Truncating replaces only this
-    // one report record, so write work is linear in the newly persisted JSON
-    // bytes rather than accumulated retained state.
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(path)
-        .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
-    let line = value.to_string();
-    file.write_all(line.as_bytes())
-        .and_then(|_| file.write_all(b"\n"))
-        .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
-    file.flush()
-        .map_err(|err| format!("failed to flush {}: {}", path.display(), err))
+fn emergency_completion_notice_line(record: &CheckRecord) -> String {
+    let status = if record.requires_human_review() {
+        "error"
+    } else if record.passed() {
+        "pass"
+    } else {
+        "fail"
+    };
+    format!(
+        "canon check: completed report for expectation {}: {}",
+        record.display_id, status
+    )
 }

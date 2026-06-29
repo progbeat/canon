@@ -7,6 +7,9 @@ use std::ffi::OsString;
 
 const EXCLUSION_SELECTOR_PREFIX: &str = "not:";
 
+// This module owns CLI expectation selector identity matching only.
+// Interrogation policy starts after selected expectations enter check
+// execution and the interrogation/session modules.
 #[derive(Debug, Clone)]
 pub(crate) struct ExpectationIdentity {
     pub(crate) id: String,
@@ -57,7 +60,9 @@ pub(crate) fn select_expectations_with_identities(
                 }
             }
         }
-        selected_indexes.retain(|index| !excluded_indexes.contains(index));
+        if !has_include {
+            selected_indexes.retain(|index| !excluded_indexes.contains(index));
+        }
     }
 
     selected_indexes
@@ -124,8 +129,9 @@ pub(crate) fn selected_expectation_at(
         display_id: identity.display_id.clone(),
         question: expectation.q.clone(),
         expected_answer: expectation.a.clone(),
-        instructions: expectation.instructions.clone(),
+        question_context: expectation.question_context.clone(),
         diff_from: expectation.diff_from.clone(),
+        diff_from_configured: expectation.diff_from_configured,
         target: expectation.target.clone(),
         question_answer_only: expectation.question_answer_only,
         agent: expectation.agent.clone(),
@@ -142,7 +148,7 @@ pub(crate) fn expectation_identities(
         .map(|expectation| {
             let rendered_question = &expectation.q;
             let expected_answer = &expectation.a;
-            let resolved_instructions = &expectation.instructions;
+            let resolved_instructions = &expectation.question_context;
             expectation_id(rendered_question, expected_answer, resolved_instructions)
         })
         .collect::<Vec<_>>();
@@ -230,7 +236,7 @@ mod tests {
     }
 
     #[test]
-    fn exclusion_selector_filters_explicit_includes() {
+    fn exclusion_selector_does_not_filter_explicit_includes() {
         let config = two_expectation_config();
         let identities = expectation_identities(&config).unwrap();
         let selectors = [
@@ -242,8 +248,9 @@ mod tests {
         let selected =
             select_expectations_with_identities(&config, &identities, &selectors).unwrap();
 
-        assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].id, identities[1].id);
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected[0].id, identities[0].id);
+        assert_eq!(selected[1].id, identities[1].id);
     }
 
     #[test]
@@ -261,7 +268,6 @@ mod tests {
     fn two_expectation_config() -> CheckConfig {
         CheckConfig {
             version: 1,
-            presets: Default::default(),
             agent: AgentConfig::implementation_default(),
             expectations: vec![
                 expectation("Does alpha pass?"),
@@ -274,8 +280,9 @@ mod tests {
         Expectation {
             q: question.to_string(),
             a: "yes".to_string(),
-            instructions: String::new(),
+            question_context: String::new(),
             diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
+            diff_from_configured: false,
             target: None,
             question_answer_only: true,
             agent: AgentConfig::implementation_default(),

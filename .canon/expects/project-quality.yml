@@ -77,16 +77,36 @@
 - q: "Can you find any avoidable violations of commonly accepted idiomatic Rust practices that materially reduce this project's maintainability, correctness, readability, type safety, or future extensibility, excluding purely stylistic alternatives unless they create a concrete demonstrated risk?"
   a: "no"
   target: diff
-  cooldown: {pass: 20m, fail: 10m}
 
 - q: "Can you find a critical high-confidence bug with a concrete failing scenario?"
   a: "no"
   preset: smart
   target: diff
-  cooldown: {pass: 20m, fail: 10m}
 
 - q: "Can you find any high-confidence, practically exploitable security vulnerability?"
   a: "no"
   preset: smart
   target: diff
-  cooldown: {pass: 20m, fail: 10m}
+
+- q: "Is any invocation-local state written to disk instead of being kept in memory?"
+  a: "no"
+  target: diff
+
+- q: |
+    The non-canon diff should change project behavior only when the change is required by the canon diff, or when it fixes behavior that did not satisfy the existing canon.
+    Refactoring is allowed when it preserves project behavior and keeps or improves correctness, readability, maintainability, and ownership boundaries.
+    Can you find any behavior change in the non-canon diff that is not justified by those rules?
+  a: "no"
+  target: diff
+  diff-from: master
+  model: gpt-5.5
+  ignore: []
+
+- q: |
+    Can you find any non-canon change that could be replaced by a substantially smaller or simpler change while preserving the same canon compliance, project behavior, and code quality?
+    Prefer the smaller diff only when the resulting code would be at least as correct, readable, maintainable, and well-structured. Do not reject a larger diff when it is needed for clear ownership, better abstractions, bug fixes, or existing canon compliance.
+  a: "no"
+  target: diff
+  diff-from: master
+  model: gpt-5.5
+  ignore: []

@@ -25,7 +25,10 @@ fn check_help_lists_public_options() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("Usage: canon check"));
     assert!(stdout.contains("--keep-going"));
+    assert!(stdout.contains("--no-sandbox"));
+    assert!(stdout.contains("Disable canon-managed sandboxing"));
     assert!(stdout.contains("--preset"));
+    assert!(stdout.contains("--in-place"));
     assert!(stdout.contains("not:<ID-PREFIX>"));
     assert!(stdout.contains("canon check not:a7F not:K9m"));
     assert!(!stdout.contains("--ignore-cooldown"));

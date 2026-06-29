@@ -3,14 +3,20 @@ use crate::evaluator::turn::EvaluatorFailureKind;
 use crate::evaluator::EvaluatorProgress;
 use crate::logs::DiagnosticLogError;
 use crate::token_usage_types::EvaluatorTurnUsage;
-use std::path::Path;
+use serde_json::Value;
+use std::path::{Path, PathBuf};
 
 pub(crate) trait EvaluatorRunner {
+    // Session startup prepares evaluator context but does not send the
+    // expectation prompt. Progress-timeline request kinds belong to `ask`
+    // calls, where a turn starts, and to the higher-level fallback/follow-up
+    // orchestration around those turns.
     #[allow(clippy::too_many_arguments)]
     fn start_session(
         &mut self,
         session_cwd: &Path,
-        template_output_dir: &Path,
+        template_artifact_paths: &[PathBuf],
+        base_instructions: &str,
         developer_instructions: &str,
         agent: &AgentConfig,
         model: Option<&str>,
@@ -23,7 +29,7 @@ pub(crate) trait EvaluatorRunner {
         prompt: &str,
         model: Option<&str>,
         thinking: &str,
-        q_scope: &[String],
+        output_schema: &Value,
     ) -> Result<String, EvaluatorError>;
 
     // Returns usage for the last app-server turn when a turn id was created.

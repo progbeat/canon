@@ -8,11 +8,31 @@ use crate::check::interrogation::{
 use crate::config_types::AgentConfig;
 use crate::evaluator::EvaluatorProgress;
 use crate::evaluator::EvaluatorRunner;
-use crate::git::{TreeSource, VisibleTreeOidCache};
+use crate::git::VisibleTreeOidCache;
 use crate::hash::full_scope;
 use crate::logs::DiagnosticLogWriter;
 use crate::scope::sanitize_scope;
 use crate::xpec_state::XpecStateCache;
+
+// Interrogation Policy implementation map:
+// - full vs restricted response schema selection, `ScopeTooNarrow`,
+//   `InvalidQuestion`, `answer`, `evidence`, and `qScopeSuggestion` schema
+//   parsing: `src/check/core/evaluator_response.rs`
+// - initial q-scope, invalid qScopeSuggestion rejection, 25%-smaller gate, and
+//   narrowed-scope acceptance: this file
+// - check-run `ScopeTooNarrow` retry and q-scope verification sequencing:
+//   `src/check/run/execute/expectation.rs`
+// - query-mode retry and q-scope verification sequencing:
+//   `src/check/interrogation/query/mod.rs`
+// - evaluator model retry order: `src/check/interrogation/session/model_fallback.rs`
+// - per-turn thinking, enforced response schema, prompt, and thread inputs:
+//   `src/check/interrogation/session/thread.rs`
+// - configured model list and thinking expansion for retries:
+//   `src/check/interrogation/state.rs`
+// A q-scope verification `ScopeTooNarrow` rejects the proposed narrowed scope;
+// the initial answer remains the final response.
+// A whole-policy audit needs all of these code paths; a narrower q-scope can
+// verify only the policy clauses owned by the included files.
 
 pub(crate) struct InterrogationCall<'a> {
     pub(crate) runtime: &'a CheckRuntime<'a>,
@@ -105,31 +125,29 @@ pub(crate) fn turn_has_context_compaction(interrogation: &InterrogationResult) -
     interrogation.context_compacted
 }
 
-pub(crate) fn initial_visible_scope_for_expectation(
+pub(crate) fn initial_q_scope_for_fresh_interrogation(
     root: &std::path::Path,
-    _tree_source: &TreeSource,
     expectation: &SelectedExpectation,
     xpec_state: &mut XpecStateCache,
-    _visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<Vec<String>, String> {
-    // Fresh interrogation starts from the stored q-scope. If no q-scope is
-    // stored, it starts from full project scope. The actual visible scope is
-    // formed later by appending the expectation agent's configured ignore
-    // patterns as excluding pathspec items.
+    // Fresh interrogation starts from the expectation's last passing q-scope.
+    // If no last pass exists, it starts from full project scope. The actual
+    // visible scope is formed later by appending the expectation agent's
+    // configured ignore patterns as excluding pathspec items.
     // This scopes the materialized tree and detailed diff, not every prompt
     // signal: prompt rendering also includes an unscoped diff summary, so a
     // changed path outside this scope is still visible enough for the evaluator
     // to report ScopeTooNarrow when it needs the hidden details.
     // `target` is intentionally not an input; target-specific behavior belongs
     // to evaluator prompt rendering.
-    let stored_q_scope = xpec_state.read_stored_q_scope(root, expectation)?;
-    Ok(initial_scope_from_stored_q_scope(stored_q_scope))
+    let last_pass_q_scope = xpec_state.read_last_pass_q_scope(root, expectation)?;
+    Ok(initial_scope_from_last_pass_q_scope(last_pass_q_scope))
 }
 
-pub(crate) fn initial_scope_from_stored_q_scope(
-    stored_q_scope: Option<Vec<String>>,
+pub(crate) fn initial_scope_from_last_pass_q_scope(
+    last_pass_q_scope: Option<Vec<String>>,
 ) -> Vec<String> {
-    stored_q_scope.unwrap_or_else(full_scope)
+    last_pass_q_scope.unwrap_or_else(full_scope)
 }
 
 pub(crate) fn question_scope_suggestion_scope_for_unused_follow_up(
@@ -216,6 +234,10 @@ pub(crate) fn narrowed_scope_is_accepted(
     // cannot make the recorded failure disappear. A fail that turns into pass
     // has the opposite shape, so the proposed scope omitted necessary failure
     // evidence and is too narrow to trust.
+    // Error responses do not verify the proposed scope as reusable.
+    // Verification ScopeTooNarrow is a concrete q-scope rejection, so the
+    // initial answer remains the final response for the expectation. Other
+    // verification errors become final human-review results.
     if narrowed.error.is_some() {
         return false;
     }
@@ -270,14 +292,17 @@ mod tests {
     }
 
     #[test]
-    fn initial_scope_uses_stored_q_scope_or_full_scope() {
-        let stored = vec!["src/main.rs".to_string()];
+    fn initial_scope_uses_last_pass_q_scope_or_full_scope() {
+        let q_scope = vec!["src/main.rs".to_string()];
 
         assert_eq!(
-            super::initial_scope_from_stored_q_scope(Some(stored.clone())),
-            stored
+            super::initial_scope_from_last_pass_q_scope(Some(q_scope.clone())),
+            q_scope
         );
-        assert_eq!(super::initial_scope_from_stored_q_scope(None), full_scope());
+        assert_eq!(
+            super::initial_scope_from_last_pass_q_scope(None),
+            full_scope()
+        );
     }
 
     #[test]
@@ -307,7 +332,6 @@ mod tests {
         let agent = AgentConfig::default();
         let config = CheckConfig {
             version: 1,
-            presets: Default::default(),
             agent: agent.clone(),
             expectations: Vec::new(),
         };
@@ -334,6 +358,31 @@ mod tests {
 
         assert!(proposed.is_none());
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn in_place_suggested_q_scope_does_not_induce_smaller_visible_tree() {
+        let root = PathBuf::from("/tmp/canon-in-place-policy");
+        let agent = AgentConfig::default();
+        let config = CheckConfig {
+            version: 1,
+            agent: agent.clone(),
+            expectations: Vec::new(),
+        };
+        let runtime = CheckRuntime::in_place(&root, &config, false);
+        let suggestion = vec!["src".to_string()];
+        let mut cache = VisibleTreeOidCache::new();
+
+        let proposed = question_scope_suggestion_scope_for_independent_verification(
+            &runtime,
+            &agent,
+            Some(&suggestion),
+            &full_scope(),
+            &mut cache,
+        )
+        .unwrap();
+
+        assert!(proposed.is_none());
     }
 
     fn git_project(name: &str) -> PathBuf {

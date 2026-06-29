@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // be verified from visible source without reading ignored canon expectation data.
 const DEFAULT_CHECK_TEMPLATE_FILE_CONTENTS: &str =
     include_str!("../.canon/templates/default/check.yml");
+const DEFAULT_PRE_COMMIT_HOOK_CONTENTS: &str = include_str!("../resources/git-hooks/pre-commit");
 
 fn canon() -> Command {
     Command::new(env!("CARGO_BIN_EXE_canon"))
@@ -32,6 +33,20 @@ fn init_git_repo(repo: &Path) {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn git_path(repo: &Path, path: &str) -> PathBuf {
+    let output = Command::new("git")
+        .args(["rev-parse", "--git-path", path])
+        .current_dir(repo)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    repo.join(String::from_utf8(output.stdout).unwrap().trim())
 }
 
 #[test]
@@ -89,6 +104,10 @@ fn hook_commands_render_documented_messages() {
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
         "Installed .git/hooks/pre-commit\n"
+    );
+    assert_eq!(
+        fs::read_to_string(git_path(&repo, "hooks/pre-commit")).unwrap(),
+        DEFAULT_PRE_COMMIT_HOOK_CONTENTS
     );
 
     let output = canon()
@@ -168,14 +187,49 @@ fn gate_rejects_mixed_canon_and_implementation_changes() {
 }
 
 #[test]
-fn gate_reports_mixed_canon_changes_before_config_errors() {
-    let repo = temp_repo("canon-gate-mixed-before-config-example");
+fn gate_passes_canon_only_staged_config_deletion() {
+    let repo = temp_repo("canon-gate-canon-only-example");
     init_git_repo(&repo);
-    fs::create_dir_all(repo.join(".canon")).unwrap();
-    fs::write(repo.join(".canon/check.yml"), "not valid: [").unwrap();
-    fs::write(repo.join("src-main.py"), "print('hello')\n").unwrap();
+
+    let output = canon().arg("init").current_dir(&repo).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let output = Command::new("git")
-        .args(["add", ".canon/check.yml", "src-main.py"])
+        .args(["add", ".canon/check.yml"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let output = Command::new("git")
+        .args([
+            "-c",
+            "user.name=Canon Test",
+            "-c",
+            "user.email=canon-test@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "init canon",
+        ])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    fs::remove_file(repo.join(".canon/check.yml")).unwrap();
+    let output = Command::new("git")
+        .args(["add", "-u", ".canon/check.yml"])
         .current_dir(&repo)
         .output()
         .unwrap();
@@ -189,12 +243,42 @@ fn gate_reports_mixed_canon_changes_before_config_errors() {
 
     let _ = fs::remove_dir_all(&repo);
 
-    assert!(!output.status.success());
-    assert_eq!(
-        String::from_utf8(output.stderr).unwrap(),
-        "canon gate: .canon/** changes must not be mixed with non-.canon changes\n\
-         ▷ Ask human to handle .canon/ changes.\n"
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
     );
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
+    assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
+}
+
+#[test]
+fn gate_passes_non_canon_staged_change_without_config() {
+    let repo = temp_repo("canon-gate-no-config-example");
+    init_git_repo(&repo);
+    fs::write(repo.join("src-main.py"), "print('hello')\n").unwrap();
+    let output = Command::new("git")
+        .args(["add", "src-main.py"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = canon().arg("gate").current_dir(&repo).output().unwrap();
+
+    let _ = fs::remove_dir_all(&repo);
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
+    assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
 }
 
 #[test]

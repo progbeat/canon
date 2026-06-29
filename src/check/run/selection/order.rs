@@ -10,12 +10,24 @@ pub(crate) fn order_by_latest_non_pass<T>(
     state_cache: &mut XpecStateCache,
     expectation: impl Fn(&T) -> &SelectedExpectation,
 ) -> Result<Vec<T>, String> {
+    // Canon-check-order applies to the work items that remain selected for
+    // evaluation/reporting. It does not override the selected-expectations rule
+    // that a cached failure can make the default evaluation queue empty.
+    order_by_latest_non_pass_with(items, |item| {
+        latest_non_pass_timestamp(root, expectation(item), state_cache)
+            .map(|latest| latest.unwrap_or(UNIX_EPOCH_TIMESTAMP))
+    })
+}
+
+fn order_by_latest_non_pass_with<T>(
+    items: Vec<T>,
+    mut latest_for: impl FnMut(&T) -> Result<u64, String>,
+) -> Result<Vec<T>, String> {
     let mut ordered = items
         .into_iter()
         .enumerate()
         .map(|(index, item)| {
-            let latest = latest_non_pass_timestamp(root, expectation(&item), state_cache)?
-                .unwrap_or(UNIX_EPOCH_TIMESTAMP);
+            let latest = latest_for(&item)?;
             Ok(OrderedByLatestNonPass {
                 item,
                 latest,

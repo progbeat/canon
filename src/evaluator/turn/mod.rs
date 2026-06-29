@@ -7,13 +7,13 @@ use crate::evaluator::EvaluatorError;
 mod attempt;
 mod logging;
 mod parse;
-#[cfg(test)]
-mod tests;
 mod types;
 
 pub(crate) use attempt::ask_once;
 pub(crate) use logging::{write_thread_lifecycle_event, write_thread_restart_event};
-pub(crate) use types::{EvaluatorTurnContext, ParsedTurnResponse, ThreadLifecycleLog};
+pub(crate) use types::{
+    EvaluatorTurnContext, ParsedTurnResponse, ThreadLifecycleLog, ThreadReuseLogContext,
+};
 
 pub(crate) fn evaluator_models(agent: &AgentConfig) -> Vec<Option<String>> {
     if agent.models.is_empty() {
@@ -54,6 +54,7 @@ pub(crate) enum EvaluatorFailureKind {
     ModelUnavailable,
     TurnTimeout,
     ContextWindow,
+    ShortIdResponse,
     UnknownAppServer,
 }
 
@@ -71,7 +72,7 @@ impl EvaluatorFailureKind {
     }
 
     pub(crate) fn invalidates_thread(self) -> bool {
-        self.is_model_technical()
+        self.is_model_technical() || matches!(self, EvaluatorFailureKind::ShortIdResponse)
     }
 }
 
@@ -100,4 +101,157 @@ pub(crate) fn record_from_response(
             visible_tree_oid,
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::check::INTERNAL_ERROR_UNPARSABLE;
+    use crate::evaluator::{EvaluatorResponseParseCache, EvaluatorRunner};
+    use crate::token_usage_types::{EvaluatorTurnUsage, TokenUsage};
+    use serde_json::json;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn schema_valid_evidence_file_refs_do_not_trigger_repair() {
+        let root = temp_root("schema-valid-evidence");
+        let mut runner = RunnerWithResponses::new(vec![
+            r#"{"q":{"answer":"yes","evidence":"`src/hidden.rs` supports it.","qScopeSuggestion":["src/hidden.rs"]}}"#,
+        ]);
+        let mut parser_cache = EvaluatorResponseParseCache::new();
+        let mut diagnostic_log = None;
+
+        let parsed = ask_once(
+            &mut runner,
+            &turn_context(),
+            "question",
+            &AgentConfig::default(),
+            crate::check::EvaluatorResponseSchemaScope::Restricted,
+            &json!({"type": "object"}),
+            "q",
+            &[],
+            &["src/visible.rs".to_string()],
+            &root,
+            &mut parser_cache,
+            &mut diagnostic_log,
+            Some("expectation"),
+        )
+        .unwrap();
+
+        assert_eq!(parsed.answer.error, None);
+        assert_eq!(parsed.answer.answer, "yes");
+        assert_eq!(parsed.answer.evidence, "`src/hidden.rs` supports it.");
+        assert!(runner.responses.is_empty());
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn malformed_response_stays_unparsable_without_repair() {
+        let root = temp_root("unparsable");
+        let mut runner = RunnerWithResponses::new(vec!["status", "still status"]);
+        let mut parser_cache = EvaluatorResponseParseCache::new();
+        let mut diagnostic_log = None;
+
+        let parsed = ask_once(
+            &mut runner,
+            &turn_context(),
+            "question",
+            &AgentConfig::default(),
+            crate::check::EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion,
+            &json!({"type": "object"}),
+            "q",
+            &[],
+            &[".".to_string()],
+            &root,
+            &mut parser_cache,
+            &mut diagnostic_log,
+            Some("expectation"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            parsed.answer.error.as_deref(),
+            Some(INTERNAL_ERROR_UNPARSABLE)
+        );
+        assert!(parsed
+            .answer
+            .evidence
+            .contains("evaluator response could not be parsed"));
+        assert_eq!(runner.responses.len(), 1);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn turn_context() -> EvaluatorTurnContext<'static> {
+        EvaluatorTurnContext {
+            session_id: "session",
+            model: None,
+            thinking: "medium",
+        }
+    }
+
+    fn temp_root(label: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "canon-turn-evidence-test-{}-{}",
+            label,
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    struct RunnerWithResponses {
+        responses: Vec<String>,
+    }
+
+    impl RunnerWithResponses {
+        fn new(responses: Vec<&str>) -> RunnerWithResponses {
+            RunnerWithResponses {
+                responses: responses.into_iter().map(str::to_string).collect(),
+            }
+        }
+    }
+
+    impl EvaluatorRunner for RunnerWithResponses {
+        fn start_session(
+            &mut self,
+            _session_cwd: &Path,
+            _template_artifact_paths: &[PathBuf],
+            _base_instructions: &str,
+            _developer_instructions: &str,
+            _agent: &AgentConfig,
+            _model: Option<&str>,
+            _thinking: &str,
+            _scope: &[String],
+        ) -> Result<String, EvaluatorError> {
+            Ok("session".to_string())
+        }
+
+        fn ask(
+            &mut self,
+            _session_id: &str,
+            _prompt: &str,
+            _model: Option<&str>,
+            _thinking: &str,
+            _output_schema: &serde_json::Value,
+        ) -> Result<String, EvaluatorError> {
+            Ok(self.responses.remove(0))
+        }
+
+        fn take_last_turn_usage(&mut self) -> Option<EvaluatorTurnUsage> {
+            Some(EvaluatorTurnUsage {
+                thread_id: "session".to_string(),
+                turn_id: "turn".to_string(),
+                usage: TokenUsage {
+                    total_tokens: 1,
+                    ..TokenUsage::default()
+                },
+                token_usage_updates: Vec::new(),
+                context_compaction_events: Vec::new(),
+            })
+        }
+    }
 }

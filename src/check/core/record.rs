@@ -48,6 +48,9 @@ pub(crate) struct CheckRecordOutcome {
     pub(crate) error: Option<String>,
     pub(crate) evidence: String,
     pub(crate) scope: Vec<String>,
+    // Invocation-local evaluator feedback used by q-scope verification and
+    // optional stdout hints. Persistent last-result state stores the q-scope
+    // actually used, not this transient suggestion.
     pub(crate) question_scope_suggestion: Option<Vec<String>>,
     pub(crate) visible_tree_oid: String,
 }

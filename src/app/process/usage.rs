@@ -76,7 +76,7 @@ impl AppServerRunner {
         loop {
             match self.messages.recv_timeout(Duration::from_millis(50)) {
                 Ok(Ok(message)) => {
-                    self.record_app_server_activity_progress();
+                    self.record_turn_message_activity_progress();
                     self.record_app_server_events(&message);
                 }
                 Ok(Err(err)) => return Err(EvaluatorError::message(err)),

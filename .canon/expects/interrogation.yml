@@ -5,40 +5,52 @@
   a: yes
 
 - q: "Are you instructed to use the minimum evidence sufficient to answer correctly, cite it precisely, then stop?"
-  a: "yes"
+  a: yes
 
 - q: "Do your instructions encourage you to make `qScopeSuggestion` as narrow as possible while still enough to justify the answer?"
-  a: "yes"
+  a: yes
 
 - q: "Can you find any prompts or instructions for the evaluator agent outside of `resources/prompts/`?"
-  a: "no"
+  a: no
 
 - q: "Do your base instructions contain any answer directive whose condition depends on the topic of a substantive project claim? Treat answer directive as any instruction that affects the semantic value of the final `answer`."
-  a: "no"
+  a: no
   cooldown: 7d
 
 - q: "Can you find any logic that depends on the content of the evidence provided by the evaluator agent?"
-  a: "no"
+  a: no
   target: diff
 
 - q: "Is the evaluator's response schema enforced by `turn/start.params.outputSchema`, not merely requested in the prompt?"
-  a: "yes"
+  a: yes
 
 - q: "When `canon check` prints <short ID>, can you find an abnormal scenario in which it does not report anything for this expectation?"
-  a: "no"
+  a: no
 
 - q: "Does evaluator prompt template rendering trim leading and trailing whitespace from the rendered output?"
-  a: "yes"
+  a: yes
 
 - q: "For expectations with the same `diff-from` whose `target` is `project` or `diff`, can the `target` value affect anything except rendered evaluator prompt template content?"
-  a: "no"
+  a: no
 
 - q: "Is the q-scope verification follow-up the only `canon check` decision logic that may depend on a `qScopeSuggestion` from an evaluator response?"
-  a: "yes"
+  a: yes
   cooldown: 7d
 
 - q: "Can `canon check` make a non-initial evaluator request whose request kind has no dedicated progress timeline marker symbol?"
-  a: "no"
+  a: no
+
+- q: 'Does `canon check` assert `progress_timeline[-2:] == "~×"` when a started expectation report finishes because of an evaluator no-progress turn timeout?'
+  a: yes
+
+- q: "Does `canon check` assert that user-visible final results never have `error: \"ScopeTooNarrow\"`?"
+  a: yes
+
+- q: |
+    Does `canon check` reuse evaluator threads by default as follows?
+    First, look up a live thread by evaluator model plus the stable inputs for rendering evaluator base/developer instructions, without rendering instructions just to build that key.
+    Then, after the current instructions have been rendered anyway, reuse an existing live thread with identical rendered base/developer instructions.
+  a: yes
 
 # - q: "Do the dev instructions require knowing any specialized terms whose meaning is not available from the dev instructions themselves?"
-#   a: "no"
+#   a: no

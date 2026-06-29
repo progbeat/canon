@@ -57,7 +57,6 @@ mod tests {
             ("reason", json!("initial")),
             ("error", json!("missing evaluator turn usage")),
             ("response", json!({"sessionId": "thread", "text": "{}"})),
-            ("tokenUsageUnavailable", json!(true)),
         ];
 
         render_runtime_log_event("error", "agent.turn_error", &fields).unwrap();
@@ -84,6 +83,33 @@ mod tests {
         let fields = vec![("query", json!(false))];
 
         render_runtime_log_event("info", "check.finish", &fields).unwrap();
+    }
+
+    #[test]
+    fn thread_lifecycle_events_include_reuse_context() {
+        let fields = vec![
+            ("threadId", json!("thread")),
+            ("scope", json!(["."])),
+            ("model", json!("model")),
+            ("thinking", json!("medium")),
+            ("baseInstructions", json!("base")),
+            ("developerInstructions", json!("developer")),
+            (
+                "reuseContext",
+                json!({
+                    "visibleTreeOid": "visible",
+                    "diffBaseTreeOid": "base-tree",
+                    "checkedTreeOid": "checked-tree",
+                    "turnPrompt": "prompt",
+                    "questionContext": "context",
+                    "plugins": ["plugin"],
+                    "ignore": ["target/**"],
+                }),
+            ),
+        ];
+
+        render_runtime_log_event("info", "thread.start", &fields).unwrap();
+        render_runtime_log_event("info", "thread.reuse", &fields).unwrap();
     }
 
     fn agent_response_fields(updates: Value) -> Vec<(&'static str, Value)> {

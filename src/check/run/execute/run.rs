@@ -13,7 +13,7 @@ use crate::check::run::selection::{
 };
 use crate::evaluator::EvaluatorRunner;
 use crate::time::unix_timestamp;
-use crate::xpec_state::snapshot_pass_ids;
+use crate::xpec_state::{snapshot_pass_ids, XpecStateCache};
 use std::path::Path;
 
 // This runtime layer consumes resolved check options and owns cache/evaluator
@@ -55,36 +55,58 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         };
     }
 
-    let mut interrogation_run_state = run_try!(InterrogationRunState::new(runtime.no_sandbox()));
-    caches.run_start_pass_ids = run_try!(snapshot_pass_ids(
-        root,
-        &options.selected,
-        &mut caches.xpec_state,
+    let mut interrogation_run_state = run_try!(InterrogationRunState::new(
+        runtime.no_sandbox() || runtime.is_in_place()
     ));
-    let check_work = run_try!(select_expectations_after_cache(
-        CacheFilterContext {
+    let check_work_queue = if runtime.is_in_place() {
+        // In-place mode still uses the normal check ordering algorithm. Its
+        // persisted xpec history is absent by mode, so latest-non-pass lookups
+        // return no record and the order policy's Unix epoch fallback applies.
+        let mut absent_history = XpecStateCache::with_absent_persistent_history(root);
+        run_try!(order_check_work(
             root,
-            source: runtime.tree_source,
-            xpec_state: &mut caches.xpec_state,
-            visible_tree_oid_cache: &mut caches.visible_tree_oid,
-            diagnostic_log: &mut diagnostic_log,
-        },
-        options,
-        run_try!(unix_timestamp()),
-        if options.selectors_provided {
-            CachedFailureMode::Continue
-        } else {
-            CachedFailureMode::StopDefaultSelection
-        },
-    ));
-    // Cached hits reuse results while evaluate items still require evaluator
-    // work, but both are ordered together for the public check run.
-    let check_work_queue = run_try!(order_check_work(
-        root,
-        check_work.cached_hits,
-        check_work.to_evaluate,
-        &mut caches.xpec_state,
-    ));
+            Vec::new(),
+            options.selected.clone(),
+            &mut absent_history,
+        ))
+    } else {
+        caches.run_start_pass_ids = run_try!(snapshot_pass_ids(
+            root,
+            &options.selected,
+            &mut caches.xpec_state,
+        ));
+        let source = runtime
+            .tree_source()
+            .ok_or_else(|| current_error!("missing Git tree source".to_string()))?;
+        let check_work = run_try!(select_expectations_after_cache(
+            CacheFilterContext {
+                root,
+                source,
+                xpec_state: &mut caches.xpec_state,
+                visible_tree_oid_cache: &mut caches.visible_tree_oid,
+                diagnostic_log: &mut diagnostic_log,
+            },
+            options,
+            run_try!(unix_timestamp()),
+            if options.selectors_provided {
+                CachedFailureMode::Continue
+            } else {
+                CachedFailureMode::StopDefaultSelection
+            },
+        ));
+        // `check_work.selected_for_evaluation` is already the final mutable
+        // Selected Expectations set for evaluator work after cached-result
+        // policy. The canon-check-order policy begins from this post-cache set;
+        // cached hits below are report-only and do not start evaluator work.
+        // Cached hits reuse results while evaluate items still require evaluator
+        // work, but both are ordered together for the public check run.
+        run_try!(order_check_work(
+            root,
+            check_work.cached_hits,
+            check_work.selected_for_evaluation,
+            &mut caches.xpec_state,
+        ))
+    };
     let mut check_work_queue = check_work_queue.into_iter();
     while let Some(item) = check_work_queue.next() {
         match item {
@@ -110,9 +132,17 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                     Ok(outcome) => outcome,
                     Err(error) => return Err(current_error!(error)),
                 };
+                let stop_run = outcome.stop_run;
+                let interrupted = outcome.interrupted;
+                // This is the structured per-expectation report for evaluated
+                // work; human stdout/stderr rendering is not the only report.
                 records.push(outcome.record);
-                if outcome.stop_run {
-                    if !outcome.interrupted {
+                if stop_run {
+                    // This is the shared default-order stop point for both
+                    // materialized and in-place runs. In-place mode changes
+                    // cache/state usage, not the stop-after-evaluated-non-pass
+                    // rule.
+                    if !interrupted {
                         write_remaining_cached_failures_without_evaluation(
                             &mut check_work_queue,
                             &mut cached,
@@ -121,7 +151,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                         .map_err(|err| current_error!(err))?;
                     }
                     let report = current_report(records, cached, total_expectations);
-                    if outcome.interrupted {
+                    if interrupted {
                         // The post-summary agent-message spec is explicitly scoped to
                         // runs without Ctrl-C or other interruption. Resource/control
                         // stop signals finish through the error-report path so no
@@ -163,14 +193,14 @@ enum CheckWorkItem {
 fn order_check_work(
     root: &Path,
     cached_hits: Vec<CachedExpectationHit>,
-    to_evaluate: Vec<SelectedExpectation>,
+    selected_for_evaluation: Vec<SelectedExpectation>,
     xpec_state: &mut crate::xpec_state::XpecStateCache,
 ) -> Result<Vec<CheckWorkItem>, String> {
     let work = cached_hits
         .into_iter()
         .map(|hit| CheckWorkItem::Cached(Box::new(hit)))
         .chain(
-            to_evaluate
+            selected_for_evaluation
                 .into_iter()
                 .map(|expectation| CheckWorkItem::Evaluate(Box::new(expectation))),
         )

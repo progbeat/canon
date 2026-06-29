@@ -10,7 +10,7 @@ use std::sync::mpsc::Receiver;
 use std::thread::JoinHandle;
 
 pub(crate) struct AppServerRunner {
-    pub(super) app_server_state_root: PathBuf,
+    pub(super) app_server_state_root: Option<PathBuf>,
     pub(super) child: Child,
     pub(super) stdin: ChildStdin,
     pub(super) messages: Receiver<Result<Value, String>>,
@@ -30,8 +30,8 @@ pub(crate) struct AppServerRunner {
 }
 
 impl AppServerRunner {
-    pub(crate) fn app_server_state_root(&self) -> &Path {
-        &self.app_server_state_root
+    pub(crate) fn app_server_state_root(&self) -> Option<&Path> {
+        self.app_server_state_root.as_deref()
     }
 
     pub(crate) fn no_sandbox(&self) -> bool {
@@ -64,9 +64,9 @@ impl AppServerRunner {
         self.progress = progress;
     }
 
-    pub(crate) fn record_app_server_activity_progress(&self) {
+    pub(crate) fn record_turn_message_activity_progress(&self) {
         if let Some(progress) = &self.progress {
-            progress.record_app_server_activity();
+            progress.record_turn_message_activity();
         }
     }
 

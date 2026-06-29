@@ -1,6 +1,6 @@
 use crate::check::core::{
-    ParsedAnswer, QueryResult, SelectedExpectation, ERROR_INVALID_QUESTION, ERROR_SCOPE_TOO_NARROW,
-    INTERNAL_ERROR_UNPARSABLE,
+    CheckResult, ParsedAnswer, QueryResult, SelectedExpectation, ERROR_INVALID_QUESTION,
+    ERROR_SCOPE_TOO_NARROW, INTERNAL_ERROR_UNPARSABLE,
 };
 use crate::check::interrogation::policy::question_scope_suggestion_scope_for_independent_verification;
 use crate::check::interrogation::state::{
@@ -13,12 +13,13 @@ use crate::check::interrogation::{
 };
 use crate::config_types::{AgentConfig, DEFAULT_DIFF_FROM};
 use crate::evaluator::{
-    create_prompt_template_output_dir, effective_thinking, evaluator_turn_prompt, EvaluatorError,
-    EvaluatorRunner,
+    effective_thinking, evaluator_turn_prompt, EvaluatorError, EvaluatorRunner,
+    EvaluatorTurnPromptContext, PromptTemplateArtifactDir,
 };
 use crate::hash::full_scope;
 use crate::logs::DiagnosticLogWriter;
 use crate::xpec_state::LastResult;
+use std::sync::Arc;
 
 #[derive(Clone, Copy)]
 pub(crate) struct QueryRequest<'a> {
@@ -81,9 +82,11 @@ fn ask_query<R: EvaluatorRunner>(
             follow_up_used: false,
         },
     };
-    // Query mode uses the same Interrogation Policy q-scope verification
-    // follow-up as expectation mode. All query-mode dependence on
-    // `qScopeSuggestion` is contained in this verification planning helper.
+    // This is query mode's use of the same Interrogation Policy q-scope
+    // verification follow-up, not a separate `qScopeSuggestion` decision.
+    // Matched q/a queries use expectation pass/fail records; one-off queries
+    // derive verification-only pass/fail from whether the answer still matches
+    // the initial answer.
     let q_scope_verification_scope =
         q_scope_verification_scope_for_query_answer(runtime, query, state, &active_scope, &attempt)
             .map_err(|err| err.to_string())?;
@@ -109,7 +112,9 @@ fn ask_query<R: EvaluatorRunner>(
                 return finish_query_result(query, diagnostic_log, result);
             }
         };
-        if answer_is_accepted(&narrowed.answer) {
+        if query_verification_error_is_final(&narrowed) {
+            result = narrowed;
+        } else if query_narrowed_scope_is_accepted(&result, &narrowed) {
             result = narrowed;
             result.answer.question_scope_suggestion = None;
         }
@@ -122,6 +127,7 @@ fn finish_query_result(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     result: QueryResult,
 ) -> Result<QueryResult, String> {
+    assert_final_query_result_has_no_scope_too_narrow(&result)?;
     if let Some(reason) = query_human_review_reason(&result) {
         // The command layer may persist a matched expectation record before it
         // turns this result into a human-review command error.
@@ -134,6 +140,18 @@ fn finish_query_result(
     write_query_result_event(query.question, diagnostic_log, &result.answer)
         .map_err(|err| err.to_string())?;
     Ok(result)
+}
+
+fn assert_final_query_result_has_no_scope_too_narrow(result: &QueryResult) -> Result<(), String> {
+    // A final ScopeTooNarrow would be a policy bug: initial restricted
+    // query-mode interrogations retry at full scope, full-scope schemas reject
+    // ScopeTooNarrow, and q-scope verification errors cannot replace the
+    // initial result. Do not rewrite the evaluator-provided error value here;
+    // stop before query result output or human-review handling can expose it.
+    if result.answer.error.as_deref() == Some(ERROR_SCOPE_TOO_NARROW) {
+        return Err("internal error: forbidden final query scope error".to_string());
+    }
+    Ok(())
 }
 
 fn query_result_from_interrogation_error(
@@ -177,7 +195,9 @@ fn ask_with_full_scope_retry<R: EvaluatorRunner>(
         state,
     )?;
     let mut follow_up_used = false;
-    if should_retry_full_scope_after_error(result.answer.error.as_deref(), enforced_scope) {
+    if !runtime.is_in_place()
+        && should_retry_full_scope_after_error(result.answer.error.as_deref(), enforced_scope)
+    {
         // Restricted ScopeTooNarrow is not final for query-mode
         // interrogations either; retry once with full project scope.
         *enforced_scope = full_scope();
@@ -212,8 +232,9 @@ fn ask_once<R: EvaluatorRunner>(
         diagnostic_log,
         query.expectation_id(),
         // `canon check -q` returns a query answer instead of emitting a
-        // per-expectation result line, so there is no public progress timeline
-        // for model fallback attempts to update.
+        // `<short ID><progress timeline>` result entry. Passing `None` here
+        // opts out of result-timeline reporting for the whole query command
+        // form; it is not a check-run request kind without a marker.
         None,
         |state, diagnostic_log, model| {
             ask_once_with_model(
@@ -238,18 +259,22 @@ fn ask_once_with_model<R: EvaluatorRunner>(
     state: &mut InterrogationRunState,
     model: Option<&str>,
 ) -> Result<QueryResult, EvaluatorError> {
-    let template_output_dir =
-        create_prompt_template_output_dir().map_err(EvaluatorError::message)?;
     let diff_from = query.resolved_diff_from(runtime)?;
-    let prompt = evaluator_turn_prompt(
-        runtime.root,
-        &template_output_dir,
-        query.turn_question(),
-        query.expected_answer(),
-        query.diff_from(),
-        query.target(),
-        diff_from.last_pass,
-    )?;
+    let template_artifact_dir =
+        PromptTemplateArtifactDir::Lazy(Arc::clone(&state.prompt_template_output_dir_cache));
+    let mut template_artifact_paths = Vec::new();
+    let prompt = evaluator_turn_prompt(EvaluatorTurnPromptContext {
+        root: runtime.root,
+        template_artifact_dir: template_artifact_dir.clone(),
+        template_artifact_paths: &mut template_artifact_paths,
+        short_id: query.short_id(),
+        question: query.turn_question(),
+        expected_answer: query.expected_answer(),
+        in_place: runtime.is_in_place(),
+        diff_from: query.diff_from(),
+        target: query.target(),
+        last_pass: diff_from.last_pass,
+    })?;
     let agent = query.agent(&runtime.config.agent);
     let response = ask_with_reused_thread(
         runtime,
@@ -262,11 +287,14 @@ fn ask_once_with_model<R: EvaluatorRunner>(
             model,
             thinking: query.thinking(&runtime.config.agent),
             expectation_id: query.expectation_id(),
-            expectation_instructions: query.expectation_instructions(),
+            short_id: query.short_id(),
+            question_context: query.question_context(),
             diff_from_tree_oid: &diff_from.tree_oid,
             prompt: &prompt,
-            template_output_dir: &template_output_dir,
+            template_artifact_dir,
+            template_artifact_paths: &template_artifact_paths,
             last_pass: diff_from.last_pass,
+            progress: None,
         },
     )?;
     finalize_query_answer(
@@ -287,8 +315,8 @@ fn q_scope_verification_scope_for_query_answer(
     enforced_scope: &[String],
     attempt: &QueryAttempt,
 ) -> Result<Option<Vec<String>>, EvaluatorError> {
-    // `ScopeTooNarrow` full-scope retry and q-scope verification share the
-    // same single follow-up budget in query mode too.
+    // `ScopeTooNarrow` full-scope retry and the q-scope verification follow-up
+    // share the same single follow-up budget in query mode too.
     if !q_scope_verification_follow_up_is_available(attempt.follow_up_used, &attempt.result.answer)
     {
         return Ok(None);
@@ -303,8 +331,47 @@ fn q_scope_verification_scope_for_query_answer(
     .map_err(EvaluatorError::from)
 }
 
-fn answer_is_accepted(narrowed: &ParsedAnswer) -> bool {
-    narrowed.error.is_none()
+fn query_narrowed_scope_is_accepted(initial: &QueryResult, narrowed: &QueryResult) -> bool {
+    let Some(initial_result) =
+        query_result_for_q_scope_verification(&initial.answer.answer, initial)
+    else {
+        return false;
+    };
+    let Some(narrowed_result) =
+        query_result_for_q_scope_verification(&initial.answer.answer, narrowed)
+    else {
+        return false;
+    };
+    match (initial_result, narrowed_result) {
+        (CheckResult::Fail, CheckResult::Pass) => false,
+        (CheckResult::Pass, CheckResult::Pass)
+        | (CheckResult::Pass, CheckResult::Fail)
+        | (CheckResult::Fail, CheckResult::Fail) => true,
+    }
+}
+
+fn query_result_for_q_scope_verification(
+    initial_answer: &str,
+    result: &QueryResult,
+) -> Option<CheckResult> {
+    if result.answer.error.is_some() {
+        return None;
+    }
+    if let Some(record) = &result.record {
+        return Some(record.record.result);
+    }
+    if result.answer.answer == initial_answer {
+        Some(CheckResult::Pass)
+    } else {
+        Some(CheckResult::Fail)
+    }
+}
+
+fn query_verification_error_is_final(narrowed: &QueryResult) -> bool {
+    // Verification ScopeTooNarrow rejects the proposed narrowed q-scope; it
+    // does not replace the initial query answer as the final response.
+    narrowed.answer.error.is_some()
+        && narrowed.answer.error.as_deref() != Some(ERROR_SCOPE_TOO_NARROW)
 }
 
 fn q_scope_verification_follow_up_is_available(
@@ -316,7 +383,9 @@ fn q_scope_verification_follow_up_is_available(
 
 pub(crate) fn query_human_review_reason(result: &QueryResult) -> Option<&'static str> {
     match result.answer.error.as_deref() {
-        Some(ERROR_SCOPE_TOO_NARROW) => Some("scope too narrow"),
+        Some(ERROR_SCOPE_TOO_NARROW) => {
+            unreachable!("final query result cannot expose scope-too-narrow")
+        }
         Some(ERROR_INVALID_QUESTION) => Some("invalid question"),
         Some(INTERNAL_ERROR_UNPARSABLE) => Some("unparsable evaluator response"),
         None => None,
@@ -366,9 +435,15 @@ impl<'a> QueryRequest<'a> {
             .map(|context| context.expectation.id.as_str())
     }
 
-    fn expectation_instructions(&self) -> &str {
+    fn short_id(&self) -> &str {
         self.expectation
-            .map(|context| context.expectation.instructions.as_str())
+            .map(|context| context.expectation.display_id.as_str())
+            .unwrap_or("q")
+    }
+
+    fn question_context(&self) -> &str {
+        self.expectation
+            .map(|context| context.expectation.question_context.as_str())
             .unwrap_or("")
     }
 
@@ -379,7 +454,7 @@ impl<'a> QueryRequest<'a> {
         match self.expectation {
             Some(context) => resolve_diff_from(runtime, context.expectation, context.last_pass),
             None => Ok(ResolvedDiffFrom {
-                tree_oid: runtime.tree_context.against_tree_oid.clone(),
+                tree_oid: runtime.against_tree_oid().to_string(),
                 last_pass: None,
             }),
         }
@@ -393,20 +468,6 @@ mod tests {
     use crate::config_types::ExpectationTarget;
 
     #[test]
-    fn q_scope_verification_uses_same_follow_up_budget_as_full_scope_retry() {
-        let answer = ParsedAnswer::answer(
-            "yes".to_string(),
-            "evidence".to_string(),
-            Some(full_scope()),
-        );
-        let error = ParsedAnswer::error(ERROR_SCOPE_TOO_NARROW.to_string(), "evidence".to_string());
-
-        assert!(q_scope_verification_follow_up_is_available(false, &answer));
-        assert!(!q_scope_verification_follow_up_is_available(true, &answer));
-        assert!(!q_scope_verification_follow_up_is_available(false, &error));
-    }
-
-    #[test]
     fn matched_query_request_uses_expectation_turn_context() {
         let default_agent = AgentConfig::implementation_default();
         let mut expectation_agent = AgentConfig::implementation_default();
@@ -417,8 +478,9 @@ mod tests {
             display_id: "e".to_string(),
             question: "Does matched expectation pass?".to_string(),
             expected_answer: "yes".to_string(),
-            instructions: "Use this expectation context.".to_string(),
+            question_context: "Use this expectation context.".to_string(),
             diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
+            diff_from_configured: false,
             target: Some(ExpectationTarget::Diff),
             question_answer_only: true,
             agent: expectation_agent,
@@ -442,10 +504,7 @@ mod tests {
         assert_eq!(request.expected_answer(), expectation.expected_answer);
         assert_eq!(request.target(), Some("diff"));
         assert_eq!(request.expectation_id(), Some("expectation-id"));
-        assert_eq!(
-            request.expectation_instructions(),
-            "Use this expectation context."
-        );
+        assert_eq!(request.question_context(), "Use this expectation context.");
     }
 
     #[test]
@@ -466,6 +525,6 @@ mod tests {
         assert_eq!(request.expected_answer(), "");
         assert_eq!(request.target(), None);
         assert_eq!(request.expectation_id(), None);
-        assert_eq!(request.expectation_instructions(), "");
+        assert_eq!(request.question_context(), "");
     }
 }

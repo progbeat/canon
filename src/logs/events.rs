@@ -169,6 +169,7 @@ pub(crate) fn write_thread_lifecycle_event(
             ("thinking", json!(event.thinking)),
             ("baseInstructions", json!(event.base_instructions)),
             ("developerInstructions", json!(event.developer_instructions)),
+            ("reuseContext", json!(event.reuse_context)),
         ],
     )
 }
@@ -209,6 +210,7 @@ pub(crate) struct ThreadLifecycleEventFields<'a> {
     pub(crate) thinking: &'a str,
     pub(crate) base_instructions: &'a str,
     pub(crate) developer_instructions: &'a str,
+    pub(crate) reuse_context: &'a crate::evaluator::ThreadReuseLogContext,
 }
 
 pub(crate) struct ThreadRestartEventFields<'a> {
@@ -250,7 +252,6 @@ fn append_turn_usage_fields(
 
 fn append_missing_turn_usage_fields(fields: &mut Vec<(&'static str, Value)>, session_id: &str) {
     fields.push(("threadId", json!(session_id)));
-    fields.push(("tokenUsageUnavailable", json!(true)));
 }
 
 fn token_usage_log_value(usage: TokenUsage) -> Value {

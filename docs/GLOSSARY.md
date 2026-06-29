@@ -55,8 +55,11 @@ code that support it.
 
 ## Expectation Instructions
 
-Additional per-expectation developer instructions resolved from an
-expectation's `instructions` field, or empty text when none is configured.
+The resolved `instructions` config value for an expectation, or empty text when
+none is configured. Despite the config field name, this is expectation context
+data, not an implementation-owned evaluator-agent prompt or instruction source.
+Evaluator prompt and instruction templates live under `resources/prompts/` and
+decide how to embed this data.
 
 ## Expectation ID
 
@@ -73,14 +76,23 @@ to the observed answer using exact string equality.
 
 A question and expected answer that the project should satisfy. In
 `.canon/check.yml`, a basic expectation has a `q` field and an `a` field. An
-expectation may also provide per-expectation instructions.
+expectation may also provide an `instructions` config value.
 
 ## Evaluator thread
 
 An ephemeral evaluator interaction context whose history is not persisted across
 `canon check` invocations. Within one check run, an evaluator thread may only be
 reused for an interrogation with the same evaluator model and the same rendered
-developer instructions.
+developer instructions. Reuse may also require the same live thread-start
+context inputs that affect evaluator tools, session root, or prompt-rendered
+tree context.
+
+## Evaluator Prompt Boundary
+
+The implementation-owned evaluator prompt and instruction templates are the
+resource files under `resources/prompts/`. Config values such as expectation
+`instructions` are human-authored canon data passed into those templates, not
+additional implementation-owned prompt templates.
 
 ## Generator item
 
@@ -166,10 +178,11 @@ evaluator after the visible scope is applied.
 ## Visible scope
 
 The scope applied to a staged tracked tree for an evaluator interrogation. It is
-formed from the stored q-scope for the expectation, or full project scope when
-no q-scope is stored. Configured ignore patterns are normalized as
-project-relative pathspec items, converted to excluding pathspec items, and
-applied last.
+formed from the interrogation q-scope plus configured ignore exclusions. A fresh
+interrogation starts from the `qScope` in the expectation's `last-pass.json`, or
+full project scope when no last pass is available. Configured ignore patterns
+are normalized as project-relative pathspec items, converted to excluding
+pathspec items, and applied last.
 
 ## Visible tree
 
@@ -178,8 +191,8 @@ The scoped tree induced by a visible scope.
 ## Implementation Map
 
 `config_types::Expectation` and `check::core::SelectedExpectation` carry
-expectation questions, expected answers, expectation instructions, and target
-metadata from config loading into check runs.
+expectation questions, expected answers, the resolved `instructions` config
+text, and target metadata from config loading into check runs.
 
 `scope` keeps scopes as Git pathspec lists: it normalizes repository paths,
 forms visible scopes by appending configured ignore patterns as excluding
@@ -193,21 +206,19 @@ otherwise it serializes and hashes a synthetic tree object with the
 repository's object hash algorithm. `staged::worktree` uses that same OID when
 materializing evaluator-visible trees.
 
-`check::interrogation::policy::initial_visible_scope_for_expectation` forms the
-base q-scope from `xpec_state::XpecStateCache::read_stored_q_scope`, or full
-project scope when no q-scope has been stored. `xpec_state::last_result`
-implements that method by reading `stored-q-scope.json` when present, otherwise
-falling back to the newest status-specific last-result file, including pass,
-fail, and error results. `staged::worktree::StagedWorktreeView::materialize_visible_scope`
+`check::interrogation::policy::initial_q_scope_for_fresh_interrogation` forms
+the base q-scope from the expectation's `last-pass.json`, or full project scope
+when no last pass result exists. `xpec_state::last_result` reads and writes the
+status-specific last-result files. `staged::worktree::StagedWorktreeView::materialize_visible_scope`
 then applies the visible scope before creating the evaluator working tree.
 
 `check::core::EvaluatorResponseJson` parses evaluator evidence and the required
 `qScopeSuggestion` value. `check::interrogation::policy` treats suggestions as
 unverified claims until an independent verification turn accepts them.
 `xpec_state` persists status-specific last-result files with `qScope`,
-`visibleScope`, and status-dependent tree OIDs. It reads q-scope history when
-seeding future interrogations and reads pass/fail last results when checking
-same-tree cached results.
+`visibleScope`, and status-dependent tree OIDs. It reads last-pass `qScope`
+when seeding future interrogations and reads pass/fail last results when
+checking same-tree cached results.
 
 `evaluator::protocol::prompt` renders the prompt templates stored under
 `resources/prompts/` with MiniJinja. The developer-instructions template is

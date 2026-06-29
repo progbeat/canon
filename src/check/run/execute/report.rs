@@ -17,7 +17,7 @@ pub(super) struct CheckRunReportCounts {
     pub(super) skipped: usize,
 }
 
-pub(super) fn skipped_count(
+pub(crate) fn skipped_count(
     total_expectations: usize,
     records: &[CheckRecord],
     cached: &[CachedExpectation],

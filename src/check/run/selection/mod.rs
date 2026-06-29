@@ -16,6 +16,6 @@ pub(crate) use cooldown::parse_cooldown;
 // in `identity`.
 pub(crate) use identity::{
     expectation_identities, minimal_unique_expectation_prefix, select_expectations_with_identities,
-    ExpectationIdentity,
+    selected_expectation_at, ExpectationIdentity,
 };
 pub(crate) use order::order_by_latest_non_pass;

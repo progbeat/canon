@@ -1,6 +1,14 @@
 #!/usr/bin/env sh
 set -eu
 
+if [ "${1:-}" = "canon" ]; then
+  shift
+fi
+
+if [ "$#" -eq 0 ]; then
+  set -- help
+fi
+
 tmpdir="${TMPDIR:-/scratch/tmp}"
 codex_home="${CODEX_HOME:-/scratch/codex-home}"
 mkdir -p \
@@ -24,6 +32,8 @@ fi
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   host_index="$(git rev-parse --path-format=absolute --git-path index)"
   if [ -e "$host_index" ]; then
+    # Copy only the host index. Do not set GIT_OBJECT_DIRECTORY or
+    # GIT_ALTERNATE_OBJECT_DIRECTORIES; use the mounted repository object DB.
     export GIT_INDEX_FILE="$tmpdir/canon-git/index"
     mkdir -p "$(dirname "$GIT_INDEX_FILE")"
     cp "$host_index" "$GIT_INDEX_FILE"
@@ -32,7 +42,14 @@ fi
 
 # Docker creates /scratch/secret for the bind mount before switching to
 # --user, so Canon's chmod-based secret-dir isolation cannot manage it here.
-# The container uses Codex's read-only evaluator sandbox plus /scratch/sandbox
-# materialization instead.
+# For canon check, Docker is the outer isolation boundary. --no-sandbox avoids
+# Codex's nested OS sandbox launcher while Canon still materializes the filtered
+# evaluator tree under /scratch/sandbox.
 unset CANON_SECRET_DIR
+if [ "${1:-}" = "check" ]; then
+  shift
+  # Preserve the user-supplied check arguments and insert Canon's container-only
+  # sandbox mode before any selectors or `--` separator.
+  set -- check --no-sandbox "$@"
+fi
 exec canon "$@"

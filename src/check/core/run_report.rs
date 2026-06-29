@@ -32,7 +32,7 @@ pub(crate) struct CachedExpectation {
 
 #[derive(Debug, Clone)]
 pub(crate) struct CheckRunReport {
-    // Result records produced by evaluator work in this run.
+    // Structured result records produced by evaluator work in this run.
     pub(crate) records: Vec<CheckRecord>,
     pub(crate) cached: Vec<CachedExpectation>,
     // Expectations not covered by pass, fail, or human-review summary
@@ -66,6 +66,7 @@ pub(crate) fn for_each_unique_report_record(
 #[derive(Debug, Clone)]
 pub(crate) struct CheckRunError {
     pub(crate) error: String,
+    // Runtime errors carry the complete report available at the error boundary.
     pub(crate) report: Box<CheckRunReport>,
     pub(crate) interrupted: bool,
 }

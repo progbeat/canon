@@ -2,9 +2,12 @@
 // stable stdout/stderr surfaces by output kind while keeping callers away from
 // renderer internals.
 // `canon check` uses this facade instead of `crate::output` because live
-// progress shares stdout across threads; every exported writer flushes through
-// `shared::write_stdout_record` or `SharedCheckOutput` as soon as a record,
-// summary, query answer, agent message, or progress dot is eligible.
+// progress shares stdout across threads. The documented check output surfaces
+// are split across `record`, `usage`, and `summary`; every exported writer
+// flushes through `shared::write_stdout_record` or `SharedCheckOutput` as soon
+// as a record, token line, summary, query answer, agent message, or progress
+// dot is eligible.
+// `canon gate` output is not routed through this check-output component.
 mod escape;
 mod query;
 mod record;
@@ -23,19 +26,23 @@ pub(crate) use summary::{render_check_agent_messages, summary_outcome_counts, wr
 pub(crate) use usage::render_token_usage_summary;
 
 #[cfg(test)]
+// These tests are colocated with the command-output implementation. Dedicated
+// tests outside implementation files exercise public CLI behavior instead.
 mod tests {
     use super::{
-        render_check_agent_messages, start_expectation_report_output, summary_outcome_counts,
-        write_cached_non_pass_output, write_result_output_without_started_report,
-        SharedCheckOutput,
+        render_check_agent_messages, render_token_usage_summary, start_expectation_report_output,
+        summary_outcome_counts, write_cached_non_pass_output,
+        write_result_output_without_started_report, write_summary_line, SharedCheckOutput,
     };
     use crate::check::core::{
-        CachedExpectation, CheckRecord, CheckResult, CheckRunReport, ERROR_SCOPE_TOO_NARROW,
+        CachedExpectation, CheckRecord, CheckResult, CheckRunReport, ERROR_INVALID_QUESTION,
     };
     use crate::check::SelectedExpectation;
     use crate::config_types::AgentConfig;
+    use crate::token_usage_types::TokenUsage;
     use std::io::{self, Write};
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
     #[derive(Clone)]
     struct CapturedOutput {
@@ -94,6 +101,72 @@ mod tests {
     }
 
     #[test]
+    fn summary_and_token_usage_output_match_documented_lines() {
+        let report = CheckRunReport {
+            records: vec![passing_record()],
+            cached: Vec::new(),
+            skipped: 2,
+        };
+        let mut summary_bytes = Vec::new();
+
+        write_summary_line(&mut summary_bytes, &report, Duration::from_millis(1250)).unwrap();
+
+        let summary = String::from_utf8(summary_bytes).unwrap();
+        assert!(summary.contains(" 1 passed, 2 pending in 1.25s "));
+        assert!(summary.starts_with('='));
+        assert!(summary.ends_with("=\n"));
+
+        let usage = TokenUsage {
+            total_tokens: 9,
+            input_tokens: 4,
+            cached_input_tokens: 3,
+            output_tokens: 2,
+            reasoning_output_tokens: 1,
+        };
+        assert_eq!(
+            render_token_usage_summary(usage),
+            "Token usage: total=9 input=4 (+ 3 cached) output=2 (reasoning 1)"
+        );
+    }
+
+    #[test]
+    fn failed_result_output_matches_documented_detail_lines() {
+        let mut bytes = Vec::new();
+        let mut result_output = Some(&mut bytes as &mut dyn Write);
+        let mut record = failed_record();
+        record.question_scope_suggestion = Some(vec!["src/check".to_string()]);
+
+        write_result_output_without_started_report(&mut result_output, &record).unwrap();
+
+        let rendered = String::from_utf8(bytes).unwrap();
+        assert_result_entry(&rendered, "FAILED");
+        assert!(rendered.contains("Does it pass?\n"));
+        assert!(rendered.contains("Expected: yes\n"));
+        assert!(rendered.contains("Observed: no\n"));
+        assert!(rendered.contains("Evidence: test evidence\n"));
+        assert!(rendered.contains("Suggested q-scope: [\"src/check\"]\n"));
+    }
+
+    #[test]
+    fn error_result_output_matches_documented_detail_lines() {
+        let mut bytes = Vec::new();
+        let mut result_output = Some(&mut bytes as &mut dyn Write);
+        let mut record = review_record_with_id("11111111111111111111", "j");
+        record.question_scope_suggestion = Some(vec!["src/check".to_string()]);
+
+        write_result_output_without_started_report(&mut result_output, &record).unwrap();
+
+        let rendered = String::from_utf8(bytes).unwrap();
+        assert_result_entry(&rendered, "ERROR");
+        assert!(rendered.contains("Does it pass?\n"));
+        assert!(rendered.contains("Error: InvalidQuestion\n"));
+        assert!(rendered.contains("Evidence: test evidence\n"));
+        assert!(!rendered.contains("Expected:"));
+        assert!(!rendered.contains("Observed:"));
+        assert!(!rendered.contains("Suggested q-scope:"));
+    }
+
+    #[test]
     fn live_report_result_output_matches_documented_record_shape() {
         let bytes = Arc::new(Mutex::new(Vec::new()));
         let output = SharedCheckOutput::new(Box::new(CapturedOutput {
@@ -101,10 +174,25 @@ mod tests {
         }));
 
         let report = start_expectation_report_output(output, "j");
-        report.finish_with_record(&passing_record());
+        let finished = report.finish_with_record(&passing_record());
+        assert!(!finished.stdout_completion_failed());
 
         let completed = captured_string(&bytes);
         assert_result_entry(&completed, "OK");
+    }
+
+    #[test]
+    fn live_report_writes_initial_progress_marker_before_completion() {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let output = SharedCheckOutput::new(Box::new(CapturedOutput {
+            bytes: bytes.clone(),
+        }));
+
+        let report = start_expectation_report_output(output, "j");
+
+        assert_eq!(captured_string(&bytes), "j.");
+        let finished = report.finish_with_record(&passing_record());
+        assert!(!finished.stdout_completion_failed());
     }
 
     #[test]
@@ -169,7 +257,7 @@ mod tests {
         record_with_identity(
             CheckResult::Fail,
             "",
-            Some(ERROR_SCOPE_TOO_NARROW),
+            Some(ERROR_INVALID_QUESTION),
             id,
             display_id,
         )
@@ -183,8 +271,9 @@ mod tests {
                 display_id: record.display_id.clone(),
                 question: record.question_text().to_string(),
                 expected_answer: record.expected_answer_text().unwrap_or("yes").to_string(),
-                instructions: String::new(),
+                question_context: String::new(),
                 diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
+                diff_from_configured: false,
                 target: None,
                 question_answer_only: true,
                 agent: AgentConfig::default(),

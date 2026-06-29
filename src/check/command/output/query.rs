@@ -8,6 +8,9 @@ pub(crate) fn write_query_output(
     result_output: &mut dyn Write,
     answer: &ParsedAnswer,
 ) -> Result<(), String> {
+    // `canon check -q` asks one question and writes this query answer. It does
+    // not process selected expectations, so it does not use the expectation
+    // result-entry format rendered by `output::record`.
     let output = render_query_output(answer);
     write_stdout_record(result_output, output.as_bytes(), "query result")
 }

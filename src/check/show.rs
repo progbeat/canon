@@ -1,5 +1,5 @@
 use crate::check::command::output::{escape_check_output_text, write_stdout_record};
-use crate::check::interrogation::policy::initial_visible_scope_for_expectation;
+use crate::check::interrogation::policy::initial_q_scope_for_fresh_interrogation;
 use crate::check::run::selection::{
     expectation_identities, order_by_latest_non_pass, select_expectations_with_identities,
 };
@@ -159,17 +159,11 @@ fn expectation_is_affected_by_pathspecs(
 
 fn show_q_scope(
     root: &Path,
-    tree_source: &TreeSource,
+    _tree_source: &TreeSource,
     expectation: &SelectedExpectation,
     caches: &mut CheckRunCaches,
 ) -> Result<Vec<String>, String> {
-    initial_visible_scope_for_expectation(
-        root,
-        tree_source,
-        expectation,
-        &mut caches.xpec_state,
-        &mut caches.visible_tree_oid,
-    )
+    initial_q_scope_for_fresh_interrogation(root, expectation, &mut caches.xpec_state)
 }
 
 fn write_show_output(expectations: &[SelectedExpectation]) -> Result<(), String> {
@@ -248,8 +242,9 @@ mod tests {
             display_id: "1".to_string(),
             question: "Line one\nLine two".to_string(),
             expected_answer: "yes\tplease".to_string(),
-            instructions: String::new(),
+            question_context: String::new(),
             diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
+            diff_from_configured: false,
             target: None,
             question_answer_only: false,
             agent: Default::default(),

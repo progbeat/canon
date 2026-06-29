@@ -1,15 +1,26 @@
 use crate::check::core::ERROR_SCOPE_TOO_NARROW;
 use crate::config_types::{AgentConfig, CheckConfig};
-use crate::evaluator::{app_server_model_key, evaluator_models, EvaluatorResponseParseCache};
+use crate::evaluator::{
+    app_server_model_key, evaluator_models, EvaluatorResponseParseCache,
+    PromptTemplateOutputDirCache,
+};
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::hash::full_scope;
 use crate::isolation::{NaiveIsolationGuard, NaiveIsolationPolicy};
 use crate::scope::{effective_ignore_patterns, visible_scope};
 use crate::staged::StagedWorktreeView;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+pub(crate) const IN_PLACE_VISIBLE_TREE_OID: &str = "in-place";
+const IN_PLACE_VISIBLE_FILE_COUNT: usize = 1;
 
 pub(crate) fn should_retry_full_scope_after_error(error: Option<&str>, scope: &[String]) -> bool {
+    // This is the Interrogation Policy retry predicate only. The check-run
+    // follow-up is executed in `src/check/run/execute/expectation.rs`, and
+    // query-mode applies the same predicate in
+    // `src/check/interrogation/query/mod.rs`.
     if scope == full_scope() {
         return false;
     }
@@ -19,48 +30,58 @@ pub(crate) fn should_retry_full_scope_after_error(error: Option<&str>, scope: &[
     false
 }
 
-pub(crate) fn evaluator_thread_reuse_key(
-    agent: &AgentConfig,
-    scope: &[String],
-    model: Option<&str>,
-    visible_tree_oid: &str,
-    expectation_instructions: &str,
-    diff_base_tree_oid: &str,
-    checked_tree_oid: &str,
+pub(crate) struct PrerenderEvaluatorThreadReuseKeyContext<'a> {
+    pub(crate) agent: &'a AgentConfig,
+    pub(crate) scope: &'a [String],
+    pub(crate) model: Option<&'a str>,
+    pub(crate) thinking: &'a str,
+    pub(crate) visible_tree_oid: &'a str,
+    pub(crate) question_context: &'a str,
+    pub(crate) diff_base_tree_oid: &'a str,
+    pub(crate) checked_tree_oid: &'a str,
+}
+
+pub(crate) fn evaluator_prerender_thread_reuse_key(
+    context: PrerenderEvaluatorThreadReuseKeyContext<'_>,
 ) -> Result<String, String> {
-    // Evaluator thread reuse is context reuse, not a deterministic result cache.
-    // A reused thread keeps its original developer instructions and live
-    // thread-start context, so the key includes the model, the inputs that
-    // render the current developer-instructions template, and the non-rendered
-    // context that changes the evaluator cwd or tools.
+    // This is the cheap pre-render lookup key. It includes the evaluator model,
+    // stable inputs that determine the rendered base/developer instructions, and
+    // non-rendered live thread-start context such as tools and visible scope.
+    // The turn prompt is deliberately excluded: each evaluator turn supplies its
+    // own task input, while a reusable thread keeps only the base/developer
+    // instruction context from session startup.
     let mut key = String::new();
-    app_server_model_key(model).push_cache_key_part(&mut key);
+    app_server_model_key(context.model).push_cache_key_part(&mut key);
     key.push('\0');
-    key.push_str(visible_tree_oid);
+    key.push_str(&context.thinking.len().to_string());
     key.push('\0');
-    key.push_str(diff_base_tree_oid);
+    key.push_str(context.thinking);
     key.push('\0');
-    key.push_str(checked_tree_oid);
+    key.push_str(context.visible_tree_oid);
     key.push('\0');
-    key.push_str(&expectation_instructions.len().to_string());
+    key.push_str(context.diff_base_tree_oid);
     key.push('\0');
-    key.push_str(expectation_instructions);
+    key.push_str(context.checked_tree_oid);
     key.push('\0');
-    for plugin in &agent.plugins {
+    key.push_str(&context.question_context.len().to_string());
+    key.push('\0');
+    key.push_str(context.question_context);
+    key.push('\0');
+    for plugin in &context.agent.plugins {
         key.push_str(&plugin.len().to_string());
         key.push('\0');
         key.push_str(plugin);
         key.push('\0');
     }
     key.push('\0');
-    for pattern in effective_ignore_patterns(agent)? {
+    for pattern in effective_ignore_patterns(context.agent)? {
         key.push_str(&pattern.len().to_string());
         key.push('\0');
         key.push_str(&pattern);
         key.push('\0');
     }
     key.push('\0');
-    for path in scope {
+    for path in context.scope {
         key.push_str(&path.len().to_string());
         key.push('\0');
         key.push_str(path);
@@ -69,13 +90,55 @@ pub(crate) fn evaluator_thread_reuse_key(
     Ok(key)
 }
 
+pub(crate) struct RenderedEvaluatorThreadReuseKeyContext<'a> {
+    pub(crate) agent: &'a AgentConfig,
+    pub(crate) model: Option<&'a str>,
+    pub(crate) thinking: &'a str,
+    pub(crate) base_instructions: &'a str,
+    pub(crate) developer_instructions: &'a str,
+}
+
+pub(crate) fn evaluator_rendered_thread_reuse_key(
+    context: RenderedEvaluatorThreadReuseKeyContext<'_>,
+) -> String {
+    let mut key = String::new();
+    app_server_model_key(context.model).push_cache_key_part(&mut key);
+    key.push('\0');
+    key.push_str(&context.thinking.len().to_string());
+    key.push('\0');
+    key.push_str(context.thinking);
+    key.push('\0');
+    key.push_str(&context.base_instructions.len().to_string());
+    key.push('\0');
+    key.push_str(context.base_instructions);
+    key.push('\0');
+    key.push_str(&context.developer_instructions.len().to_string());
+    key.push('\0');
+    key.push_str(context.developer_instructions);
+    key.push('\0');
+    for plugin in &context.agent.plugins {
+        key.push_str(&plugin.len().to_string());
+        key.push('\0');
+        key.push_str(plugin);
+        key.push('\0');
+    }
+    key
+}
+
 pub(crate) struct CheckRuntime<'a> {
     pub(crate) root: &'a Path,
     pub(crate) config: &'a CheckConfig,
-    pub(crate) tree_source: &'a TreeSource,
-    pub(crate) tree_context: CheckTreeContext,
     no_sandbox: bool,
-    staged_view: &'a StagedWorktreeView,
+    mode: CheckRuntimeMode<'a>,
+}
+
+enum CheckRuntimeMode<'a> {
+    Materialized {
+        tree_source: &'a TreeSource,
+        tree_context: CheckTreeContext,
+        staged_view: &'a StagedWorktreeView,
+    },
+    InPlace,
 }
 
 #[derive(Clone)]
@@ -97,15 +160,88 @@ impl<'a> CheckRuntime<'a> {
         CheckRuntime {
             root,
             config,
-            tree_source,
-            tree_context,
             no_sandbox,
-            staged_view,
+            mode: CheckRuntimeMode::Materialized {
+                tree_source,
+                tree_context,
+                staged_view,
+            },
+        }
+    }
+
+    pub(crate) fn in_place(
+        root: &'a Path,
+        config: &'a CheckConfig,
+        no_sandbox: bool,
+    ) -> CheckRuntime<'a> {
+        // This runtime mode owns the in-place evaluator view: no materialized
+        // Git tree, full-project visible scope, stable fake visible-tree
+        // metadata, and sessions rooted at the checked directory. Command
+        // execution owns the complementary in-place rules: expectation
+        // validation in `src/check/command/execution/in_place.rs`, cache-free
+        // run orchestration in `src/check/command/execution/run.rs`, and
+        // config expansion through `src/repo_inspection/mod.rs`.
+        CheckRuntime {
+            root,
+            config,
+            no_sandbox,
+            mode: CheckRuntimeMode::InPlace,
         }
     }
 
     pub(crate) fn no_sandbox(&self) -> bool {
         self.no_sandbox
+    }
+
+    pub(crate) fn is_in_place(&self) -> bool {
+        matches!(self.mode, CheckRuntimeMode::InPlace)
+    }
+
+    pub(crate) fn evaluator_interrogations_never_hide_files(&self) -> bool {
+        // In-place mode is the check mode whose selected expectations are
+        // evaluated against the checked directory as-is. Its evaluator
+        // interrogations never hide files through q-scope, expectation ignore,
+        // scope narrowing, or retry behavior.
+        self.is_in_place()
+    }
+
+    pub(crate) fn persistent_check_state_root(&self) -> Option<&Path> {
+        match self.mode {
+            CheckRuntimeMode::Materialized { .. } => Some(self.root),
+            // In-place mode has no Git-backed persistent check-state target:
+            // persisted xpec last-result history is absent, so the Last
+            // Results files have no XPECS_DIR to read or update for this
+            // runtime.
+            CheckRuntimeMode::InPlace => None,
+        }
+    }
+
+    pub(crate) fn tree_source(&self) -> Option<&TreeSource> {
+        match &self.mode {
+            CheckRuntimeMode::Materialized { tree_source, .. } => Some(tree_source),
+            CheckRuntimeMode::InPlace => None,
+        }
+    }
+
+    pub(crate) fn checked_tree_oid(&self) -> &str {
+        match &self.mode {
+            CheckRuntimeMode::Materialized { tree_context, .. } => &tree_context.checked_tree_oid,
+            CheckRuntimeMode::InPlace => IN_PLACE_VISIBLE_TREE_OID,
+        }
+    }
+
+    pub(crate) fn against_tree_oid(&self) -> &str {
+        match &self.mode {
+            CheckRuntimeMode::Materialized { tree_context, .. } => &tree_context.against_tree_oid,
+            CheckRuntimeMode::InPlace => IN_PLACE_VISIBLE_TREE_OID,
+        }
+    }
+
+    pub(crate) fn checked_file_count(&self) -> usize {
+        match &self.mode {
+            CheckRuntimeMode::Materialized { tree_context, .. } => tree_context.checked_file_count,
+            CheckRuntimeMode::InPlace => IN_PLACE_VISIBLE_FILE_COUNT,
+        }
     }
 
     pub(crate) fn visible_tree_oid(
@@ -114,7 +250,15 @@ impl<'a> CheckRuntime<'a> {
         agent: &AgentConfig,
         scope: &[String],
     ) -> Result<String, String> {
-        cache.visible_tree_oid(self.root, self.tree_source, agent, scope)
+        match &self.mode {
+            CheckRuntimeMode::Materialized { tree_source, .. } => {
+                cache.visible_tree_oid(self.root, tree_source, agent, scope)
+            }
+            // In-place mode does not construct scoped visible trees. Every
+            // requested q-scope induces the same full-project evaluator view
+            // rooted at the checked directory.
+            CheckRuntimeMode::InPlace => Ok(IN_PLACE_VISIBLE_TREE_OID.to_string()),
+        }
     }
 
     pub(crate) fn visible_file_count(
@@ -123,7 +267,43 @@ impl<'a> CheckRuntime<'a> {
         agent: &AgentConfig,
         scope: &[String],
     ) -> Result<usize, String> {
-        cache.visible_file_count(self.root, self.tree_source, agent, scope)
+        match &self.mode {
+            CheckRuntimeMode::Materialized { tree_source, .. } => {
+                cache.visible_file_count(self.root, tree_source, agent, scope)
+            }
+            // This is fake visible-tree metadata, not a filesystem count. It
+            // preserves the Interrogation Policy invariant that q-scope
+            // verification runs only when a suggestion induces a smaller
+            // visible tree: in in-place mode every q-scope induces the same
+            // full-project visible tree, so the exact positive count is
+            // irrelevant but must be stable across requested scopes.
+            CheckRuntimeMode::InPlace => Ok(IN_PLACE_VISIBLE_FILE_COUNT),
+        }
+    }
+
+    pub(crate) fn visible_scope(
+        &self,
+        agent: &AgentConfig,
+        scope: &[String],
+    ) -> Result<Vec<String>, String> {
+        if self.is_in_place() {
+            // In-place q-scopes are normalized to full project scope. CLI
+            // parsing rejects `--scope` in this mode, while last-pass q-scopes
+            // and evaluator qScopeSuggestion values cannot hide files.
+            return Ok(full_scope());
+        }
+        visible_scope(agent, scope)
+    }
+
+    pub(crate) fn fresh_scope_without_persistent_history(&self) -> Option<Vec<String>> {
+        match &self.mode {
+            CheckRuntimeMode::Materialized { .. } => None,
+            // In-place mode treats persisted xpec last-result history as
+            // absent. This is the Interrogation Policy's "no last pass result
+            // with qScope exists" case: fresh interrogations start at full
+            // project scope.
+            CheckRuntimeMode::InPlace => Some(full_scope()),
+        }
     }
 
     pub(crate) fn session_root_for_scope(
@@ -132,26 +312,41 @@ impl<'a> CheckRuntime<'a> {
         scope: &[String],
         visible_tree_oid: &str,
     ) -> Result<PathBuf, String> {
+        if self.is_in_place() {
+            // In-place evaluator sessions start in the checked directory
+            // itself; no scoped materialization is created.
+            return Ok(self.root.to_path_buf());
+        }
         // `visible_scope` returns the complete visible-scope pathspec,
         // including configured ignore exclusions. From here down,
         // materialization selects paths solely by applying that pathspec to
         // checked Git entries.
         let visible_scope = visible_scope(agent, scope)?;
-        self.staged_view
-            .materialize_visible_scope(&visible_scope, visible_tree_oid)
+        match &self.mode {
+            CheckRuntimeMode::Materialized { staged_view, .. } => {
+                staged_view.materialize_visible_scope(&visible_scope, visible_tree_oid)
+            }
+            CheckRuntimeMode::InPlace => Ok(self.root.to_path_buf()),
+        }
     }
 }
 
 pub(crate) struct InterrogationRunState {
     pub(crate) session_isolations: BTreeMap<String, NaiveIsolationGuard>,
     // This is a run-level pool of evaluator threads, not one thread. The
-    // reuse key enforces the glossary's model/rendered-developer-instructions
-    // invariant and also splits on stricter live thread-start context.
-    pub(crate) thread_sessions_by_reuse_key: BTreeMap<String, String>,
+    // pre-render key is used before rendering instructions only to avoid
+    // rendering solely for the lookup.
+    pub(crate) thread_sessions_by_prerender_key: BTreeMap<String, String>,
+    // After instructions have been rendered anyway, this key lets identical
+    // rendered base/developer instructions reuse a live evaluator thread.
+    pub(crate) thread_sessions_by_rendered_instructions_key: BTreeMap<String, String>,
+    pub(crate) session_base_instructions: BTreeMap<String, String>,
     pub(crate) session_instructions: BTreeMap<String, String>,
     pub(crate) session_roots_by_id: BTreeMap<String, PathBuf>,
+    pub(crate) session_answered_short_ids: BTreeMap<String, BTreeSet<String>>,
     pub(crate) visible_tree_oid_cache: VisibleTreeOidCache,
     pub(crate) parse_cache: EvaluatorResponseParseCache,
+    pub(crate) prompt_template_output_dir_cache: Arc<PromptTemplateOutputDirCache>,
     isolation_policy: Option<NaiveIsolationPolicy>,
 }
 
@@ -164,11 +359,15 @@ impl InterrogationRunState {
         };
         Ok(InterrogationRunState {
             session_isolations: BTreeMap::new(),
-            thread_sessions_by_reuse_key: BTreeMap::new(),
+            thread_sessions_by_prerender_key: BTreeMap::new(),
+            thread_sessions_by_rendered_instructions_key: BTreeMap::new(),
+            session_base_instructions: BTreeMap::new(),
             session_instructions: BTreeMap::new(),
             session_roots_by_id: BTreeMap::new(),
+            session_answered_short_ids: BTreeMap::new(),
             visible_tree_oid_cache: VisibleTreeOidCache::new(),
             parse_cache: EvaluatorResponseParseCache::new(),
+            prompt_template_output_dir_cache: Arc::new(PromptTemplateOutputDirCache::new()),
             isolation_policy,
         })
     }
@@ -179,9 +378,12 @@ impl InterrogationRunState {
 
     pub(crate) fn clear_thread_sessions(&mut self) {
         self.session_isolations.clear();
-        self.thread_sessions_by_reuse_key.clear();
+        self.thread_sessions_by_prerender_key.clear();
+        self.thread_sessions_by_rendered_instructions_key.clear();
+        self.session_base_instructions.clear();
         self.session_instructions.clear();
         self.session_roots_by_id.clear();
+        self.session_answered_short_ids.clear();
     }
 
     pub(crate) fn isolate_session_root(
@@ -193,6 +395,37 @@ impl InterrogationRunState {
             .map(|policy| policy.isolate(session_root))
             .transpose()
     }
+
+    pub(crate) fn activate_session_root(&mut self, session_id: &str) -> Result<(), String> {
+        for (isolated_session_id, isolation) in &mut self.session_isolations {
+            if isolated_session_id == session_id {
+                isolation.reveal()?;
+            } else {
+                isolation.hide()?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn answered_short_ids_for_session(&self, session_id: &str) -> Vec<String> {
+        self.session_answered_short_ids
+            .get(session_id)
+            .map(|ids| ids.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn session_has_valid_response(&self, session_id: &str) -> bool {
+        self.session_answered_short_ids
+            .get(session_id)
+            .is_some_and(|ids| !ids.is_empty())
+    }
+
+    pub(crate) fn record_session_answered_short_id(&mut self, session_id: &str, short_id: &str) {
+        self.session_answered_short_ids
+            .entry(session_id.to_string())
+            .or_default()
+            .insert(short_id.to_string());
+    }
 }
 
 #[cfg(test)]
@@ -203,38 +436,152 @@ mod tests {
     fn thread_reuse_key_includes_developer_instruction_tree_inputs() {
         let agent = AgentConfig::default();
         let scope = full_scope();
-        let base = evaluator_thread_reuse_key(
-            &agent,
-            &scope,
-            Some("model"),
-            "visible-tree",
-            "instructions",
-            "base-a",
-            "checked-a",
-        )
+        let base = evaluator_prerender_thread_reuse_key(PrerenderEvaluatorThreadReuseKeyContext {
+            agent: &agent,
+            scope: &scope,
+            model: Some("model"),
+            thinking: "medium",
+            visible_tree_oid: "visible-tree",
+            question_context: "instructions",
+            diff_base_tree_oid: "base-a",
+            checked_tree_oid: "checked-a",
+        })
         .unwrap();
-        let different_base = evaluator_thread_reuse_key(
-            &agent,
-            &scope,
-            Some("model"),
-            "visible-tree",
-            "instructions",
-            "base-b",
-            "checked-a",
-        )
-        .unwrap();
-        let different_checked = evaluator_thread_reuse_key(
-            &agent,
-            &scope,
-            Some("model"),
-            "visible-tree",
-            "instructions",
-            "base-a",
-            "checked-b",
-        )
-        .unwrap();
+        let different_base =
+            evaluator_prerender_thread_reuse_key(PrerenderEvaluatorThreadReuseKeyContext {
+                agent: &agent,
+                scope: &scope,
+                model: Some("model"),
+                thinking: "medium",
+                visible_tree_oid: "visible-tree",
+                question_context: "instructions",
+                diff_base_tree_oid: "base-b",
+                checked_tree_oid: "checked-a",
+            })
+            .unwrap();
+        let different_checked =
+            evaluator_prerender_thread_reuse_key(PrerenderEvaluatorThreadReuseKeyContext {
+                agent: &agent,
+                scope: &scope,
+                model: Some("model"),
+                thinking: "medium",
+                visible_tree_oid: "visible-tree",
+                question_context: "instructions",
+                diff_base_tree_oid: "base-a",
+                checked_tree_oid: "checked-b",
+            })
+            .unwrap();
+        let different_thinking =
+            evaluator_prerender_thread_reuse_key(PrerenderEvaluatorThreadReuseKeyContext {
+                agent: &agent,
+                scope: &scope,
+                model: Some("model"),
+                thinking: "high",
+                visible_tree_oid: "visible-tree",
+                question_context: "instructions",
+                diff_base_tree_oid: "base-a",
+                checked_tree_oid: "checked-a",
+            })
+            .unwrap();
 
         assert_ne!(base, different_base);
         assert_ne!(base, different_checked);
+        assert_ne!(base, different_thinking);
+    }
+
+    #[test]
+    fn rendered_thread_reuse_key_includes_rendered_instructions() {
+        let agent = AgentConfig::default();
+        let first = evaluator_rendered_thread_reuse_key(RenderedEvaluatorThreadReuseKeyContext {
+            agent: &agent,
+            model: Some("model"),
+            thinking: "medium",
+            base_instructions: "base",
+            developer_instructions: "developer-a",
+        });
+        let second = evaluator_rendered_thread_reuse_key(RenderedEvaluatorThreadReuseKeyContext {
+            agent: &agent,
+            model: Some("model"),
+            thinking: "medium",
+            base_instructions: "base",
+            developer_instructions: "developer-b",
+        });
+        let third = evaluator_rendered_thread_reuse_key(RenderedEvaluatorThreadReuseKeyContext {
+            agent: &agent,
+            model: Some("model"),
+            thinking: "high",
+            base_instructions: "base",
+            developer_instructions: "developer-a",
+        });
+
+        assert_ne!(first, second);
+        assert_ne!(first, third);
+    }
+
+    #[test]
+    fn in_place_runtime_uses_full_scope_and_checked_directory() {
+        let root = PathBuf::from("/tmp/canon-in-place-runtime");
+        let config = CheckConfig {
+            version: 1,
+            agent: AgentConfig::default(),
+            expectations: Vec::new(),
+        };
+        let runtime = CheckRuntime::in_place(&root, &config, false);
+        let requested_scope = vec!["src".to_string()];
+
+        assert_eq!(
+            runtime
+                .visible_scope(&AgentConfig::default(), &requested_scope)
+                .unwrap(),
+            full_scope()
+        );
+        assert_eq!(
+            runtime.fresh_scope_without_persistent_history().unwrap(),
+            full_scope()
+        );
+        assert_eq!(
+            runtime
+                .session_root_for_scope(&AgentConfig::default(), &requested_scope, "in-place")
+                .unwrap(),
+            root
+        );
+    }
+
+    #[test]
+    fn in_place_runtime_never_makes_requested_scope_smaller() {
+        let root = PathBuf::from("/tmp/canon-in-place-runtime");
+        let config = CheckConfig {
+            version: 1,
+            agent: AgentConfig::default(),
+            expectations: Vec::new(),
+        };
+        let runtime = CheckRuntime::in_place(&root, &config, false);
+        let mut cache = VisibleTreeOidCache::new();
+        let agent = AgentConfig::default();
+        let src_scope = vec!["src".to_string()];
+
+        assert_eq!(runtime.checked_file_count(), IN_PLACE_VISIBLE_FILE_COUNT);
+        assert_eq!(
+            runtime
+                .visible_file_count(&mut cache, &agent, &full_scope())
+                .unwrap(),
+            IN_PLACE_VISIBLE_FILE_COUNT
+        );
+        assert_eq!(
+            runtime
+                .visible_file_count(&mut cache, &agent, &src_scope)
+                .unwrap(),
+            IN_PLACE_VISIBLE_FILE_COUNT
+        );
+        assert_eq!(
+            runtime.visible_scope(&agent, &src_scope).unwrap(),
+            full_scope()
+        );
+        assert_eq!(
+            runtime
+                .visible_tree_oid(&mut cache, &agent, &["missing".to_string()])
+                .unwrap(),
+            IN_PLACE_VISIBLE_TREE_OID
+        );
     }
 }

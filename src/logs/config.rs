@@ -15,6 +15,8 @@ const DEFAULT_DIAGNOSTIC_LOG_CONFIG: DiagnosticLogConfig = DiagnosticLogConfig {
 
 #[derive(Clone, Copy)]
 pub(crate) struct DiagnosticLogConfig {
+    // Runtime logging is enabled only with a positive max size. A zero max
+    // size is the configured off switch, not a request to write zero-byte logs.
     pub(crate) max_bytes: u64,
     pub(crate) explicitly_disabled: bool,
     pub(crate) files: &'static [&'static str],
@@ -34,6 +36,8 @@ fn configured_log_max_size(root: &Path) -> DiagnosticLogResult<(u64, bool)> {
         .map_err(log_config_get_error)?
         .unwrap_or_else(|| DEFAULT_LOG_MAX_SIZE_CONFIG_VALUE.to_string());
     let max_bytes = parse_log_max_size(&value)?;
+    // `canon.logs.maxSize=0` is the off switch; the default `0M` follows the
+    // same path so logs stay disabled until a positive size is configured.
     Ok((max_bytes, max_bytes == 0))
 }
 

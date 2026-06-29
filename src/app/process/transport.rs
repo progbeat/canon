@@ -25,7 +25,7 @@ impl AppServerTurnRequest {
 }
 
 impl AppServerRunner {
-    pub(crate) fn send_request(
+    pub(crate) fn send_control_request(
         &mut self,
         method: &str,
         params: Value,
@@ -39,6 +39,12 @@ impl AppServerRunner {
             let Some(message) = self.read_message_or_timeout()? else {
                 let now = Instant::now();
                 if turn_idle_timed_out(last_activity, now) {
+                    // Control messages such as initialize and thread/start set
+                    // up the app server or a session; they are not evaluator
+                    // work kinds in the per-expectation timeline. If a
+                    // non-initial interrogation needs a fresh session, the
+                    // higher-level fallback/retry/verification path records
+                    // its dedicated marker before this control message.
                     return Err(EvaluatorError::failure(
                         EvaluatorFailureKind::TurnTimeout,
                         format!(
@@ -47,11 +53,9 @@ impl AppServerRunner {
                         ),
                     ));
                 }
-                self.record_no_progress_timeout_accumulating_progress();
                 continue;
             };
             last_activity = Instant::now();
-            self.record_app_server_activity_progress();
             self.record_app_server_events(&message);
             let envelope = app_server_message(&message).map_err(|error| {
                 EvaluatorError::failure(EvaluatorFailureKind::UnknownAppServer, error)
@@ -78,10 +82,7 @@ impl AppServerRunner {
         self.last_turn_usage = None;
         let id = match self.send_json_rpc_request(method, &request.params, "request") {
             Ok(id) => id,
-            Err(err) => {
-                self.record_turn_timeout_if_error_kind(&err);
-                return Err(err);
-            }
+            Err(err) => return fail_without_turn_timeout_progress_marker(err),
         };
         let thread_id = request.thread_id;
 
@@ -101,19 +102,17 @@ impl AppServerRunner {
                 Some(thread_id.as_str()),
                 turn_id.as_deref(),
             ) {
-                self.record_turn_timeout_if_error_kind(&err);
-                return Err(err);
+                return fail_without_turn_timeout_progress_marker(err);
             }
             let message = match self.read_message_or_timeout() {
                 Ok(message) => message,
-                Err(err) => {
-                    self.record_turn_timeout_if_error_kind(&err);
-                    return Err(err);
-                }
+                Err(err) => return fail_without_turn_timeout_progress_marker(err),
             };
             let Some(message) = message else {
                 let now = Instant::now();
                 if turn_idle_timed_out(last_activity, now) {
+                    // A turn attempt is active here, so an exhausted
+                    // no-progress timeout owns the timeline `×` marker.
                     self.record_turn_timeout_progress();
                     return Err(EvaluatorError::failure(
                         EvaluatorFailureKind::TurnTimeout,
@@ -123,11 +122,13 @@ impl AppServerRunner {
                         ),
                     ));
                 }
+                // A turn attempt is active here, so time is accumulating
+                // toward the no-progress timeout and owns the timeline `~`.
                 self.record_no_progress_timeout_accumulating_progress();
                 continue;
             };
             last_activity = Instant::now();
-            self.record_app_server_activity_progress();
+            self.record_turn_message_activity_progress();
             self.record_app_server_events(&message);
             let envelope = match app_server_message(&message) {
                 Ok(envelope) => envelope,
@@ -146,8 +147,7 @@ impl AppServerRunner {
                     Some(thread_id.as_str()),
                     turn_id.as_deref(),
                 ) {
-                    self.record_turn_timeout_if_error_kind(&err);
-                    return Err(err);
+                    return fail_without_turn_timeout_progress_marker(err);
                 }
             }
             if envelope.id == Some(id) {
@@ -157,7 +157,7 @@ impl AppServerRunner {
                     .cloned()
                     .or_else(|| pending_error.take())
                 {
-                    return Err(self.fail_turn_request(
+                    return fail_without_turn_timeout_progress_marker(self.fail_turn_request(
                         method,
                         &error,
                         &thread_id,
@@ -191,7 +191,7 @@ impl AppServerRunner {
                     if let Some(error) =
                         app_server_error_value(&message).or_else(|| pending_error.take())
                     {
-                        return Err(self.fail_turn_request(
+                        return fail_without_turn_timeout_progress_marker(self.fail_turn_request(
                             method,
                             &error,
                             &thread_id,
@@ -215,7 +215,7 @@ impl AppServerRunner {
                 }
                 Some(_) => {
                     if let Some(error) = app_server_error_value(&message) {
-                        return Err(self.fail_turn_request(
+                        return fail_without_turn_timeout_progress_marker(self.fail_turn_request(
                             method,
                             &error,
                             &thread_id,
@@ -269,10 +269,15 @@ impl AppServerRunner {
         self.last_turn_usage = turn_id.map(|turn_id| self.turn_usage_for_turn(thread_id, turn_id));
         app_server_failure_from_value(method, error)
     }
+}
 
-    fn record_turn_timeout_if_error_kind(&self, err: &EvaluatorError) {
-        if err.kind() == Some(EvaluatorFailureKind::TurnTimeout) {
-            self.record_turn_timeout_progress();
-        }
-    }
+fn fail_without_turn_timeout_progress_marker(
+    err: EvaluatorError,
+) -> Result<String, EvaluatorError> {
+    assert_ne!(
+        err.kind(),
+        Some(EvaluatorFailureKind::TurnTimeout),
+        "turn timeout must record the progress timeline `×` marker before returning"
+    );
+    Err(err)
 }

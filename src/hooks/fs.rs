@@ -1,65 +1,7 @@
-use crate::fs_util::ensure_dir_without_symlinks;
 use crate::platform;
 use std::fs;
-use std::io::{self, Write};
+use std::io;
 use std::path::Path;
-
-pub(super) fn path_exists_no_follow(path: &Path) -> Result<bool, String> {
-    match fs::symlink_metadata(path) {
-        Ok(_) => Ok(true),
-        Err(err)
-            if matches!(
-                err.kind(),
-                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
-            ) =>
-        {
-            Ok(false)
-        }
-        Err(err) => Err(format!("failed to inspect {}: {}", path.display(), err)),
-    }
-}
-
-pub(super) fn ensure_project_dir_without_symlinks(root: &Path, path: &Path) -> Result<(), String> {
-    path.strip_prefix(root).map_err(|_| {
-        format!(
-            "refusing to create directory outside project root: {}",
-            path.display()
-        )
-    })?;
-    ensure_dir_without_symlinks(path)
-}
-
-pub(super) fn write_new_file(path: &Path, content: &str) -> Result<(), String> {
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|err| format!("failed to create {}: {}", path.display(), err))?;
-    file.write_all(content.as_bytes())
-        .map_err(|err| format!("failed to write {}: {}", path.display(), err))?;
-    file.flush()
-        .map_err(|err| format!("failed to flush {}: {}", path.display(), err))
-}
-
-pub(super) fn replace_file(path: &Path, content: &str) -> Result<(), String> {
-    remove_optional_file(path)?;
-    write_new_file(path, content)
-}
-
-pub(super) fn remove_optional_file(path: &Path) -> Result<(), String> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(err)
-            if matches!(
-                err.kind(),
-                io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
-            ) =>
-        {
-            Ok(())
-        }
-        Err(err) => Err(format!("failed to remove {}: {}", path.display(), err)),
-    }
-}
 
 pub(super) fn make_executable(path: &Path) -> Result<(), String> {
     platform::make_hook_executable(path)

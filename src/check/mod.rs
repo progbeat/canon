@@ -16,12 +16,13 @@ pub(crate) use command::preflight::{
 pub(crate) use command::{check_help_command, run_check_command};
 pub(crate) use config::{
     codex_reasoning_effort, expand_staged_generator_paths_from_listing,
-    parse_tree_check_config_content_with_root,
+    parse_check_config_content_with_root_and_source_and_default_agent_preset,
+    parse_tree_check_config_content_with_root_and_default_agent_preset, CheckConfigSource,
 };
 pub(crate) use core::{
-    evaluator_response_output_schema_for_q_scope, parse_evaluator_response, CheckRecord,
-    CheckRecordOutcome, CheckResult, Cooldown, EvaluatorResponseSchemaScope, ParsedAnswer,
-    SelectedExpectation, INTERNAL_ERROR_UNPARSABLE,
+    evaluator_response_output_schema_for_scope, parse_evaluator_response_for_short_id, CheckRecord,
+    CheckRecordOutcome, CheckResult, Cooldown, EvaluatorResponseParseError,
+    EvaluatorResponseSchemaScope, ParsedAnswer, SelectedExpectation, INTERNAL_ERROR_UNPARSABLE,
 };
 pub(crate) use interrogation::{
     write_agent_turn_failure_event, write_agent_turn_missing_usage_event,
@@ -29,6 +30,6 @@ pub(crate) use interrogation::{
 };
 pub(crate) use run::{
     expectation_identities, run_check_with_runner_and_caches, select_expectations_with_identities,
-    CheckRunCaches, CheckRunSideEffects, ExpectationIdentity,
+    skipped_count, CheckRunCaches, CheckRunSideEffects, ExpectationIdentity,
 };
 pub(crate) use show::{run_show_command, show_help_command};

@@ -11,7 +11,7 @@ use super::process::AppServerRunner;
 
 pub(crate) struct LazyAppServerRunner {
     app_server_root: PathBuf,
-    app_server_state_root: PathBuf,
+    app_server_state_root: Option<PathBuf>,
     load_plugins: bool,
     agent: AgentConfig,
     no_sandbox: bool,
@@ -28,7 +28,38 @@ impl LazyAppServerRunner {
         no_sandbox: bool,
     ) -> Result<LazyAppServerRunner, String> {
         let app_server_state_root = resolve_git_path(app_server_root, CANON_STATE_DIR_GIT_PATH)?;
-        Ok(LazyAppServerRunner {
+        Ok(LazyAppServerRunner::with_state_root(
+            app_server_root,
+            Some(app_server_state_root),
+            load_plugins,
+            agent,
+            no_sandbox,
+        ))
+    }
+
+    pub(crate) fn new_in_place(
+        app_server_root: &std::path::Path,
+        load_plugins: bool,
+        agent: &AgentConfig,
+        no_sandbox: bool,
+    ) -> Result<LazyAppServerRunner, String> {
+        Ok(LazyAppServerRunner::with_state_root(
+            app_server_root,
+            None,
+            load_plugins,
+            agent,
+            no_sandbox,
+        ))
+    }
+
+    fn with_state_root(
+        app_server_root: &std::path::Path,
+        app_server_state_root: Option<PathBuf>,
+        load_plugins: bool,
+        agent: &AgentConfig,
+        no_sandbox: bool,
+    ) -> LazyAppServerRunner {
+        LazyAppServerRunner {
             app_server_root: app_server_root.to_path_buf(),
             app_server_state_root,
             load_plugins,
@@ -37,14 +68,14 @@ impl LazyAppServerRunner {
             inner: None,
             sessions: BTreeSet::new(),
             retired_token_usage: TokenUsage::default(),
-        })
+        }
     }
 
     fn inner(&mut self) -> Result<&mut AppServerRunner, EvaluatorError> {
         if self.inner.is_none() {
             self.inner = Some(AppServerRunner::new(
                 &self.app_server_root,
-                &self.app_server_state_root,
+                self.app_server_state_root.as_deref(),
                 self.load_plugins,
                 &self.agent,
                 self.no_sandbox,
@@ -98,7 +129,8 @@ impl EvaluatorRunner for LazyAppServerRunner {
     fn start_session(
         &mut self,
         session_cwd: &Path,
-        template_output_dir: &Path,
+        template_artifact_paths: &[PathBuf],
+        base_instructions: &str,
         developer_instructions: &str,
         agent: &AgentConfig,
         model: Option<&str>,
@@ -107,7 +139,8 @@ impl EvaluatorRunner for LazyAppServerRunner {
     ) -> Result<String, EvaluatorError> {
         let result = self.inner()?.start_session(
             session_cwd,
-            template_output_dir,
+            template_artifact_paths,
+            base_instructions,
             developer_instructions,
             agent,
             model,
@@ -132,7 +165,7 @@ impl EvaluatorRunner for LazyAppServerRunner {
         prompt: &str,
         model: Option<&str>,
         thinking: &str,
-        q_scope: &[String],
+        output_schema: &serde_json::Value,
     ) -> Result<String, EvaluatorError> {
         if !self.sessions.contains(session_id) {
             return Err("app-server runner does not own session".into());
@@ -141,7 +174,7 @@ impl EvaluatorRunner for LazyAppServerRunner {
             .inner
             .as_mut()
             .ok_or_else(|| EvaluatorError::message("app-server runner is not initialized"))?
-            .ask(session_id, prompt, model, thinking, q_scope);
+            .ask(session_id, prompt, model, thinking, output_schema);
         if let Err(err) = &result {
             self.retire_inner_after_model_failure(err)?;
         }
@@ -163,5 +196,32 @@ impl EvaluatorRunner for LazyAppServerRunner {
             self.sessions.remove(session_id);
         }
         retired
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config_types::AgentConfig;
+    use std::fs;
+    use std::process;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn in_place_runner_initializes_outside_git_worktree() {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "canon-in-place-runner-no-git-{}-{}",
+            process::id(),
+            stamp
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+
+        LazyAppServerRunner::new_in_place(&root, false, &AgentConfig::default(), false).unwrap();
+        fs::remove_dir_all(root).unwrap();
     }
 }

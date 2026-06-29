@@ -16,7 +16,7 @@ use std::io::Write;
 // when allowed by the command form. The optional error only changes the finish
 // log payload and final command result.
 pub(crate) struct CheckReportFinishContext<'b> {
-    pub(crate) diagnostic_log: &'b mut crate::logs::DiagnosticLogWriter,
+    pub(crate) diagnostic_log: Option<&'b mut crate::logs::DiagnosticLogWriter>,
     pub(crate) result_output: &'b mut dyn Write,
     pub(crate) check_caches: &'b mut CheckRunCaches,
     pub(crate) write_agent_message: bool,
@@ -42,7 +42,9 @@ pub(crate) fn finish_check_report(
             post_finish_error.get_or_insert(err);
         }
     }
-    write_check_lifecycle_finish_event(context.diagnostic_log, false, finish_error.as_deref())?;
+    if let Some(diagnostic_log) = context.diagnostic_log {
+        write_check_lifecycle_finish_event(diagnostic_log, false, finish_error.as_deref())?;
+    }
     if let Some(err) = post_finish_error {
         return Err(err);
     }
@@ -139,7 +141,6 @@ mod tests {
     use crate::git::{TreeSource, VisibleTreeOidCache};
     use crate::hash::full_scope;
     use crate::time::format_record_timestamp;
-    use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
     use std::process;
@@ -254,13 +255,13 @@ mod tests {
     fn test_config(agent: &AgentConfig) -> CheckConfig {
         CheckConfig {
             version: 1,
-            presets: BTreeMap::new(),
             agent: agent.clone(),
             expectations: vec![Expectation {
                 q: "Does it pass?".to_string(),
                 a: "yes".to_string(),
-                instructions: String::new(),
+                question_context: String::new(),
                 diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
+                diff_from_configured: false,
                 target: None,
                 question_answer_only: false,
                 agent: agent.clone(),

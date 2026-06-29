@@ -3,7 +3,7 @@ use crate::check::core::{
     ERROR_INVALID_QUESTION, ERROR_SCOPE_TOO_NARROW, INTERNAL_ERROR_UNPARSABLE,
 };
 use crate::check::run::selection::{minimal_unique_expectation_prefix, parse_cooldown};
-use crate::config_types::{AgentConfig, CheckConfig, Expectation, ResolvedPresetConfig};
+use crate::config_types::{AgentConfig, CheckConfig, Expectation};
 use crate::hash::expectation_id;
 use crate::logs::push_json_control_escape;
 use crate::scope::normalize_repo_path;
@@ -13,13 +13,7 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
     if config.version != 1 {
         return Err("check.yml version must be 1".to_string());
     }
-    if !config.presets.contains_key("default") {
-        return Err("check.yml presets must contain default".to_string());
-    }
-    for (name, preset) in &config.presets {
-        validate_agent_config(&preset.agent_config(), &format!("presets.{}", name))?;
-    }
-    validate_agent_config(&config.agent, "presets.default")?;
+    validate_agent_config(&config.agent, "config agent")?;
     if config.expectations.is_empty() {
         return Err("check.yml expectations must not be empty".to_string());
     }
@@ -55,6 +49,9 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
             ));
         }
         if let Some(cooldown) = expectation.cooldown.as_ref() {
+            // Cached Result defines `cooldown` as valid check.yml configuration.
+            // Command modes that cannot read cached last-result state may reject
+            // a parsed expectation later without changing config validity.
             parse_cooldown(cooldown)
                 .map_err(|err| format!("expectation {} cooldown: {}", number, err))?;
         }
@@ -82,18 +79,22 @@ fn validate_expected_answer_matches_interrogation_response_schema_answer_pattern
     ))
 }
 
-fn render_expectation_validation_error(
+pub(crate) fn render_expectation_validation_error(
     display_id: &str,
     question: &str,
     error: &str,
     evidence: &str,
 ) -> String {
+    assert_ne!(
+        error, ERROR_SCOPE_TOO_NARROW,
+        "public expectation error blocks must not expose ScopeTooNarrow"
+    );
     format!(
         "{}. ERROR\n{}\nError: {}\nEvidence: {}",
         display_id,
         escape_config_error_block_text(question),
-        error,
-        evidence
+        escape_config_error_block_text(error),
+        escape_config_error_block_text(evidence)
     )
 }
 
@@ -102,7 +103,11 @@ fn expectation_ids(config: &CheckConfig) -> Vec<String> {
         .expectations
         .iter()
         .map(|expectation| {
-            expectation_id(&expectation.q, &expectation.a, &expectation.instructions)
+            expectation_id(
+                &expectation.q,
+                &expectation.a,
+                &expectation.question_context,
+            )
         })
         .collect()
 }
@@ -150,7 +155,7 @@ fn push_config_error_unicode_escape(output: &mut String, ch: char) {
     }
 }
 
-fn validate_agent_config(agent: &AgentConfig, label: &str) -> Result<(), String> {
+pub(crate) fn validate_agent_config(agent: &AgentConfig, label: &str) -> Result<(), String> {
     for (index, model) in agent.models.iter().enumerate() {
         validate_optional_model(
             Some(model.as_str()),
@@ -313,16 +318,6 @@ pub(crate) fn check_config_loads_plugins(config: &CheckConfig) -> bool {
             .expectations
             .iter()
             .any(|expectation| !expectation.agent.plugins.is_empty())
-        || config.presets.values().any(resolved_preset_loads_plugins)
-}
-
-fn resolved_preset_loads_plugins(preset: &ResolvedPresetConfig) -> bool {
-    preset
-        .common
-        .settings
-        .plugins
-        .as_ref()
-        .is_some_and(|plugins| !plugins.is_empty())
 }
 
 pub(crate) fn validate_relative_config_path(value: &str, label: &str) -> Result<(), String> {
@@ -341,27 +336,24 @@ pub(crate) fn normalize_agent_ignore_pattern_for_config(value: &str) -> Result<S
 #[cfg(test)]
 mod tests {
     use super::push_config_error_unicode_escape;
+    use super::render_expectation_validation_error;
     use super::validate_check_config;
-    use crate::config_types::{
-        AgentConfig, CheckConfig, Expectation, ExpectationTarget, ResolvedPresetConfig,
-    };
-    use std::collections::BTreeMap;
+    use crate::check::core::ERROR_SCOPE_TOO_NARROW;
+    use crate::config_types::{AgentConfig, CheckConfig, Expectation, ExpectationTarget};
 
     #[test]
     fn invalid_expected_answer_error_uses_expectation_block_format() {
         let question = "What is this project implemented in?";
         let agent = AgentConfig::default();
-        let mut presets = BTreeMap::new();
-        presets.insert("default".to_string(), preset(&agent));
         let config = CheckConfig {
             version: 1,
-            presets,
             agent: agent.clone(),
             expectations: vec![Expectation {
                 q: question.to_string(),
                 a: "Rust".to_string(),
-                instructions: String::new(),
+                question_context: String::new(),
                 diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
+                diff_from_configured: false,
                 target: None,
                 question_answer_only: false,
                 agent,
@@ -385,15 +377,31 @@ mod tests {
     }
 
     #[test]
+    fn expectation_validation_error_escapes_all_public_fields() {
+        let rendered =
+            render_expectation_validation_error("A", "Question\ntext", "bad\terror", "line\rbreak");
+
+        assert_eq!(
+            rendered,
+            "A. ERROR\nQuestion\\ntext\nError: bad\\terror\nEvidence: line\\rbreak"
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "public expectation error blocks must not expose ScopeTooNarrow")]
+    fn expectation_validation_error_rejects_scope_too_narrow() {
+        render_expectation_validation_error("A", "Question", ERROR_SCOPE_TOO_NARROW, "scope");
+    }
+
+    #[test]
     fn duplicate_expectation_ids_are_rejected_even_when_targets_differ() {
         let agent = AgentConfig::default();
-        let mut presets = BTreeMap::new();
-        presets.insert("default".to_string(), preset(&agent));
         let expectation = |target| Expectation {
             q: "Does this behavior work?".to_string(),
             a: "yes".to_string(),
-            instructions: String::new(),
+            question_context: String::new(),
             diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
+            diff_from_configured: false,
             target,
             question_answer_only: false,
             agent: agent.clone(),
@@ -401,10 +409,10 @@ mod tests {
         };
         let config = CheckConfig {
             version: 1,
-            presets,
             agent: agent.clone(),
             expectations: vec![
                 expectation(None),
+                expectation(Some(ExpectationTarget::Project)),
                 expectation(Some(ExpectationTarget::Diff)),
             ],
         };
@@ -421,14 +429,5 @@ mod tests {
         push_config_error_unicode_escape(&mut escaped, '\u{1f600}');
 
         assert_eq!(escaped, "\\ud83d\\ude00");
-    }
-
-    fn preset(agent: &AgentConfig) -> ResolvedPresetConfig {
-        let mut preset = ResolvedPresetConfig::default();
-        preset.common.settings.models = Some(agent.models.clone());
-        preset.common.settings.thinking = Some(agent.thinking.clone());
-        preset.common.settings.ignore = Some(agent.ignore.clone());
-        preset.common.settings.plugins = Some(agent.plugins.clone());
-        preset
     }
 }

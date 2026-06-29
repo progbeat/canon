@@ -1,5 +1,6 @@
 use serde::{de, Deserialize};
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 
 pub(crate) const ERROR_SCOPE_TOO_NARROW: &str = "ScopeTooNarrow";
 pub(crate) const ERROR_INVALID_QUESTION: &str = "InvalidQuestion";
@@ -9,10 +10,13 @@ pub(crate) const ANSWER_PATTERN: &str = "^[-_a-z0-9]+$";
 pub(crate) enum EvaluatorResponseSchemaScope {
     Restricted,
     FullProject,
+    WithoutQuestionScopeSuggestion,
 }
 
 impl EvaluatorResponseSchemaScope {
-    pub(crate) fn for_q_scope(q_scope: &[String]) -> EvaluatorResponseSchemaScope {
+    pub(crate) fn for_scope_with_question_scope_suggestion(
+        q_scope: &[String],
+    ) -> EvaluatorResponseSchemaScope {
         // Interrogation Policy defines full project scope as exactly q-scope
         // ["."], before configured ignore exclusions are applied.
         if q_scope.len() == 1 && q_scope[0] == "." {
@@ -28,8 +32,11 @@ impl EvaluatorResponseSchemaScope {
             EvaluatorResponseSchemaScope::Restricted => {
                 json!([ERROR_SCOPE_TOO_NARROW, ERROR_INVALID_QUESTION])
             }
-            // Full-project-scope interrogations disable ScopeTooNarrow.
-            EvaluatorResponseSchemaScope::FullProject => json!([ERROR_INVALID_QUESTION]),
+            // Full-project-scope and no-suggestion schemas disable ScopeTooNarrow.
+            EvaluatorResponseSchemaScope::FullProject
+            | EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion => {
+                json!([ERROR_INVALID_QUESTION])
+            }
         }
     }
 
@@ -38,8 +45,18 @@ impl EvaluatorResponseSchemaScope {
             EvaluatorResponseSchemaScope::Restricted => {
                 matches!(error, ERROR_SCOPE_TOO_NARROW | ERROR_INVALID_QUESTION)
             }
-            EvaluatorResponseSchemaScope::FullProject => error == ERROR_INVALID_QUESTION,
+            EvaluatorResponseSchemaScope::FullProject
+            | EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion => {
+                error == ERROR_INVALID_QUESTION
+            }
         }
+    }
+
+    fn requires_question_scope_suggestion(self) -> bool {
+        matches!(
+            self,
+            EvaluatorResponseSchemaScope::Restricted | EvaluatorResponseSchemaScope::FullProject
+        )
     }
 }
 
@@ -86,16 +103,57 @@ impl ParsedAnswer {
     }
 }
 
-pub(crate) fn parse_evaluator_response(
+pub(crate) fn parse_evaluator_response_for_short_id(
     text: &str,
     schema_scope: EvaluatorResponseSchemaScope,
-) -> Result<ParsedAnswer, String> {
-    let response = parse_evaluator_response_json(text)?;
-    response.into_schema_valid_parsed_answer(schema_scope)
+    short_id: &str,
+    answered_short_ids: &[String],
+) -> Result<ParsedAnswer, EvaluatorResponseParseError> {
+    let response = parse_evaluator_response_json(text, schema_scope, short_id, answered_short_ids)?;
+    response
+        .into_schema_valid_parsed_answer(schema_scope)
+        .map_err(EvaluatorResponseParseError::Schema)
 }
 
-pub(crate) fn evaluator_response_json_schema(schema_scope: EvaluatorResponseSchemaScope) -> Value {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum EvaluatorResponseParseError {
+    Schema(String),
+    ShortIdResponse(String),
+}
+
+impl EvaluatorResponseParseError {
+    pub(crate) fn is_short_id_response_error(&self) -> bool {
+        matches!(self, EvaluatorResponseParseError::ShortIdResponse(_))
+    }
+
+    #[cfg(test)]
+    fn contains(&self, value: &str) -> bool {
+        self.to_string().contains(value)
+    }
+}
+
+impl std::fmt::Display for EvaluatorResponseParseError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EvaluatorResponseParseError::Schema(error)
+            | EvaluatorResponseParseError::ShortIdResponse(error) => formatter.write_str(error),
+        }
+    }
+}
+
+#[cfg(test)]
+fn evaluator_response_json_schema(schema_scope: EvaluatorResponseSchemaScope) -> Value {
     json!({
+        "type": "object",
+        "propertyNames": {
+            "pattern": "^[A-Za-z0-9]+$",
+        },
+        "additionalProperties": evaluator_response_result_json_schema(schema_scope),
+    })
+}
+
+fn evaluator_response_result_json_schema(schema_scope: EvaluatorResponseSchemaScope) -> Value {
+    let mut schema = json!({
         "type": "object",
         "properties": {
             "answer": {
@@ -109,30 +167,56 @@ pub(crate) fn evaluator_response_json_schema(schema_scope: EvaluatorResponseSche
             "evidence": {
                 "type": "string",
             },
-            "qScopeSuggestion": {
-                "type": "array",
-                "minItems": 1,
-                "items": {
-                    "type": "string",
-                    "minLength": 1,
-                    "pattern": "^[^\\r\\n]*$",
-                },
-            },
         },
-        "required": ["evidence", "qScopeSuggestion"],
+        "required": ["evidence"],
         "oneOf": [
             {"required": ["answer"], "not": { "required": ["error"] }},
             {"required": ["error"], "not": { "required": ["answer"] }},
         ],
         "additionalProperties": false,
-    })
+    });
+    if schema_scope.requires_question_scope_suggestion() {
+        // Interrogations that may hide files outside the visible scope require
+        // qScopeSuggestion, even when the q-scope is full project before
+        // configured ignore exclusions. A full-scope first turn can still
+        // propose a narrower reusable q-scope. Check modes that never hide
+        // files use WithoutQuestionScopeSuggestion and omit qScopeSuggestion.
+        schema["properties"]["qScopeSuggestion"] = json!({
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[^\\r\\n]*$",
+            },
+        });
+        schema["required"] = json!(["evidence", "qScopeSuggestion"]);
+    }
+    schema
 }
 
-pub(crate) fn evaluator_response_output_schema_for_q_scope(q_scope: &[String]) -> Value {
-    match EvaluatorResponseSchemaScope::for_q_scope(q_scope) {
-        EvaluatorResponseSchemaScope::Restricted => restricted_evaluator_response_output_schema(),
+pub(crate) fn evaluator_response_output_schema_for_scope(
+    schema_scope: EvaluatorResponseSchemaScope,
+    short_id: &str,
+) -> Value {
+    // Interrogation Policy navigation: this module only builds and validates
+    // the response schema for one evaluator turn. Follow-up sequencing for
+    // check runs lives in `src/check/run/execute/expectation.rs`; query-mode
+    // sequencing lives in `src/check/interrogation/query/mod.rs`; the
+    // q-scope verification gate and acceptance matrix live in
+    // `src/check/interrogation/policy.rs`; model retry order and thinking
+    // selection flow through `src/check/interrogation/session/model_fallback.rs`,
+    // `src/check/interrogation/session/thread.rs`, and
+    // `src/check/interrogation/state.rs`.
+    match schema_scope {
+        EvaluatorResponseSchemaScope::Restricted => {
+            restricted_evaluator_response_output_schema(short_id)
+        }
         EvaluatorResponseSchemaScope::FullProject => {
-            full_project_evaluator_response_output_schema()
+            full_project_evaluator_response_output_schema(short_id)
+        }
+        EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion => {
+            without_question_scope_suggestion_evaluator_response_output_schema(short_id)
         }
     }
 }
@@ -142,45 +226,66 @@ fn evaluator_response_output_schema_for_schema_scope(
     schema_scope: EvaluatorResponseSchemaScope,
 ) -> Value {
     match schema_scope {
-        EvaluatorResponseSchemaScope::Restricted => restricted_evaluator_response_output_schema(),
+        EvaluatorResponseSchemaScope::Restricted => {
+            restricted_evaluator_response_output_schema("q")
+        }
         EvaluatorResponseSchemaScope::FullProject => {
-            full_project_evaluator_response_output_schema()
+            full_project_evaluator_response_output_schema("q")
+        }
+        EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion => {
+            without_question_scope_suggestion_evaluator_response_output_schema("q")
         }
     }
 }
 
-fn restricted_evaluator_response_output_schema() -> Value {
+fn restricted_evaluator_response_output_schema(short_id: &str) -> Value {
     evaluator_response_output_schema_with_error_enum(
         EvaluatorResponseSchemaScope::Restricted,
         json!([ERROR_SCOPE_TOO_NARROW, ERROR_INVALID_QUESTION, null]),
+        short_id,
     )
 }
 
-fn full_project_evaluator_response_output_schema() -> Value {
+fn full_project_evaluator_response_output_schema(short_id: &str) -> Value {
     // This value is sent as turn/start.params.outputSchema for q-scope ["."],
     // so the app server cannot return ScopeTooNarrow as a schema-valid
-    // full-project-scope response.
+    // full-project-scope response. It still requires qScopeSuggestion because
+    // Git-backed full-scope turns can seed a narrower q-scope.
     evaluator_response_output_schema_with_error_enum(
         EvaluatorResponseSchemaScope::FullProject,
         json!([ERROR_INVALID_QUESTION, null]),
+        short_id,
+    )
+}
+
+fn without_question_scope_suggestion_evaluator_response_output_schema(short_id: &str) -> Value {
+    evaluator_response_output_schema_with_error_enum(
+        EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion,
+        json!([ERROR_INVALID_QUESTION, null]),
+        short_id,
     )
 }
 
 fn evaluator_response_output_schema_with_error_enum(
     schema_scope: EvaluatorResponseSchemaScope,
     output_error_enum: Value,
+    short_id: &str,
 ) -> Value {
     // Codex app-server structured output requires every object property to be
     // listed in `required` and represents optional fields as nullable types.
     // Parsing removes those null placeholders; `validate_schema` then applies
     // the Interrogation Policy's canonical exactly-one validation.
-    let mut schema = evaluator_response_json_schema(schema_scope);
+    let mut schema = evaluator_response_result_json_schema(schema_scope);
     let object = schema
         .as_object_mut()
         .expect("evaluator response schema is an object");
     object.insert(
         "required".to_string(),
-        json!(["answer", "error", "evidence", "qScopeSuggestion"]),
+        if schema_scope.requires_question_scope_suggestion() {
+            json!(["answer", "error", "evidence", "qScopeSuggestion"])
+        } else {
+            json!(["answer", "error", "evidence"])
+        },
     );
     object.remove("oneOf");
     let properties = object
@@ -195,7 +300,14 @@ fn evaluator_response_output_schema_with_error_enum(
         .expect("evaluator response schema has error");
     error["type"] = json!(["string", "null"]);
     error["enum"] = output_error_enum;
-    schema
+    let mut properties = serde_json::Map::new();
+    properties.insert(short_id.to_string(), schema);
+    json!({
+        "type": "object",
+        "properties": Value::Object(properties),
+        "required": [short_id],
+        "additionalProperties": false,
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -207,10 +319,11 @@ pub(crate) struct EvaluatorResponseJson {
     pub(crate) error: Option<String>,
     pub(crate) evidence: String,
     #[serde(
+        default,
         rename = "qScopeSuggestion",
-        deserialize_with = "deserialize_question_scope_suggestion"
+        deserialize_with = "deserialize_optional_question_scope_suggestion"
     )]
-    pub(crate) question_scope_suggestion: Vec<String>,
+    pub(crate) question_scope_suggestion: Option<Vec<String>>,
 }
 
 impl EvaluatorResponseJson {
@@ -219,26 +332,26 @@ impl EvaluatorResponseJson {
         schema_scope: EvaluatorResponseSchemaScope,
     ) -> Result<ParsedAnswer, String> {
         self.validate_schema(schema_scope)?;
+        let question_scope_suggestion = self.question_scope_suggestion;
         if let Some(answer) = self.answer {
             // Pass/fail comparison happens after parsing against the
             // expectation's current expected answer.
             return Ok(ParsedAnswer::answer(
                 answer,
                 self.evidence,
-                Some(self.question_scope_suggestion),
+                question_scope_suggestion,
             ));
         }
         let error = self
             .error
             .expect("schema validation ensures error is present");
-        // The Interrogation Policy schema permits qScopeSuggestion on an error
-        // response too. Preserve it for schema fidelity and diagnostics;
-        // narrowing policy still consumes suggestions only from answer
-        // responses.
+        // Restricted-scope schema permits qScopeSuggestion on an error response
+        // too. Preserve it for schema fidelity and diagnostics; narrowing
+        // policy still consumes suggestions only from answer responses.
         Ok(ParsedAnswer::error_with_question_scope_suggestion(
             error,
             self.evidence,
-            Some(self.question_scope_suggestion),
+            question_scope_suggestion,
         ))
     }
 
@@ -263,35 +376,111 @@ impl EvaluatorResponseJson {
                 return Err(format!("unsupported evaluator error: {}", error));
             }
         }
-        if self.question_scope_suggestion.is_empty() {
-            return Err("qScopeSuggestion must contain at least one item".to_string());
-        }
-        for item in &self.question_scope_suggestion {
-            if item.is_empty() || contains_schema_single_line_violation(item) {
-                return Err(
-                    "qScopeSuggestion items must be non-empty single-line strings".to_string(),
-                );
+        match (schema_scope, self.question_scope_suggestion.as_ref()) {
+            (
+                EvaluatorResponseSchemaScope::Restricted
+                | EvaluatorResponseSchemaScope::FullProject,
+                Some(items),
+            ) => {
+                if items.is_empty() {
+                    return Err("qScopeSuggestion must contain at least one item".to_string());
+                }
+                for item in items {
+                    if item.is_empty() || contains_schema_single_line_violation(item) {
+                        return Err(
+                            "qScopeSuggestion items must be non-empty single-line strings"
+                                .to_string(),
+                        );
+                    }
+                }
             }
+            (
+                EvaluatorResponseSchemaScope::Restricted
+                | EvaluatorResponseSchemaScope::FullProject,
+                None,
+            ) => {
+                return Err("qScopeSuggestion is required".to_string());
+            }
+            (EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion, Some(_)) => {
+                return Err("qScopeSuggestion must be omitted when no files are hidden".to_string());
+            }
+            (EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion, None) => {}
         }
         Ok(())
     }
 }
 
-pub(crate) fn parse_evaluator_response_json(text: &str) -> Result<EvaluatorResponseJson, String> {
+pub(crate) fn parse_evaluator_response_json(
+    text: &str,
+    _schema_scope: EvaluatorResponseSchemaScope,
+    short_id: &str,
+    answered_short_ids: &[String],
+) -> Result<EvaluatorResponseJson, EvaluatorResponseParseError> {
     let payload = evaluator_response_json_payload(text)?;
-    let mut raw = serde_json::from_str::<Value>(payload)
-        .map_err(|err| format!("failed to parse evaluator JSON response: {}", err))?;
-    normalize_output_schema_null_placeholders(&mut raw)?;
-    serde_json::from_value::<EvaluatorResponseJson>(raw)
-        .map_err(|err| format!("failed to parse evaluator JSON response: {}", err))
+    let mut raw = serde_json::from_str::<Value>(payload).map_err(|err| {
+        EvaluatorResponseParseError::Schema(format!(
+            "failed to parse evaluator JSON response: {}",
+            err
+        ))
+    })?;
+    let object = raw.as_object_mut().ok_or_else(|| {
+        EvaluatorResponseParseError::Schema("evaluator response must be a JSON object".to_string())
+    })?;
+    for key in object.keys() {
+        if !matches_short_id_pattern(key) {
+            return Err(EvaluatorResponseParseError::Schema(format!(
+                "evaluator response short ID must match pattern ^[A-Za-z0-9]+$: {}",
+                key
+            )));
+        }
+    }
+    let answered = answered_short_ids.iter().cloned().collect::<BTreeSet<_>>();
+    for key in object.keys() {
+        if answered.contains(key) {
+            return Err(EvaluatorResponseParseError::ShortIdResponse(format!(
+                "evaluator response returned already answered short ID `{}`",
+                key
+            )));
+        }
+    }
+    if !object.contains_key(short_id) {
+        return Err(EvaluatorResponseParseError::ShortIdResponse(format!(
+            "evaluator response did not contain short ID `{}`",
+            short_id
+        )));
+    }
+    if let Some(key) = object.keys().find(|key| key.as_str() != short_id) {
+        return Err(EvaluatorResponseParseError::ShortIdResponse(format!(
+            "evaluator response returned unrequested short ID `{}`",
+            key
+        )));
+    }
+    for value in object.values_mut() {
+        normalize_output_schema_null_placeholders(value)?;
+    }
+    let response = object
+        .remove(short_id)
+        .expect("requested short ID was checked above");
+    serde_json::from_value::<EvaluatorResponseJson>(response).map_err(|err| {
+        EvaluatorResponseParseError::Schema(format!(
+            "failed to parse evaluator JSON response for short ID `{}`: {}",
+            short_id, err
+        ))
+    })
 }
 
-fn normalize_output_schema_null_placeholders(raw: &mut Value) -> Result<(), String> {
+fn normalize_output_schema_null_placeholders(
+    raw: &mut Value,
+) -> Result<(), EvaluatorResponseParseError> {
     let Some(object) = raw.as_object_mut() else {
-        return Err("evaluator response must be a JSON object".to_string());
+        return Err(EvaluatorResponseParseError::Schema(
+            "evaluator response result must be a JSON object".to_string(),
+        ));
     };
     if object.get("qScopeSuggestion").is_some_and(Value::is_null) {
-        return Err("qScopeSuggestion must not be null".to_string());
+        return Err(EvaluatorResponseParseError::Schema(
+            "qScopeSuggestion must not be null".to_string(),
+        ));
     }
     for key in ["answer", "error"] {
         if object.get(key).is_some_and(Value::is_null) {
@@ -301,19 +490,31 @@ fn normalize_output_schema_null_placeholders(raw: &mut Value) -> Result<(), Stri
     Ok(())
 }
 
-pub(crate) fn evaluator_response_json_payload(text: &str) -> Result<&str, String> {
+pub(crate) fn evaluator_response_json_payload(
+    text: &str,
+) -> Result<&str, EvaluatorResponseParseError> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
-        return Err("evaluator response must be a JSON object".to_string());
+        return Err(EvaluatorResponseParseError::Schema(
+            "evaluator response must be a JSON object".to_string(),
+        ));
     }
     let mut deserializer = serde_json::Deserializer::from_str(trimmed);
-    serde_json::Value::deserialize(&mut deserializer)
-        .map_err(|err| format!("failed to inspect evaluator JSON response: {}", err))?;
-    deserializer
-        .end()
-        .map_err(|_| "evaluator response must not contain surrounding prose".to_string())?;
+    serde_json::Value::deserialize(&mut deserializer).map_err(|err| {
+        EvaluatorResponseParseError::Schema(format!(
+            "failed to inspect evaluator JSON response: {}",
+            err
+        ))
+    })?;
+    deserializer.end().map_err(|_| {
+        EvaluatorResponseParseError::Schema(
+            "evaluator response must not contain surrounding prose".to_string(),
+        )
+    })?;
     if !trimmed.starts_with('{') {
-        return Err("evaluator response must be a JSON object".to_string());
+        return Err(EvaluatorResponseParseError::Schema(
+            "evaluator response must be a JSON object".to_string(),
+        ));
     }
     Ok(trimmed)
 }
@@ -330,6 +531,10 @@ pub(crate) fn matches_answer_pattern(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| matches!(byte, b'-' | b'_' | b'0'..=b'9' | b'a'..=b'z'))
+}
+
+fn matches_short_id_pattern(value: &str) -> bool {
+    !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
 }
 
 fn deserialize_optional_answer<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
@@ -365,7 +570,9 @@ where
         .map_err(de::Error::custom)
 }
 
-fn deserialize_question_scope_suggestion<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+fn deserialize_optional_question_scope_suggestion<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<String>>, D::Error>
 where
     D: de::Deserializer<'de>,
 {
@@ -373,45 +580,168 @@ where
     if value.is_null() {
         return Err(de::Error::custom("qScopeSuggestion must not be null"));
     }
-    Vec::<String>::deserialize(value).map_err(de::Error::custom)
+    Vec::<String>::deserialize(value)
+        .map(Some)
+        .map_err(de::Error::custom)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         evaluator_response_json_schema, evaluator_response_output_schema_for_schema_scope,
-        parse_evaluator_response, parse_evaluator_response_json, EvaluatorResponseJson,
-        EvaluatorResponseSchemaScope, ANSWER_PATTERN, ERROR_INVALID_QUESTION,
-        ERROR_SCOPE_TOO_NARROW,
+        EvaluatorResponseJson, EvaluatorResponseParseError, EvaluatorResponseSchemaScope,
+        ANSWER_PATTERN, ERROR_INVALID_QUESTION, ERROR_SCOPE_TOO_NARROW,
     };
     use serde_json::json;
+
+    fn parse_evaluator_response(
+        result_json: &str,
+        schema_scope: EvaluatorResponseSchemaScope,
+    ) -> Result<super::ParsedAnswer, EvaluatorResponseParseError> {
+        super::parse_evaluator_response_for_short_id(
+            &keyed_response(result_json),
+            schema_scope,
+            "q",
+            &[],
+        )
+    }
+
+    fn parse_evaluator_response_json(
+        result_json: &str,
+    ) -> Result<EvaluatorResponseJson, EvaluatorResponseParseError> {
+        super::parse_evaluator_response_json(
+            &keyed_response(result_json),
+            EvaluatorResponseSchemaScope::Restricted,
+            "q",
+            &[],
+        )
+    }
+
+    fn keyed_response(result_json: &str) -> String {
+        format!(r#"{{"q":{}}}"#, result_json)
+    }
+
+    #[test]
+    fn evaluator_response_requires_the_requested_short_id() {
+        let error = super::parse_evaluator_response_for_short_id(
+            &keyed_response(
+                r#"{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":["."]}"#,
+            ),
+            EvaluatorResponseSchemaScope::Restricted,
+            "other",
+            &[],
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            EvaluatorResponseParseError::ShortIdResponse(_)
+        ));
+        assert!(error.contains("other"));
+    }
+
+    #[test]
+    fn evaluator_response_rejects_already_answered_short_id() {
+        let error = super::parse_evaluator_response_for_short_id(
+            &keyed_response(
+                r#"{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":["."]}"#,
+            ),
+            EvaluatorResponseSchemaScope::Restricted,
+            "q",
+            &["q".to_string()],
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            EvaluatorResponseParseError::ShortIdResponse(_)
+        ));
+        assert!(error.contains("already answered"));
+    }
+
+    #[test]
+    fn evaluator_response_rejects_unrequested_short_id() {
+        let error = super::parse_evaluator_response_for_short_id(
+            r#"{
+                "q":{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":["."]},
+                "other":{"answer":"yes","evidence":"`src/lib.rs`","qScopeSuggestion":["."]}
+            }"#,
+            EvaluatorResponseSchemaScope::Restricted,
+            "q",
+            &[],
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            EvaluatorResponseParseError::ShortIdResponse(_)
+        ));
+        assert!(error.contains("unrequested short ID `other`"));
+    }
 
     #[test]
     fn restricted_evaluator_response_json_schema_matches_interrogation_policy() {
         let schema = evaluator_response_json_schema(EvaluatorResponseSchemaScope::Restricted);
+        let result_schema = &schema["additionalProperties"];
 
-        assert_eq!(schema["required"], json!(["evidence", "qScopeSuggestion"]));
-        assert_eq!(schema["properties"]["answer"]["type"], json!("string"));
+        assert_eq!(schema["propertyNames"]["pattern"], json!("^[A-Za-z0-9]+$"));
         assert_eq!(
-            schema["properties"]["answer"]["pattern"],
+            result_schema["required"],
+            json!(["evidence", "qScopeSuggestion"])
+        );
+        assert_eq!(
+            result_schema["properties"]["answer"]["type"],
+            json!("string")
+        );
+        assert_eq!(
+            result_schema["properties"]["answer"]["pattern"],
             json!(ANSWER_PATTERN)
         );
-        assert_eq!(schema["properties"]["error"]["type"], json!("string"));
         assert_eq!(
-            schema["properties"]["error"]["enum"],
+            result_schema["properties"]["error"]["type"],
+            json!("string")
+        );
+        assert_eq!(
+            result_schema["properties"]["error"]["enum"],
             json!([ERROR_SCOPE_TOO_NARROW, ERROR_INVALID_QUESTION])
         );
-        assert_eq!(schema["oneOf"][0]["required"], json!(["answer"]));
-        assert_eq!(schema["oneOf"][1]["required"], json!(["error"]));
-        assert_eq!(schema["additionalProperties"], json!(false));
+        assert_eq!(result_schema["oneOf"][0]["required"], json!(["answer"]));
+        assert_eq!(result_schema["oneOf"][1]["required"], json!(["error"]));
+        assert_eq!(result_schema["additionalProperties"], json!(false));
     }
 
     #[test]
     fn full_project_evaluator_response_json_schema_disables_scope_too_narrow() {
         let schema = evaluator_response_json_schema(EvaluatorResponseSchemaScope::FullProject);
+        let result_schema = &schema["additionalProperties"];
 
         assert_eq!(
-            schema["properties"]["error"]["enum"],
+            result_schema["required"],
+            json!(["evidence", "qScopeSuggestion"])
+        );
+        assert!(result_schema["properties"]
+            .get("qScopeSuggestion")
+            .is_some());
+        assert_eq!(
+            result_schema["properties"]["error"]["enum"],
+            json!([ERROR_INVALID_QUESTION])
+        );
+    }
+
+    #[test]
+    fn without_question_scope_suggestion_evaluator_response_json_schema_omits_question_scope_suggestion(
+    ) {
+        let schema = evaluator_response_json_schema(
+            EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion,
+        );
+        let result_schema = &schema["additionalProperties"];
+
+        assert_eq!(result_schema["required"], json!(["evidence"]));
+        assert!(result_schema["properties"]
+            .get("qScopeSuggestion")
+            .is_none());
+        assert_eq!(
+            result_schema["properties"]["error"]["enum"],
             json!([ERROR_INVALID_QUESTION])
         );
     }
@@ -421,24 +751,27 @@ mod tests {
         let schema = evaluator_response_output_schema_for_schema_scope(
             EvaluatorResponseSchemaScope::Restricted,
         );
+        let result_schema = &schema["properties"]["q"];
 
+        assert_eq!(schema["required"], json!(["q"]));
+        assert_eq!(schema["additionalProperties"], json!(false));
         assert_eq!(
-            schema["required"],
+            result_schema["required"],
             json!(["answer", "error", "evidence", "qScopeSuggestion"])
         );
         assert_eq!(
-            schema["properties"]["answer"]["type"],
+            result_schema["properties"]["answer"]["type"],
             json!(["string", "null"])
         );
         assert_eq!(
-            schema["properties"]["error"]["type"],
+            result_schema["properties"]["error"]["type"],
             json!(["string", "null"])
         );
         assert_eq!(
-            schema["properties"]["error"]["enum"],
+            result_schema["properties"]["error"]["enum"],
             json!([ERROR_SCOPE_TOO_NARROW, ERROR_INVALID_QUESTION, null])
         );
-        assert!(schema.get("oneOf").is_none());
+        assert!(result_schema.get("oneOf").is_none());
     }
 
     #[test]
@@ -446,18 +779,48 @@ mod tests {
         let schema = evaluator_response_output_schema_for_schema_scope(
             EvaluatorResponseSchemaScope::FullProject,
         );
+        let result_schema = &schema["properties"]["q"];
 
         assert_eq!(
-            schema["properties"]["error"]["enum"],
+            result_schema["required"],
+            json!(["answer", "error", "evidence", "qScopeSuggestion"])
+        );
+        assert!(result_schema["properties"]
+            .get("qScopeSuggestion")
+            .is_some());
+        assert_eq!(
+            result_schema["properties"]["error"]["enum"],
             json!([ERROR_INVALID_QUESTION, null])
         );
-        assert!(schema.get("oneOf").is_none());
+        assert!(result_schema.get("oneOf").is_none());
+    }
+
+    #[test]
+    fn without_question_scope_suggestion_evaluator_response_output_schema_omits_question_scope_suggestion(
+    ) {
+        let schema = evaluator_response_output_schema_for_schema_scope(
+            EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion,
+        );
+        let result_schema = &schema["properties"]["q"];
+
+        assert_eq!(
+            result_schema["required"],
+            json!(["answer", "error", "evidence"])
+        );
+        assert!(result_schema["properties"]
+            .get("qScopeSuggestion")
+            .is_none());
+        assert_eq!(
+            result_schema["properties"]["error"]["enum"],
+            json!([ERROR_INVALID_QUESTION, null])
+        );
+        assert!(result_schema.get("oneOf").is_none());
     }
 
     #[test]
     fn full_project_evaluator_response_rejects_scope_too_narrow() {
         let error = parse_evaluator_response(
-            r#"{"error":"ScopeTooNarrow","evidence":"scope","qScopeSuggestion":["."]}"#,
+            r#"{"error":"ScopeTooNarrow","evidence":"scope"}"#,
             EvaluatorResponseSchemaScope::FullProject,
         )
         .unwrap_err();
@@ -466,9 +829,62 @@ mod tests {
     }
 
     #[test]
-    fn evaluator_response_requires_question_scope_suggestion() {
-        let error = parse_evaluator_response_json(r#"{"answer":"yes","evidence":"`src/main.rs`"}"#)
+    fn restricted_evaluator_response_requires_question_scope_suggestion() {
+        let response =
+            parse_evaluator_response_json(r#"{"answer":"yes","evidence":"`src/main.rs`"}"#)
+                .unwrap();
+        let error = response
+            .validate_schema(EvaluatorResponseSchemaScope::Restricted)
             .unwrap_err();
+
+        assert!(error.contains("qScopeSuggestion"));
+    }
+
+    #[test]
+    fn full_project_evaluator_response_requires_question_scope_suggestion() {
+        let response =
+            parse_evaluator_response_json(r#"{"answer":"yes","evidence":"`src/main.rs`"}"#)
+                .unwrap();
+        let error = response
+            .validate_schema(EvaluatorResponseSchemaScope::FullProject)
+            .unwrap_err();
+
+        assert!(error.contains("qScopeSuggestion"));
+    }
+
+    #[test]
+    fn without_question_scope_suggestion_evaluator_response_omits_question_scope_suggestion() {
+        let response = parse_evaluator_response(
+            r#"{"answer":"yes","evidence":"`src/main.rs`"}"#,
+            EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion,
+        )
+        .unwrap();
+
+        assert_eq!(response.answer, "yes");
+        assert_eq!(response.question_scope_suggestion, None);
+    }
+
+    #[test]
+    fn full_project_evaluator_response_accepts_question_scope_suggestion() {
+        let response = parse_evaluator_response(
+            r#"{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":["src/main.rs"]}"#,
+            EvaluatorResponseSchemaScope::FullProject,
+        )
+        .unwrap();
+
+        assert_eq!(
+            response.question_scope_suggestion,
+            Some(vec!["src/main.rs".to_string()])
+        );
+    }
+
+    #[test]
+    fn without_question_scope_suggestion_evaluator_response_rejects_question_scope_suggestion() {
+        let error = parse_evaluator_response(
+            r#"{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":["."]}"#,
+            EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion,
+        )
+        .unwrap_err();
 
         assert!(error.contains("qScopeSuggestion"));
     }
@@ -509,7 +925,10 @@ mod tests {
         response
             .validate_schema(EvaluatorResponseSchemaScope::Restricted)
             .unwrap();
-        assert_eq!(response.question_scope_suggestion, vec!["src/main.rs"]);
+        assert_eq!(
+            response.question_scope_suggestion,
+            Some(vec!["src/main.rs".to_string()])
+        );
     }
 
     #[test]
@@ -545,7 +964,7 @@ mod tests {
                 answer: Some(invalid_answer.to_string()),
                 error: None,
                 evidence: "ok".to_string(),
-                question_scope_suggestion: vec![".".to_string()],
+                question_scope_suggestion: Some(vec![".".to_string()]),
             };
 
             assert!(response
@@ -561,7 +980,7 @@ mod tests {
             answer: None,
             error: Some("TechnicalFailure".to_string()),
             evidence: "ok".to_string(),
-            question_scope_suggestion: vec![".".to_string()],
+            question_scope_suggestion: Some(vec![".".to_string()]),
         };
 
         assert!(response
@@ -597,7 +1016,7 @@ mod tests {
             answer: Some("yes".to_string()),
             error: None,
             evidence: "ok".to_string(),
-            question_scope_suggestion: vec!["src\u{2028}main.rs".to_string()],
+            question_scope_suggestion: Some(vec!["src\u{2028}main.rs".to_string()]),
         };
         assert!(schema_valid_unicode_separator
             .validate_schema(EvaluatorResponseSchemaScope::Restricted)
@@ -607,7 +1026,7 @@ mod tests {
             answer: Some("yes".to_string()),
             error: None,
             evidence: "ok".to_string(),
-            question_scope_suggestion: vec!["src\nmain.rs".to_string()],
+            question_scope_suggestion: Some(vec!["src\nmain.rs".to_string()]),
         };
         assert!(schema_invalid_crlf
             .validate_schema(EvaluatorResponseSchemaScope::Restricted)

@@ -4,11 +4,12 @@ use crate::check::{
     write_agent_turn_failure_event, write_agent_turn_missing_usage_event,
     write_agent_turn_request_event, write_agent_turn_response_event,
 };
-use crate::evaluator::{EvaluatorError, EvaluatorRunner, EVALUATOR_BASE_INSTRUCTIONS};
+use crate::evaluator::{EvaluatorError, EvaluatorRunner};
 use crate::logs::{
     AgentTurnLogRequest, DiagnosticLogResult, DiagnosticLogWriter, ThreadLifecycleEventFields,
     ThreadRestartEventFields,
 };
+use serde_json::Value;
 
 pub(super) struct LoggedTurnRequest<'a> {
     pub(super) turn: &'a EvaluatorTurnContext<'a>,
@@ -16,7 +17,7 @@ pub(super) struct LoggedTurnRequest<'a> {
     pub(super) expectation_id: Option<&'a str>,
     pub(super) attempt: usize,
     pub(super) reason: &'a str,
-    pub(super) q_scope: &'a [String],
+    pub(super) output_schema: &'a Value,
 }
 
 pub(super) fn ask_and_log<R: EvaluatorRunner>(
@@ -43,7 +44,7 @@ pub(super) fn ask_and_log<R: EvaluatorRunner>(
         request.prompt,
         request.turn.model,
         request.turn.thinking,
-        request.q_scope,
+        request.output_schema,
     ) {
         Ok(response) => response,
         Err(err) => {
@@ -137,8 +138,9 @@ pub(crate) fn write_thread_lifecycle_event(
                 scope: enforced_scope,
                 model,
                 thinking,
-                base_instructions: EVALUATOR_BASE_INSTRUCTIONS,
+                base_instructions: &lifecycle_log.base_instructions,
                 developer_instructions: &lifecycle_log.developer_instructions,
+                reuse_context: &lifecycle_log.reuse_context,
             },
         )
     });
@@ -146,23 +148,22 @@ pub(crate) fn write_thread_lifecycle_event(
 
 pub(crate) fn write_thread_restart_event(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    session_id: &str,
+    lifecycle_log: &ThreadLifecycleLog,
     expectation_id: Option<&str>,
     enforced_scope: &[String],
     model: Option<&str>,
-    developer_instructions: &str,
     reason: &str,
 ) {
     write_optional_diagnostic_log(diagnostic_log, |writer| {
         crate::logs::write_thread_restart_event(
             writer,
             &ThreadRestartEventFields {
-                session_id,
+                session_id: &lifecycle_log.session_id,
                 expectation_id,
                 scope: enforced_scope,
                 model,
-                base_instructions: EVALUATOR_BASE_INSTRUCTIONS,
-                developer_instructions,
+                base_instructions: &lifecycle_log.base_instructions,
+                developer_instructions: &lifecycle_log.developer_instructions,
                 reason,
             },
         )

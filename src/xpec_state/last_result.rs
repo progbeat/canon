@@ -1,7 +1,6 @@
 use crate::check::{CheckRecord, CheckResult, SelectedExpectation};
 use crate::fs_util::{ensure_dir_without_symlinks, reject_symlink, write_temp_file_then_replace};
 use crate::git::{TreeSource, VisibleTreeOidCache};
-use crate::hash::full_scope;
 use crate::scope::visible_scope;
 use crate::time::{format_record_timestamp, parse_record_timestamp, unix_timestamp};
 use serde::{Deserialize, Serialize};
@@ -52,7 +51,9 @@ impl LastResultStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct LastResult {
     // This struct is the persisted last-result schema. Prompt-rendering inputs
-    // such as `diff-from` are intentionally not part of this state record.
+    // such as `diff-from` are intentionally not part of this state record. The
+    // containing xpec directory is keyed by the full expectation ID; the JSON
+    // body does not persist the expectation ID or human display prefix.
     #[serde(rename = "responseTimestamp")]
     pub(crate) response_timestamp: String,
     #[serde(rename = "updatedTimestamp")]
@@ -94,59 +95,27 @@ impl LastResult {
             .to_string()
     }
 
-    pub(crate) fn question_scope_suggestion(&self) -> Option<Vec<String>> {
+    fn question_scope_suggestion(&self) -> Option<Vec<String>> {
+        // Last-result `response` is the normalized evaluator response; the
+        // applied q-scope is stored separately in `qScope`.
         self.response
             .get("qScopeSuggestion")?
-            .as_array()
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .filter(|items| !items.is_empty())
+            .as_array()?
+            .iter()
+            .map(|value| value.as_str().map(str::to_string))
+            .collect()
     }
 }
 
 impl XpecStateCache {
-    pub(crate) fn read_stored_q_scope_file(
-        &mut self,
-        root: &Path,
-        expectation: &SelectedExpectation,
-    ) -> Result<Option<Option<Vec<String>>>, String> {
-        let path = self.stored_q_scope_path(root, expectation)?;
-        reject_symlink(&path)?;
-        let content = match fs::read_to_string(&path) {
-            Ok(content) => content,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(err) => return Err(format!("failed to read {}: {}", path.display(), err)),
-        };
-        let record = serde_json::from_str::<StoredQScopeRecord>(&content)
-            .map_err(|err| format!("invalid stored q-scope JSON in {}: {}", path.display(), err))?;
-        Ok(Some(record.q_scope))
-    }
-
-    pub(crate) fn read_stored_q_scope(
+    pub(crate) fn read_last_pass_q_scope(
         &mut self,
         root: &Path,
         expectation: &SelectedExpectation,
     ) -> Result<Option<Vec<String>>, String> {
-        if let Some(stored_q_scope) = self.read_stored_q_scope_file(root, expectation)? {
-            return Ok(stored_q_scope);
-        }
-        Ok([
-            LastResultStatus::Pass,
-            LastResultStatus::Fail,
-            LastResultStatus::Error,
-        ]
-        .into_iter()
-        .map(|status| self.read_last_result(root, expectation, status))
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .max_by_key(|result| parse_record_timestamp(&result.updated_timestamp).unwrap_or(0))
-        .map(|result| result.q_scope))
+        Ok(self
+            .read_last_pass(root, expectation)?
+            .map(|result| result.q_scope))
     }
 
     pub(crate) fn read_last_pass(
@@ -179,6 +148,9 @@ impl XpecStateCache {
         expectation: &SelectedExpectation,
         status: LastResultStatus,
     ) -> Result<Option<LastResult>, String> {
+        if self.persistent_history_is_absent(root) {
+            return Ok(None);
+        }
         let key = (root.to_path_buf(), expectation.id.clone(), status);
         if let Some(cached) = self.last_results.get(&key) {
             return Ok(cached.clone());
@@ -196,22 +168,24 @@ impl XpecStateCache {
         expectation: &SelectedExpectation,
         record: &CheckRecord,
     ) -> Result<LastResult, String> {
-        let result =
-            self.write_last_result_for_record_inner(root, checked_tree_oid, expectation, record)?;
-        self.write_stored_q_scope_file(root, expectation, Some(&record.scope))?;
-        Ok(result)
+        self.write_last_result_for_record_inner(root, checked_tree_oid, expectation, record)
     }
 
-    pub(crate) fn write_last_result_for_record_without_stored_q_scope_seed(
+    pub(crate) fn write_last_result_for_record_or_absent_history(
         &mut self,
-        root: &Path,
+        root: Option<&Path>,
         checked_tree_oid: &str,
         expectation: &SelectedExpectation,
         record: &CheckRecord,
-    ) -> Result<LastResult, String> {
-        let current_stored_q_scope = self.read_stored_q_scope(root, expectation)?;
-        self.write_stored_q_scope_file(root, expectation, current_stored_q_scope.as_deref())?;
-        self.write_last_result_for_record_inner(root, checked_tree_oid, expectation, record)
+    ) -> Result<Option<LastResult>, String> {
+        let Some(root) = root else {
+            // Last Results are file-backed xpec state under XPECS_DIR. A
+            // runtime with absent persistent history has no status-specific
+            // files to update.
+            return Ok(None);
+        };
+        self.write_last_result_for_record(root, checked_tree_oid, expectation, record)
+            .map(Some)
     }
 
     fn write_last_result_for_record_inner(
@@ -299,41 +273,6 @@ impl XpecStateCache {
     ) -> Result<PathBuf, String> {
         Ok(self.xpec_dir(root, expectation)?.join(status.file_name()))
     }
-
-    fn stored_q_scope_path(
-        &mut self,
-        root: &Path,
-        expectation: &SelectedExpectation,
-    ) -> Result<PathBuf, String> {
-        Ok(self
-            .xpec_dir(root, expectation)?
-            .join("stored-q-scope.json"))
-    }
-
-    fn write_stored_q_scope_file(
-        &mut self,
-        root: &Path,
-        expectation: &SelectedExpectation,
-        q_scope: Option<&[String]>,
-    ) -> Result<(), String> {
-        let path = self.stored_q_scope_path(root, expectation)?;
-        let temp_path = temp_path_for(&path)?;
-        let record = StoredQScopeRecord {
-            q_scope: q_scope.map(<[String]>::to_vec),
-        };
-        write_temp_file_then_replace(&temp_path, &path, |file| {
-            serde_json::to_writer(&mut *file, &record)
-                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
-            std::io::Write::write_all(file, b"\n")
-                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))
-        })
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-struct StoredQScopeRecord {
-    #[serde(rename = "qScope")]
-    q_scope: Option<Vec<String>>,
 }
 
 pub(super) fn check_record_from_last_result(
@@ -341,6 +280,7 @@ pub(super) fn check_record_from_last_result(
     result: &LastResult,
 ) -> CheckRecord {
     let error = result.error().map(str::to_string);
+    let response_question_scope_suggestion = result.question_scope_suggestion();
     let observed = result
         .answer()
         .or_else(|| result.error())
@@ -356,7 +296,7 @@ pub(super) fn check_record_from_last_result(
         error,
         evidence: result.evidence(),
         scope: result.q_scope.clone(),
-        question_scope_suggestion: result.question_scope_suggestion(),
+        question_scope_suggestion: response_question_scope_suggestion,
         visible_tree_oid: result.visible_tree_oid.clone().unwrap_or_default(),
         id: expectation.id.clone(),
         display_id: expectation.display_id.clone(),
@@ -367,6 +307,7 @@ pub(super) fn pass_record_from_cooldown_result(
     expectation: &SelectedExpectation,
     result: &LastResult,
 ) -> CheckRecord {
+    let response_question_scope_suggestion = result.question_scope_suggestion();
     CheckRecord {
         timestamp: result.response_timestamp.clone(),
         number: expectation.number,
@@ -377,7 +318,7 @@ pub(super) fn pass_record_from_cooldown_result(
         error: None,
         evidence: result.evidence(),
         scope: result.q_scope.clone(),
-        question_scope_suggestion: result.question_scope_suggestion(),
+        question_scope_suggestion: response_question_scope_suggestion,
         visible_tree_oid: result.visible_tree_oid.clone().unwrap_or_default(),
         id: expectation.id.clone(),
         display_id: expectation.display_id.clone(),
@@ -407,11 +348,13 @@ fn normalized_response_from_record(record: &CheckRecord) -> Value {
         response.insert("answer".to_string(), json!(record.observed));
     }
     response.insert("evidence".to_string(), json!(record.evidence));
-    let suggestion = record
-        .question_scope_suggestion
-        .as_ref()
-        .unwrap_or(&record.scope);
-    response.insert("qScopeSuggestion".to_string(), json!(suggestion));
+    if let Some(suggestion) = record.question_scope_suggestion.as_deref() {
+        assert!(
+            !suggestion.is_empty(),
+            "qScopeSuggestion must be non-empty when present"
+        );
+        response.insert("qScopeSuggestion".to_string(), json!(suggestion));
+    }
     Value::Object(response)
 }
 
@@ -444,9 +387,8 @@ fn read_last_result_path(
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(format!("failed to read {}: {}", path.display(), err)),
     };
-    let mut result = serde_json::from_str::<LastResult>(&content)
+    let result = serde_json::from_str::<LastResult>(&content)
         .map_err(|err| format!("invalid last-result JSON in {}: {}", path.display(), err))?;
-    normalize_legacy_last_result_response(&mut result);
     validate_last_result(expected_status, &result).map_err(|message| {
         format!(
             "invalid last-result JSON in {}: {}",
@@ -455,20 +397,6 @@ fn read_last_result_path(
         )
     })?;
     Ok(Some(result))
-}
-
-fn normalize_legacy_last_result_response(result: &mut LastResult) {
-    if result.question_scope_suggestion().is_some() {
-        return;
-    }
-    if let Some(response) = result.response.as_object_mut() {
-        let fallback_scope = if result.status == LastResultStatus::Pass {
-            full_scope()
-        } else {
-            result.q_scope.clone()
-        };
-        response.insert("qScopeSuggestion".to_string(), json!(fallback_scope));
-    }
 }
 
 fn validate_last_result(
@@ -496,8 +424,8 @@ fn validate_last_result(
     {
         return Err("response must contain evidence".to_string());
     }
-    if result.question_scope_suggestion().is_none() {
-        return Err("response must contain qScopeSuggestion".to_string());
+    if let Some(suggestion) = result.response.get("qScopeSuggestion") {
+        validate_response_question_scope_suggestion(suggestion)?;
     }
     match expected_status {
         LastResultStatus::Pass => {
@@ -541,6 +469,26 @@ fn validate_last_result(
             if result.visible_tree_oid.is_some() {
                 return Err("error must omit visibleTreeOid".to_string());
             }
+        }
+    }
+    Ok(())
+}
+
+fn validate_response_question_scope_suggestion(value: &Value) -> Result<(), String> {
+    let Some(items) = value.as_array() else {
+        return Err("response qScopeSuggestion must be an array".to_string());
+    };
+    if items.is_empty() {
+        return Err("response qScopeSuggestion must be non-empty".to_string());
+    }
+    for item in items {
+        let Some(path) = item.as_str() else {
+            return Err("response qScopeSuggestion items must be strings".to_string());
+        };
+        if path.is_empty() || path.contains(['\r', '\n']) {
+            return Err(
+                "response qScopeSuggestion items must be non-empty single-line strings".to_string(),
+            );
         }
     }
     Ok(())

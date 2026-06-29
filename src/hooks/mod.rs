@@ -1,18 +1,15 @@
 mod fs;
 mod git;
 
-use self::fs::{
-    ensure_project_dir_without_symlinks, make_executable, path_exists_no_follow,
-    remove_optional_file, replace_file, write_new_file,
-};
+use self::fs::make_executable;
 use self::git::{
     configure_git_hooks_path, git_hooks_path_matches, has_canon_git_hooks_path,
     unset_git_hooks_path, uses_canon_git_hooks_path, HookInstallPreflight,
 };
-use crate::check::CHECK_PATH;
-use crate::fs_util::ensure_dir_without_symlinks;
-use crate::notes::arg_to_string;
+use crate::fs_util::{ensure_dir_without_symlinks, remove_optional_file, replace_file};
 use crate::output::write_stdout_line;
+use clap::error::ErrorKind as ClapErrorKind;
+use clap::Command as ClapCommand;
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -31,39 +28,53 @@ const PRE_COMMIT_HOOK_MANUAL_ADVICE: &str =
 pub(super) const GIT_WORKTREE_REQUIRED_FOR_HOOK_INSTALL: &str =
     "Can't safely install pre-commit hook: canon hook install requires a Git worktree.";
 
-// The canon init seed is compiled into the binary from the default check-config
-// template file, not loaded at runtime as an evaluator prompt/instruction.
-// Interrogation texts live under resources/prompts.
-const DEFAULT_CHECK_CONFIG_TEMPLATE_FILE_CONTENTS: &str =
-    include_str!("../../.canon/templates/default/check.yml");
-
-pub(crate) fn run_init(root: &Path) -> Result<(), String> {
-    let check_path = root.join(CHECK_PATH);
-    if path_exists_no_follow(&check_path)? {
-        return Err(format!("{} already exists", CHECK_PATH));
-    }
-
-    // These are user-owned project configuration files, not canon runtime
-    // state: they live in the worktree so humans can review and version them.
-    if let Some(parent) = check_path.parent() {
-        ensure_project_dir_without_symlinks(root, parent)?;
-    }
-    write_new_file(&check_path, DEFAULT_CHECK_CONFIG_TEMPLATE_FILE_CONTENTS)?;
-    // This success line becomes eligible only after the config file exists;
-    // `write_stdout_line` flushes it immediately and no later init work remains.
-    write_stdout_line(&format!("Created {}", CHECK_PATH))?;
-    Ok(())
+pub(crate) fn hook_help_command() -> ClapCommand {
+    ClapCommand::new("hook")
+        .bin_name("canon hook")
+        .about("Manage the canon Git hook")
+        .subcommand_required(true)
+        .subcommand(ClapCommand::new("install").about("Install the canon Git hook"))
+        .subcommand(ClapCommand::new("uninstall").about("Uninstall the canon Git hook"))
 }
 
 pub(crate) fn run_hook_command(root: &Path, args: &[OsString]) -> Result<(), String> {
-    if args.len() != 1 {
-        return Err("usage: canon hook <install|uninstall>".to_string());
+    let Some(action) = parse_hook_action(args)? else {
+        return Ok(());
+    };
+    match action {
+        HookAction::Install => run_hook_install(root),
+        HookAction::Uninstall => run_hook_uninstall(root),
     }
-    let action = arg_to_string(&args[0])?;
-    match action.as_str() {
-        "install" => run_hook_install(root),
-        "uninstall" => run_hook_uninstall(root),
-        _ => Err(format!("unknown hook command: {}", action)),
+}
+
+enum HookAction {
+    Install,
+    Uninstall,
+}
+
+fn parse_hook_action(args: &[OsString]) -> Result<Option<HookAction>, String> {
+    let argv = std::iter::once(OsString::from("canon hook"))
+        .chain(args.iter().cloned())
+        .collect::<Vec<_>>();
+    let matches = match hook_help_command().try_get_matches_from(argv) {
+        Ok(matches) => matches,
+        Err(err)
+            if matches!(
+                err.kind(),
+                ClapErrorKind::DisplayHelp | ClapErrorKind::DisplayVersion
+            ) =>
+        {
+            err.print()
+                .map_err(|print_err| format!("failed to write help: {}", print_err))?;
+            return Ok(None);
+        }
+        Err(err) => return Err(err.to_string()),
+    };
+    match matches.subcommand_name() {
+        Some("install") => Ok(Some(HookAction::Install)),
+        Some("uninstall") => Ok(Some(HookAction::Uninstall)),
+        Some(action) => Err(format!("unknown hook command: {}", action)),
+        None => unreachable!("clap requires a hook subcommand"),
     }
 }
 
