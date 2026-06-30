@@ -11,9 +11,6 @@ Arguments:
 
 Options:
   -c, --config <PATH>          Read expectations from this config file [default: .canon/check.yml]
-  -q <QUESTION>                Ask one question
-  -s, --scope <PATHSPEC>       Set the visible scope for the question
-      --preset <PRESET>        Select a preset by name for the question [default: default]
       --tree <TREE>            Check this Git tree [default: :staged]
       --against-tree <TREE>    Compare against this Git tree [default: HEAD]
       --in-place               Check the current directory directly
@@ -33,12 +30,6 @@ Examples:
 
   canon check --tree HEAD --against-tree HEAD~1 a7F
       Check one canon expectation on HEAD with comparison against the previous commit.
-
-  canon check -q "Does the app expose Undo?"
-      Ask a one-off question.
-
-  canon check -q "Does the app expose Undo?" -s src/app.rs
-      Ask a one-off question with a restricted visible scope.
 ```
 
 *The `canon check --help` output may differ from this example in wording,
@@ -165,3 +156,22 @@ def _repair_instructions(issues):
     print(f"❕ Plan the repair, then run `canon show {selectors} [not:<ALREADY_IN_CONTEXT_EXPECTATION>]... -- <PATHSPEC>...` for the planned edit paths to identify expectations that may be affected.")
     print("❕ Use the matching expectations to avoid regressions while fixing the issues.")
 ```
+
+## Runtime Logs
+
+`canon check` logs runtime events including:
+
+- check lifecycle;
+- expectation outcomes;
+- evaluator communication;
+- model and fallback failures;
+- review-required diagnostics;
+- token usage when available.
+
+Evaluator communication events include tasks and responses before interpretation or repair, with context linking each exchange to the check run.
+
+Evaluator communication events identify the boundary between the command and the evaluator.
+
+Evaluator thread events include creation, reuse, and the effective evaluator instructions used for each thread.
+
+When usage data is available for an evaluator turn, token usage events include input tokens, cached input tokens, output tokens, and reasoning output tokens with enough context to match the usage to that turn.
