@@ -10,9 +10,10 @@ pub(crate) fn order_by_latest_non_pass<T>(
     state_cache: &mut XpecStateCache,
     expectation: impl Fn(&T) -> &SelectedExpectation,
 ) -> Result<Vec<T>, String> {
-    // Canon-check-order applies to the work items that remain selected for
-    // evaluation/reporting. It does not override the selected-expectations rule
-    // that a cached failure can make the default evaluation queue empty.
+    // Canon-check-order applies to the post-cache work items that remain
+    // selected for evaluation/reporting. It does not override the
+    // selected-expectations rule that a cached failure can make the default
+    // selected evaluation queue empty before evaluator work starts.
     order_by_latest_non_pass_with(items, |item| {
         latest_non_pass_timestamp(root, expectation(item), state_cache)
             .map(|latest| latest.unwrap_or(UNIX_EPOCH_TIMESTAMP))

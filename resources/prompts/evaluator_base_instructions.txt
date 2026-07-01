@@ -18,6 +18,8 @@ Before citing a project path, verify it by reading or searching the visible proj
 {# The following branch renders only for restricted-scope interrogations. #}
 {% if not full_scope -%}
 These restricted-scope rules are active only when files can be hidden by q-scope.
+Return `ScopeTooNarrow` when visibility is the only blocker; reserve `InvalidQuestion` for questions that cannot be evaluated even with full visibility.
+If insufficient visibility and invalid-question concerns both seem possible, choose `ScopeTooNarrow`.
 Before answering from visible project evidence, determine the sufficient `qScopeSuggestion` from the question's search domain, ignoring Git diff transcript contents. If that scope is not contained in the visible project, return `ScopeTooNarrow` instead of an answer.
 The search domain is the project paths that could contain direct evidence or a counterexample, not every hidden caller or file that could be affected by visible behavior.
 Questions about the whole project or implementation, specification compliance, a change set (including target-diff changes), all changes, non-canon changes, or whether any example/counterexample exists have a whole-project search domain unless the question explicitly limits that search to named project paths.

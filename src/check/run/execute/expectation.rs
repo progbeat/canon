@@ -42,6 +42,46 @@ pub(super) struct ExpectationRunOutcome {
     pub(super) interrupted: bool,
 }
 
+pub(crate) struct TemporaryExpectationInterrogationContext<'a, 'log, R: EvaluatorRunner> {
+    pub(crate) runtime: &'a CheckRuntime<'a>,
+    pub(crate) runner: &'a mut R,
+    pub(crate) diagnostic_log: &'a mut Option<&'log mut DiagnosticLogWriter>,
+    pub(crate) caches: &'a mut CheckRunCaches,
+    pub(crate) interrogation_run_state: &'a mut InterrogationRunState,
+}
+
+pub(crate) fn run_temporary_expectation_interrogation<R: EvaluatorRunner>(
+    context: TemporaryExpectationInterrogationContext<'_, '_, R>,
+    expectation: &SelectedExpectation,
+    verified_q_scope: &mut Vec<String>,
+    progress: Option<&EvaluatorProgress>,
+) -> Result<CheckRecord, String> {
+    // This is the `canon ask` path: it deliberately reuses evaluator
+    // interrogation and follow-up policy, then returns the final record without
+    // calling `record_finished_expectation` or any other xpec-state writer.
+    let options = CheckOptions {
+        selected: Vec::new(),
+        selectors_provided: false,
+        keep_going: false,
+        ignore_cooldown: false,
+        break_after_tokens: None,
+    };
+    let mut result_output = None;
+    let live_report_output = None;
+    let mut context = ExpectationRunContext {
+        runtime: context.runtime,
+        options: &options,
+        runner: context.runner,
+        diagnostic_log: context.diagnostic_log,
+        result_output: &mut result_output,
+        live_report_output: &live_report_output,
+        caches: context.caches,
+        interrogation_run_state: context.interrogation_run_state,
+    };
+    run_started_expectation_interrogation(&mut context, expectation, verified_q_scope, progress)
+        .map(|completed| user_visible_final_check_record(completed.record))
+}
+
 pub(super) fn run_expectation<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
     expectation: &SelectedExpectation,
@@ -251,7 +291,8 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
         *verified_q_scope = record_scope.clone();
     }
     debug_assert!(scope_is_within(&record_scope, verified_q_scope));
-    let initial_result = initial_interrogation.record.result;
+    let initial_record = initial_interrogation.record.clone();
+    let initial_result = initial_record.result;
     // This is the selected-expectation path's Interrogation Policy q-scope
     // verification follow-up. The only decision made from an evaluator
     // `qScopeSuggestion` is whether this verification follow-up should run;
@@ -299,7 +340,12 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
         context_compaction_hit |= turn_has_context_compaction(&narrowed);
         stop_after_current_expectation |= narrowed.stop_after_current_expectation;
         interrupted |= narrowed.interrupted;
-        let accepted = narrowed_scope_is_accepted(initial_result, &narrowed.record);
+        let accepted = q_scope_verification_result_is_accepted(
+            expectation,
+            initial_result,
+            &initial_record,
+            &narrowed.record,
+        );
         write_scope_narrowing_event(
             context.diagnostic_log,
             &expectation.id,
@@ -307,7 +353,12 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
             &proposed_scope,
             accepted,
         )?;
-        if q_scope_verification_result_becomes_final(initial_result, &narrowed.record) {
+        if q_scope_verification_result_becomes_final(
+            expectation,
+            initial_result,
+            &initial_record,
+            &narrowed.record,
+        ) {
             interrogation = narrowed;
         }
     }
@@ -321,7 +372,9 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
 }
 
 fn q_scope_verification_result_becomes_final(
+    expectation: &SelectedExpectation,
     initial_result: crate::check::core::CheckResult,
+    initial: &CheckRecord,
     narrowed: &CheckRecord,
 ) -> bool {
     if narrowed.error.as_deref() == Some(ERROR_SCOPE_TOO_NARROW) {
@@ -330,7 +383,27 @@ fn q_scope_verification_result_becomes_final(
         // the final evaluator response for the expectation.
         return false;
     }
-    narrowed.error.is_some() || narrowed_scope_is_accepted(initial_result, narrowed)
+    narrowed.error.is_some()
+        || q_scope_verification_result_is_accepted(expectation, initial_result, initial, narrowed)
+}
+
+fn q_scope_verification_result_is_accepted(
+    expectation: &SelectedExpectation,
+    initial_result: crate::check::core::CheckResult,
+    initial: &CheckRecord,
+    narrowed: &CheckRecord,
+) -> bool {
+    if expectation.expected_answer.is_empty() && initial.error.is_none() && narrowed.error.is_none()
+    {
+        // This branch is for `canon ask`'s temporary xpec only. Check config
+        // validation rejects empty expected answers for persisted
+        // expectations, so normal `canon check` xpecs still use the
+        // Interrogation Policy pass/fail acceptance matrix below. `canon ask`
+        // has no derived result status, so the verification turn is accepted
+        // only when it preserves the observed answer.
+        return initial.observed == narrowed.observed;
+    }
+    narrowed_scope_is_accepted(initial_result, narrowed)
 }
 
 fn interrogate_initial_with_full_scope_retry<R: EvaluatorRunner>(
@@ -491,9 +564,13 @@ mod tests {
     #[test]
     fn q_scope_verification_scope_too_narrow_rejects_scope_without_replacing_initial_result() {
         let narrowed = test_record(CheckResult::Fail, Some(ERROR_SCOPE_TOO_NARROW));
+        let initial = test_record(CheckResult::Pass, None);
+        let expectation = test_expectation("yes");
 
         assert!(!q_scope_verification_result_becomes_final(
+            &expectation,
             CheckResult::Pass,
+            &initial,
             &narrowed
         ));
     }
@@ -501,9 +578,13 @@ mod tests {
     #[test]
     fn q_scope_verification_invalid_question_replaces_initial_result() {
         let narrowed = test_record(CheckResult::Fail, Some(ERROR_INVALID_QUESTION));
+        let initial = test_record(CheckResult::Pass, None);
+        let expectation = test_expectation("yes");
 
         assert!(q_scope_verification_result_becomes_final(
+            &expectation,
             CheckResult::Pass,
+            &initial,
             &narrowed
         ));
     }
@@ -512,14 +593,40 @@ mod tests {
     fn q_scope_verification_pass_fail_matrix_still_applies_without_error() {
         let fail = test_record(CheckResult::Fail, None);
         let pass = test_record(CheckResult::Pass, None);
+        let expectation = test_expectation("yes");
 
         assert!(q_scope_verification_result_becomes_final(
+            &expectation,
             CheckResult::Pass,
+            &pass,
             &fail
         ));
         assert!(!q_scope_verification_result_becomes_final(
+            &expectation,
             CheckResult::Fail,
+            &fail,
             &pass
+        ));
+    }
+
+    #[test]
+    fn empty_expected_answer_verification_accepts_only_same_observed_answer() {
+        let expectation = test_expectation("");
+        let initial = test_record_with_observed(CheckResult::Fail, "yes", None);
+        let same = test_record_with_observed(CheckResult::Fail, "yes", None);
+        let changed = test_record_with_observed(CheckResult::Fail, "no", None);
+
+        assert!(q_scope_verification_result_becomes_final(
+            &expectation,
+            CheckResult::Fail,
+            &initial,
+            &same
+        ));
+        assert!(!q_scope_verification_result_becomes_final(
+            &expectation,
+            CheckResult::Fail,
+            &initial,
+            &changed
         ));
     }
 
@@ -540,13 +647,21 @@ mod tests {
     }
 
     fn test_record(result: CheckResult, error: Option<&str>) -> CheckRecord {
+        test_record_with_observed(result, error.unwrap_or("yes"), error)
+    }
+
+    fn test_record_with_observed(
+        result: CheckResult,
+        observed: &str,
+        error: Option<&str>,
+    ) -> CheckRecord {
         CheckRecord {
             timestamp: crate::time::format_record_timestamp(0),
             number: 1,
             result,
             question: Some("Does it pass?".to_string()),
             expected_answer: Some("yes".to_string()),
-            observed: error.unwrap_or("yes").to_string(),
+            observed: observed.to_string(),
             error: error.map(str::to_string),
             evidence: "evidence".to_string(),
             scope: full_scope(),
@@ -554,6 +669,23 @@ mod tests {
             visible_tree_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
             id: "expectation-id".to_string(),
             display_id: "e".to_string(),
+        }
+    }
+
+    fn test_expectation(expected_answer: &str) -> crate::check::core::SelectedExpectation {
+        crate::check::core::SelectedExpectation {
+            number: 1,
+            id: "expectation-id".to_string(),
+            display_id: "e".to_string(),
+            question: "Does it pass?".to_string(),
+            expected_answer: expected_answer.to_string(),
+            question_context: String::new(),
+            diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
+            diff_from_configured: false,
+            target: None,
+            question_answer_only: true,
+            agent: crate::config_types::AgentConfig::implementation_default(),
+            cooldown: None,
         }
     }
 }

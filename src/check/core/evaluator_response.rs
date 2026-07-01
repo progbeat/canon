@@ -199,9 +199,13 @@ pub(crate) fn evaluator_response_output_schema_for_scope(
     schema_scope: EvaluatorResponseSchemaScope,
     short_id: &str,
 ) -> Value {
+    // The schema is per evaluator turn, and current check execution requests
+    // one interrogation short ID per turn. Requiring exactly this property is
+    // the single-request form of the Interrogation Policy's "each requested
+    // interrogation" rule.
     // Interrogation Policy navigation: this module only builds and validates
     // the response schema for one evaluator turn. Follow-up sequencing for
-    // check runs lives in `src/check/run/execute/expectation.rs`; query-mode
+    // check runs lives in `src/check/run/execute/expectation.rs`; `canon ask`
     // sequencing lives in `src/check/interrogation/query/mod.rs`; the
     // q-scope verification gate and acceptance matrix live in
     // `src/check/interrogation/policy.rs`; model retry order and thinking

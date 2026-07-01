@@ -1,18 +1,17 @@
 use super::escape::escape_check_output_text;
-use super::shared::write_stdout_record;
+use super::record::StartedExpectationReportOutput;
 use crate::check::core::ParsedAnswer;
 use crate::json_util::compact_json_string_array;
-use std::io::Write;
 
-pub(crate) fn write_query_output(
-    result_output: &mut dyn Write,
+pub(crate) fn finish_query_output(
+    started_report: StartedExpectationReportOutput,
     answer: &ParsedAnswer,
 ) -> Result<(), String> {
-    // `canon check -q` asks one question and writes this query answer. It does
-    // not process selected expectations, so it does not use the expectation
-    // result-entry format rendered by `output::record`.
+    // `canon ask` asks one question and writes this query answer. It does
+    // not derive an expectation result, so it reports the evaluator response
+    // after the standalone progress timeline.
     let output = render_query_output(answer);
-    write_stdout_record(result_output, output.as_bytes(), "query result")
+    started_report.finish_with_query_output(&output)
 }
 
 fn render_query_output(answer: &ParsedAnswer) -> String {

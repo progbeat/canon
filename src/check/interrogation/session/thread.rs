@@ -170,6 +170,12 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
             }
         }
         Err(err) if selection.reused_existing_session && is_context_window_failure(&err) => {
+            if let Some(progress) = request.progress {
+                // The retry is logged through the model-fallback event path
+                // below, so the public timeline uses the same canon `⇄`
+                // marker before the fresh thread can make another request.
+                progress.record_model_fallback_started();
+            }
             clear_thread_sessions_after_failure(state);
             write_model_fallback_events(
                 diagnostic_log,
@@ -537,12 +543,12 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
     model: Option<&str>,
     progress: Option<&crate::evaluator::EvaluatorProgress>,
 ) -> Result<InterrogationResult, EvaluatorError> {
-    // Expectation mode may start from a last-pass restricted scope, but
-    // after sanitization this path shares query mode's first-turn construction:
+    // Expectation checks may start from a last-pass restricted scope, but
+    // after sanitization this path shares `canon ask`'s first-turn construction:
     // developer instructions and the turn prompt are rendered from
     // `resources/prompts/` plus runtime data.
     let enforced_scope = sanitize_scope(enforced_scope)?;
-    let last_pass = if runtime.is_in_place() {
+    let last_pass = if runtime.is_in_place() || expectation.id.is_empty() {
         None
     } else {
         xpec_state
@@ -602,7 +608,7 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
             enforced_scope,
             model,
             thinking,
-            expectation_id: Some(&expectation.id),
+            expectation_id: (!expectation.id.is_empty()).then_some(expectation.id.as_str()),
             short_id: &expectation.display_id,
             // This is question-scoped canon config data. The implementation-owned
             // evaluator instruction source is the template in `resources/prompts/`;

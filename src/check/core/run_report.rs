@@ -15,13 +15,6 @@ pub(crate) struct InterrogationResult {
 #[derive(Debug)]
 pub(crate) struct QueryResult {
     pub(crate) answer: ParsedAnswer,
-    pub(crate) record: Option<QueryExpectationRecord>,
-}
-
-#[derive(Debug)]
-pub(crate) struct QueryExpectationRecord {
-    pub(crate) expectation: SelectedExpectation,
-    pub(crate) record: CheckRecord,
 }
 
 #[derive(Debug, Clone)]
@@ -31,10 +24,16 @@ pub(crate) struct CachedExpectation {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct BlockedCheckHook {
+    pub(crate) repair_instruction: String,
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct CheckRunReport {
     // Structured result records produced by evaluator work in this run.
     pub(crate) records: Vec<CheckRecord>,
     pub(crate) cached: Vec<CachedExpectation>,
+    pub(crate) blocked: Option<BlockedCheckHook>,
     // Expectations not covered by pass, fail, or human-review summary
     // categories.
     pub(crate) skipped: usize,

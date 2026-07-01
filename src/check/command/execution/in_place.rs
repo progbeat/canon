@@ -1,4 +1,3 @@
-use crate::check::config::validation::render_expectation_validation_error;
 use crate::check::core::{CheckRecord, CheckRecordOutcome, CheckResult, SelectedExpectation};
 use crate::check::interrogation::state::IN_PLACE_VISIBLE_TREE_OID;
 use crate::config_types::AgentConfig;
@@ -58,25 +57,6 @@ fn has_explicit_target(expectation: &SelectedExpectation) -> bool {
     // rejected uniformly by presence only; the target value itself remains
     // prompt-rendering data.
     expectation.target.is_some()
-}
-
-pub(super) fn validate_in_place_query_expectation(
-    config_agent: &AgentConfig,
-    expectation: &SelectedExpectation,
-) -> Result<(), String> {
-    let unsupported = in_place_unsupported_fields(config_agent, expectation);
-    if unsupported.is_empty() {
-        return Ok(());
-    }
-    let record = in_place_unsupported_expectation_record(expectation, &unsupported)?;
-    Err(render_expectation_validation_error(
-        &record.display_id,
-        record.question_text(),
-        record
-            .human_review_reason()
-            .expect("invalid in-place records include error"),
-        &record.evidence,
-    ))
 }
 
 pub(super) fn validate_in_place_global_config(config_agent: &AgentConfig) -> Result<(), String> {

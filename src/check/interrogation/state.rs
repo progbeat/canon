@@ -19,7 +19,7 @@ const IN_PLACE_VISIBLE_FILE_COUNT: usize = 1;
 pub(crate) fn should_retry_full_scope_after_error(error: Option<&str>, scope: &[String]) -> bool {
     // This is the Interrogation Policy retry predicate only. The check-run
     // follow-up is executed in `src/check/run/execute/expectation.rs`, and
-    // query-mode applies the same predicate in
+    // `canon ask` applies the same predicate in
     // `src/check/interrogation/query/mod.rs`.
     if scope == full_scope() {
         return false;
@@ -524,6 +524,7 @@ mod tests {
         let config = CheckConfig {
             version: 1,
             agent: AgentConfig::default(),
+            hooks: Default::default(),
             expectations: Vec::new(),
         };
         let runtime = CheckRuntime::in_place(&root, &config, false);
@@ -553,6 +554,7 @@ mod tests {
         let config = CheckConfig {
             version: 1,
             agent: AgentConfig::default(),
+            hooks: Default::default(),
             expectations: Vec::new(),
         };
         let runtime = CheckRuntime::in_place(&root, &config, false);

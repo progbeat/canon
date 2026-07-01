@@ -22,7 +22,7 @@ use crate::xpec_state::XpecStateCache;
 //   narrowed-scope acceptance: this file
 // - check-run `ScopeTooNarrow` retry and q-scope verification sequencing:
 //   `src/check/run/execute/expectation.rs`
-// - query-mode retry and q-scope verification sequencing:
+// - `canon ask` retry and q-scope verification sequencing:
 //   `src/check/interrogation/query/mod.rs`
 // - evaluator model retry order: `src/check/interrogation/session/model_fallback.rs`
 // - per-turn thinking, enforced response schema, prompt, and thread inputs:
@@ -333,6 +333,7 @@ mod tests {
         let config = CheckConfig {
             version: 1,
             agent: agent.clone(),
+            hooks: Default::default(),
             expectations: Vec::new(),
         };
         let staged_view = StagedWorktreeView::apply_for_tree_source(&root, source.clone()).unwrap();
@@ -367,6 +368,7 @@ mod tests {
         let config = CheckConfig {
             version: 1,
             agent: agent.clone(),
+            hooks: Default::default(),
             expectations: Vec::new(),
         };
         let runtime = CheckRuntime::in_place(&root, &config, false);

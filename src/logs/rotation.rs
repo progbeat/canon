@@ -84,6 +84,9 @@ pub(crate) fn prune_diagnostic_logs_to_limit(
     if diagnostic_logs_explicitly_disabled(config) {
         return Ok(());
     }
+    // Runtime-log rotation retains older JSONL files in LOGS_DIR while they
+    // fit the configured `canon.logs.maxSize` budget. This pruning is the
+    // Configuration size limit, not a different log location or format.
     let files = diagnostic_log_files(config)?;
     for index in (1..files.len()).rev() {
         if diagnostic_log_dir_size(log_dir, config)? <= config.max_bytes {

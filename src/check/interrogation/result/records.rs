@@ -1,9 +1,5 @@
-use crate::check::core::{
-    CheckRecord, InterrogationResult, ParsedAnswer, QueryExpectationRecord, QueryResult,
-    SelectedExpectation,
-};
+use crate::check::core::{CheckRecord, InterrogationResult, ParsedAnswer, SelectedExpectation};
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
-use crate::config_types::AgentConfig;
 use crate::evaluator::{record_from_response, EvaluatorError, ParsedTurnResponse};
 use crate::logs::{DiagnosticLogWriter, DiagnosticRecordEvent};
 use crate::scope::sanitize_scope;
@@ -42,36 +38,6 @@ pub(crate) fn finalize_interrogation_response(
     })
 }
 
-pub(crate) fn finalize_query_answer(
-    runtime: &CheckRuntime<'_>,
-    state: &mut InterrogationRunState,
-    agent: &AgentConfig,
-    expectation: Option<&SelectedExpectation>,
-    enforced_scope: &[String],
-    _question: &str,
-    response: ParsedAnswer,
-) -> Result<QueryResult, EvaluatorError> {
-    let finalized = finalize_parsed_answer(runtime, state, agent, enforced_scope, response)?;
-    let record = expectation
-        .map(|expectation| {
-            record_from_response(
-                expectation,
-                finalized.response.clone(),
-                finalized.scope.clone(),
-                finalized.visible_tree_oid.clone(),
-            )
-            .map(|record| QueryExpectationRecord {
-                expectation: expectation.clone(),
-                record,
-            })
-        })
-        .transpose()?;
-    Ok(QueryResult {
-        answer: finalized.response,
-        record,
-    })
-}
-
 pub(crate) fn write_query_result_event(
     question: &str,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
@@ -97,9 +63,9 @@ pub(crate) fn write_query_result_event(
 
 // Result records are only one runtime-log family. `canon check` calls these
 // writers from the evaluated-expectation path, the cached-expectation path, and
-// query mode; evaluator boundary events such as thread creation/reuse, restart,
-// agent request/response/failure, and per-turn token usage are emitted by
-// `check::interrogation::session` through the same `DiagnosticLogWriter`.
+// `canon ask`; evaluator boundary events such as thread creation/reuse,
+// restart, agent request/response/failure, and per-turn token usage are emitted
+// by `check::interrogation::session` through the same `DiagnosticLogWriter`.
 pub(crate) fn write_expectation_result_event(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     record: &CheckRecord,

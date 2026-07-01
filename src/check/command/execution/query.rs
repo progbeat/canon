@@ -1,13 +1,13 @@
-use super::in_place::{validate_in_place_global_config, validate_in_place_query_expectation};
+use super::in_place::validate_in_place_global_config;
 use crate::app::LazyAppServerRunner;
-use crate::check::command::output::write_query_output;
+use crate::check::command::output::{
+    finish_query_output, start_query_report_output, SharedCheckOutput,
+};
 use crate::check::command::{
     collect_check_token_usage, prepare_check_execution, print_token_usage_summary,
     PrepareCheckExecutionOptions,
 };
-use crate::check::core::errors::error_record_from_interrogation_error;
-use crate::check::core::QueryResult;
-use crate::check::interrogation::policy::initial_q_scope_for_fresh_interrogation;
+use crate::check::core::{ParsedAnswer, INTERNAL_ERROR_UNPARSABLE};
 use crate::check::interrogation::query::{
     query_human_review_reason, run_query_with_runner, QueryExpectationContext, QueryRequest,
 };
@@ -15,13 +15,12 @@ use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::interrogation::{
     write_query_lifecycle_finish_event, write_query_lifecycle_start_event,
 };
-use crate::check::run::selection::selected_expectation_at;
-use crate::check::{expectation_identities, CheckRecord, CheckRunCaches, SelectedExpectation};
-use crate::config_types::CheckConfig;
+use crate::check::{CheckRunCaches, SelectedExpectation};
+use crate::config_types::{AgentConfig, CheckConfig, DEFAULT_DIFF_FROM};
+use crate::evaluator::EvaluatorRunner;
 use crate::git::TreeSource;
 use crate::logs::DiagnosticLogWriter;
 use crate::scope::sanitize_scope;
-use std::io;
 use std::path::Path;
 
 pub(crate) struct CheckQueryCommand<'a> {
@@ -168,175 +167,64 @@ fn run_started_check_query_command(
 
 #[allow(clippy::too_many_arguments)]
 fn run_prepared_query(
-    root: &Path,
+    _root: &Path,
     runtime: CheckRuntime<'_>,
     runner: &mut LazyAppServerRunner,
     config: &CheckConfig,
     question: &str,
-    query_scope_provided: bool,
+    _query_scope_provided: bool,
     enforced_scope: &mut Vec<String>,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     check_caches: &mut CheckRunCaches,
 ) -> Result<(), String> {
     // `config` is already expanded: command `--preset` can only choose the
-    // default agent during raw expansion, before query mode consumes resolved
+    // default agent during raw expansion, before `canon ask` consumes resolved
     // expectation/config fields here.
-    let query_expectation = query_expectation_context(config, question)?;
     if runtime.is_in_place() {
         validate_in_place_global_config(&config.agent)?;
-        // In-place compatibility is expectation-specific after global config.
-        // A `-q` invocation selects only the matched q/a expectation, if any;
-        // other collected expectations are not evaluator work for this query.
-        if let Some(expectation) = query_expectation.as_ref() {
-            validate_in_place_query_expectation(&config.agent, expectation)?;
-        }
         *enforced_scope = runtime
             .fresh_scope_without_persistent_history()
             .expect("in-place query has no persistent q-scope");
-    } else if let Some(expectation) = query_expectation.as_ref() {
-        if !query_scope_provided {
-            *enforced_scope = initial_q_scope_for_fresh_interrogation(
-                root,
-                expectation,
-                &mut check_caches.xpec_state,
-            )?;
-        }
     }
-    let persist_expectation_record = query_expectation.is_some();
-    // Query mode always asks the evaluator; it does not reuse cached results.
-    // A matched q/a expectation reads only the last pass so query prompts can
-    // preserve checkpoint context for that expectation.
-    let query_last_pass = if runtime.is_in_place() {
-        None
-    } else {
-        query_expectation
-            .as_ref()
-            .map(|expectation| check_caches.xpec_state.read_last_pass(root, expectation))
-            .transpose()?
-            .flatten()
+    let temporary_expectation = temporary_query_expectation(question, &config.agent);
+    let expectation = QueryExpectationContext {
+        expectation: &temporary_expectation,
     };
-    let expectation = query_expectation
-        .as_ref()
-        .map(|expectation| QueryExpectationContext {
-            expectation,
-            last_pass: query_last_pass.as_ref(),
-        });
     let mut interrogation_run_state =
         InterrogationRunState::new(runtime.no_sandbox() || runtime.is_in_place())?;
+    let shared_output = SharedCheckOutput::stdout();
+    let started_report = start_query_report_output(shared_output);
+    let progress = started_report.progress();
+    runner.set_progress_reporter(Some(progress.clone()));
     let result = run_query_with_runner(
         &runtime,
         QueryRequest {
             question,
             enforced_scope,
             expectation,
+            progress: Some(&progress),
         },
         runner,
         diagnostic_log.as_deref_mut(),
         &mut interrogation_run_state,
+        check_caches,
     );
+    runner.set_progress_reporter(None);
     let result = match result {
         Ok(result) => result,
         Err(err) => {
-            persist_query_error_result(
-                root,
-                &runtime,
-                runtime.checked_tree_oid(),
-                check_caches,
-                persist_expectation_record && !runtime.is_in_place(),
-                query_expectation.as_ref(),
-                enforced_scope,
-                &err,
-            )?;
+            let answer = ParsedAnswer::error(INTERNAL_ERROR_UNPARSABLE.to_string(), err.clone());
+            finish_query_output(started_report, &answer)?;
             print_query_token_usage(runner)?;
             return Err(err);
         }
     };
-    persist_query_result(
-        root,
-        runtime.checked_tree_oid(),
-        check_caches,
-        persist_expectation_record && !runtime.is_in_place(),
-        &result,
-    )?;
+    finish_query_output(started_report, &result.answer)?;
+    print_query_token_usage(runner)?;
     if let Some(reason) = query_human_review_reason(&result) {
-        print_query_token_usage(runner)?;
         return Err(format!("query requires human review: {}", reason));
     }
-    write_successful_query_output(&result, runner)?;
     Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn persist_query_error_result(
-    root: &Path,
-    runtime: &CheckRuntime<'_>,
-    checked_tree_oid: &str,
-    check_caches: &mut CheckRunCaches,
-    should_persist: bool,
-    expectation: Option<&SelectedExpectation>,
-    scope: &[String],
-    error: &str,
-) -> Result<(), String> {
-    if !should_persist {
-        return Ok(());
-    }
-    let Some(expectation) = expectation else {
-        return Ok(());
-    };
-    let record = error_record_from_interrogation_error(
-        runtime,
-        &expectation.agent,
-        expectation,
-        scope,
-        error,
-        &mut check_caches.visible_tree_oid,
-    )?;
-    write_query_last_result(root, checked_tree_oid, check_caches, expectation, &record)
-}
-
-fn persist_query_result(
-    root: &Path,
-    checked_tree_oid: &str,
-    check_caches: &mut CheckRunCaches,
-    should_persist: bool,
-    result: &QueryResult,
-) -> Result<(), String> {
-    if !should_persist {
-        return Ok(());
-    }
-    let Some(record) = result.record.as_ref() else {
-        return Ok(());
-    };
-    write_query_last_result(
-        root,
-        checked_tree_oid,
-        check_caches,
-        &record.expectation,
-        &record.record,
-    )
-}
-
-fn write_query_last_result(
-    root: &Path,
-    checked_tree_oid: &str,
-    check_caches: &mut CheckRunCaches,
-    expectation: &SelectedExpectation,
-    record: &CheckRecord,
-) -> Result<(), String> {
-    check_caches
-        .xpec_state
-        .write_last_result_for_record(root, checked_tree_oid, expectation, record)
-        .map(|_| ())
-}
-
-fn write_successful_query_output(
-    result: &QueryResult,
-    runner: &mut LazyAppServerRunner,
-) -> Result<(), String> {
-    let stdout = io::stdout();
-    let mut stdout = stdout.lock();
-    write_query_output(&mut stdout, &result.answer)?;
-    print_query_token_usage(runner)
 }
 
 fn print_query_token_usage(runner: &mut LazyAppServerRunner) -> Result<(), String> {
@@ -348,134 +236,36 @@ fn query_enforced_scope(query_scope: &[String]) -> Result<Vec<String>, String> {
     sanitize_scope(query_scope).map_err(|err| format!("--scope: {}", err))
 }
 
-fn query_expectation_context(
-    config: &CheckConfig,
-    question: &str,
-) -> Result<Option<SelectedExpectation>, String> {
-    let identities = expectation_identities(config)?;
-    let matches = config
-        .expectations
-        .iter()
-        .enumerate()
-        .filter_map(|(index, expectation)| {
-            (expectation.question_answer_only && expectation.q == question).then_some(index)
-        })
-        .collect::<Vec<_>>();
-    let [index] = matches.as_slice() else {
-        return Ok(None);
-    };
-    // This is query-mode selection, not check-run selector expansion. Only a
-    // q/a-only expectation can be selected here; if a text-matching
-    // expectation has diff, cache, path-hiding, or instruction fields, it is a
-    // non-q/a expectation and the query remains an unmatched one-off question.
-    selected_expectation_at(config, &identities, *index, true).map(Some)
+fn temporary_query_expectation(question: &str, agent: &AgentConfig) -> SelectedExpectation {
+    SelectedExpectation {
+        number: 0,
+        id: String::new(),
+        display_id: "q".to_string(),
+        question: question.to_string(),
+        expected_answer: String::new(),
+        question_context: String::new(),
+        diff_from: DEFAULT_DIFF_FROM.to_string(),
+        diff_from_configured: false,
+        target: None,
+        question_answer_only: true,
+        agent: agent.clone(),
+        cooldown: None,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::check::core::{
-        CheckRecord, CheckResult, ParsedAnswer, QueryExpectationRecord, INTERNAL_ERROR_UNPARSABLE,
-    };
-    use crate::config_types::{AgentConfig, Expectation};
-    use crate::hash::full_scope;
-    use crate::xpec_state::LastResultStatus;
+    use crate::config_types::AgentConfig;
 
     #[test]
-    fn persist_query_result_writes_error_record_for_matched_query() {
-        let root = temp_query_root("last-error");
-        let config = two_expectation_config();
-        let expectation = query_expectation_context(&config, "Does alpha pass?")
-            .unwrap()
-            .unwrap();
-        let answer = ParsedAnswer::error(
-            INTERNAL_ERROR_UNPARSABLE.to_string(),
-            "technical failure".to_string(),
-        );
-        let record = CheckRecord {
-            timestamp: crate::time::format_record_timestamp(1),
-            number: expectation.number,
-            result: CheckResult::Fail,
-            question: Some(expectation.question.clone()),
-            expected_answer: Some(expectation.expected_answer.clone()),
-            observed: INTERNAL_ERROR_UNPARSABLE.to_string(),
-            error: Some(INTERNAL_ERROR_UNPARSABLE.to_string()),
-            evidence: "technical failure".to_string(),
-            scope: full_scope(),
-            question_scope_suggestion: None,
-            visible_tree_oid: "visible-tree".to_string(),
-            id: expectation.id.clone(),
-            display_id: expectation.display_id.clone(),
-        };
-        let result = QueryResult {
-            answer,
-            record: Some(QueryExpectationRecord {
-                expectation: expectation.clone(),
-                record,
-            }),
-        };
-        let mut caches = CheckRunCaches::new();
+    fn temporary_query_expectation_has_empty_expected_answer() {
+        let agent = AgentConfig::implementation_default();
+        let expectation = temporary_query_expectation("Does ask work?", &agent);
 
-        persist_query_result(&root, "checked-tree", &mut caches, true, &result).unwrap();
-
-        let last_error = caches
-            .xpec_state
-            .read_last_error(&root, &expectation)
-            .unwrap()
-            .unwrap();
-        assert_eq!(last_error.status, LastResultStatus::Error);
-        assert_eq!(
-            last_error
-                .response
-                .get("error")
-                .and_then(serde_json::Value::as_str),
-            Some(INTERNAL_ERROR_UNPARSABLE)
-        );
-        assert!(last_error.checked_tree_oid.is_none());
-        assert!(last_error.visible_tree_oid.is_none());
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    fn two_expectation_config() -> CheckConfig {
-        CheckConfig {
-            version: 1,
-            agent: AgentConfig::implementation_default(),
-            expectations: vec![
-                expectation("Does alpha pass?"),
-                expectation("Does beta pass?"),
-            ],
-        }
-    }
-
-    fn expectation(question: &str) -> Expectation {
-        Expectation {
-            q: question.to_string(),
-            a: "yes".to_string(),
-            question_context: String::new(),
-            diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
-            diff_from_configured: false,
-            target: None,
-            question_answer_only: true,
-            agent: AgentConfig::implementation_default(),
-            cooldown: None,
-        }
-    }
-
-    fn temp_query_root(label: &str) -> std::path::PathBuf {
-        let temp_dir = std::env::temp_dir().canonicalize().unwrap();
-        let root = temp_dir.join(format!("canon-query-test-{}-{}", label, std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        let output = std::process::Command::new("git")
-            .args(["init", "--quiet"])
-            .current_dir(&root)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "git init failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        root
+        assert_eq!(expectation.question, "Does ask work?");
+        assert_eq!(expectation.expected_answer, "");
+        assert_eq!(expectation.display_id, "q");
+        assert!(expectation.id.is_empty());
     }
 }

@@ -93,13 +93,13 @@ canon init
 Create `.canon/check.yml` from `canon`'s embedded default template.
 
 ```sh
-canon hook install
+canon pre-commit install
 ```
 
 Install the local pre-commit hook.
 
 ```sh
-canon hook uninstall
+canon pre-commit uninstall
 ```
 
 Remove the local pre-commit hook.
@@ -119,7 +119,7 @@ Explicitly evaluate selected expectations by unique ID prefix or full ID. These
 selectors are expectation IDs, not 1-based expectation numbers.
 
 ```sh
-canon check -q "Can you find any practically exploitable security vulnerability?"
+canon ask "Can you find any practically exploitable security vulnerability?"
 ```
 
 Ask one uncached ad-hoc question. Add one or more `-s`/`--scope` paths to debug

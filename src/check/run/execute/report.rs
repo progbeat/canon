@@ -9,6 +9,7 @@ pub(super) fn check_run_report(
     CheckRunReport {
         records,
         cached,
+        blocked: None,
         skipped: counts.skipped,
     }
 }

@@ -269,6 +269,7 @@ mod tests {
         CheckConfig {
             version: 1,
             agent: AgentConfig::implementation_default(),
+            hooks: Default::default(),
             expectations: vec![
                 expectation("Does alpha pass?"),
                 expectation("Does beta pass?"),

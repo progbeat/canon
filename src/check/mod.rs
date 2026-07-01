@@ -13,7 +13,9 @@ mod show;
 pub(crate) use command::preflight::{
     is_canon_only_staged_change_bytes, is_canon_project_path_bytes, staged_changed_path_bytes,
 };
-pub(crate) use command::{check_help_command, run_check_command};
+pub(crate) use command::{
+    ask_help_command, check_help_command, run_ask_command, run_check_command,
+};
 pub(crate) use config::{
     codex_reasoning_effort, expand_staged_generator_paths_from_listing,
     parse_check_config_content_with_root_and_source_and_default_agent_preset,
@@ -29,7 +31,9 @@ pub(crate) use interrogation::{
     write_agent_turn_request_event, write_agent_turn_response_event,
 };
 pub(crate) use run::{
-    expectation_identities, run_check_with_runner_and_caches, select_expectations_with_identities,
-    skipped_count, CheckRunCaches, CheckRunSideEffects, ExpectationIdentity,
+    expectation_identities, run_check_with_runner_and_caches,
+    run_temporary_expectation_interrogation, select_expectations_with_identities, skipped_count,
+    CheckRunCaches, CheckRunSideEffects, ExpectationIdentity,
+    TemporaryExpectationInterrogationContext,
 };
 pub(crate) use show::{run_show_command, show_help_command};

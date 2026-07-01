@@ -22,9 +22,9 @@ pub(crate) struct CachedExpectationHit {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CachedFailureMode {
-    Continue,
-    StopDefaultSelection,
+pub(crate) enum CachedNonPassPolicy {
+    EvaluateUncached,
+    LeaveUncachedPending,
 }
 
 pub(crate) struct CacheFilterContext<'a, 'log> {
@@ -35,14 +35,20 @@ pub(crate) struct CacheFilterContext<'a, 'log> {
     pub(crate) diagnostic_log: &'a mut Option<&'log mut DiagnosticLogWriter>,
 }
 
-// Cache filtering decides when a cached result is reused as check work.
+// Cache filtering implements the Selected Expectations default cache policy:
+// selector mode evaluates explicit selections, all-pass cached state evaluates
+// only uncached expectations, and any cached non-pass leaves uncached
+// expectations pending. That last branch is not check-order stopping after an
+// evaluated result; no evaluator work has started yet.
+//
 // `cached_result_for_expectation` owns the Cached Result definition itself.
 // In-place runs build an evaluate-only queue in `execute::run` and never call
 // this function, because the in-place spec has no persistent last-result reads
 // and therefore no same-tree or cooldown cache lookup.
 //
 // This layer only partitions work by cache availability. The execution layer
-// orders cached hits and remaining evaluations together before running them.
+// orders cached hits and the post-cache selected-for-evaluation queue together
+// before running them.
 //
 // This function receives command-independent `CheckOptions`; CLI/trailer policy
 // stays in the command layer before and after this selection step.
@@ -50,9 +56,12 @@ pub(crate) fn select_expectations_after_cache(
     context: CacheFilterContext<'_, '_>,
     options: &CheckOptions,
     now: u64,
-    cached_failure_mode: CachedFailureMode,
+    cached_non_pass_policy: CachedNonPassPolicy,
 ) -> Result<CacheFilteredCheckWork, String> {
     if options.selectors_provided {
+        // Explicit expectation selectors are forced selections. Do not inspect
+        // cached results here: a cache hit must not move a selected
+        // expectation out of the evaluator queue.
         return Ok(CacheFilteredCheckWork {
             selected_for_evaluation: options.selected.clone(),
             cached_hits: Vec::new(),
@@ -61,7 +70,7 @@ pub(crate) fn select_expectations_after_cache(
 
     let mut uncached = Vec::new();
     let mut cached_hits = Vec::new();
-    let mut cached_failure_seen = false;
+    let mut cached_non_pass_seen = false;
     for expectation in options.selected.clone() {
         // Cached results come only from pass/fail same-tree or cooldown state;
         // last-error human-review records remain non-pass history for ordering,
@@ -80,7 +89,7 @@ pub(crate) fn select_expectations_after_cache(
             },
         )? {
             Some(hit) => {
-                cached_failure_seen |= !hit.record.passed();
+                cached_non_pass_seen |= !hit.record.passed();
                 if let Some(writer) = context.diagnostic_log.as_deref_mut() {
                     write_cache_hit(writer, &hit)?;
                 }
@@ -90,11 +99,11 @@ pub(crate) fn select_expectations_after_cache(
         }
     }
     let selected_for_evaluation = selected_expectations_after_default_cache_policy(
-        cached_failure_seen,
+        cached_non_pass_seen,
         uncached,
-        cached_failure_mode,
+        cached_non_pass_policy,
     );
-    if cached_failure_seen && cached_failure_mode == CachedFailureMode::StopDefaultSelection {
+    if cached_non_pass_seen && cached_non_pass_policy == CachedNonPassPolicy::LeaveUncachedPending {
         cached_hits =
             order_by_latest_non_pass(context.root, cached_hits, context.xpec_state, |hit| {
                 &hit.expectation
@@ -107,16 +116,18 @@ pub(crate) fn select_expectations_after_cache(
 }
 
 fn selected_expectations_after_default_cache_policy(
-    cached_failure_seen: bool,
+    cached_non_pass_seen: bool,
     uncached: Vec<SelectedExpectation>,
-    cached_failure_mode: CachedFailureMode,
+    cached_non_pass_policy: CachedNonPassPolicy,
 ) -> Vec<SelectedExpectation> {
-    if cached_failure_seen && cached_failure_mode == CachedFailureMode::StopDefaultSelection {
-        // Selected Expectations default policy: when any cached result is a
-        // non-pass, selected expectations for evaluator work are empty until
-        // that cached failure is fixed. This is pre-evaluation selection, not
-        // canon-check-order stopping after an evaluated result; an empty
-        // selected set creates no evaluation queue for check order to sort.
+    if cached_non_pass_seen && cached_non_pass_policy == CachedNonPassPolicy::LeaveUncachedPending {
+        // Selected Expectations default policy: the cached non-pass is the
+        // known check result for this run, and uncached expectations remain
+        // pending until that known issue is fixed.
+        //
+        // This does not conflict with canon-check-order. No evaluator work has
+        // started, so there is no post-cache selected evaluation queue for the
+        // Order rule to sort or stop after first evaluated non-pass.
         Vec::new()
     } else {
         uncached
@@ -192,7 +203,7 @@ mod tests {
             &source,
             vec![cached_expectation, uncached_expectation],
             true,
-            CachedFailureMode::Continue,
+            CachedNonPassPolicy::EvaluateUncached,
         );
         assert!(work.cached_hits.is_empty());
         assert_eq!(work.selected_for_evaluation.len(), 2);
@@ -202,8 +213,8 @@ mod tests {
     }
 
     #[test]
-    fn default_cached_failure_leaves_uncached_expectations_unselected_for_evaluation() {
-        let root = git_project("default-cached-failure-clears-evaluate-queue");
+    fn default_cached_non_pass_leaves_uncached_expectations_unselected_for_evaluation() {
+        let root = git_project("default-cached-non-pass-leaves-uncached-pending");
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src/lib.rs"), "pub fn demo() {}\n").unwrap();
         git(&root, &["add", "src/lib.rs"]);
@@ -230,7 +241,7 @@ mod tests {
             &source,
             vec![cached_expectation, uncached_expectation],
             false,
-            CachedFailureMode::StopDefaultSelection,
+            CachedNonPassPolicy::LeaveUncachedPending,
         );
 
         assert_eq!(work.cached_hits.len(), 1);
@@ -248,7 +259,7 @@ mod tests {
             source,
             vec![expectation],
             false,
-            CachedFailureMode::StopDefaultSelection,
+            CachedNonPassPolicy::LeaveUncachedPending,
         )
     }
 
@@ -257,7 +268,7 @@ mod tests {
         source: &TreeSource,
         expectations: Vec<SelectedExpectation>,
         selectors_provided: bool,
-        cached_failure_mode: CachedFailureMode,
+        cached_non_pass_policy: CachedNonPassPolicy,
     ) -> CacheFilteredCheckWork {
         let mut xpec_state = XpecStateCache::default();
         let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
@@ -278,7 +289,7 @@ mod tests {
                 break_after_tokens: None,
             },
             2,
-            cached_failure_mode,
+            cached_non_pass_policy,
         )
         .unwrap()
     }

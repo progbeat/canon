@@ -348,6 +348,7 @@ mod tests {
         let config = CheckConfig {
             version: 1,
             agent: agent.clone(),
+            hooks: Default::default(),
             expectations: vec![Expectation {
                 q: question.to_string(),
                 a: "Rust".to_string(),
@@ -410,6 +411,7 @@ mod tests {
         let config = CheckConfig {
             version: 1,
             agent: agent.clone(),
+            hooks: Default::default(),
             expectations: vec![
                 expectation(None),
                 expectation(Some(ExpectationTarget::Project)),

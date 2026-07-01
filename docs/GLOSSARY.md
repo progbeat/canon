@@ -5,7 +5,7 @@ CLI output.
 
 ## Ad-hoc question
 
-A one-off question passed with `canon check -q`. It is evaluated fresh instead
+A one-off question passed with `canon ask`. It is evaluated fresh instead
 of being selected from the configured expectations.
 
 ## Cache
@@ -108,7 +108,7 @@ expected answer.
 
 ## Pre-commit hook
 
-The Git hook installed by `canon hook install`. It runs `canon gate` before a
+The Git hook installed by `canon pre-commit install`. It runs `canon gate` before a
 commit and blocks staged changes that are not safe under the current canon
 history.
 

@@ -412,6 +412,48 @@ expectations:
     }
 
     #[test]
+    fn top_level_hooks_expand_shorthand_and_mapping() {
+        let raw: RawCheckConfig = serde_saphyr::from_str(
+            r#"
+version: 1
+presets:
+  default: {}
+hooks:
+  on-start: "Starting check.\n"
+  on-pass:
+    print: "Type pass:\n"
+    confirm: "pass"
+    repair-instruction: "Run the blocker fix."
+expectations:
+  - q: "Does hook config parse?"
+    a: "yes"
+"#,
+        )
+        .expect("parse raw check config");
+
+        let config = expand_raw_check_config(
+            None,
+            Path::new("check.yml"),
+            raw,
+            None,
+            CheckConfigSource::Tree(TreeSource::Staged),
+        )
+        .expect("expand config");
+
+        let on_start = config.hooks.on_start.as_ref().expect("on-start hook");
+        assert_eq!(on_start.print, "Starting check.\n");
+        assert_eq!(on_start.confirm, None);
+        assert_eq!(
+            on_start.repair_instruction,
+            crate::config_types::DEFAULT_CHECK_HOOK_REPAIR_INSTRUCTION
+        );
+        let on_pass = config.hooks.on_pass.as_ref().expect("on-pass hook");
+        assert_eq!(on_pass.print, "Type pass:\n");
+        assert_eq!(on_pass.confirm.as_deref(), Some("pass"));
+        assert_eq!(on_pass.repair_instruction, "Run the blocker fix.");
+    }
+
+    #[test]
     fn preset_supplies_expectation_field_defaults() {
         let raw: RawCheckConfig = serde_saphyr::from_str(
             r#"

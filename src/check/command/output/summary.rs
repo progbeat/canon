@@ -25,11 +25,15 @@ pub(crate) fn write_summary_line(
 
 fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -> String {
     let SummaryOutcomeCounts {
+        blocked,
         passed,
         failed,
         errors,
     } = summary_outcome_counts(report);
     let mut outcomes = Vec::new();
+    if blocked > 0 {
+        outcomes.push(format!("{} blocked", blocked));
+    }
     if failed > 0 {
         outcomes.push(format!("{} failed", failed));
     }
@@ -115,6 +119,7 @@ fn pass_improvement_notice(count: usize) -> Option<String> {
 }
 
 pub(crate) struct SummaryOutcomeCounts {
+    pub(crate) blocked: usize,
     pub(crate) passed: usize,
     pub(crate) failed: usize,
     pub(crate) errors: usize,
@@ -122,6 +127,7 @@ pub(crate) struct SummaryOutcomeCounts {
 
 pub(crate) fn summary_outcome_counts(report: &CheckRunReport) -> SummaryOutcomeCounts {
     let mut counts = SummaryOutcomeCounts {
+        blocked: usize::from(report.blocked.is_some()),
         passed: 0,
         failed: 0,
         errors: 0,

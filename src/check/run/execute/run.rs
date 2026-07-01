@@ -9,7 +9,7 @@ use crate::check::core::{
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::run::selection::{
     order_by_latest_non_pass, select_expectations_after_cache, CacheFilterContext,
-    CachedExpectationHit, CachedFailureMode,
+    CachedExpectationHit, CachedNonPassPolicy,
 };
 use crate::evaluator::EvaluatorRunner;
 use crate::time::unix_timestamp;
@@ -78,6 +78,10 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         let source = runtime
             .tree_source()
             .ok_or_else(|| current_error!("missing Git tree source".to_string()))?;
+        // Explicit selectors are still routed through this component, but the
+        // cache selector returns before any cache lookup when
+        // `selectors_provided` is true. That keeps forced selections in the
+        // evaluator queue even if reusable cached results exist.
         let check_work = run_try!(select_expectations_after_cache(
             CacheFilterContext {
                 root,
@@ -89,15 +93,16 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             options,
             run_try!(unix_timestamp()),
             if options.selectors_provided {
-                CachedFailureMode::Continue
+                CachedNonPassPolicy::EvaluateUncached
             } else {
-                CachedFailureMode::StopDefaultSelection
+                CachedNonPassPolicy::LeaveUncachedPending
             },
         ));
         // `check_work.selected_for_evaluation` is already the final mutable
         // Selected Expectations set for evaluator work after cached-result
-        // policy. The canon-check-order policy begins from this post-cache set;
-        // cached hits below are report-only and do not start evaluator work.
+        // policy. If a default run has a cached non-pass, uncached expectations
+        // are pending rather than selected. The canon-check-order policy begins
+        // only from this post-cache evaluator queue plus cached report work.
         // Cached hits reuse results while evaluate items still require evaluator
         // work, but both are ordered together for the public check run.
         run_try!(order_check_work(

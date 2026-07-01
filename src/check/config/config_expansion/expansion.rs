@@ -42,11 +42,21 @@ pub(crate) fn expand_raw_check_config_with_options(
     source: CheckConfigSource,
     options: CheckConfigExpansionOptions<'_>,
 ) -> Result<CheckConfig, String> {
+    let RawCheckConfig {
+        version,
+        presets,
+        hooks,
+        agent,
+        expectations: raw_expectations,
+    } = raw;
     // Raw expansion is the only layer that consumes preset names. Command
     // execution receives the returned `CheckConfig`, which carries resolved
     // agent/expectation fields and no preset map to inspect later.
-    let raw_presets = raw_presets_from_config(raw.presets, raw.agent)?;
+    let raw_presets = raw_presets_from_config(presets, agent)?;
     let resolved_presets = resolve_presets(raw_presets)?;
+    let hooks = hooks
+        .map(crate::config_types::RawCheckHooksConfig::resolve)
+        .unwrap_or_default();
     let default_agent_preset = options.default_agent_preset.unwrap_or("default");
     let default_agent = resolved_presets
         .get(default_agent_preset)
@@ -61,12 +71,13 @@ pub(crate) fn expand_raw_check_config_with_options(
             include_stack: Vec::new(),
             expectations: Vec::new(),
         };
-        expansion.expand_items(config_path, raw.expectations)?;
+        expansion.expand_items(config_path, raw_expectations)?;
         expansion.expectations
     };
     Ok(CheckConfig {
-        version: raw.version,
+        version,
         agent: default_agent,
+        hooks,
         expectations,
     })
 }

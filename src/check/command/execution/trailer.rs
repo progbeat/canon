@@ -5,6 +5,7 @@ use crate::check::core::{CheckCommandArgs, CheckRunReport};
 use crate::check::CHECK_PATH;
 use crate::git::TreeSource;
 use crate::scope::normalize_repo_path;
+use crate::token_usage_types::TokenUsage;
 use std::io::Write;
 use std::path::Path;
 use std::time::Instant;
@@ -17,7 +18,7 @@ pub(super) struct CompletedCheckRun {
 
 pub(super) fn check_report_passed(report: &CheckRunReport) -> bool {
     let counts = summary_outcome_counts(report);
-    counts.failed == 0 && counts.errors == 0
+    counts.blocked == 0 && counts.failed == 0 && counts.errors == 0
 }
 
 pub(super) fn check_command_writes_agent_message(
@@ -49,6 +50,15 @@ pub(super) fn write_check_trailer(
     started: Instant,
 ) -> Result<(), String> {
     let usage = collect_check_token_usage(runner);
+    write_check_trailer_with_usage(result_output, report, started, usage)
+}
+
+pub(super) fn write_check_trailer_with_usage(
+    result_output: &mut dyn Write,
+    report: &CheckRunReport,
+    started: Instant,
+    usage: Option<TokenUsage>,
+) -> Result<(), String> {
     print_token_usage_summary(usage)?;
     write_summary_line(result_output, report, started.elapsed())
 }
@@ -90,10 +100,6 @@ mod tests {
             against_tree_explicit: false,
             in_place: false,
             no_sandbox: false,
-            query: None,
-            default_agent_preset: None,
-            query_scope: Vec::new(),
-            query_scope_provided: false,
             options: RawCheckOptions::default(),
         }
     }

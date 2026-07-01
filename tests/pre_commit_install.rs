@@ -13,13 +13,13 @@ fn temp_repo() -> PathBuf {
         .unwrap()
         .as_nanos();
     std::env::temp_dir().join(format!(
-        "canon-hook-install-{}-{unique}",
+        "canon-pre-commit-install-{}-{unique}",
         std::process::id()
     ))
 }
 
 #[test]
-fn hook_install_allows_unrelated_default_hook_files() {
+fn pre_commit_install_allows_unrelated_default_hook_files() {
     let repo = temp_repo();
     fs::create_dir_all(&repo).unwrap();
 
@@ -33,7 +33,7 @@ fn hook_install_allows_unrelated_default_hook_files() {
     fs::write(repo.join(".git/hooks/post-commit"), "#!/usr/bin/env sh\n").unwrap();
 
     let output = canon()
-        .args(["hook", "install"])
+        .args(["pre-commit", "install"])
         .current_dir(&repo)
         .output()
         .unwrap();

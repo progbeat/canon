@@ -29,9 +29,18 @@ pub(crate) struct CheckCommandArgs {
     pub(crate) against_tree_explicit: bool,
     pub(crate) in_place: bool,
     pub(crate) no_sandbox: bool,
-    pub(crate) query: Option<String>,
+    pub(crate) options: RawCheckOptions,
+}
+
+pub(crate) struct AskCommandArgs {
+    pub(crate) config_path: PathBuf,
+    pub(crate) tree: String,
+    pub(crate) against_tree: String,
+    pub(crate) against_tree_explicit: bool,
+    pub(crate) in_place: bool,
+    pub(crate) no_sandbox: bool,
+    pub(crate) question: String,
     pub(crate) default_agent_preset: Option<String>,
     pub(crate) query_scope: Vec<String>,
     pub(crate) query_scope_provided: bool,
-    pub(crate) options: RawCheckOptions,
 }

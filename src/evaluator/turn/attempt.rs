@@ -39,6 +39,11 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
             output_schema,
         },
     )?;
+    // One evaluator turn asks for exactly one interrogation short ID. The
+    // parser rejects missing, already-answered, or extra short IDs to enforce
+    // the Interrogation Policy for that single requested interrogation. If a
+    // future check turn batches multiple requested interrogations, this
+    // boundary must change from `short_id` to the requested short-ID set.
     let (parsed, schema_valid) = match parse_visible_evaluator_response(
         parser_cache,
         &response.text,

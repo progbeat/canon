@@ -69,6 +69,9 @@ pub(crate) fn check_agent_messages(
     report: &CheckRunReport,
     run_start_pass_ids: &BTreeSet<String>,
 ) -> Vec<String> {
+    if let Some(blocked) = &report.blocked {
+        return vec![blocked.repair_instruction.clone()];
+    }
     let num_new_passes = current_passes_without_prior_pass_count(report, run_start_pass_ids);
     let num_regressions = current_failures_with_prior_pass_count(report, run_start_pass_ids);
     let issue_ids = report_issue_display_ids(report);
@@ -136,7 +139,9 @@ fn current_failures_with_prior_pass_count(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::check::core::{CheckRecord, CheckResult, CheckRunReport, SelectedExpectation};
+    use crate::check::core::{
+        BlockedCheckHook, CheckRecord, CheckResult, CheckRunReport, SelectedExpectation,
+    };
     use crate::config_types::{AgentConfig, CheckConfig, Expectation};
     use crate::git::{TreeSource, VisibleTreeOidCache};
     use crate::hash::full_scope;
@@ -189,6 +194,23 @@ mod tests {
     }
 
     #[test]
+    fn blocked_hook_agent_message_is_repair_instruction() {
+        let repair_instruction = "Run the required checks, then rerun canon.".to_string();
+        let report = CheckRunReport {
+            records: Vec::new(),
+            cached: Vec::new(),
+            blocked: Some(BlockedCheckHook {
+                repair_instruction: repair_instruction.clone(),
+            }),
+            skipped: 0,
+        };
+
+        let messages = check_agent_messages(&report, &BTreeSet::new());
+
+        assert_eq!(messages, vec![repair_instruction]);
+    }
+
+    #[test]
     fn prior_pass_regression_agent_message_repairs_instead_of_commits() {
         let root = git_project("prior-pass-regression-agent-message");
         let agent = AgentConfig::default();
@@ -198,6 +220,7 @@ mod tests {
         let report = CheckRunReport {
             records: vec![staged_scope_record(&root, &expectation, &scope, "no")],
             cached: Vec::new(),
+            blocked: None,
             skipped: 0,
         };
         let run_start_pass_ids = BTreeSet::from([expectation.id.clone()]);
@@ -221,6 +244,7 @@ mod tests {
         CheckRunReport {
             records: vec![staged_scope_record(root, expectation, scope, "yes")],
             cached: Vec::new(),
+            blocked: None,
             skipped: 0,
         }
     }
@@ -256,6 +280,7 @@ mod tests {
         CheckConfig {
             version: 1,
             agent: agent.clone(),
+            hooks: Default::default(),
             expectations: vec![Expectation {
                 q: "Does it pass?".to_string(),
                 a: "yes".to_string(),

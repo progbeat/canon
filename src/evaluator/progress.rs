@@ -138,21 +138,17 @@ impl EvaluatorProgress {
             .lock()
             .map_err(|_| "evaluator progress state poisoned".to_string())?;
         let mut markers = Vec::new();
-        let terminal_turn_timeout_due =
-            state.has_event_before_or_at(EvaluatorProgressEventKind::TurnTimeout, now);
-        if *next_marker_at <= now {
+        while *next_marker_at <= now {
             let marker_at = *next_marker_at;
             let window_start = marker_at - interval;
             markers.push(state.marker_for_window(window_start, marker_at));
             state.events.retain(|event| event.at > marker_at);
-            *next_marker_at = now + interval;
+            *next_marker_at += interval;
         }
-        if terminal_turn_timeout_due {
-            state.events.retain(|event| event.at > now);
-            if markers.last() != Some(&EvaluatorProgressMarker::TurnTimeout) {
-                markers.push(EvaluatorProgressMarker::TurnTimeout);
-            }
-        }
+        let final_window_start = *next_marker_at - interval;
+        markers.push(state.marker_for_window(final_window_start, now));
+        state.events.retain(|event| event.at > now);
+        *next_marker_at = now + interval;
         Ok(markers)
     }
 }
@@ -227,12 +223,6 @@ impl EvaluatorProgressState {
             }
         }
         EvaluatorProgressMarker::NoHigherPriorityEvent
-    }
-
-    fn has_event_before_or_at(&self, kind: EvaluatorProgressEventKind, now: Instant) -> bool {
-        self.events
-            .iter()
-            .any(|event| event.kind == kind && event.at <= now)
     }
 }
 
@@ -401,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_markers_due_keeps_terminal_turn_timeout_before_overdue_window() {
+    fn completion_markers_due_emits_overdue_window_then_final_window() {
         let progress = EvaluatorProgress::new();
         let interval = Duration::from_secs(60);
         let start = Instant::now();
@@ -411,7 +401,7 @@ mod tests {
             .state
             .lock()
             .unwrap()
-            .record_turn_timeout_at(start + Duration::from_secs(30));
+            .record_turn_timeout_at(start + Duration::from_secs(125));
 
         let markers = progress
             .completion_markers_due(
@@ -428,5 +418,27 @@ mod tests {
                 EvaluatorProgressMarker::TurnTimeout
             ]
         );
+    }
+
+    #[test]
+    fn completion_markers_due_emits_final_marker_for_zero_full_minutes() {
+        let progress = EvaluatorProgress::new();
+        let interval = Duration::from_secs(60);
+        let start = Instant::now();
+        let mut next_marker_at = start + interval;
+
+        let markers = progress
+            .completion_markers_due(
+                &mut next_marker_at,
+                start + Duration::from_secs(1),
+                interval,
+            )
+            .unwrap();
+
+        assert_eq!(
+            markers,
+            vec![EvaluatorProgressMarker::NoHigherPriorityEvent]
+        );
+        assert_eq!(next_marker_at, start + Duration::from_secs(61));
     }
 }
