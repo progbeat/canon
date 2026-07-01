@@ -1,6 +1,6 @@
 # AGENTS.md
 
-- To run `canon check`, use `cargo run -- check` from the project root.
+- Alternate repeated `canon check` runs between `cargo run -- check` and the Docker wrapper to exercise both local and containerized paths.
 - After a successful commit, rebuild and refresh the installed `canon` binary available on PATH.
 - Treat tokens as a scarce resource. Avoid increasing token usage unless the correctness benefit justifies it, and prefer designs that preserve or reduce the model work needed to answer canon questions correctly.
 - If the evaluator returns a valid answer that does not match the expected answer, never try to influence the answer through developer instructions.
@@ -11,9 +11,9 @@
 
 ## AI Docs
 
-Use `docs/ai/FAQ.md` for compact AI runbook notes: recurring failures, reliable fixes, project gotchas, navigation tips, and ideas that reduce future confusion.
+Use `docs/ai/**` for compact notes that reduce future confusion: recurring failures, reliable fixes, project gotchas, navigation tips, canon pain points, questionable canon decisions, implementation concerns, and improvement ideas.
 
-You may edit `docs/ai/**` when useful, including human-facing notes about canon pain points, questionable canon decisions, implementation concerns, or improvement ideas.
+You may edit `docs/ai/**` when useful.
 
 Keep `docs/ai/**` small. Do not store raw logs, long outputs, transcripts, duplicate notes, or stale complaints.
 
