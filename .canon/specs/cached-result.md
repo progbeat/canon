@@ -1,8 +1,9 @@
 # Cached Result
 
-If the last fail record has `visibleTreeOid` equal to the scoped tree OID of its `visibleScope` in the checked tree, the **same-tree result** for that expectation is `fail`.
+A **same-tree matching record** for an expectation is a `pass` or `fail` record whose `visibleTreeOid` is equal to the scoped tree OID of that record's `visibleScope` in the checked tree.
 
-Otherwise, if the last pass record has `visibleTreeOid` equal to the scoped tree OID of its `visibleScope` in the checked tree, the **same-tree result** for that expectation is `pass`.
+A **same-tree result** for an expectation exists when at least one same-tree matching record exists.
+The same-tree result is the result of the same-tree matching record with the latest `responseTimestamp`.
 
 A **cooldown result** for an expectation exists when at least one of the following is true:
 
