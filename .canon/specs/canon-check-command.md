@@ -104,7 +104,7 @@ The outcome text is surrounded by spaces and padded with `=` characters on both 
 
 Outcome labels follow pytest pluralization: `failed`, `blocked`, `passed`, and `pending` are used for both singular and plural counts; `error` is used for one error and `errors` for every other error count.
 
-`blocked` is the number of check hooks that blocked completion.
+`blocked` is the number of hooks that blocked completion.
 `passed` is the number of expectations whose result is pass.
 `failed` is the number of expectations whose result is fail.
 `errors` is the number of expectations that encountered errors during evaluation in this run.
