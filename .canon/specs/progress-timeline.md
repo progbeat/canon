@@ -18,6 +18,8 @@ The marker is chosen by the first matching rule for the interval:
 ⇄  a minute during which an evaluator model fallback started
 ↻  a minute during which a fresh-thread retry after a short-ID response error started
 ↗  a minute during which a full-scope retry started
+⤡  a minute during which a q-scope verification started and that same verification returned `ScopeTooNarrow`
+↖  a minute during which a q-scope verification returned `ScopeTooNarrow`
 ↘  a minute during which a q-scope verification started
 .  a minute during which no higher-priority marker applied
 ```

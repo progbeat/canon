@@ -34,6 +34,17 @@ presets:
       - "AGENTS.md"
       - "Cargo.lock"
       - "LICENSE"
+  pr-review:
+    <<: *default_preset
+    target: diff
+    diff-from: master
+    models: ["gpt-5.5"]
+    ignore:
+      - "docs/ai/**"
+      - "skills/**"
+      - "AGENTS.md"
+      - "Cargo.lock"
+      - "LICENSE"
 
 expectations:
   - include: expects/*.yml
