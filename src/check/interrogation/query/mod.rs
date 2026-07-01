@@ -117,7 +117,7 @@ mod tests {
     use crate::check::core::Cooldown;
     use crate::check::interrogation::state::{CheckRuntime, CheckTreeContext};
     use crate::config_types::{AgentConfig, CheckConfig, CheckHooksConfig, DEFAULT_DIFF_FROM};
-    use crate::git::{empty_tree_oid, staged_tree_oid, TreeSource};
+    use crate::git::{staged_tree_oid, TreeSource};
     use crate::hash::full_scope;
     use crate::staged::StagedWorktreeView;
     use crate::token_usage_types::{EvaluatorTurnUsage, TokenUsage};
@@ -199,8 +199,8 @@ mod tests {
             StagedWorktreeView::apply_for_tree_source(&root, tree_source.clone()).unwrap();
         let checked_tree_oid = staged_tree_oid(&root).unwrap();
         let tree_context = CheckTreeContext {
+            against_tree_oid: checked_tree_oid.clone(),
             checked_tree_oid,
-            against_tree_oid: empty_tree_oid(&root).unwrap(),
             checked_file_count: 1,
         };
         let runtime = CheckRuntime::materialized(
@@ -251,7 +251,7 @@ mod tests {
         .unwrap();
 
         let xpec_state_dir = root.join(".git").join("canon").join("xpecs");
-        assert_eq!(result.answer.answer, "yes");
+        assert_eq!(result.answer.answer, "yes", "{}", result.answer.evidence);
         assert!(!xpec_state_dir.exists());
         let _ = fs::remove_dir_all(&root);
     }
