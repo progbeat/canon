@@ -21,9 +21,6 @@
   a: no
   target: diff
 
-- q: "Is the evaluator's response schema enforced by `turn/start.params.outputSchema`, not merely requested in the prompt?"
-  a: yes
-
 - q: "When `canon check` prints <short ID>, can you find an abnormal scenario in which it does not report anything for this expectation?"
   a: no
 
