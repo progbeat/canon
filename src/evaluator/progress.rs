@@ -108,19 +108,22 @@ impl EvaluatorProgress {
         now: Instant,
         interval: Duration,
     ) -> Result<Option<EvaluatorProgressMarker>, String> {
-        if interval.is_zero() || *next_marker_at > now {
+        debug_assert!(!interval.is_zero(), "progress marker interval is zero");
+        if *next_marker_at > now {
             return Ok(None);
         }
         let mut state = self
             .state
             .lock()
             .map_err(|_| "evaluator progress state poisoned".to_string())?;
-        // One call classifies one scheduled elapsed-marker tick. The output
-        // worker owns the one-minute cadence; this helper owns marker priority.
-        let window_start = now - interval;
-        let marker = state.marker_for_window(window_start, now);
-        state.events.retain(|event| event.at > now);
-        *next_marker_at = now + interval;
+        // One call classifies one scheduled elapsed-marker tick. If the output
+        // worker wakes late, advancing by the scheduled tick lets zero-duration
+        // waits emit the skipped minute markers in order.
+        let marker_at = *next_marker_at;
+        let window_start = marker_at - interval;
+        let marker = state.marker_for_window(window_start, marker_at);
+        state.events.retain(|event| event.at > marker_at);
+        *next_marker_at += interval;
         Ok(Some(marker))
     }
 
@@ -130,9 +133,7 @@ impl EvaluatorProgress {
         now: Instant,
         interval: Duration,
     ) -> Result<Vec<EvaluatorProgressMarker>, String> {
-        if interval.is_zero() {
-            return Ok(Vec::new());
-        }
+        debug_assert!(!interval.is_zero(), "progress marker interval is zero");
         let mut state = self
             .state
             .lock()
@@ -358,6 +359,39 @@ mod tests {
             .unwrap();
 
         assert_eq!(marker, Some(EvaluatorProgressMarker::QScopeVerification));
+    }
+
+    #[test]
+    fn elapsed_marker_due_preserves_scheduled_ticks_after_late_wakeup() {
+        let progress = EvaluatorProgress::new();
+        let interval = Duration::from_secs(60);
+        let start = Instant::now();
+        let mut next_marker_at = start + interval;
+
+        {
+            let mut state = progress.state.lock().unwrap();
+            state.record_full_scope_retry_started_at(start + Duration::from_secs(70));
+            state.record_q_scope_verification_started_at(start + Duration::from_secs(170));
+        }
+
+        let late_now = start + Duration::from_secs(181);
+        let mut markers = Vec::new();
+        while let Some(marker) = progress
+            .elapsed_marker_due(&mut next_marker_at, late_now, interval)
+            .unwrap()
+        {
+            markers.push(marker);
+        }
+
+        assert_eq!(
+            markers,
+            vec![
+                EvaluatorProgressMarker::NoHigherPriorityEvent,
+                EvaluatorProgressMarker::FullScopeRetry,
+                EvaluatorProgressMarker::QScopeVerification
+            ]
+        );
+        assert_eq!(next_marker_at, start + Duration::from_secs(240));
     }
 
     #[test]

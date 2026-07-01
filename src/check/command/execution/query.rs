@@ -214,17 +214,26 @@ fn run_prepared_query(
         Ok(result) => result,
         Err(err) => {
             let answer = ParsedAnswer::error(INTERNAL_ERROR_UNPARSABLE.to_string(), err.clone());
-            finish_query_output(started_report, &answer)?;
-            print_query_token_usage(runner)?;
+            finish_query_output_and_print_usage(started_report, &answer, runner)?;
             return Err(err);
         }
     };
-    finish_query_output(started_report, &result.answer)?;
-    print_query_token_usage(runner)?;
+    finish_query_output_and_print_usage(started_report, &result.answer, runner)?;
     if let Some(reason) = query_human_review_reason(&result) {
         return Err(format!("query requires human review: {}", reason));
     }
     Ok(())
+}
+
+fn finish_query_output_and_print_usage(
+    started_report: crate::check::command::output::StartedExpectationReportOutput,
+    answer: &ParsedAnswer,
+    runner: &mut LazyAppServerRunner,
+) -> Result<(), String> {
+    let output_result = finish_query_output(started_report, answer);
+    let usage_result = print_query_token_usage(runner);
+    output_result?;
+    usage_result
 }
 
 fn print_query_token_usage(runner: &mut LazyAppServerRunner) -> Result<(), String> {
