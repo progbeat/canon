@@ -49,15 +49,61 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
             ));
         }
         if let Some(cooldown) = expectation.cooldown.as_ref() {
-            // Cached Result defines `cooldown` as valid check.yml configuration.
-            // Command modes that cannot read cached last-result state may reject
-            // a parsed expectation later without changing config validity.
+            // Config validation checks the cooldown syntax. Command modes apply
+            // their own compatibility rules after config expansion.
             parse_cooldown(cooldown)
                 .map_err(|err| format!("expectation {} cooldown: {}", number, err))?;
         }
         validate_agent_config(&expectation.agent, &format!("expectation {}", number))?;
     }
     Ok(())
+}
+
+pub(crate) fn validate_in_place_check_config(config: &CheckConfig) -> Result<(), String> {
+    validate_in_place_global_config(&config.agent)?;
+    validate_in_place_expectation_config(&config.agent, &config.expectations)
+}
+
+pub(crate) fn validate_in_place_global_config(config_agent: &AgentConfig) -> Result<(), String> {
+    if config_agent.ignore.is_empty() {
+        return Ok(());
+    }
+    Err("configured Git-backed-only ignore invalid in in-place mode".to_string())
+}
+
+fn validate_in_place_expectation_config(
+    config_agent: &AgentConfig,
+    expectations: &[Expectation],
+) -> Result<(), String> {
+    for (index, expectation) in expectations.iter().enumerate() {
+        let unsupported = in_place_unsupported_fields(config_agent, expectation);
+        if !unsupported.is_empty() {
+            return Err(format!(
+                "expectation {} has Git-backed-only config: {}",
+                index + 1,
+                unsupported.join(", ")
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn in_place_unsupported_fields(
+    config_agent: &AgentConfig,
+    expectation: &Expectation,
+) -> Vec<&'static str> {
+    [
+        (expectation.diff_from_configured, "diff-from"),
+        (expectation.target.is_some(), "target"),
+        (expectation.cooldown.is_some(), "cooldown"),
+        (
+            !config_agent.ignore.is_empty() || !expectation.agent.ignore.is_empty(),
+            "ignore",
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(configured, name)| configured.then_some(name))
+    .collect()
 }
 
 fn validate_expected_answer_matches_interrogation_response_schema_answer_pattern(
@@ -337,7 +383,7 @@ pub(crate) fn normalize_agent_ignore_pattern_for_config(value: &str) -> Result<S
 mod tests {
     use super::push_config_error_unicode_escape;
     use super::render_expectation_validation_error;
-    use super::validate_check_config;
+    use super::{validate_check_config, validate_in_place_check_config};
     use crate::check::core::ERROR_SCOPE_TOO_NARROW;
     use crate::config_types::{AgentConfig, CheckConfig, Expectation, ExpectationTarget};
 
@@ -425,11 +471,43 @@ mod tests {
     }
 
     #[test]
+    fn in_place_rejects_git_backed_only_expectation_config_after_expansion() {
+        let agent = AgentConfig::default();
+        let mut expectation = expectation(&agent, None);
+        expectation.diff_from_configured = true;
+        let config = CheckConfig {
+            version: 1,
+            agent,
+            hooks: Default::default(),
+            expectations: vec![expectation],
+        };
+
+        assert_eq!(
+            validate_in_place_check_config(&config).unwrap_err(),
+            "expectation 1 has Git-backed-only config: diff-from"
+        );
+    }
+
+    #[test]
     fn unicode_escape_uses_surrogate_pairs_for_non_bmp_codepoints() {
         let mut escaped = String::new();
 
         push_config_error_unicode_escape(&mut escaped, '\u{1f600}');
 
         assert_eq!(escaped, "\\ud83d\\ude00");
+    }
+
+    fn expectation(agent: &AgentConfig, target: Option<ExpectationTarget>) -> Expectation {
+        Expectation {
+            q: "Does this behavior work?".to_string(),
+            a: "yes".to_string(),
+            question_context: String::new(),
+            diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
+            diff_from_configured: false,
+            target,
+            question_answer_only: false,
+            agent: agent.clone(),
+            cooldown: None,
+        }
     }
 }

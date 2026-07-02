@@ -3,12 +3,12 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 pub(crate) struct CheckOptions {
-    // CLI-expanded selected expectations before cache filtering finalizes the
-    // mutable Selected Expectations set for evaluator work.
-    pub(crate) selected: Vec<SelectedExpectation>,
+    // CLI-expanded candidates before cache filtering determines the final
+    // evaluator queue.
+    pub(crate) pre_cache_candidates: Vec<SelectedExpectation>,
     pub(crate) selectors_provided: bool,
-    // `--keep-going` continues after non-pass results among selected
-    // expectations; it does not bypass default cache-based selection.
+    // `--keep-going` continues evaluator work after non-pass results; it does
+    // not bypass default cache-based selection.
     pub(crate) keep_going: bool,
     pub(crate) ignore_cooldown: bool,
     pub(crate) break_after_tokens: Option<u64>,

@@ -32,8 +32,7 @@ pub(crate) use interrogation::{
 };
 pub(crate) use run::{
     expectation_identities, run_check_with_runner_and_caches,
-    run_temporary_expectation_interrogation, select_expectations_with_identities, skipped_count,
-    CheckRunCaches, CheckRunSideEffects, ExpectationIdentity,
-    TemporaryExpectationInterrogationContext,
+    run_temporary_expectation_interrogation, select_expectations_with_identities, CheckRunCaches,
+    CheckRunSideEffects, ExpectationIdentity, TemporaryExpectationInterrogationContext,
 };
 pub(crate) use show::{run_show_command, show_help_command};

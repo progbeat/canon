@@ -421,9 +421,10 @@ presets:
 hooks:
   on-start: "Starting check.\n"
   on-pass:
-    print: "Type pass:\n"
-    confirm: "pass"
-    repair-instruction: "Run the blocker fix."
+    - print: "Type pass:\n"
+      confirm: "pass"
+      repair-instruction: "Run the blocker fix."
+    - "Done.\n"
 expectations:
   - q: "Does hook config parse?"
     a: "yes"
@@ -440,17 +441,26 @@ expectations:
         )
         .expect("expand config");
 
-        let on_start = config.hooks.on_start.as_ref().expect("on-start hook");
+        assert_eq!(config.hooks.on_start.len(), 1);
+        let on_start = &config.hooks.on_start[0];
         assert_eq!(on_start.print, "Starting check.\n");
         assert_eq!(on_start.confirm, None);
         assert_eq!(
             on_start.repair_instruction,
             crate::config_types::DEFAULT_CHECK_HOOK_REPAIR_INSTRUCTION
         );
-        let on_pass = config.hooks.on_pass.as_ref().expect("on-pass hook");
+        assert_eq!(config.hooks.on_pass.len(), 2);
+        let on_pass = &config.hooks.on_pass[0];
         assert_eq!(on_pass.print, "Type pass:\n");
         assert_eq!(on_pass.confirm.as_deref(), Some("pass"));
         assert_eq!(on_pass.repair_instruction, "Run the blocker fix.");
+        let on_pass = &config.hooks.on_pass[1];
+        assert_eq!(on_pass.print, "Done.\n");
+        assert_eq!(on_pass.confirm, None);
+        assert_eq!(
+            on_pass.repair_instruction,
+            crate::config_types::DEFAULT_CHECK_HOOK_REPAIR_INSTRUCTION
+        );
     }
 
     #[test]

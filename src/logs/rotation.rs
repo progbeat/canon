@@ -47,9 +47,6 @@ pub(crate) fn rotate_diagnostic_logs_with_config(
     if should_rotate {
         rotate_active_diagnostic_logs(log_dir, files)?;
     }
-    // Rotated runtime logs are retained within the configured total size
-    // budget. Pruning enforces that bound instead of changing event semantics.
-    prune_diagnostic_logs_to_limit(log_dir, config)?;
     Ok(())
 }
 
@@ -77,25 +74,33 @@ pub(crate) fn rotate_active_diagnostic_logs(
     Ok(())
 }
 
-pub(crate) fn prune_diagnostic_logs_to_limit(
+pub(crate) fn rotate_active_diagnostic_logs_to_fit(
     log_dir: &Path,
     config: &DiagnosticLogConfig,
+    incoming_size: u64,
 ) -> DiagnosticLogResult<()> {
     if diagnostic_logs_explicitly_disabled(config) {
         return Ok(());
     }
-    // Runtime-log rotation retains older JSONL files in LOGS_DIR while they
-    // fit the configured `canon.logs.maxSize` budget. This pruning is the
-    // Configuration size limit, not a different log location or format.
     let files = diagnostic_log_files(config)?;
-    for index in (1..files.len()).rev() {
-        if diagnostic_log_dir_size(log_dir, config)? <= config.max_bytes {
+    loop {
+        let size = diagnostic_log_dir_size(log_dir, config)?;
+        let total =
+            size.checked_add(incoming_size)
+                .ok_or_else(|| DiagnosticLogError::SizeOverflow {
+                    path: log_dir.to_path_buf(),
+                })?;
+        if total <= config.max_bytes {
             return Ok(());
         }
-        let path = log_dir.join(files[index]);
-        remove_file_if_exists(&path)?;
+        rotate_active_diagnostic_logs(log_dir, files)?;
+        if diagnostic_log_dir_size(log_dir, config)? >= size {
+            return Err(DiagnosticLogError::RecordTooLarge {
+                size: total,
+                max_bytes: config.max_bytes,
+            });
+        }
     }
-    Ok(())
 }
 
 fn rename_file_if_exists(from: &Path, to: &Path) -> DiagnosticLogResult<()> {

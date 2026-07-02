@@ -1,12 +1,12 @@
-use super::in_place::validate_in_place_global_config;
 use crate::app::LazyAppServerRunner;
 use crate::check::command::output::{
     finish_query_output, start_query_report_output, SharedCheckOutput,
 };
 use crate::check::command::{
-    collect_check_token_usage, prepare_check_execution, print_token_usage_summary,
-    PrepareCheckExecutionOptions,
+    collect_check_token_usage, prepare_git_backed_check_execution, print_token_usage_summary,
+    GitBackedCheckStorage, PrepareGitBackedCheckExecutionOptions,
 };
+use crate::check::config::validation::validate_in_place_global_config;
 use crate::check::core::{ParsedAnswer, INTERNAL_ERROR_UNPARSABLE};
 use crate::check::interrogation::query::{
     query_human_review_reason, run_query_with_runner, QueryExpectationContext, QueryRequest,
@@ -37,7 +37,38 @@ pub(crate) struct CheckQueryCommand<'a> {
     pub(crate) check_caches: &'a mut CheckRunCaches,
 }
 
-pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<(), String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CheckQueryError {
+    Message(String),
+    ReviewRequired(&'static str),
+}
+
+impl CheckQueryError {
+    pub(crate) fn public_output_already_reported(&self) -> bool {
+        matches!(self, CheckQueryError::ReviewRequired(_))
+    }
+}
+
+impl std::fmt::Display for CheckQueryError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CheckQueryError::Message(message) => formatter.write_str(message),
+            CheckQueryError::ReviewRequired(reason) => {
+                write!(formatter, "query requires human review: {reason}")
+            }
+        }
+    }
+}
+
+impl From<String> for CheckQueryError {
+    fn from(message: String) -> CheckQueryError {
+        CheckQueryError::Message(message)
+    }
+}
+
+pub(crate) fn run_check_query_command(
+    command: CheckQueryCommand<'_>,
+) -> Result<(), CheckQueryError> {
     let CheckQueryCommand {
         root,
         config,
@@ -68,9 +99,10 @@ pub(crate) fn run_check_query_command(command: CheckQueryCommand<'_>) -> Result<
         diagnostic_log: diagnostic_log.as_mut(),
         check_caches,
     });
-    let finish_error = result.as_ref().err().map(String::as_str);
+    let finish_error = result.as_ref().err().map(ToString::to_string);
     if let Some(writer) = diagnostic_log.as_mut() {
-        write_query_lifecycle_finish_event(writer, finish_error).map_err(|err| err.to_string())?;
+        write_query_lifecycle_finish_event(writer, finish_error.as_deref())
+            .map_err(|err| err.to_string())?;
     }
     result
 }
@@ -91,7 +123,7 @@ struct StartedCheckQueryCommand<'a, 'b> {
 
 fn run_started_check_query_command(
     command: StartedCheckQueryCommand<'_, '_>,
-) -> Result<(), String> {
+) -> Result<(), CheckQueryError> {
     let StartedCheckQueryCommand {
         root,
         config,
@@ -105,6 +137,8 @@ fn run_started_check_query_command(
         mut diagnostic_log,
         check_caches,
     } = command;
+    // Scope sanitization is command validation. A prepared ask starts only
+    // after this succeeds, then sends the temporary xpec to the evaluator.
     let mut enforced_scope = query_enforced_scope(query_scope)?;
     let mut in_place_runner;
     let (runtime, runner): (CheckRuntime<'_>, &mut LazyAppServerRunner) = if in_place {
@@ -121,17 +155,18 @@ fn run_started_check_query_command(
     } else {
         let tree_source = tree_source.ok_or_else(|| "missing query tree source".to_string())?;
         let against_tree = against_tree.ok_or_else(|| "missing query against tree".to_string())?;
-        let mut execution = prepare_check_execution(
+        let mut execution = prepare_git_backed_check_execution(
             root,
             config,
-            PrepareCheckExecutionOptions {
+            PrepareGitBackedCheckExecutionOptions {
                 tree_source,
                 against_tree,
                 no_sandbox,
+                storage: GitBackedCheckStorage::InvocationLocal,
             },
             &mut check_caches.visible_tree_oid,
         )?;
-        let runtime = CheckRuntime::materialized(
+        let runtime = CheckRuntime::materialized_without_persistent_history(
             root,
             &execution.staged_view,
             &execution.tree_source,
@@ -176,7 +211,7 @@ fn run_prepared_query(
     enforced_scope: &mut Vec<String>,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     check_caches: &mut CheckRunCaches,
-) -> Result<(), String> {
+) -> Result<(), CheckQueryError> {
     // `config` is already expanded: command `--preset` can only choose the
     // default agent during raw expansion, before `canon ask` consumes resolved
     // expectation/config fields here.
@@ -190,6 +225,9 @@ fn run_prepared_query(
     let expectation = QueryExpectationContext {
         expectation: &temporary_expectation,
     };
+    // This is the `canon ask` evaluator boundary: every prepared ask creates a
+    // temporary resultless xpec and sends it through the same interrogation path
+    // as check evaluation. There is no cache hit or last-result shortcut here.
     let mut interrogation_run_state =
         InterrogationRunState::new(runtime.no_sandbox() || runtime.is_in_place())?;
     let shared_output = SharedCheckOutput::stdout();
@@ -215,12 +253,12 @@ fn run_prepared_query(
         Err(err) => {
             let answer = ParsedAnswer::error(INTERNAL_ERROR_UNPARSABLE.to_string(), err.clone());
             finish_query_output_and_print_usage(started_report, &answer, runner)?;
-            return Err(err);
+            return Err(CheckQueryError::Message(err));
         }
     };
     finish_query_output_and_print_usage(started_report, &result.answer, runner)?;
     if let Some(reason) = query_human_review_reason(&result) {
-        return Err(format!("query requires human review: {}", reason));
+        return Err(CheckQueryError::ReviewRequired(reason));
     }
     Ok(())
 }
@@ -229,11 +267,14 @@ fn finish_query_output_and_print_usage(
     started_report: crate::check::command::output::StartedExpectationReportOutput,
     answer: &ParsedAnswer,
     runner: &mut LazyAppServerRunner,
-) -> Result<(), String> {
+) -> Result<(), CheckQueryError> {
+    // Compute both results before returning either error. This still attempts
+    // the token usage stderr line when query stdout finishing fails.
     let output_result = finish_query_output(started_report, answer);
     let usage_result = print_query_token_usage(runner);
     output_result?;
-    usage_result
+    usage_result?;
+    Ok(())
 }
 
 fn print_query_token_usage(runner: &mut LazyAppServerRunner) -> Result<(), String> {
@@ -254,7 +295,6 @@ fn temporary_query_expectation(question: &str, agent: &AgentConfig) -> SelectedE
         expected_answer: String::new(),
         question_context: String::new(),
         diff_from: DEFAULT_DIFF_FROM.to_string(),
-        diff_from_configured: false,
         target: None,
         question_answer_only: true,
         agent: agent.clone(),

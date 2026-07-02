@@ -10,7 +10,7 @@ use self::git::{
     unset_git_hooks_path, uses_canon_git_hooks_path, HookInstallPreflight,
 };
 use crate::fs_util::{ensure_dir_without_symlinks, remove_optional_file, replace_file};
-use crate::output::write_stdout_line;
+use crate::output::{write_stderr, write_stdout, write_stdout_line};
 use clap::error::ErrorKind as ClapErrorKind;
 use clap::Command as ClapCommand;
 use std::ffi::OsString;
@@ -67,8 +67,7 @@ fn parse_pre_commit_action(args: &[OsString]) -> Result<Option<HookAction>, Stri
                 ClapErrorKind::DisplayHelp | ClapErrorKind::DisplayVersion
             ) =>
         {
-            err.print()
-                .map_err(|print_err| format!("failed to write help: {}", print_err))?;
+            write_clap_display_error(&err)?;
             return Ok(None);
         }
         Err(err) => return Err(err.to_string()),
@@ -78,6 +77,15 @@ fn parse_pre_commit_action(args: &[OsString]) -> Result<Option<HookAction>, Stri
         Some("uninstall") => Ok(Some(HookAction::Uninstall)),
         Some(action) => Err(format!("unknown pre-commit command: {}", action)),
         None => unreachable!("clap requires a pre-commit subcommand"),
+    }
+}
+
+fn write_clap_display_error(err: &clap::Error) -> Result<(), String> {
+    let rendered = err.to_string();
+    if err.use_stderr() {
+        write_stderr(&rendered)
+    } else {
+        write_stdout(&rendered)
     }
 }
 

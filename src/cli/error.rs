@@ -9,6 +9,7 @@ pub(crate) enum CommandError {
     PwdDoesNotAcceptArguments,
     UnknownOption(String),
     UnknownCommand(String),
+    AskFailed,
     CheckFailed,
     GateFailed,
 }
@@ -45,6 +46,7 @@ impl std::fmt::Display for CommandError {
             CommandError::UnknownCommand(command) => {
                 write!(formatter, "unknown command: {command}")
             }
+            CommandError::AskFailed => formatter.write_str("canon ask failed"),
             CommandError::CheckFailed => formatter.write_str("canon check failed"),
             CommandError::GateFailed => formatter.write_str("canon gate failed"),
         }
@@ -61,7 +63,10 @@ pub(super) fn report_command_error(err: CommandError) -> CommandError {
 fn command_error_has_public_diagnostic(err: &CommandError) -> bool {
     // These commands already wrote their public diagnostics before returning a
     // sentinel error for the process exit status.
-    !matches!(err, CommandError::CheckFailed | CommandError::GateFailed)
+    !matches!(
+        err,
+        CommandError::AskFailed | CommandError::CheckFailed | CommandError::GateFailed
+    )
 }
 
 fn write_command_error_line(err: &CommandError) -> Result<(), String> {
@@ -113,5 +118,12 @@ mod tests {
         let rendered = render_command_error(&CommandError::from("ordinary failure".to_string()));
 
         assert_eq!(rendered, "Error: ordinary failure\n");
+    }
+
+    #[test]
+    fn ask_failed_has_no_extra_public_diagnostic() {
+        assert!(!super::command_error_has_public_diagnostic(
+            &CommandError::AskFailed
+        ));
     }
 }

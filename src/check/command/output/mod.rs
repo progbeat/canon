@@ -85,7 +85,7 @@ mod tests {
     }
 
     #[test]
-    fn summary_counts_cached_failures_separately_from_current_run_errors() {
+    fn summary_counts_cached_non_pass_records() {
         let evaluated_error = review_record_with_id("11111111111111111111", "j");
         let cached_failure = cached_expectation(failed_record_with_id("22222222222222222222", "k"));
         let cached_error = cached_expectation(review_record_with_id("33333333333333333333", "l"));
@@ -100,7 +100,7 @@ mod tests {
 
         assert_eq!(counts.passed, 0);
         assert_eq!(counts.failed, 1);
-        assert_eq!(counts.errors, 1);
+        assert_eq!(counts.errors, 2);
     }
 
     #[test]
@@ -323,7 +323,6 @@ mod tests {
                 expected_answer: record.expected_answer_text().unwrap_or("yes").to_string(),
                 question_context: String::new(),
                 diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
-                diff_from_configured: false,
                 target: None,
                 question_answer_only: true,
                 agent: AgentConfig::default(),

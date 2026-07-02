@@ -7,9 +7,8 @@ pub(crate) fn finish_query_output(
     started_report: StartedExpectationReportOutput,
     answer: &ParsedAnswer,
 ) -> Result<(), String> {
-    // `canon ask` asks one question and writes this query answer. It does
-    // not derive an expectation result, so it reports the evaluator response
-    // after the standalone progress timeline.
+    // `render_query_output` renders only the evaluator response. The started
+    // report wrapper writes the standalone progress timeline line first.
     let output = render_query_output(answer);
     started_report.finish_with_query_output(&output)
 }
@@ -21,7 +20,7 @@ fn render_query_output(answer: &ParsedAnswer) -> String {
         output.push_str(&escape_check_output_text(error));
     } else {
         output.push_str("Observed: ");
-        output.push_str(&escape_check_output_text(&answer.answer));
+        output.push_str(&escape_check_output_text(&answer.observed));
     }
     output.push('\n');
     output.push_str("Evidence: ");

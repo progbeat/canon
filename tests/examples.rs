@@ -260,6 +260,43 @@ expectations:
 }
 
 #[test]
+fn in_place_prohibited_expectation_fields_fail_before_hooks() {
+    let repo = temp_repo("canon-in-place-invalid-config-before-hooks");
+    fs::create_dir_all(repo.join(".canon")).unwrap();
+    fs::write(
+        repo.join(".canon/check.yml"),
+        r#"
+version: 1
+presets:
+  default: {}
+hooks:
+  on-start:
+    print: "This should not print.\n"
+expectations:
+  - q: "Does in-place reject diff-from before hooks?"
+    a: "yes"
+    diff-from: :against-tree
+"#,
+    )
+    .unwrap();
+
+    let output = canon()
+        .args(["check", "--in-place", "unknown-selector"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_dir_all(&repo);
+
+    assert!(!output.status.success());
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "Error: expectation 1 has Git-backed-only config: diff-from\n"
+    );
+}
+
+#[test]
 fn gate_rejects_mixed_canon_and_implementation_changes() {
     let repo = temp_repo("canon-gate-example");
     init_git_repo(&repo);

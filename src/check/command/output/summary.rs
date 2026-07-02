@@ -165,8 +165,7 @@ fn add_cached_summary_record(counts: &mut SummaryOutcomeCounts, record: &CheckRe
     if record.passed() {
         counts.passed += 1;
     } else if record.requires_human_review() {
-        // Human-review last-error records are not cache hits; cache selection
-        // rejects them before cached output or summary accounting.
+        counts.errors += 1;
     } else {
         counts.failed += 1;
     }

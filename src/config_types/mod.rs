@@ -31,8 +31,8 @@ pub(crate) struct RawCheckConfig {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct CheckHooksConfig {
-    pub(crate) on_start: Option<CheckHookConfig>,
-    pub(crate) on_pass: Option<CheckHookConfig>,
+    pub(crate) on_start: Vec<CheckHookConfig>,
+    pub(crate) on_pass: Vec<CheckHookConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +58,7 @@ pub(crate) struct RawCheckHooksConfig {
 pub(crate) enum RawCheckHookConfig {
     Shorthand(String),
     Mapping(RawCheckHookMappingConfig),
+    List(Vec<RawCheckHookConfig>),
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -77,14 +78,30 @@ pub(crate) const DEFAULT_CHECK_HOOK_REPAIR_INSTRUCTION: &str =
 impl RawCheckHooksConfig {
     pub(crate) fn resolve(self) -> CheckHooksConfig {
         CheckHooksConfig {
-            on_start: self.on_start.map(RawCheckHookConfig::resolve),
-            on_pass: self.on_pass.map(RawCheckHookConfig::resolve),
+            on_start: self
+                .on_start
+                .map(RawCheckHookConfig::resolve)
+                .unwrap_or_default(),
+            on_pass: self
+                .on_pass
+                .map(RawCheckHookConfig::resolve)
+                .unwrap_or_default(),
         }
     }
 }
 
 impl RawCheckHookConfig {
-    pub(crate) fn resolve(self) -> CheckHookConfig {
+    pub(crate) fn resolve(self) -> Vec<CheckHookConfig> {
+        match self {
+            RawCheckHookConfig::List(hooks) => hooks
+                .into_iter()
+                .flat_map(RawCheckHookConfig::resolve)
+                .collect(),
+            hook => vec![hook.resolve_one()],
+        }
+    }
+
+    fn resolve_one(self) -> CheckHookConfig {
         match self {
             RawCheckHookConfig::Shorthand(print) => CheckHookConfig {
                 print,
@@ -98,6 +115,7 @@ impl RawCheckHookConfig {
                     .repair_instruction
                     .unwrap_or_else(|| DEFAULT_CHECK_HOOK_REPAIR_INSTRUCTION.to_string()),
             },
+            RawCheckHookConfig::List(_) => unreachable!("hook list is resolved before hook item"),
         }
     }
 }

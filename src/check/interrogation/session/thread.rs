@@ -1,10 +1,12 @@
 use super::model_fallback::write_model_fallback_events;
-use crate::check::core::{InterrogationResult, SelectedExpectation};
-use crate::check::interrogation::finalize_interrogation_response;
+use crate::check::core::{InterrogationAnswer, InterrogationResult, SelectedExpectation};
 use crate::check::interrogation::state::{
     evaluator_prerender_thread_reuse_key, evaluator_rendered_thread_reuse_key, CheckRuntime,
     InterrogationRunState, PrerenderEvaluatorThreadReuseKeyContext,
     RenderedEvaluatorThreadReuseKeyContext,
+};
+use crate::check::interrogation::{
+    finalize_interrogation_answer, interrogation_result_from_answer, InterrogationRequestKind,
 };
 use crate::check::{evaluator_response_output_schema_for_scope, EvaluatorResponseSchemaScope};
 use crate::config_types::{AgentConfig, AGAINST_TREE_DIFF_FROM, DEFAULT_DIFF_FROM};
@@ -29,6 +31,8 @@ pub(crate) struct ThreadTurnRequest<'a> {
     pub(crate) enforced_scope: &'a [String],
     pub(crate) model: Option<&'a str>,
     pub(crate) thinking: &'a str,
+    pub(crate) response_contract: ThreadTurnResponseContract,
+    pub(crate) request_kind: InterrogationRequestKind,
     pub(crate) expectation_id: Option<&'a str>,
     pub(crate) short_id: &'a str,
     pub(crate) question_context: &'a str,
@@ -38,6 +42,44 @@ pub(crate) struct ThreadTurnRequest<'a> {
     pub(crate) template_artifact_paths: &'a [PathBuf],
     pub(crate) last_pass: Option<&'a LastResult>,
     pub(crate) progress: Option<&'a crate::evaluator::EvaluatorProgress>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ThreadTurnResponseContract {
+    ExpectationResult,
+    AdHocQuestion,
+}
+
+impl ThreadTurnResponseContract {
+    fn for_expectation(expectation: &SelectedExpectation) -> ThreadTurnResponseContract {
+        if expectation.expected_answer.is_empty() {
+            ThreadTurnResponseContract::AdHocQuestion
+        } else {
+            ThreadTurnResponseContract::ExpectationResult
+        }
+    }
+
+    fn schema_scope(
+        self,
+        runtime: &CheckRuntime<'_>,
+        enforced_scope: &[String],
+    ) -> EvaluatorResponseSchemaScope {
+        if runtime.evaluator_interrogations_never_hide_files() {
+            return EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion;
+        }
+        match self {
+            ThreadTurnResponseContract::ExpectationResult => {
+                EvaluatorResponseSchemaScope::for_scope_with_question_scope_suggestion(
+                    enforced_scope,
+                )
+            }
+            ThreadTurnResponseContract::AdHocQuestion => {
+                EvaluatorResponseSchemaScope::for_scope_with_question_scope_suggestion(
+                    enforced_scope,
+                )
+            }
+        }
+    }
 }
 
 pub(crate) struct ResolvedDiffFrom<'a> {
@@ -57,6 +99,9 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
     state: &mut InterrogationRunState,
     request: ThreadTurnRequest<'_>,
 ) -> Result<ParsedTurnResponse, EvaluatorError> {
+    request
+        .request_kind
+        .record_started_progress_marker(request.progress);
     let current_visible_tree_oid = runtime
         .visible_tree_oid(
             &mut state.visible_tree_oid_cache,
@@ -278,17 +323,15 @@ fn ask_in_thread<R: EvaluatorRunner>(
     let visible_scope = runtime
         .visible_scope(request.agent, request.enforced_scope)
         .map_err(EvaluatorError::message)?;
-    let schema_scope = if runtime.evaluator_interrogations_never_hide_files() {
-        EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion
-    } else {
-        EvaluatorResponseSchemaScope::for_scope_with_question_scope_suggestion(
-            request.enforced_scope,
-        )
-    };
+    let schema_scope = request
+        .response_contract
+        .schema_scope(runtime, request.enforced_scope);
     let output_schema = evaluator_response_output_schema_for_scope(schema_scope, request.short_id);
     let answered_short_ids = state.answered_short_ids_for_session(session_id);
-    // The evaluator turn boundary owns agent.request/agent.response runtime
-    // log events for the single evaluator request made by this turn.
+    // This is one turn/start request. `ThreadTurnRequest::request_kind`
+    // classifies whether it is an initial request or a non-initial follow-up,
+    // and `ask_with_reused_thread` records any request-start timeline marker
+    // before session setup can emit thread/start.
     let response = ask_evaluator_once(
         runner,
         &turn,
@@ -541,8 +584,37 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
     xpec_state: &mut XpecStateCache,
     enforced_scope: &[String],
     model: Option<&str>,
+    request_kind: InterrogationRequestKind,
     progress: Option<&crate::evaluator::EvaluatorProgress>,
 ) -> Result<InterrogationResult, EvaluatorError> {
+    let answer = interrogate_expectation_answer_with_model(
+        runtime,
+        expectation,
+        runner,
+        diagnostic_log,
+        state,
+        xpec_state,
+        enforced_scope,
+        model,
+        request_kind,
+        progress,
+    )?;
+    interrogation_result_from_answer(expectation, diagnostic_log, answer)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn interrogate_expectation_answer_with_model<R: EvaluatorRunner>(
+    runtime: &CheckRuntime<'_>,
+    expectation: &SelectedExpectation,
+    runner: &mut R,
+    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    state: &mut InterrogationRunState,
+    xpec_state: &mut XpecStateCache,
+    enforced_scope: &[String],
+    model: Option<&str>,
+    request_kind: InterrogationRequestKind,
+    progress: Option<&crate::evaluator::EvaluatorProgress>,
+) -> Result<InterrogationAnswer, EvaluatorError> {
     // Expectation checks may start from a last-pass restricted scope, but
     // after sanitization this path shares `canon ask`'s first-turn construction:
     // developer instructions and the turn prompt are rendered from
@@ -564,6 +636,7 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
         &enforced_scope,
         model,
         last_pass.as_ref(),
+        request_kind,
         progress,
     )
 }
@@ -578,8 +651,9 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
     enforced_scope: &[String],
     model: Option<&str>,
     last_pass: Option<&LastResult>,
+    request_kind: InterrogationRequestKind,
     progress: Option<&crate::evaluator::EvaluatorProgress>,
-) -> Result<InterrogationResult, EvaluatorError> {
+) -> Result<InterrogationAnswer, EvaluatorError> {
     let diff_from = resolve_diff_from(runtime, expectation, last_pass)?;
     let template_artifact_dir =
         PromptTemplateArtifactDir::Lazy(Arc::clone(&state.prompt_template_output_dir_cache));
@@ -608,6 +682,8 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
             enforced_scope,
             model,
             thinking,
+            response_contract: ThreadTurnResponseContract::for_expectation(expectation),
+            request_kind,
             expectation_id: (!expectation.id.is_empty()).then_some(expectation.id.as_str()),
             short_id: &expectation.display_id,
             // This is question-scoped canon config data. The implementation-owned
@@ -622,13 +698,14 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
             progress,
         },
     )?;
-    finalize_interrogation_response(
+    finalize_interrogation_answer(
         runtime,
-        expectation,
-        diagnostic_log,
         state,
+        &expectation.agent,
         enforced_scope,
-        response,
+        response.answer,
+        response.usage,
+        response.context_compacted,
     )
 }
 

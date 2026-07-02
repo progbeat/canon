@@ -1,15 +1,15 @@
 use crate::check::CheckRecord;
 use crate::fs_util::ensure_dir_without_symlinks;
 use crate::logs::config::{
-    active_log_file_name, diagnostic_log_files, diagnostic_logs_explicitly_disabled,
-    DiagnosticLogConfig,
+    active_log_file_name, active_log_max_bytes, diagnostic_log_files,
+    diagnostic_logs_explicitly_disabled, DiagnosticLogConfig,
 };
 use crate::logs::error::{external_log_error, DiagnosticLogResult};
 use crate::logs::lock::acquire_diagnostic_log_lock;
 use crate::logs::render::render_runtime_log_event;
 use crate::logs::rotation::{
     active_log_size, append_runtime_log_event_to_file, open_runtime_log_file,
-    prune_diagnostic_logs_to_limit, rotate_active_diagnostic_logs,
+    rotate_active_diagnostic_logs, rotate_active_diagnostic_logs_to_fit,
     rotate_diagnostic_logs_with_config,
 };
 use crate::project::git_project_root;
@@ -52,7 +52,7 @@ impl DiagnosticLogWriter {
     // Runtime-log ownership is intentionally centralized here: config resolves
     // `${CANON_STATE_DIR}/logs/0.jsonl`, rotation keeps older JSONL files in
     // that directory, and every `write_event` call renders, appends, flushes,
-    // and prunes one complete runtime-log object. `logs::render` validates the
+    // and rotates one complete runtime-log object. `logs::render` validates the
     // common fields and known event schemas, while `logs::events`,
     // `check::interrogation::session`, and
     // `check::interrogation::result::records` route check lifecycle, thread
@@ -120,7 +120,6 @@ impl DiagnosticLogWriter {
 fn record_log_fields(record: &CheckRecord) -> Vec<(&'static str, Value)> {
     vec![
         ("id", json!(record.id)),
-        ("result", json!(record.result)),
         ("observed", json!(record.observed)),
         ("evidence", json!(record.evidence)),
         ("scope", json!(record.scope)),
@@ -202,23 +201,27 @@ fn write_runtime_log_event_with_rotation(
     let line = render_runtime_log_event(level, event, fields)?;
     let line_size = line.len() as u64;
     let log_size_limited = config.max_bytes > 0;
-    if log_size_limited && line_size > config.max_bytes {
+    let files = diagnostic_log_files(config)?;
+    let active_limit = active_log_max_bytes(config, files.len());
+    if log_size_limited && line_size > active_limit {
         return Err(DiagnosticLogError::RecordTooLarge {
             size: line_size,
-            max_bytes: config.max_bytes,
+            max_bytes: active_limit,
         });
     }
     let _lock = acquire_diagnostic_log_lock(log_dir)?;
     rotate_diagnostic_logs_with_config(log_dir, config)?;
-    if log_size_limited && active_log_size(path)?.saturating_add(line_size) > config.max_bytes {
-        rotate_active_diagnostic_logs(log_dir, diagnostic_log_files(config)?)?;
+    if log_size_limited && active_log_size(path)?.saturating_add(line_size) > active_limit {
+        rotate_active_diagnostic_logs(log_dir, files)?;
+    }
+    if log_size_limited {
+        rotate_active_diagnostic_logs_to_fit(log_dir, config, line_size)?;
     }
     // Keep file handles local to a single event. A failed write or flush then
     // returns an error without leaving poisoned writer state for the next call.
     let mut file = open_runtime_log_file(path)?;
     append_runtime_log_event_to_file(path, &mut file, &line)?;
-    drop(file);
-    prune_diagnostic_logs_to_limit(log_dir, config)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -229,12 +232,14 @@ mod tests {
     };
     use crate::repo_inspection::RepoInspectionCache;
     use crate::state_paths::CANON_LOG_DIR_GIT_PATH;
+    use serde_json::json;
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::process;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static LOG_FILES: [&str; 1] = ["0.jsonl"];
+    static TWO_LOG_FILES: [&str; 2] = ["0.jsonl", "1.jsonl"];
 
     #[test]
     fn diagnostic_logs_use_fallback_dir_when_git_path_is_unavailable() {
@@ -264,6 +269,62 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn diagnostic_logs_rotate_within_configured_log_dir_size() {
+        let root = temp_root("diagnostic-logs-rotate-within-configured-size");
+        let mut cache = RepoInspectionCache::new();
+        let config = DiagnosticLogConfig {
+            max_bytes: 1600,
+            explicitly_disabled: false,
+            files: &TWO_LOG_FILES,
+        };
+        let prepared = prepare_diagnostic_log_with_config(&root, &mut cache, config).unwrap();
+        let mut writer = super::DiagnosticLogWriter {
+            path: prepared.path.clone(),
+            log_dir: prepared.log_dir.clone(),
+            config: prepared.config,
+        };
+
+        for index in 0..12 {
+            writer
+                .write_event(
+                    "info",
+                    "test.event",
+                    &[("index", json!(index)), ("payload", json!("x".repeat(120)))],
+                )
+                .unwrap();
+        }
+
+        assert!(prepared.path.is_file());
+        assert!(prepared.log_dir.join("1.jsonl").is_file());
+        assert!(configured_log_dir_size(&prepared.log_dir, &TWO_LOG_FILES) <= config.max_bytes);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn diagnostic_logs_make_room_for_new_event_with_rotation() {
+        let root = temp_root("diagnostic-logs-make-room-with-rotation");
+        let mut cache = RepoInspectionCache::new();
+        let config = DiagnosticLogConfig {
+            max_bytes: 1000,
+            explicitly_disabled: false,
+            files: &TWO_LOG_FILES,
+        };
+        let prepared = prepare_diagnostic_log_with_config(&root, &mut cache, config).unwrap();
+        fs::write(prepared.log_dir.join("1.jsonl"), "x".repeat(950)).unwrap();
+        let mut writer = super::DiagnosticLogWriter {
+            path: prepared.path.clone(),
+            log_dir: prepared.log_dir.clone(),
+            config: prepared.config,
+        };
+
+        writer.write_event("info", "test.event", &[]).unwrap();
+
+        assert!(prepared.path.is_file());
+        assert!(configured_log_dir_size(&prepared.log_dir, &TWO_LOG_FILES) <= config.max_bytes);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn temp_root(name: &str) -> PathBuf {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -276,5 +337,13 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    fn configured_log_dir_size(log_dir: &Path, files: &[&str]) -> u64 {
+        files
+            .iter()
+            .filter_map(|file| fs::metadata(log_dir.join(file)).ok())
+            .map(|metadata| metadata.len())
+            .sum()
     }
 }

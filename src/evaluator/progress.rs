@@ -8,9 +8,10 @@ use std::time::{Duration, Instant};
 // q-scope verification. `src/check/interrogation/session/model_fallback.rs`
 // records `⇄`; `src/check/interrogation/session/thread.rs` records `↻` through
 // `record_fresh_thread_retry_after_short_id_response_error_started`;
-// `src/check/run/execute/expectation.rs` records `↗` and `↘`; and
-// `src/app/process/transport.rs` records active-turn idle accumulation `~` and
-// exhausted no-progress turn timeouts `×`.
+// `src/check/interrogation/request_kind.rs` records request-start `↗` and
+// `↘`; `src/check/run/execute/expectation.rs` records result-side `↖` and
+// `⤡`; and `src/app/process/transport.rs` records active-turn idle
+// accumulation `~` and exhausted no-progress turn timeouts `×`.
 // The stdout live timeline writer in `check::command::output::record` renders
 // and flushes the due marker.
 // App-server control messages such as initialize and thread/start are session
@@ -35,6 +36,8 @@ pub(crate) enum EvaluatorProgressMarker {
     // Canon `↻`: a fresh-thread retry after a short-ID response error started.
     FreshThreadRetryAfterShortIdResponseError,
     FullScopeRetry,
+    QScopeVerificationStartedAndReturnedScopeTooNarrow,
+    QScopeVerificationReturnedScopeTooNarrow,
     QScopeVerification,
     NoHigherPriorityEvent,
 }
@@ -47,6 +50,7 @@ enum EvaluatorProgressEventKind {
     FreshThreadRetryAfterShortIdResponseError,
     FullScopeRetry,
     QScopeVerification,
+    QScopeVerificationReturnedScopeTooNarrow,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,6 +103,12 @@ impl EvaluatorProgress {
     pub(crate) fn record_q_scope_verification_started(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.record_q_scope_verification_started_at(Instant::now());
+        }
+    }
+
+    pub(crate) fn record_q_scope_verification_returned_scope_too_narrow(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.record_q_scope_verification_returned_scope_too_narrow_at(Instant::now());
         }
     }
 
@@ -182,6 +192,13 @@ impl EvaluatorProgressState {
         self.record_marker_event(at, EvaluatorProgressEventKind::QScopeVerification);
     }
 
+    fn record_q_scope_verification_returned_scope_too_narrow_at(&mut self, at: Instant) {
+        self.record_marker_event(
+            at,
+            EvaluatorProgressEventKind::QScopeVerificationReturnedScopeTooNarrow,
+        );
+    }
+
     fn record_marker_event(&mut self, at: Instant, kind: EvaluatorProgressEventKind) {
         self.events.push(EvaluatorProgressEvent { at, kind });
     }
@@ -212,18 +229,46 @@ impl EvaluatorProgressState {
                 EvaluatorProgressEventKind::FullScopeRetry,
                 EvaluatorProgressMarker::FullScopeRetry,
             ),
-            (
-                EvaluatorProgressEventKind::QScopeVerification,
-                EvaluatorProgressMarker::QScopeVerification,
-            ),
         ] {
-            if self.events.iter().any(|event| {
-                event.kind == kind && event.at >= window_start && event.at <= marker_at
-            }) {
+            if self.has_event_in_window(kind, window_start, marker_at) {
                 return marker;
             }
         }
+        let q_scope_verification_started = self.has_event_in_window(
+            EvaluatorProgressEventKind::QScopeVerification,
+            window_start,
+            marker_at,
+        );
+        let q_scope_verification_returned_scope_too_narrow = self.has_event_in_window(
+            EvaluatorProgressEventKind::QScopeVerificationReturnedScopeTooNarrow,
+            window_start,
+            marker_at,
+        );
+        match (
+            q_scope_verification_started,
+            q_scope_verification_returned_scope_too_narrow,
+        ) {
+            (true, true) => {
+                return EvaluatorProgressMarker::QScopeVerificationStartedAndReturnedScopeTooNarrow;
+            }
+            (false, true) => {
+                return EvaluatorProgressMarker::QScopeVerificationReturnedScopeTooNarrow;
+            }
+            (true, false) => return EvaluatorProgressMarker::QScopeVerification,
+            (false, false) => {}
+        }
         EvaluatorProgressMarker::NoHigherPriorityEvent
+    }
+
+    fn has_event_in_window(
+        &self,
+        kind: EvaluatorProgressEventKind,
+        window_start: Instant,
+        marker_at: Instant,
+    ) -> bool {
+        self.events
+            .iter()
+            .any(|event| event.kind == kind && event.at >= window_start && event.at <= marker_at)
     }
 }
 
@@ -235,6 +280,8 @@ impl EvaluatorProgressMarker {
             EvaluatorProgressMarker::ModelFallback => "⇄",
             EvaluatorProgressMarker::FreshThreadRetryAfterShortIdResponseError => "↻",
             EvaluatorProgressMarker::FullScopeRetry => "↗",
+            EvaluatorProgressMarker::QScopeVerificationStartedAndReturnedScopeTooNarrow => "⤡",
+            EvaluatorProgressMarker::QScopeVerificationReturnedScopeTooNarrow => "↖",
             EvaluatorProgressMarker::QScopeVerification => "↘",
             EvaluatorProgressMarker::NoHigherPriorityEvent => ".",
         }
@@ -338,6 +385,66 @@ mod tests {
 
         assert_eq!(marker, Some(EvaluatorProgressMarker::QScopeVerification));
         assert_eq!(EvaluatorProgressMarker::QScopeVerification.as_str(), "↘");
+    }
+
+    #[test]
+    fn q_scope_verification_scope_too_narrow_marker_uses_canon_symbol() {
+        let progress = EvaluatorProgress::new();
+        let interval = Duration::from_secs(60);
+        let start = Instant::now();
+        let tick_at = start + interval;
+        let mut next_marker_at = tick_at;
+
+        progress
+            .state
+            .lock()
+            .unwrap()
+            .record_q_scope_verification_returned_scope_too_narrow_at(
+                start + Duration::from_secs(30),
+            );
+
+        let marker = progress
+            .elapsed_marker_due(&mut next_marker_at, tick_at, interval)
+            .unwrap();
+
+        assert_eq!(
+            marker,
+            Some(EvaluatorProgressMarker::QScopeVerificationReturnedScopeTooNarrow)
+        );
+        assert_eq!(
+            EvaluatorProgressMarker::QScopeVerificationReturnedScopeTooNarrow.as_str(),
+            "↖"
+        );
+    }
+
+    #[test]
+    fn q_scope_verification_same_window_scope_too_narrow_marker_uses_canon_symbol() {
+        let progress = EvaluatorProgress::new();
+        let interval = Duration::from_secs(60);
+        let start = Instant::now();
+        let tick_at = start + interval;
+        let mut next_marker_at = tick_at;
+
+        {
+            let mut state = progress.state.lock().unwrap();
+            state.record_q_scope_verification_started_at(start + Duration::from_secs(10));
+            state.record_q_scope_verification_returned_scope_too_narrow_at(
+                start + Duration::from_secs(30),
+            );
+        }
+
+        let marker = progress
+            .elapsed_marker_due(&mut next_marker_at, tick_at, interval)
+            .unwrap();
+
+        assert_eq!(
+            marker,
+            Some(EvaluatorProgressMarker::QScopeVerificationStartedAndReturnedScopeTooNarrow)
+        );
+        assert_eq!(
+            EvaluatorProgressMarker::QScopeVerificationStartedAndReturnedScopeTooNarrow.as_str(),
+            "⤡"
+        );
     }
 
     #[test]

@@ -10,6 +10,10 @@ pub(crate) fn write_stdout(text: &str) -> Result<(), String> {
     write_stdout_bytes(text.as_bytes())
 }
 
+pub(crate) fn write_stderr(text: &str) -> Result<(), String> {
+    write_stderr_bytes(text.as_bytes())
+}
+
 pub(crate) fn write_stdout_bytes(bytes: &[u8]) -> Result<(), String> {
     let stdout = io::stdout();
     write_and_flush(stdout.lock(), "stdout", bytes)

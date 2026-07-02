@@ -137,6 +137,7 @@ enum CheckRuntimeMode<'a> {
         tree_source: &'a TreeSource,
         tree_context: CheckTreeContext,
         staged_view: &'a StagedWorktreeView,
+        persistent_history: bool,
     },
     InPlace,
 }
@@ -165,6 +166,28 @@ impl<'a> CheckRuntime<'a> {
                 tree_source,
                 tree_context,
                 staged_view,
+                persistent_history: true,
+            },
+        }
+    }
+
+    pub(crate) fn materialized_without_persistent_history(
+        root: &'a Path,
+        staged_view: &'a StagedWorktreeView,
+        tree_source: &'a TreeSource,
+        tree_context: CheckTreeContext,
+        config: &'a CheckConfig,
+        no_sandbox: bool,
+    ) -> CheckRuntime<'a> {
+        CheckRuntime {
+            root,
+            config,
+            no_sandbox,
+            mode: CheckRuntimeMode::Materialized {
+                tree_source,
+                tree_context,
+                staged_view,
+                persistent_history: false,
             },
         }
     }
@@ -177,10 +200,8 @@ impl<'a> CheckRuntime<'a> {
         // This runtime mode owns the in-place evaluator view: no materialized
         // Git tree, full-project visible scope, stable fake visible-tree
         // metadata, and sessions rooted at the checked directory. Command
-        // execution owns the complementary in-place rules: expectation
-        // validation in `src/check/command/execution/in_place.rs`, cache-free
-        // run orchestration in `src/check/command/execution/run.rs`, and
-        // config expansion through `src/repo_inspection/mod.rs`.
+        // execution owns cache-free run orchestration, while config validation
+        // owns mode compatibility after raw config expansion.
         CheckRuntime {
             root,
             config,
@@ -207,7 +228,9 @@ impl<'a> CheckRuntime<'a> {
 
     pub(crate) fn persistent_check_state_root(&self) -> Option<&Path> {
         match self.mode {
-            CheckRuntimeMode::Materialized { .. } => Some(self.root),
+            CheckRuntimeMode::Materialized {
+                persistent_history, ..
+            } => persistent_history.then_some(self.root),
             // In-place mode has no Git-backed persistent check-state target:
             // persisted xpec last-result history is absent, so the Last
             // Results files have no XPECS_DIR to read or update for this
@@ -297,7 +320,9 @@ impl<'a> CheckRuntime<'a> {
 
     pub(crate) fn fresh_scope_without_persistent_history(&self) -> Option<Vec<String>> {
         match &self.mode {
-            CheckRuntimeMode::Materialized { .. } => None,
+            CheckRuntimeMode::Materialized {
+                persistent_history, ..
+            } => (!persistent_history).then(full_scope),
             // In-place mode treats persisted xpec last-result history as
             // absent. This is the Interrogation Policy's "no last pass result
             // with qScope exists" case: fresh interrogations start at full
@@ -530,6 +555,10 @@ mod tests {
         let runtime = CheckRuntime::in_place(&root, &config, false);
         let requested_scope = vec!["src".to_string()];
 
+        assert!(runtime.tree_source().is_none());
+        assert!(runtime.persistent_check_state_root().is_none());
+        assert_eq!(runtime.checked_tree_oid(), IN_PLACE_VISIBLE_TREE_OID);
+        assert_eq!(runtime.against_tree_oid(), IN_PLACE_VISIBLE_TREE_OID);
         assert_eq!(
             runtime
                 .visible_scope(&AgentConfig::default(), &requested_scope)
@@ -546,6 +575,65 @@ mod tests {
                 .unwrap(),
             root
         );
+    }
+
+    #[test]
+    fn materialized_runtime_without_persistent_history_has_no_state_root() {
+        use crate::git::TreeSource;
+        use crate::staged::StagedWorktreeView;
+        use std::fs;
+        use std::process::{self, Command};
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!(
+            "canon-runtime-no-history-{}-{}",
+            process::id(),
+            stamp
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        fs::write(root.join("README.md"), "hello\n").unwrap();
+        Command::new("git")
+            .args(["add", "README.md"])
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        let config = CheckConfig {
+            version: 1,
+            agent: AgentConfig::default(),
+            hooks: Default::default(),
+            expectations: Vec::new(),
+        };
+        let source = TreeSource::Staged;
+        let staged_view = StagedWorktreeView::apply_for_tree_source(&root, source.clone()).unwrap();
+        let runtime = CheckRuntime::materialized_without_persistent_history(
+            &root,
+            &staged_view,
+            &source,
+            CheckTreeContext {
+                checked_tree_oid: "checked".to_string(),
+                against_tree_oid: "against".to_string(),
+                checked_file_count: 1,
+            },
+            &config,
+            false,
+        );
+
+        assert!(runtime.persistent_check_state_root().is_none());
+        assert_eq!(
+            runtime.fresh_scope_without_persistent_history().unwrap(),
+            full_scope()
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

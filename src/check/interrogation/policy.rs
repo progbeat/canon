@@ -1,9 +1,13 @@
 use crate::check::core::errors::error_record_from_interrogation_error;
-use crate::check::core::{CheckRecord, CheckResult, InterrogationResult, SelectedExpectation};
+use crate::check::core::{
+    CheckRecord, CheckResult, InterrogationAnswer, InterrogationResult, ParsedAnswer,
+    SelectedExpectation, INTERNAL_ERROR_UNPARSABLE,
+};
+use crate::check::interrogation::session::interrogate_expectation_answer_with_model_fallbacks;
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::interrogation::{
     interrogate_expectation_with_model_fallbacks, scope_narrowing_log_fields,
-    ModelFallbackInterrogation,
+    InterrogationRequestKind, ModelFallbackInterrogation,
 };
 use crate::config_types::AgentConfig;
 use crate::evaluator::EvaluatorProgress;
@@ -38,6 +42,7 @@ pub(crate) struct InterrogationCall<'a> {
     pub(crate) runtime: &'a CheckRuntime<'a>,
     pub(crate) expectation: &'a SelectedExpectation,
     pub(crate) scope: &'a [String],
+    pub(crate) request_kind: InterrogationRequestKind,
     pub(crate) progress: Option<&'a EvaluatorProgress>,
 }
 
@@ -83,6 +88,7 @@ pub(crate) fn interrogate_or_error_record<R: EvaluatorRunner>(
             runtime: call.runtime,
             expectation: call.expectation,
             enforced_scope: call.scope,
+            request_kind: call.request_kind,
             progress: call.progress,
         },
         runner,
@@ -102,6 +108,50 @@ pub(crate) fn interrogate_or_error_record<R: EvaluatorRunner>(
                     &err,
                     visible_tree_oid_cache,
                 )?,
+                turn_usage: None,
+                context_compacted: false,
+                stop_after_current_expectation: false,
+                interrupted,
+            })
+        }
+    }
+}
+
+pub(crate) fn interrogate_or_error_answer<R: EvaluatorRunner>(
+    call: InterrogationCall<'_>,
+    runner: &mut R,
+    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    interrogation_run_state: &mut InterrogationRunState,
+    xpec_state: &mut XpecStateCache,
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
+) -> Result<InterrogationAnswer, String> {
+    match interrogate_expectation_answer_with_model_fallbacks(
+        ModelFallbackInterrogation {
+            runtime: call.runtime,
+            expectation: call.expectation,
+            enforced_scope: call.scope,
+            request_kind: call.request_kind,
+            progress: call.progress,
+        },
+        runner,
+        diagnostic_log,
+        interrogation_run_state,
+        xpec_state,
+    ) {
+        Ok(answer) => Ok(answer),
+        Err(err) => {
+            let interrupted = err == "interrupted";
+            let visible_tree_oid = call.runtime.visible_tree_oid(
+                visible_tree_oid_cache,
+                &call.expectation.agent,
+                call.scope,
+            )?;
+            let mut answer =
+                ParsedAnswer::error(INTERNAL_ERROR_UNPARSABLE.to_string(), err.to_string());
+            answer.scope = call.scope.to_vec();
+            Ok(InterrogationAnswer {
+                answer,
+                visible_tree_oid,
                 turn_usage: None,
                 context_compacted: false,
                 stop_after_current_expectation: false,

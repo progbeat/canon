@@ -1,38 +1,56 @@
-use crate::check::core::{CheckRecord, InterrogationResult, ParsedAnswer, SelectedExpectation};
+use crate::check::core::{
+    CheckRecord, InterrogationAnswer, InterrogationResult, ParsedAnswer, SelectedExpectation,
+};
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
-use crate::evaluator::{record_from_response, EvaluatorError, ParsedTurnResponse};
+use crate::evaluator::{record_from_response, EvaluatorError};
 use crate::logs::{DiagnosticLogWriter, DiagnosticRecordEvent};
 use crate::scope::sanitize_scope;
 use serde_json::json;
 
-pub(crate) fn finalize_interrogation_response(
-    runtime: &CheckRuntime<'_>,
+pub(crate) fn interrogation_result_from_answer(
     expectation: &SelectedExpectation,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    state: &mut InterrogationRunState,
-    enforced_scope: &[String],
-    turn_response: ParsedTurnResponse,
+    answer: InterrogationAnswer,
 ) -> Result<InterrogationResult, EvaluatorError> {
-    let finalized = finalize_parsed_answer(
-        runtime,
-        state,
-        &expectation.agent,
-        enforced_scope,
-        turn_response.answer,
-    )?;
-    let record = record_from_response(
-        expectation,
-        finalized.response,
-        finalized.scope,
-        finalized.visible_tree_oid,
-    )?;
+    let InterrogationAnswer {
+        answer,
+        visible_tree_oid,
+        turn_usage,
+        context_compacted,
+        stop_after_current_expectation,
+        interrupted,
+    } = answer;
+    let record = record_from_response(expectation, answer, visible_tree_oid)?;
     if let Some(writer) = diagnostic_log.as_deref_mut() {
         writer.write_record_event(DiagnosticRecordEvent::Interrogation, &record)?;
     }
     Ok(InterrogationResult {
         record,
-        turn_usage: turn_response.usage,
-        context_compacted: turn_response.context_compacted,
+        turn_usage,
+        context_compacted,
+        stop_after_current_expectation,
+        interrupted,
+    })
+}
+
+pub(crate) fn finalize_interrogation_answer(
+    runtime: &CheckRuntime<'_>,
+    state: &mut InterrogationRunState,
+    agent: &crate::config_types::AgentConfig,
+    enforced_scope: &[String],
+    response: ParsedAnswer,
+    turn_usage: Option<crate::token_usage_types::TokenUsage>,
+    context_compacted: bool,
+) -> Result<InterrogationAnswer, EvaluatorError> {
+    // InterrogationAnswer is invocation-local normalized evaluator output.
+    // Normal check expectations convert it to CheckRecord; `canon ask` reports
+    // it directly and never reaches durable xpec last-result storage.
+    let finalized = finalize_parsed_answer(runtime, state, agent, enforced_scope, response)?;
+    Ok(InterrogationAnswer {
+        answer: finalized.response,
+        visible_tree_oid: finalized.visible_tree_oid,
+        turn_usage,
+        context_compacted,
         stop_after_current_expectation: false,
         interrupted: false,
     })
@@ -49,7 +67,7 @@ pub(crate) fn write_query_result_event(
             "query.result",
             &[
                 ("prompt", json!(question)),
-                ("observed", json!(answer.answer.clone())),
+                ("observed", json!(answer.observed.clone())),
                 ("evidence", json!(answer.evidence.clone())),
                 (
                     "qScopeSuggestion",
@@ -61,11 +79,12 @@ pub(crate) fn write_query_result_event(
     Ok(())
 }
 
-// Result records are only one runtime-log family. `canon check` calls these
-// writers from the evaluated-expectation path, the cached-expectation path, and
-// `canon ask`; evaluator boundary events such as thread creation/reuse,
-// restart, agent request/response/failure, and per-turn token usage are emitted
-// by `check::interrogation::session` through the same `DiagnosticLogWriter`.
+// Result records are only one runtime-log family. Normal check paths call
+// these writers for evaluated and cached expectations; `canon ask` writes
+// query result/review events instead. Evaluator boundary events such as thread
+// creation/reuse, restart, agent request/response/failure, and per-turn token
+// usage are emitted by `check::interrogation::session` through the same
+// `DiagnosticLogWriter`.
 pub(crate) fn write_expectation_result_event(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     record: &CheckRecord,
@@ -90,7 +109,7 @@ pub(crate) fn write_query_review_required_event(
             "query.review_required",
             &[
                 ("prompt", json!(question)),
-                ("observed", json!(answer.answer.clone())),
+                ("observed", json!(answer.observed.clone())),
                 ("evidence", json!(answer.evidence.clone())),
                 (
                     "qScopeSuggestion",
@@ -105,7 +124,6 @@ pub(crate) fn write_query_review_required_event(
 
 struct FinalizedParsedAnswer {
     response: ParsedAnswer,
-    scope: Vec<String>,
     visible_tree_oid: String,
 }
 
@@ -123,7 +141,6 @@ fn finalize_parsed_answer(
     response.scope = scope.clone();
     Ok(FinalizedParsedAnswer {
         response,
-        scope,
         visible_tree_oid,
     })
 }

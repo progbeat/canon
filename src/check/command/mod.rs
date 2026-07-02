@@ -14,5 +14,8 @@ pub(super) use completion::{
     collect_check_token_usage, finish_check_report, print_token_usage_summary,
     CheckReportFinishContext,
 };
-pub(super) use execution::{prepare_check_execution, PrepareCheckExecutionOptions};
+pub(super) use execution::{
+    prepare_git_backed_check_execution, GitBackedCheckStorage,
+    PrepareGitBackedCheckExecutionOptions,
+};
 pub(crate) use execution::{run_ask_command, run_check_command};

@@ -17,6 +17,8 @@ use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BuiltinCommand {
+    // Keep this enum aligned with the public command surface. `ask` and
+    // `pre-commit` are public builtins; the old `hook` command is not.
     Init,
     PreCommit,
     Ask,
@@ -114,8 +116,8 @@ fn check_like_root(args: &[OsString]) -> Result<(std::path::PathBuf, bool), Comm
     let default_in_place = git_root.is_none();
     // This is only the in-place root-selection rule. The rest of the in-place
     // contract is split across command parsing (`src/check/command/args.rs`),
-    // in-place expectation validation and orchestration
-    // (`src/check/command/execution/in_place.rs` and `run.rs`), runtime
+    // config validation (`src/check/config/validation.rs`), orchestration
+    // (`src/check/command/execution/run.rs`), runtime
     // scope/session behavior (`src/check/interrogation/state.rs`), and config
     // expansion (`src/repo_inspection/mod.rs`).
     let root = if explicit_in_place || default_in_place {

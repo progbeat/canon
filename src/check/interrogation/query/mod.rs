@@ -1,6 +1,6 @@
 use crate::check::core::{
-    CheckRecord, ParsedAnswer, QueryResult, SelectedExpectation, ERROR_INVALID_QUESTION,
-    ERROR_SCOPE_TOO_NARROW, INTERNAL_ERROR_UNPARSABLE,
+    QueryResult, SelectedExpectation, ERROR_INVALID_QUESTION, ERROR_SCOPE_TOO_NARROW,
+    INTERNAL_ERROR_UNPARSABLE,
 };
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::interrogation::{write_query_result_event, write_query_review_required_event};
@@ -37,7 +37,7 @@ pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
     // execution preparation as well as the evaluator turn managed here.
     let mut diagnostic_log = diagnostic_log;
     let mut verified_q_scope = query.enforced_scope.to_vec();
-    let record = run_temporary_expectation_interrogation(
+    let interrogation = run_temporary_expectation_interrogation(
         TemporaryExpectationInterrogationContext {
             runtime,
             runner,
@@ -53,7 +53,7 @@ pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
         query.question,
         &mut diagnostic_log,
         QueryResult {
-            answer: parsed_answer_from_check_record(&record),
+            answer: interrogation.answer,
         },
     )
 }
@@ -72,24 +72,6 @@ fn finish_query_result(
     write_query_result_event(question, diagnostic_log, &result.answer)
         .map_err(|err| err.to_string())?;
     Ok(result)
-}
-
-fn parsed_answer_from_check_record(record: &CheckRecord) -> ParsedAnswer {
-    let mut answer = if let Some(error) = record.error.as_deref() {
-        ParsedAnswer::error_with_question_scope_suggestion(
-            error.to_string(),
-            record.evidence.clone(),
-            record.question_scope_suggestion.clone(),
-        )
-    } else {
-        ParsedAnswer::answer(
-            record.observed.clone(),
-            record.evidence.clone(),
-            record.question_scope_suggestion.clone(),
-        )
-    };
-    answer.scope = record.scope.clone();
-    answer
 }
 
 fn assert_final_query_result_has_no_scope_too_narrow(result: &QueryResult) -> Result<(), String> {
@@ -144,7 +126,6 @@ mod tests {
             expected_answer: String::new(),
             question_context: String::new(),
             diff_from: DEFAULT_DIFF_FROM.to_string(),
-            diff_from_configured: false,
             target: None,
             question_answer_only: true,
             agent: config.agent.clone(),
@@ -179,15 +160,13 @@ mod tests {
 
         let _ = fs::remove_dir_all(&root);
         assert_eq!(runner.ask_count, 1);
-        assert_eq!(result.answer.answer, "yes");
+        assert_eq!(result.answer.observed, "yes");
         assert_eq!(result.answer.evidence, "checked visible files");
     }
 
     #[test]
     fn ask_temporary_expectation_does_not_write_git_backed_xpec_state() {
         let root = temp_git_root("ask-no-xpec-state");
-        fs::write(root.join("main.rs"), "fn main() {}\n").unwrap();
-        git(&root, &["add", "main.rs"]);
         let config = CheckConfig {
             version: 1,
             agent: AgentConfig::implementation_default(),
@@ -201,7 +180,7 @@ mod tests {
         let tree_context = CheckTreeContext {
             against_tree_oid: checked_tree_oid.clone(),
             checked_tree_oid,
-            checked_file_count: 1,
+            checked_file_count: 0,
         };
         let runtime = CheckRuntime::materialized(
             &root,
@@ -219,7 +198,6 @@ mod tests {
             expected_answer: String::new(),
             question_context: String::new(),
             diff_from: DEFAULT_DIFF_FROM.to_string(),
-            diff_from_configured: false,
             target: None,
             question_answer_only: true,
             agent: config.agent.clone(),
@@ -251,7 +229,7 @@ mod tests {
         .unwrap();
 
         let xpec_state_dir = root.join(".git").join("canon").join("xpecs");
-        assert_eq!(result.answer.answer, "yes", "{}", result.answer.evidence);
+        assert_eq!(result.answer.observed, "yes", "{}", result.answer.evidence);
         assert!(!xpec_state_dir.exists());
         let _ = fs::remove_dir_all(&root);
     }

@@ -7,21 +7,32 @@ pub(super) enum CheckHookOutcome {
     Blocked { repair_instruction: String },
 }
 
-pub(super) fn run_check_hook(
-    hook: Option<&CheckHookConfig>,
+pub(super) fn run_check_hooks(
+    hooks: &[CheckHookConfig],
     result_output: &mut dyn Write,
 ) -> Result<CheckHookOutcome, String> {
-    run_check_hook_with_input(hook, result_output, &mut io::stdin().lock())
+    run_check_hooks_with_input(hooks, result_output, &mut io::stdin().lock())
 }
 
-pub(super) fn run_check_hook_with_input(
-    hook: Option<&CheckHookConfig>,
+pub(super) fn run_check_hooks_with_input(
+    hooks: &[CheckHookConfig],
     result_output: &mut dyn Write,
     input: &mut dyn BufRead,
 ) -> Result<CheckHookOutcome, String> {
-    let Some(hook) = hook else {
-        return Ok(CheckHookOutcome::Continue);
-    };
+    for hook in hooks {
+        match run_check_hook_with_input(hook, result_output, input)? {
+            CheckHookOutcome::Continue => {}
+            blocked @ CheckHookOutcome::Blocked { .. } => return Ok(blocked),
+        }
+    }
+    Ok(CheckHookOutcome::Continue)
+}
+
+fn run_check_hook_with_input(
+    hook: &CheckHookConfig,
+    result_output: &mut dyn Write,
+    input: &mut dyn BufRead,
+) -> Result<CheckHookOutcome, String> {
     if hook.print.is_empty() {
         return Ok(CheckHookOutcome::Continue);
     }
@@ -57,7 +68,7 @@ fn trim_stdin_line_ending(line: &mut String) {
 
 #[cfg(test)]
 mod tests {
-    use super::{run_check_hook_with_input, CheckHookOutcome};
+    use super::{run_check_hooks_with_input, CheckHookOutcome};
     use crate::config_types::CheckHookConfig;
     use std::io::Cursor;
 
@@ -71,7 +82,7 @@ mod tests {
         let mut output = Vec::new();
         let mut input = Cursor::new(Vec::<u8>::new());
 
-        let outcome = run_check_hook_with_input(Some(&hook), &mut output, &mut input).unwrap();
+        let outcome = run_check_hooks_with_input(&[hook], &mut output, &mut input).unwrap();
 
         assert!(matches!(outcome, CheckHookOutcome::Continue));
         assert!(output.is_empty());
@@ -87,7 +98,7 @@ mod tests {
         let mut output = Vec::new();
         let mut input = Cursor::new(b"pass\n".to_vec());
 
-        let outcome = run_check_hook_with_input(Some(&hook), &mut output, &mut input).unwrap();
+        let outcome = run_check_hooks_with_input(&[hook], &mut output, &mut input).unwrap();
 
         assert!(matches!(outcome, CheckHookOutcome::Continue));
         assert_eq!(String::from_utf8(output).unwrap(), "type pass\n");
@@ -103,7 +114,7 @@ mod tests {
         let mut output = Vec::new();
         let mut input = Cursor::new(b"fail\n".to_vec());
 
-        let outcome = run_check_hook_with_input(Some(&hook), &mut output, &mut input).unwrap();
+        let outcome = run_check_hooks_with_input(&[hook], &mut output, &mut input).unwrap();
 
         match outcome {
             CheckHookOutcome::Blocked { repair_instruction } => {
@@ -111,5 +122,38 @@ mod tests {
             }
             CheckHookOutcome::Continue => panic!("expected hook to block"),
         }
+    }
+
+    #[test]
+    fn hook_list_runs_in_order_and_stops_on_block() {
+        let hooks = vec![
+            CheckHookConfig {
+                print: "first ".to_string(),
+                confirm: None,
+                repair_instruction: "first repair".to_string(),
+            },
+            CheckHookConfig {
+                print: "second ".to_string(),
+                confirm: Some("pass".to_string()),
+                repair_instruction: "second repair".to_string(),
+            },
+            CheckHookConfig {
+                print: "third ".to_string(),
+                confirm: None,
+                repair_instruction: "third repair".to_string(),
+            },
+        ];
+        let mut output = Vec::new();
+        let mut input = Cursor::new(b"fail\n".to_vec());
+
+        let outcome = run_check_hooks_with_input(&hooks, &mut output, &mut input).unwrap();
+
+        match outcome {
+            CheckHookOutcome::Blocked { repair_instruction } => {
+                assert_eq!(repair_instruction, "second repair");
+            }
+            CheckHookOutcome::Continue => panic!("expected hook to block"),
+        }
+        assert_eq!(String::from_utf8(output).unwrap(), "first second ");
     }
 }

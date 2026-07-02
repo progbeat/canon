@@ -50,10 +50,9 @@ pub(crate) fn parse_check_command_args(
 
     if in_place {
         // This parser rejects CLI options whose meaning depends on a Git tree
-        // or cache/path-hiding behavior. Expectation-level in-place
-        // validation for diff-from/target/cooldown/ignore happens after config
-        // expansion in `src/check/command/execution/in_place.rs`, and
-        // generators/includes are expanded before that by `repo_inspection`.
+        // or cache/path-hiding behavior. Config-level mode compatibility
+        // runs after raw config expansion, so generators/includes have already
+        // been resolved.
         validate_in_place_options(
             "canon check",
             tree_explicit,
@@ -107,13 +106,7 @@ pub(crate) fn parse_ask_command_args(
         None => DEFAULT_AGAINST_TREE_ARG.to_string(),
     };
     let question = match matches.get_one::<OsString>("question") {
-        Some(value) => {
-            let value = arg_to_string(value)?;
-            if value.trim().is_empty() {
-                return Err("question must not be empty".to_string());
-            }
-            value
-        }
+        Some(value) => arg_to_string(value)?,
         None => return Err("question is required".to_string()),
     };
     let default_agent_preset = match matches.get_one::<OsString>("preset") {
@@ -313,9 +306,6 @@ fn validate_in_place_options(
         invalid.push("-s/--scope");
     }
     if options.ignore_cooldown {
-        // This is only the in-place mode check. Ordinary Git-backed
-        // `canon check` accepts this cache-control flag and still supports
-        // configured cooldown through the Cached Result implementation.
         invalid.push("--ignore-cooldown");
     }
     if invalid.is_empty() {
@@ -473,13 +463,10 @@ mod tests {
     }
 
     #[test]
-    fn ask_rejects_empty_question() {
-        let err = match parse_ask(&[""]) {
-            Ok(_) => panic!("expected empty ask question to fail"),
-            Err(err) => err,
-        };
+    fn ask_preserves_empty_question() {
+        let command = parse_ask(&[""]).unwrap();
 
-        assert_eq!(err, "question must not be empty");
+        assert_eq!(command.question, "");
     }
 
     #[test]

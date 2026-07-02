@@ -14,6 +14,7 @@ pub(crate) fn render_runtime_log_event(
     event: &str,
     fields: &[(&str, Value)],
 ) -> DiagnosticLogResult<String> {
+    schema::validate_runtime_log_common_fields(level, event)?;
     schema::validate_runtime_log_extra_fields(fields)?;
     schema::validate_runtime_log_event_schema(event, fields)?;
     let event = event::RuntimeLogEvent {
@@ -66,7 +67,6 @@ mod tests {
     fn review_required_record_events_include_reason() {
         let fields = vec![
             ("id", json!("id")),
-            ("result", json!("fail")),
             ("observed", json!("unparsable")),
             ("evidence", json!("evidence")),
             ("scope", json!(["."])),
@@ -83,6 +83,37 @@ mod tests {
         let fields = vec![("query", json!(false))];
 
         render_runtime_log_event("info", "check.finish", &fields).unwrap();
+    }
+
+    #[test]
+    fn runtime_log_common_fields_are_single_line_labels() {
+        let level_error = render_runtime_log_event("warn\nnext", "check.start", &[]).unwrap_err();
+        let event_error = render_runtime_log_event("warn", "check.start\rnext", &[]).unwrap_err();
+        let tab_error = render_runtime_log_event("warn\t", "check.start", &[]).unwrap_err();
+        let empty_error = render_runtime_log_event("warn", "", &[]).unwrap_err();
+        let separator_error =
+            render_runtime_log_event("warn", "check.start\u{2028}next", &[]).unwrap_err();
+
+        assert_eq!(
+            level_error.to_string(),
+            "runtime log field \"level\" is not a single-line label"
+        );
+        assert_eq!(
+            event_error.to_string(),
+            "runtime log field \"event\" is not a single-line label"
+        );
+        assert_eq!(
+            tab_error.to_string(),
+            "runtime log field \"level\" is not a single-line label"
+        );
+        assert_eq!(
+            empty_error.to_string(),
+            "runtime log field \"event\" is not a single-line label"
+        );
+        assert_eq!(
+            separator_error.to_string(),
+            "runtime log field \"event\" is not a single-line label"
+        );
     }
 
     #[test]

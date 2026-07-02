@@ -12,6 +12,15 @@ pub(crate) struct InterrogationResult {
     pub(crate) interrupted: bool,
 }
 
+pub(crate) struct InterrogationAnswer {
+    pub(crate) answer: ParsedAnswer,
+    pub(crate) visible_tree_oid: String,
+    pub(crate) turn_usage: Option<TokenUsage>,
+    pub(crate) context_compacted: bool,
+    pub(crate) stop_after_current_expectation: bool,
+    pub(crate) interrupted: bool,
+}
+
 #[derive(Debug)]
 pub(crate) struct QueryResult {
     pub(crate) answer: ParsedAnswer,

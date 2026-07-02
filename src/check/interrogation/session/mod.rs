@@ -3,6 +3,7 @@ mod runtime_logs;
 mod thread;
 
 pub(crate) use model_fallback::{
+    interrogate_expectation_answer_with_model_fallbacks,
     interrogate_expectation_with_model_fallbacks, ModelFallbackInterrogation,
 };
 pub(crate) use runtime_logs::{
