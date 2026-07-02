@@ -118,8 +118,7 @@ impl EvaluatorProgress {
         now: Instant,
         interval: Duration,
     ) -> Result<Option<EvaluatorProgressMarker>, String> {
-        debug_assert!(!interval.is_zero(), "progress marker interval is zero");
-        if *next_marker_at > now {
+        if interval.is_zero() || *next_marker_at > now {
             return Ok(None);
         }
         let mut state = self
@@ -143,7 +142,9 @@ impl EvaluatorProgress {
         now: Instant,
         interval: Duration,
     ) -> Result<Vec<EvaluatorProgressMarker>, String> {
-        debug_assert!(!interval.is_zero(), "progress marker interval is zero");
+        if interval.is_zero() {
+            return Ok(Vec::new());
+        }
         let mut state = self
             .state
             .lock()
@@ -310,6 +311,21 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn elapsed_marker_due_ignores_zero_interval() {
+        let progress = EvaluatorProgress::new();
+        let start = Instant::now();
+        let mut next_marker_at = start;
+
+        assert_eq!(
+            progress
+                .elapsed_marker_due(&mut next_marker_at, start, Duration::ZERO)
+                .unwrap(),
+            None
+        );
+        assert_eq!(next_marker_at, start);
     }
 
     #[test]
@@ -529,6 +545,20 @@ mod tests {
             ]
         );
         assert_eq!(next_marker_at, start + Duration::from_secs(179));
+    }
+
+    #[test]
+    fn completion_markers_due_ignores_zero_interval() {
+        let progress = EvaluatorProgress::new();
+        let start = Instant::now();
+        let mut next_marker_at = start;
+
+        let markers = progress
+            .completion_markers_due(&mut next_marker_at, start, Duration::ZERO)
+            .unwrap();
+
+        assert!(markers.is_empty());
+        assert_eq!(next_marker_at, start);
     }
 
     #[test]
