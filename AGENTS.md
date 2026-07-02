@@ -33,7 +33,7 @@ When running canon check, **do not pass options** unless the human explicitly re
 
 **Never ever make unrequested changes unless they directly improve the project's compliance with the canon.**
 
-If a request contradicts the canon or the canon is internally inconsistent, stop, show the human evidence based only on files under `.canon/`, and ask them to update the canon first.
+If a request appears to contradict the canon, or if the canon appears internally inconsistent, use `$canon-conflict` before reporting a conflict to the human.
 
 Do not edit files under `.canon/` proactively. Edit them only when a human explicitly insists.
 

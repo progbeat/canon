@@ -1,0 +1,5 @@
+interface:
+  display_name: "Canon Conflict"
+
+policy:
+  allow_implicit_invocation: false
