@@ -74,6 +74,10 @@
   a: no
   target: diff
 
+- q: "Can you find any test declaration or assert invocation whose same line and immediately preceding non-blank line both lack a source-comment marker `xpec:` followed by a non-empty comma-separated token list?"
+  a: no
+  target: diff
+
 - q: "Can you find any avoidable violations of commonly accepted idiomatic Rust practices that materially reduce this project's maintainability, correctness, readability, type safety, or future extensibility, excluding purely stylistic alternatives unless they create a concrete demonstrated risk?"
   a: no
   target: diff

@@ -8,9 +8,16 @@ The temporary xpec follows the same evaluator path as a `canon check` xpec.
 
 For `canon ask`, the empty expected answer means the evaluator response is reported without deriving a result.
 
-Stdout starts with `<progress timeline>` on its own line.
+## Output Order
 
-Then stdout prints the evaluator response.
+`canon ask` writes output in this order:
+
+1. Stdout starts with `<progress timeline>` on its own line.
+2. Stdout prints the evaluator response.
+3. Stdout appends `Suggested q-scope: <compact JSON array>` when a q-scope suggestion is available.
+4. Stderr contains exactly one token usage line in the same format as `canon check`.
+
+## Response Output
 
 For an answer, the response lines are:
 
@@ -31,8 +38,6 @@ If a q-scope suggestion is available, stdout appends `Suggested q-scope: <compac
 The line is omitted when no q-scope suggestion is available.
 
 Text fields are escaped the same way as `canon check` stdout.
-
-After evaluator work finishes, stderr contains exactly one token usage line in the same format as `canon check`.
 
 `canon ask` always asks the evaluator.
 
