@@ -6,7 +6,7 @@
 - If the evaluator returns a valid answer that does not match the expected answer, never try to influence the answer through developer instructions.
 - Optimize evaluator developer instructions only to reduce token usage or to fix errors such as unparseable answers.
 - Keep the evaluator agent’s developer instructions concise.
-- For every test declaration and every assert invocation, the behavior checked on that execution path must logically follow from the canon. Add a source-comment marker `xpec: <shortID>[,<shortID>...]` on the same line or immediately preceding non-blank line.
+- For every test declaration and every assert invocation, the behavior checked on that execution path must logically follow from the canon. Add a source-comment marker `xpec: <shortID>[,<shortID>...]`, preferring the same line over the immediately preceding non-blank line. A marker on a test declaration covers assert invocations in that test unless an assert has its own marker.
 - Treat any codex_app_server ERROR or permission-config warning during canon check as a blocker, even if the command exits successfully.
 - For reference, Codex GitHub: https://github.com/openai/codex
 
