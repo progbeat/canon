@@ -3,6 +3,28 @@ use crate::logs::error::{DiagnosticLogError, DiagnosticLogResult};
 use serde_json::Value;
 use std::collections::BTreeSet;
 
+pub(super) fn validate_runtime_log_common_fields(
+    level: &str,
+    event: &str,
+) -> DiagnosticLogResult<()> {
+    validate_runtime_log_label("level", level)?;
+    validate_runtime_log_label("event", event)
+}
+
+fn validate_runtime_log_label(key: &str, value: &str) -> DiagnosticLogResult<()> {
+    if value.is_empty()
+        || value
+            .chars()
+            .any(|char| char.is_control() || matches!(char, '\u{2028}' | '\u{2029}'))
+    {
+        return Err(DiagnosticLogError::InvalidRuntimeField {
+            key: key.to_string(),
+            reason: "not a single-line label",
+        });
+    }
+    Ok(())
+}
+
 pub(super) fn validate_runtime_log_event_schema(
     event: &str,
     fields: &[(&str, Value)],
@@ -35,11 +57,11 @@ fn required_runtime_log_fields(event: &str) -> Option<&'static [&'static str]> {
         "cache.cleanup" => Some(&["removed", "kept"]),
         "cache.hit" => Some(&["id", "result", "scope"]),
         "check.start" => Some(&["selected"]),
-        "expectation.result" | "interrogation.result" => Some(&[
-            "id", "result", "observed", "evidence", "scope", "prompt", "expected",
-        ]),
+        "expectation.result" | "interrogation.result" => {
+            Some(&["id", "observed", "evidence", "scope", "prompt", "expected"])
+        }
         "expectation.review_required" | "interrogation.review_required" => Some(&[
-            "id", "result", "observed", "evidence", "scope", "prompt", "expected", "reason",
+            "id", "observed", "evidence", "scope", "prompt", "expected", "reason",
         ]),
         "model.failure" => Some(&["id", "model", "error"]),
         "model.fallback" => Some(&["id", "from", "to", "reason"]),

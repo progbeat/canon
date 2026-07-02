@@ -67,7 +67,7 @@ pub(crate) fn select_expectations_with_identities(
 
     selected_indexes
         .into_iter()
-        .map(|index| selected_expectation_at(config, identities, index, true))
+        .map(|index| selected_expectation_at(config, identities, index))
         .collect::<Result<Vec<_>, _>>()
 }
 
@@ -105,7 +105,6 @@ pub(crate) fn selected_expectation_at(
     config: &CheckConfig,
     identities: &[ExpectationIdentity],
     index: usize,
-    include_cooldown: bool,
 ) -> Result<SelectedExpectation, String> {
     let identity = identities
         .get(index)
@@ -114,15 +113,11 @@ pub(crate) fn selected_expectation_at(
         .expectations
         .get(index)
         .ok_or_else(|| "expectation identity count mismatch".to_string())?;
-    let cooldown = if include_cooldown {
-        expectation
-            .cooldown
-            .as_ref()
-            .map(parse_cooldown)
-            .transpose()?
-    } else {
-        None
-    };
+    let cooldown = expectation
+        .cooldown
+        .as_ref()
+        .map(parse_cooldown)
+        .transpose()?;
     Ok(SelectedExpectation {
         number: index + 1,
         id: identity.id.clone(),
@@ -131,7 +126,6 @@ pub(crate) fn selected_expectation_at(
         expected_answer: expectation.a.clone(),
         question_context: expectation.question_context.clone(),
         diff_from: expectation.diff_from.clone(),
-        diff_from_configured: expectation.diff_from_configured,
         target: expectation.target.clone(),
         question_answer_only: expectation.question_answer_only,
         agent: expectation.agent.clone(),
@@ -269,6 +263,7 @@ mod tests {
         CheckConfig {
             version: 1,
             agent: AgentConfig::implementation_default(),
+            hooks: Default::default(),
             expectations: vec![
                 expectation("Does alpha pass?"),
                 expectation("Does beta pass?"),

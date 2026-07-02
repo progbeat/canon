@@ -8,12 +8,12 @@ use crate::check::core::{
 };
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::run::selection::{
-    order_by_latest_non_pass, select_expectations_after_cache, CacheFilterContext,
-    CachedExpectationHit, CachedFailureMode,
+    order_by_latest_non_pass, select_git_backed_expectations_after_cache, CachedExpectationHit,
+    CachedNonPassPolicy, GitBackedCacheFilterContext,
 };
 use crate::evaluator::EvaluatorRunner;
 use crate::time::unix_timestamp;
-use crate::xpec_state::{snapshot_pass_ids, XpecStateCache};
+use crate::xpec_state::snapshot_pass_ids;
 use std::path::Path;
 
 // This runtime layer consumes resolved check options and owns cache/evaluator
@@ -59,27 +59,25 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         runtime.no_sandbox() || runtime.is_in_place()
     ));
     let check_work_queue = if runtime.is_in_place() {
-        // In-place mode still uses the normal check ordering algorithm. Its
-        // persisted xpec history is absent by mode, so latest-non-pass lookups
-        // return no record and the order policy's Unix epoch fallback applies.
-        let mut absent_history = XpecStateCache::with_absent_persistent_history(root);
-        run_try!(order_check_work(
-            root,
-            Vec::new(),
-            options.selected.clone(),
-            &mut absent_history,
-        ))
+        // In-place config compatibility has already been validated by the
+        // command layer, and this runtime has no Git-backed cache source.
+        // Every candidate goes straight to evaluator work in stable order.
+        evaluate_only_check_work_queue(options.pre_cache_candidates.clone())
     } else {
         caches.run_start_pass_ids = run_try!(snapshot_pass_ids(
             root,
-            &options.selected,
+            &options.pre_cache_candidates,
             &mut caches.xpec_state,
         ));
         let source = runtime
             .tree_source()
             .ok_or_else(|| current_error!("missing Git tree source".to_string()))?;
-        let check_work = run_try!(select_expectations_after_cache(
-            CacheFilterContext {
+        // Explicit selectors are still routed through this component, but the
+        // cache selector returns before any cache lookup when
+        // `selectors_provided` is true. That keeps forced selections in the
+        // evaluator queue even if reusable cached results exist.
+        let check_work = run_try!(select_git_backed_expectations_after_cache(
+            GitBackedCacheFilterContext {
                 root,
                 source,
                 xpec_state: &mut caches.xpec_state,
@@ -89,21 +87,18 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             options,
             run_try!(unix_timestamp()),
             if options.selectors_provided {
-                CachedFailureMode::Continue
+                CachedNonPassPolicy::EvaluateUncached
             } else {
-                CachedFailureMode::StopDefaultSelection
+                CachedNonPassPolicy::LeaveUncachedPending
             },
         ));
-        // `check_work.selected_for_evaluation` is already the final mutable
-        // Selected Expectations set for evaluator work after cached-result
-        // policy. The canon-check-order policy begins from this post-cache set;
-        // cached hits below are report-only and do not start evaluator work.
-        // Cached hits reuse results while evaluate items still require evaluator
-        // work, but both are ordered together for the public check run.
+        // Cache selection returns cached report work plus the evaluator queue.
+        // Sort both by latest non-pass timestamp so public output and evaluator
+        // work share one priority order.
         run_try!(order_check_work(
             root,
             check_work.cached_hits,
-            check_work.selected_for_evaluation,
+            check_work.evaluation_queue,
             &mut caches.xpec_state,
         ))
     };
@@ -190,17 +185,26 @@ enum CheckWorkItem {
     Evaluate(Box<SelectedExpectation>),
 }
 
+fn evaluate_only_check_work_queue(
+    evaluation_queue: Vec<SelectedExpectation>,
+) -> Vec<CheckWorkItem> {
+    evaluation_queue
+        .into_iter()
+        .map(|expectation| CheckWorkItem::Evaluate(Box::new(expectation)))
+        .collect()
+}
+
 fn order_check_work(
     root: &Path,
     cached_hits: Vec<CachedExpectationHit>,
-    selected_for_evaluation: Vec<SelectedExpectation>,
+    evaluation_queue: Vec<SelectedExpectation>,
     xpec_state: &mut crate::xpec_state::XpecStateCache,
 ) -> Result<Vec<CheckWorkItem>, String> {
     let work = cached_hits
         .into_iter()
         .map(|hit| CheckWorkItem::Cached(Box::new(hit)))
         .chain(
-            selected_for_evaluation
+            evaluation_queue
                 .into_iter()
                 .map(|expectation| CheckWorkItem::Evaluate(Box::new(expectation))),
         )
@@ -242,4 +246,46 @@ fn current_report(
 ) -> CheckRunReport {
     let skipped = skipped_count(total_expectations, &records, &cached);
     check_run_report(records, cached, CheckRunReportCounts { skipped })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config_types::{AgentConfig, DEFAULT_DIFF_FROM};
+
+    #[test]
+    fn evaluate_only_check_work_queue_preserves_candidate_order() {
+        let queue = evaluate_only_check_work_queue(vec![
+            selected_expectation("first"),
+            selected_expectation("second"),
+        ]);
+
+        let ids = queue
+            .into_iter()
+            .map(|item| match item {
+                CheckWorkItem::Evaluate(expectation) => expectation.id,
+                CheckWorkItem::Cached(_) => {
+                    panic!("evaluate-only queue must not contain cache hits")
+                }
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(ids, vec!["first", "second"]);
+    }
+
+    fn selected_expectation(id: &str) -> SelectedExpectation {
+        SelectedExpectation {
+            number: 1,
+            id: id.to_string(),
+            display_id: id.to_string(),
+            question: "Does it pass?".to_string(),
+            expected_answer: "yes".to_string(),
+            question_context: String::new(),
+            diff_from: DEFAULT_DIFF_FROM.to_string(),
+            target: None,
+            question_answer_only: false,
+            agent: AgentConfig::default(),
+            cooldown: None,
+        }
+    }
 }

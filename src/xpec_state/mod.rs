@@ -14,10 +14,10 @@ pub(crate) use last_result::{LastResult, LastResultStatus};
 
 #[derive(Default)]
 pub(crate) struct XpecStateCache {
-    absent_persistent_history_roots: BTreeSet<PathBuf>,
     xpecs_dirs: BTreeMap<PathBuf, PathBuf>,
     xpec_dirs: BTreeMap<(PathBuf, String), PathBuf>,
     last_results: BTreeMap<LastResultCacheKey, Option<LastResult>>,
+    same_tree_records: BTreeMap<LastResultCacheKey, Vec<LastResult>>,
 }
 
 type LastResultCacheKey = (PathBuf, String, LastResultStatus);
@@ -41,18 +41,6 @@ pub(crate) enum CachedLastResultKind {
 }
 
 impl XpecStateCache {
-    pub(crate) fn with_absent_persistent_history(root: &Path) -> XpecStateCache {
-        let mut cache = XpecStateCache::default();
-        cache
-            .absent_persistent_history_roots
-            .insert(root.to_path_buf());
-        cache
-    }
-
-    pub(crate) fn persistent_history_is_absent(&self, root: &Path) -> bool {
-        self.absent_persistent_history_roots.contains(root)
-    }
-
     pub(crate) fn xpecs_dir(&mut self, root: &Path) -> Result<PathBuf, String> {
         let key = root.to_path_buf();
         if let Some(path) = self.xpecs_dirs.get(&key) {
@@ -106,13 +94,12 @@ pub(crate) fn cached_last_result_for_expectation(
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
     lookup: CachedLastResultLookup,
 ) -> Result<Option<CachedLastResultHit>, String> {
-    // This is the Cached Result implementation for ordinary Git-backed runs.
-    // The in-place command path never calls it; in-place's separate
-    // compatibility validator can reject configured cooldown because that mode
-    // has no persistent last-result history to query.
-    // Cached results are answers for the checked visible tree. `diff-from`
-    // only chooses the left-hand tree for prompt-rendered Git diffs during
-    // fresh evaluator work, so it is not part of cache identity.
+    // Cached Result is defined for an expectation and Git state. Same-tree
+    // lookup compares the checked Git state with stored visible-tree OIDs;
+    // cooldown lookup consults status-specific last results when enabled.
+    // Same-tree lookup is over pass/fail records that still exist in Canon
+    // state: the current Last Results files plus same-status records saved
+    // before those files are replaced.
     if lookup.include_same_tree {
         if let Some((result, status)) = same_tree_last_result(
             root,
@@ -203,30 +190,81 @@ fn same_tree_last_result(
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<Option<(LastResult, CachedResultStatus)>, String> {
     let resolver = visible_tree_oid_cache.reuse_resolver(root, source)?;
-    for (last_status, cached_status) in [
-        (LastResultStatus::Fail, CachedResultStatus::Fail),
-        (LastResultStatus::Pass, CachedResultStatus::Pass),
-    ] {
-        let Some(result) = state_cache.read_last_result(root, expectation, last_status)? else {
-            continue;
-        };
-        let Some(stored_visible_tree_oid) = result.visible_tree_oid.as_deref() else {
-            continue;
-        };
-        // The cached-result rule compares the stored visibleTreeOid with the
-        // current visible tree built from that same stored visible-scope
-        // pathspec. Reconstructing a q-scope here would make current agent
-        // ignores part of history reuse.
-        let Some(current_visible_tree_oid) =
-            resolver.visible_tree_oid_for_visible_scope_pathspec(&result.visible_scope)?
-        else {
-            continue;
-        };
-        if current_visible_tree_oid == stored_visible_tree_oid {
-            return Ok(Some((result, cached_status)));
+    let mut hits = Vec::new();
+    hits.extend(matching_same_tree_last_results(
+        &resolver,
+        root,
+        expectation,
+        state_cache,
+        LastResultStatus::Fail,
+        CachedResultStatus::Fail,
+    )?);
+    hits.extend(matching_same_tree_last_results(
+        &resolver,
+        root,
+        expectation,
+        state_cache,
+        LastResultStatus::Pass,
+        CachedResultStatus::Pass,
+    )?);
+    Ok(latest_matching_same_tree_last_result(hits))
+}
+
+fn matching_same_tree_last_results(
+    resolver: &crate::git::VisibleTreeOidReuseResolver,
+    root: &Path,
+    expectation: &SelectedExpectation,
+    state_cache: &mut XpecStateCache,
+    last_status: LastResultStatus,
+    cached_status: CachedResultStatus,
+) -> Result<Vec<(LastResult, CachedResultStatus)>, String> {
+    let mut results = state_cache.read_same_tree_records(root, expectation, last_status)?;
+    if let Some(result) = state_cache.read_last_result(root, expectation, last_status)? {
+        results.push(result);
+    }
+    matching_same_tree_results(resolver, results, cached_status)
+}
+
+fn matching_same_tree_results(
+    resolver: &crate::git::VisibleTreeOidReuseResolver,
+    results: Vec<LastResult>,
+    cached_status: CachedResultStatus,
+) -> Result<Vec<(LastResult, CachedResultStatus)>, String> {
+    let mut hits = Vec::new();
+    for result in results {
+        if result_matches_checked_tree(resolver, &result)? {
+            hits.push((result, cached_status));
         }
     }
-    Ok(None)
+    Ok(hits)
+}
+
+fn result_matches_checked_tree(
+    resolver: &crate::git::VisibleTreeOidReuseResolver,
+    result: &LastResult,
+) -> Result<bool, String> {
+    let Some(stored_visible_tree_oid) = result.visible_tree_oid.as_deref() else {
+        return Ok(false);
+    };
+    // The cached-result rule compares the stored visibleTreeOid with the
+    // current visible tree built from that same stored visible-scope pathspec.
+    // Reconstructing a q-scope here would make current agent ignores part of
+    // history reuse.
+    let Some(current_visible_tree_oid) =
+        resolver.visible_tree_oid_for_visible_scope_pathspec(&result.visible_scope)?
+    else {
+        return Ok(false);
+    };
+    Ok(current_visible_tree_oid == stored_visible_tree_oid)
+}
+
+fn latest_matching_same_tree_last_result(
+    hits: Vec<(LastResult, CachedResultStatus)>,
+) -> Option<(LastResult, CachedResultStatus)> {
+    hits.into_iter()
+        .filter_map(|hit| parse_record_timestamp(&hit.0.response_timestamp).map(|time| (time, hit)))
+        .max_by_key(|(time, _)| *time)
+        .map(|(_, hit)| hit)
 }
 
 fn cooldown_last_result(
@@ -446,24 +484,21 @@ mod tests {
     }
 
     #[test]
-    fn absent_persistent_history_does_not_read_existing_last_results() {
-        let root = git_project("absent-persistent-history");
+    fn absent_persistent_history_root_skips_last_result_writes() {
         let expectation = test_expectation();
         let scope = full_scope();
-        let fail = test_record(&expectation, &scope, "no", None);
-        let mut writer = XpecStateCache::default();
-        writer
-            .write_last_result_for_record(&root, "checked-tree", &expectation, &fail)
+        let pass = test_record(&expectation, &scope, "yes", None);
+
+        let written = XpecStateCache::default()
+            .write_last_result_for_record_or_absent_history(
+                None,
+                "checked-tree",
+                &expectation,
+                &pass,
+            )
             .unwrap();
 
-        let mut absent_history = XpecStateCache::with_absent_persistent_history(&root);
-
-        assert!(last_result_path(&root, &expectation.id, "last-fail.json").exists());
-        assert!(absent_history
-            .read_last_fail(&root, &expectation)
-            .unwrap()
-            .is_none());
-        let _ = fs::remove_dir_all(root);
+        assert!(written.is_none());
     }
 
     #[test]
@@ -748,8 +783,8 @@ mod tests {
     }
 
     #[test]
-    fn new_answer_status_keeps_opposite_answer_result() {
-        let root = git_project("new-answer-keeps-opposite");
+    fn newer_same_tree_fail_wins_over_older_matching_pass() {
+        let root = git_project("same-tree-newer-fail");
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src/a.rs"), "a\n").unwrap();
         fs::write(root.join("src/b.rs"), "b\n").unwrap();
@@ -762,20 +797,22 @@ mod tests {
         let checked_tree_oid = TreeSource::Staged.tree_oid_for_prompt_diff(&root).unwrap();
         let mut oid_cache = VisibleTreeOidCache::new();
 
-        let mut fail = test_record(&expectation, &fail_scope, "no", None);
-        fail.visible_tree_oid = oid_cache
-            .visible_tree_oid(&root, &TreeSource::Staged, &expectation.agent, &fail_scope)
-            .unwrap();
-        cache
-            .write_last_result_for_record(&root, &checked_tree_oid, &expectation, &fail)
-            .unwrap();
-
         let mut pass = test_record(&expectation, &pass_scope, "yes", None);
+        pass.timestamp = crate::time::format_record_timestamp(1);
         pass.visible_tree_oid = oid_cache
             .visible_tree_oid(&root, &TreeSource::Staged, &expectation.agent, &pass_scope)
             .unwrap();
         cache
             .write_last_result_for_record(&root, &checked_tree_oid, &expectation, &pass)
+            .unwrap();
+
+        let mut fail = test_record(&expectation, &fail_scope, "no", None);
+        fail.timestamp = crate::time::format_record_timestamp(2);
+        fail.visible_tree_oid = oid_cache
+            .visible_tree_oid(&root, &TreeSource::Staged, &expectation.agent, &fail_scope)
+            .unwrap();
+        cache
+            .write_last_result_for_record(&root, &checked_tree_oid, &expectation, &fail)
             .unwrap();
 
         assert!(last_result_path(&root, &expectation.id, "last-fail.json").exists());
@@ -795,6 +832,107 @@ mod tests {
         .unwrap();
 
         assert_eq!(hit.status, CachedResultStatus::Fail);
+        assert_eq!(hit.kind, CachedLastResultKind::SameTree);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn same_tree_result_uses_newer_matching_pass() {
+        let root = git_project("same-tree-newer-pass");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/a.rs"), "a\n").unwrap();
+        git(&root, &["add", "src/a.rs"]);
+
+        let mut expectation = test_expectation();
+        expectation.target = Some(ExpectationTarget::Diff);
+        let mut cache = XpecStateCache::default();
+        let scope = full_scope();
+        let checked_tree_oid = TreeSource::Staged.tree_oid_for_prompt_diff(&root).unwrap();
+        let visible_tree_oid = VisibleTreeOidCache::new()
+            .visible_tree_oid(&root, &TreeSource::Staged, &expectation.agent, &scope)
+            .unwrap();
+
+        let mut fail = test_record(&expectation, &scope, "no", None);
+        fail.timestamp = crate::time::format_record_timestamp(1);
+        fail.visible_tree_oid = visible_tree_oid.clone();
+        cache
+            .write_last_result_for_record(&root, &checked_tree_oid, &expectation, &fail)
+            .unwrap();
+
+        let mut pass = test_record(&expectation, &scope, "yes", None);
+        pass.timestamp = crate::time::format_record_timestamp(2);
+        pass.visible_tree_oid = visible_tree_oid;
+        cache
+            .write_last_result_for_record(&root, &checked_tree_oid, &expectation, &pass)
+            .unwrap();
+
+        let hit = cached_last_result_for_expectation(
+            &root,
+            &TreeSource::Staged,
+            &expectation,
+            &mut cache,
+            &mut VisibleTreeOidCache::new(),
+            CachedLastResultLookup {
+                now: 3,
+                include_same_tree: true,
+                include_cooldown: true,
+            },
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(hit.status, CachedResultStatus::Pass);
+        assert_eq!(hit.kind, CachedLastResultKind::SameTree);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn explicit_diff_from_uses_newer_matching_pass() {
+        let root = git_project("explicit-diff-from-newer-pass");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/a.rs"), "a\n").unwrap();
+        git(&root, &["add", "src/a.rs"]);
+
+        let mut expectation = test_expectation();
+        expectation.target = Some(ExpectationTarget::Diff);
+        expectation.diff_from = crate::config_types::AGAINST_TREE_DIFF_FROM.to_string();
+        let mut cache = XpecStateCache::default();
+        let scope = full_scope();
+        let checked_tree_oid = TreeSource::Staged.tree_oid_for_prompt_diff(&root).unwrap();
+        let visible_tree_oid = VisibleTreeOidCache::new()
+            .visible_tree_oid(&root, &TreeSource::Staged, &expectation.agent, &scope)
+            .unwrap();
+
+        let mut fail = test_record(&expectation, &scope, "no", None);
+        fail.timestamp = crate::time::format_record_timestamp(1);
+        fail.visible_tree_oid = visible_tree_oid.clone();
+        cache
+            .write_last_result_for_record(&root, &checked_tree_oid, &expectation, &fail)
+            .unwrap();
+
+        let mut pass = test_record(&expectation, &scope, "yes", None);
+        pass.timestamp = crate::time::format_record_timestamp(2);
+        pass.visible_tree_oid = visible_tree_oid;
+        cache
+            .write_last_result_for_record(&root, &checked_tree_oid, &expectation, &pass)
+            .unwrap();
+
+        let hit = cached_last_result_for_expectation(
+            &root,
+            &TreeSource::Staged,
+            &expectation,
+            &mut cache,
+            &mut VisibleTreeOidCache::new(),
+            CachedLastResultLookup {
+                now: 3,
+                include_same_tree: true,
+                include_cooldown: true,
+            },
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(hit.status, CachedResultStatus::Pass);
         assert_eq!(hit.kind, CachedLastResultKind::SameTree);
         let _ = fs::remove_dir_all(root);
     }
@@ -860,6 +998,75 @@ mod tests {
         assert_eq!(
             hit.result.checked_tree_oid.as_deref(),
             Some(checked_tree_oid.as_str())
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn same_tree_result_reuses_replaced_same_status_record() {
+        let root = git_project("same-tree-history-pass");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/a.rs"), "a\n").unwrap();
+        git(&root, &["add", "src/a.rs"]);
+
+        let expectation = test_expectation();
+        let scope = full_scope();
+        let mut cache = XpecStateCache::default();
+
+        let checked_tree_oid_a = TreeSource::Staged.tree_oid_for_prompt_diff(&root).unwrap();
+        let visible_tree_oid_a = VisibleTreeOidCache::new()
+            .visible_tree_oid(&root, &TreeSource::Staged, &expectation.agent, &scope)
+            .unwrap();
+        let mut pass_a = test_record(&expectation, &scope, "yes", None);
+        pass_a.timestamp = crate::time::format_record_timestamp(1);
+        pass_a.visible_tree_oid = visible_tree_oid_a.clone();
+        cache
+            .write_last_result_for_record(&root, &checked_tree_oid_a, &expectation, &pass_a)
+            .unwrap();
+
+        let mut pass_a_newer = test_record(&expectation, &scope, "yes", None);
+        pass_a_newer.timestamp = crate::time::format_record_timestamp(2);
+        pass_a_newer.visible_tree_oid = visible_tree_oid_a;
+        cache
+            .write_last_result_for_record(&root, &checked_tree_oid_a, &expectation, &pass_a_newer)
+            .unwrap();
+
+        fs::write(root.join("src/a.rs"), "b\n").unwrap();
+        git(&root, &["add", "src/a.rs"]);
+        let checked_tree_oid_b = TreeSource::Staged.tree_oid_for_prompt_diff(&root).unwrap();
+        let visible_tree_oid_b = VisibleTreeOidCache::new()
+            .visible_tree_oid(&root, &TreeSource::Staged, &expectation.agent, &scope)
+            .unwrap();
+        let mut pass_b = test_record(&expectation, &scope, "yes", None);
+        pass_b.timestamp = crate::time::format_record_timestamp(3);
+        pass_b.visible_tree_oid = visible_tree_oid_b;
+        cache
+            .write_last_result_for_record(&root, &checked_tree_oid_b, &expectation, &pass_b)
+            .unwrap();
+
+        fs::write(root.join("src/a.rs"), "a\n").unwrap();
+        git(&root, &["add", "src/a.rs"]);
+
+        let hit = cached_last_result_for_expectation(
+            &root,
+            &TreeSource::Staged,
+            &expectation,
+            &mut cache,
+            &mut VisibleTreeOidCache::new(),
+            CachedLastResultLookup {
+                now: 3,
+                include_same_tree: true,
+                include_cooldown: true,
+            },
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(hit.status, CachedResultStatus::Pass);
+        assert_eq!(hit.kind, CachedLastResultKind::SameTree);
+        assert_eq!(
+            hit.result.response_timestamp,
+            crate::time::format_record_timestamp(2)
         );
         let _ = fs::remove_dir_all(root);
     }
@@ -1022,7 +1229,6 @@ mod tests {
             expected_answer: "yes".to_string(),
             question_context: String::new(),
             diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
-            diff_from_configured: false,
             target: None,
             question_answer_only: false,
             agent: AgentConfig::default(),

@@ -8,6 +8,8 @@ use std::collections::BTreeMap;
 pub(crate) struct CheckConfig {
     pub(crate) version: u32,
     pub(crate) agent: AgentConfig,
+    // Resolved top-level check hooks from the parsed `hooks` mapping.
+    pub(crate) hooks: CheckHooksConfig,
     pub(crate) expectations: Vec<Expectation>,
 }
 
@@ -19,8 +21,103 @@ pub(crate) struct RawCheckConfig {
     #[serde(default)]
     pub(crate) presets: Option<BTreeMap<String, RawPresetConfig>>,
     #[serde(default)]
+    // Optional top-level `hooks` mapping from check.yml. Expansion resolves
+    // this raw schema into `CheckConfig.hooks`.
+    pub(crate) hooks: Option<RawCheckHooksConfig>,
+    #[serde(default)]
     pub(crate) agent: Option<RawLegacyAgentConfig>,
     pub(crate) expectations: Vec<RawExpectationItem>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct CheckHooksConfig {
+    pub(crate) on_start: Vec<CheckHookConfig>,
+    pub(crate) on_pass: Vec<CheckHookConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CheckHookConfig {
+    pub(crate) print: String,
+    pub(crate) confirm: Option<String>,
+    pub(crate) repair_instruction: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RawCheckHooksConfig {
+    #[serde(default)]
+    #[serde(rename = "on-start")]
+    pub(crate) on_start: Option<RawCheckHookConfig>,
+    #[serde(default)]
+    #[serde(rename = "on-pass")]
+    pub(crate) on_pass: Option<RawCheckHookConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(untagged)]
+pub(crate) enum RawCheckHookConfig {
+    Shorthand(String),
+    Mapping(RawCheckHookMappingConfig),
+    List(Vec<RawCheckHookConfig>),
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RawCheckHookMappingConfig {
+    pub(crate) print: String,
+    #[serde(default)]
+    pub(crate) confirm: Option<String>,
+    #[serde(default)]
+    #[serde(rename = "repair-instruction")]
+    pub(crate) repair_instruction: Option<String>,
+}
+
+pub(crate) const DEFAULT_CHECK_HOOK_REPAIR_INSTRUCTION: &str =
+    "▷ Fix the blocker and run `canon check` again!";
+
+impl RawCheckHooksConfig {
+    pub(crate) fn resolve(self) -> CheckHooksConfig {
+        CheckHooksConfig {
+            on_start: self
+                .on_start
+                .map(RawCheckHookConfig::resolve)
+                .unwrap_or_default(),
+            on_pass: self
+                .on_pass
+                .map(RawCheckHookConfig::resolve)
+                .unwrap_or_default(),
+        }
+    }
+}
+
+impl RawCheckHookConfig {
+    pub(crate) fn resolve(self) -> Vec<CheckHookConfig> {
+        match self {
+            RawCheckHookConfig::List(hooks) => hooks
+                .into_iter()
+                .flat_map(RawCheckHookConfig::resolve)
+                .collect(),
+            hook => vec![hook.resolve_one()],
+        }
+    }
+
+    fn resolve_one(self) -> CheckHookConfig {
+        match self {
+            RawCheckHookConfig::Shorthand(print) => CheckHookConfig {
+                print,
+                confirm: None,
+                repair_instruction: DEFAULT_CHECK_HOOK_REPAIR_INSTRUCTION.to_string(),
+            },
+            RawCheckHookConfig::Mapping(mapping) => CheckHookConfig {
+                print: mapping.print,
+                confirm: mapping.confirm,
+                repair_instruction: mapping
+                    .repair_instruction
+                    .unwrap_or_else(|| DEFAULT_CHECK_HOOK_REPAIR_INSTRUCTION.to_string()),
+            },
+            RawCheckHookConfig::List(_) => unreachable!("hook list is resolved before hook item"),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
@@ -426,9 +523,11 @@ impl RawExpectationItem {
             include,
             common,
         } = fields;
-        // Preset defaults are already applied here. The implementation default
-        // for a missing required shape field is still no value, so after
-        // item/preset/default resolution the config is invalid.
+        // Field resolution has already applied item values, selected preset
+        // values, and real implementation defaults. Required shape fields have
+        // no synthetic defaults: inventing an `include`, `q`+`a`, or
+        // `path`+`q_template`+`a` would change the expectation form instead of
+        // resolving it, so absence after resolution is a config error.
         match resolved_form {
             Some(RawExpectationItemForm::Include) => {
                 return match include {

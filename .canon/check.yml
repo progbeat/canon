@@ -34,6 +34,17 @@ presets:
       - "AGENTS.md"
       - "Cargo.lock"
       - "LICENSE"
+  pr-review:
+    <<: *default_preset
+    target: diff
+    diff-from: master
+    models: ["gpt-5.5"]
+    ignore:
+      - "docs/ai/**"
+      - "skills/**"
+      - "AGENTS.md"
+      - "Cargo.lock"
+      - "LICENSE"
 
 expectations:
   - include: expects/*.yml
@@ -77,9 +88,6 @@ expectations:
   - q: "Can `canon check <PREFIX>...` select one or more expectations by unique ID prefix, including full IDs?"
     a: "yes"
 
-  - q: "For an expectation that defines only `q` and `a`, when `canon check -q <q>` and `canon check <ID>` select the same expectation, is the complete first-turn evaluator-model input identical before the evaluator answers assuming the same scope?"
-    a: "yes"
-
   - q: "Are expectation ID prefixes limited to human-readable output and CLI selection, with all non-temporary persistent state under CANON_STATE_DIR storing expectation references by full ID rather than minimal or user-provided prefixes?"
     a: "yes"
 
@@ -94,3 +102,17 @@ expectations:
 
   - q: "Can you find any check execution path after raw config expansion that looks up a named preset or copies fields from a preset instead of consuming the already-resolved fields of the question or expectation being evaluated?"
     a: "no"
+
+hooks:
+  on-start:
+    - |
+        Run the checks that are relevant to this change:
+        ```
+        cargo fmt --check
+        cargo clippy --all-targets -- -D warnings
+        cargo test
+        ```
+        Consider `cargo build --release` or `cargo audit --deny warnings` when relevant.
+    - print: "Have the relevant checks passed? [y/N] "
+      confirm: "y"
+      repair-instruction: "▷ Fix any failures, then run `canon check` again."

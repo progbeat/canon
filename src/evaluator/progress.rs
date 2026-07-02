@@ -8,9 +8,10 @@ use std::time::{Duration, Instant};
 // q-scope verification. `src/check/interrogation/session/model_fallback.rs`
 // records `⇄`; `src/check/interrogation/session/thread.rs` records `↻` through
 // `record_fresh_thread_retry_after_short_id_response_error_started`;
-// `src/check/run/execute/expectation.rs` records `↗` and `↘`; and
-// `src/app/process/transport.rs` records active-turn idle accumulation `~` and
-// exhausted no-progress turn timeouts `×`.
+// `src/check/interrogation/request_kind.rs` records request-start `↗` and
+// `↘`; `src/check/run/execute/expectation.rs` records result-side `↖` and
+// `⤡`; and `src/app/process/transport.rs` records active-turn idle
+// accumulation `~` and exhausted no-progress turn timeouts `×`.
 // The stdout live timeline writer in `check::command::output::record` renders
 // and flushes the due marker.
 // App-server control messages such as initialize and thread/start are session
@@ -35,6 +36,8 @@ pub(crate) enum EvaluatorProgressMarker {
     // Canon `↻`: a fresh-thread retry after a short-ID response error started.
     FreshThreadRetryAfterShortIdResponseError,
     FullScopeRetry,
+    QScopeVerificationStartedAndReturnedScopeTooNarrow,
+    QScopeVerificationReturnedScopeTooNarrow,
     QScopeVerification,
     NoHigherPriorityEvent,
 }
@@ -47,6 +50,7 @@ enum EvaluatorProgressEventKind {
     FreshThreadRetryAfterShortIdResponseError,
     FullScopeRetry,
     QScopeVerification,
+    QScopeVerificationReturnedScopeTooNarrow,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,6 +106,12 @@ impl EvaluatorProgress {
         }
     }
 
+    pub(crate) fn record_q_scope_verification_returned_scope_too_narrow(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.record_q_scope_verification_returned_scope_too_narrow_at(Instant::now());
+        }
+    }
+
     pub(crate) fn elapsed_marker_due(
         &self,
         next_marker_at: &mut Instant,
@@ -115,12 +125,14 @@ impl EvaluatorProgress {
             .state
             .lock()
             .map_err(|_| "evaluator progress state poisoned".to_string())?;
-        // One call classifies one scheduled elapsed-marker tick. The output
-        // worker owns the one-minute cadence; this helper owns marker priority.
-        let window_start = now - interval;
-        let marker = state.marker_for_window(window_start, now);
-        state.events.retain(|event| event.at > now);
-        *next_marker_at = now + interval;
+        // One call classifies one scheduled elapsed-marker tick. If the output
+        // worker wakes late, advancing by the scheduled tick lets zero-duration
+        // waits emit the skipped minute markers in order.
+        let marker_at = *next_marker_at;
+        let window_start = marker_at - interval;
+        let marker = state.marker_for_window(window_start, marker_at);
+        state.events.retain(|event| event.at > marker_at);
+        *next_marker_at += interval;
         Ok(Some(marker))
     }
 
@@ -138,21 +150,17 @@ impl EvaluatorProgress {
             .lock()
             .map_err(|_| "evaluator progress state poisoned".to_string())?;
         let mut markers = Vec::new();
-        let terminal_turn_timeout_due =
-            state.has_event_before_or_at(EvaluatorProgressEventKind::TurnTimeout, now);
-        if *next_marker_at <= now {
+        while *next_marker_at <= now {
             let marker_at = *next_marker_at;
             let window_start = marker_at - interval;
             markers.push(state.marker_for_window(window_start, marker_at));
             state.events.retain(|event| event.at > marker_at);
-            *next_marker_at = now + interval;
+            *next_marker_at += interval;
         }
-        if terminal_turn_timeout_due {
-            state.events.retain(|event| event.at > now);
-            if markers.last() != Some(&EvaluatorProgressMarker::TurnTimeout) {
-                markers.push(EvaluatorProgressMarker::TurnTimeout);
-            }
-        }
+        let final_window_start = *next_marker_at - interval;
+        markers.push(state.marker_for_window(final_window_start, now));
+        state.events.retain(|event| event.at > now);
+        *next_marker_at = now + interval;
         Ok(markers)
     }
 }
@@ -185,6 +193,13 @@ impl EvaluatorProgressState {
         self.record_marker_event(at, EvaluatorProgressEventKind::QScopeVerification);
     }
 
+    fn record_q_scope_verification_returned_scope_too_narrow_at(&mut self, at: Instant) {
+        self.record_marker_event(
+            at,
+            EvaluatorProgressEventKind::QScopeVerificationReturnedScopeTooNarrow,
+        );
+    }
+
     fn record_marker_event(&mut self, at: Instant, kind: EvaluatorProgressEventKind) {
         self.events.push(EvaluatorProgressEvent { at, kind });
     }
@@ -215,24 +230,46 @@ impl EvaluatorProgressState {
                 EvaluatorProgressEventKind::FullScopeRetry,
                 EvaluatorProgressMarker::FullScopeRetry,
             ),
-            (
-                EvaluatorProgressEventKind::QScopeVerification,
-                EvaluatorProgressMarker::QScopeVerification,
-            ),
         ] {
-            if self.events.iter().any(|event| {
-                event.kind == kind && event.at >= window_start && event.at <= marker_at
-            }) {
+            if self.has_event_in_window(kind, window_start, marker_at) {
                 return marker;
             }
+        }
+        let q_scope_verification_started = self.has_event_in_window(
+            EvaluatorProgressEventKind::QScopeVerification,
+            window_start,
+            marker_at,
+        );
+        let q_scope_verification_returned_scope_too_narrow = self.has_event_in_window(
+            EvaluatorProgressEventKind::QScopeVerificationReturnedScopeTooNarrow,
+            window_start,
+            marker_at,
+        );
+        match (
+            q_scope_verification_started,
+            q_scope_verification_returned_scope_too_narrow,
+        ) {
+            (true, true) => {
+                return EvaluatorProgressMarker::QScopeVerificationStartedAndReturnedScopeTooNarrow;
+            }
+            (false, true) => {
+                return EvaluatorProgressMarker::QScopeVerificationReturnedScopeTooNarrow;
+            }
+            (true, false) => return EvaluatorProgressMarker::QScopeVerification,
+            (false, false) => {}
         }
         EvaluatorProgressMarker::NoHigherPriorityEvent
     }
 
-    fn has_event_before_or_at(&self, kind: EvaluatorProgressEventKind, now: Instant) -> bool {
+    fn has_event_in_window(
+        &self,
+        kind: EvaluatorProgressEventKind,
+        window_start: Instant,
+        marker_at: Instant,
+    ) -> bool {
         self.events
             .iter()
-            .any(|event| event.kind == kind && event.at <= now)
+            .any(|event| event.kind == kind && event.at >= window_start && event.at <= marker_at)
     }
 }
 
@@ -244,6 +281,8 @@ impl EvaluatorProgressMarker {
             EvaluatorProgressMarker::ModelFallback => "⇄",
             EvaluatorProgressMarker::FreshThreadRetryAfterShortIdResponseError => "↻",
             EvaluatorProgressMarker::FullScopeRetry => "↗",
+            EvaluatorProgressMarker::QScopeVerificationStartedAndReturnedScopeTooNarrow => "⤡",
+            EvaluatorProgressMarker::QScopeVerificationReturnedScopeTooNarrow => "↖",
             EvaluatorProgressMarker::QScopeVerification => "↘",
             EvaluatorProgressMarker::NoHigherPriorityEvent => ".",
         }
@@ -272,6 +311,21 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn elapsed_marker_due_ignores_zero_interval() {
+        let progress = EvaluatorProgress::new();
+        let start = Instant::now();
+        let mut next_marker_at = start;
+
+        assert_eq!(
+            progress
+                .elapsed_marker_due(&mut next_marker_at, start, Duration::ZERO)
+                .unwrap(),
+            None
+        );
+        assert_eq!(next_marker_at, start);
     }
 
     #[test]
@@ -350,6 +404,66 @@ mod tests {
     }
 
     #[test]
+    fn q_scope_verification_scope_too_narrow_marker_uses_canon_symbol() {
+        let progress = EvaluatorProgress::new();
+        let interval = Duration::from_secs(60);
+        let start = Instant::now();
+        let tick_at = start + interval;
+        let mut next_marker_at = tick_at;
+
+        progress
+            .state
+            .lock()
+            .unwrap()
+            .record_q_scope_verification_returned_scope_too_narrow_at(
+                start + Duration::from_secs(30),
+            );
+
+        let marker = progress
+            .elapsed_marker_due(&mut next_marker_at, tick_at, interval)
+            .unwrap();
+
+        assert_eq!(
+            marker,
+            Some(EvaluatorProgressMarker::QScopeVerificationReturnedScopeTooNarrow)
+        );
+        assert_eq!(
+            EvaluatorProgressMarker::QScopeVerificationReturnedScopeTooNarrow.as_str(),
+            "↖"
+        );
+    }
+
+    #[test]
+    fn q_scope_verification_same_window_scope_too_narrow_marker_uses_canon_symbol() {
+        let progress = EvaluatorProgress::new();
+        let interval = Duration::from_secs(60);
+        let start = Instant::now();
+        let tick_at = start + interval;
+        let mut next_marker_at = tick_at;
+
+        {
+            let mut state = progress.state.lock().unwrap();
+            state.record_q_scope_verification_started_at(start + Duration::from_secs(10));
+            state.record_q_scope_verification_returned_scope_too_narrow_at(
+                start + Duration::from_secs(30),
+            );
+        }
+
+        let marker = progress
+            .elapsed_marker_due(&mut next_marker_at, tick_at, interval)
+            .unwrap();
+
+        assert_eq!(
+            marker,
+            Some(EvaluatorProgressMarker::QScopeVerificationStartedAndReturnedScopeTooNarrow)
+        );
+        assert_eq!(
+            EvaluatorProgressMarker::QScopeVerificationStartedAndReturnedScopeTooNarrow.as_str(),
+            "⤡"
+        );
+    }
+
+    #[test]
     fn elapsed_marker_due_includes_window_start_boundary() {
         let progress = EvaluatorProgress::new();
         let interval = Duration::from_secs(60);
@@ -368,6 +482,39 @@ mod tests {
             .unwrap();
 
         assert_eq!(marker, Some(EvaluatorProgressMarker::QScopeVerification));
+    }
+
+    #[test]
+    fn elapsed_marker_due_preserves_scheduled_ticks_after_late_wakeup() {
+        let progress = EvaluatorProgress::new();
+        let interval = Duration::from_secs(60);
+        let start = Instant::now();
+        let mut next_marker_at = start + interval;
+
+        {
+            let mut state = progress.state.lock().unwrap();
+            state.record_full_scope_retry_started_at(start + Duration::from_secs(70));
+            state.record_q_scope_verification_started_at(start + Duration::from_secs(170));
+        }
+
+        let late_now = start + Duration::from_secs(181);
+        let mut markers = Vec::new();
+        while let Some(marker) = progress
+            .elapsed_marker_due(&mut next_marker_at, late_now, interval)
+            .unwrap()
+        {
+            markers.push(marker);
+        }
+
+        assert_eq!(
+            markers,
+            vec![
+                EvaluatorProgressMarker::NoHigherPriorityEvent,
+                EvaluatorProgressMarker::FullScopeRetry,
+                EvaluatorProgressMarker::QScopeVerification
+            ]
+        );
+        assert_eq!(next_marker_at, start + Duration::from_secs(240));
     }
 
     #[test]
@@ -401,7 +548,21 @@ mod tests {
     }
 
     #[test]
-    fn completion_markers_due_keeps_terminal_turn_timeout_before_overdue_window() {
+    fn completion_markers_due_ignores_zero_interval() {
+        let progress = EvaluatorProgress::new();
+        let start = Instant::now();
+        let mut next_marker_at = start;
+
+        let markers = progress
+            .completion_markers_due(&mut next_marker_at, start, Duration::ZERO)
+            .unwrap();
+
+        assert!(markers.is_empty());
+        assert_eq!(next_marker_at, start);
+    }
+
+    #[test]
+    fn completion_markers_due_emits_overdue_window_then_final_window() {
         let progress = EvaluatorProgress::new();
         let interval = Duration::from_secs(60);
         let start = Instant::now();
@@ -411,7 +572,7 @@ mod tests {
             .state
             .lock()
             .unwrap()
-            .record_turn_timeout_at(start + Duration::from_secs(30));
+            .record_turn_timeout_at(start + Duration::from_secs(125));
 
         let markers = progress
             .completion_markers_due(
@@ -428,5 +589,27 @@ mod tests {
                 EvaluatorProgressMarker::TurnTimeout
             ]
         );
+    }
+
+    #[test]
+    fn completion_markers_due_emits_final_marker_for_zero_full_minutes() {
+        let progress = EvaluatorProgress::new();
+        let interval = Duration::from_secs(60);
+        let start = Instant::now();
+        let mut next_marker_at = start + interval;
+
+        let markers = progress
+            .completion_markers_due(
+                &mut next_marker_at,
+                start + Duration::from_secs(1),
+                interval,
+            )
+            .unwrap();
+
+        assert_eq!(
+            markers,
+            vec![EvaluatorProgressMarker::NoHigherPriorityEvent]
+        );
+        assert_eq!(next_marker_at, start + Duration::from_secs(61));
     }
 }

@@ -4,7 +4,7 @@
 
 Each evaluator task input is rendered from the turn prompt template.
 
-An evaluator response must be a single JSON object matching the JSON Schema selected for that interrogation.
+An evaluator response must be a single JSON object accepted by the selected JSON Schema; the schema sent to the evaluator transport may differ from the selected schema only to fit transport support, must enforce each selected-schema restriction directly or through an equivalent supported form when possible, and leaves only the remaining restrictions to be enforced after parsing.
 
 An interrogation is **restricted-scope** when its q-scope is not full project scope.
 For this policy, **full project scope** means the q-scope `["."]` before configured ignore exclusions are applied to form the visible scope.

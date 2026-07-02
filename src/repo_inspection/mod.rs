@@ -423,7 +423,7 @@ fn collect_in_place_files(root: &Path, dir: &Path, files: &mut Vec<String>) -> R
             .map_err(|err| format!("failed to inspect {}: {}", path.display(), err))?;
         if file_type.is_dir() {
             collect_in_place_files(root, &path, files)?;
-        } else if file_type.is_file() {
+        } else if file_type.is_file() || file_type.is_symlink() {
             let relative = path
                 .strip_prefix(root)
                 .map_err(|_| format!("failed to relativize {}", path.display()))?;
@@ -479,8 +479,8 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn in_place_file_listing_omits_symlinks() {
-        let root = test_root("in-place-file-listing-omits-symlinks");
+    fn in_place_file_listing_includes_symlinks() {
+        let root = test_root("in-place-file-listing-includes-symlinks");
         fs::create_dir_all(root.join("specs")).unwrap();
         fs::write(root.join("specs/real.md"), "real").unwrap();
         let outside = outside_test_file(&root);
@@ -489,7 +489,7 @@ mod tests {
 
         let files = in_place_file_listing(&root).unwrap();
 
-        assert_eq!(files, vec!["specs/real.md"]);
+        assert_eq!(files, vec!["specs/link.md", "specs/real.md"]);
         let _ = fs::remove_file(outside);
         let _ = fs::remove_dir_all(root);
     }

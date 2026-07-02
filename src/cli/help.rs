@@ -90,8 +90,8 @@ pub(super) fn init_help_command() -> ClapCommand {
         .about("Create the default canon configuration")
 }
 
-pub(super) fn hook_help_command() -> ClapCommand {
-    crate::hooks::hook_help_command()
+pub(super) fn pre_commit_help_command() -> ClapCommand {
+    crate::hooks::pre_commit_help_command()
 }
 
 pub(super) fn gate_help_command() -> ClapCommand {

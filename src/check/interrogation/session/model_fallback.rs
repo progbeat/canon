@@ -1,6 +1,8 @@
-use crate::check::core::{InterrogationResult, SelectedExpectation};
+use super::thread::interrogate_expectation_answer_with_model;
+use crate::check::core::{InterrogationAnswer, InterrogationResult, SelectedExpectation};
 use crate::check::interrogation::interrogate_expectation_with_model;
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
+use crate::check::interrogation::InterrogationRequestKind;
 use crate::config_types::AgentConfig;
 use crate::evaluator::{
     is_model_technical_failure, model_label, EvaluatorError, EvaluatorProgress, EvaluatorRunner,
@@ -14,6 +16,7 @@ pub(crate) struct ModelFallbackInterrogation<'a> {
     pub(crate) runtime: &'a CheckRuntime<'a>,
     pub(crate) expectation: &'a SelectedExpectation,
     pub(crate) enforced_scope: &'a [String],
+    pub(crate) request_kind: InterrogationRequestKind,
     pub(crate) progress: Option<&'a EvaluatorProgress>,
 }
 
@@ -28,6 +31,7 @@ pub(crate) fn interrogate_expectation_with_model_fallbacks<R: EvaluatorRunner>(
         runtime,
         expectation,
         enforced_scope,
+        request_kind,
         progress,
     } = interrogation;
     run_with_model_fallbacks(
@@ -46,6 +50,44 @@ pub(crate) fn interrogate_expectation_with_model_fallbacks<R: EvaluatorRunner>(
                 xpec_state,
                 enforced_scope,
                 model,
+                request_kind,
+                progress,
+            )
+        },
+    )
+}
+
+pub(crate) fn interrogate_expectation_answer_with_model_fallbacks<R: EvaluatorRunner>(
+    interrogation: ModelFallbackInterrogation<'_>,
+    runner: &mut R,
+    diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    state: &mut InterrogationRunState,
+    xpec_state: &mut XpecStateCache,
+) -> Result<InterrogationAnswer, String> {
+    let ModelFallbackInterrogation {
+        runtime,
+        expectation,
+        enforced_scope,
+        request_kind,
+        progress,
+    } = interrogation;
+    run_with_model_fallbacks(
+        &expectation.agent,
+        state,
+        diagnostic_log,
+        Some(&expectation.id),
+        progress,
+        |state, diagnostic_log, model| {
+            interrogate_expectation_answer_with_model(
+                runtime,
+                expectation,
+                runner,
+                diagnostic_log,
+                state,
+                xpec_state,
+                enforced_scope,
+                model,
+                request_kind,
                 progress,
             )
         },
@@ -87,10 +129,9 @@ pub(crate) fn run_with_model_fallbacks<T>(
                         // marker before that control message can happen.
                         progress.record_model_fallback_started();
                     }
-                    // `progress` is present for selected-expectation result
-                    // timelines, where this fallback maps to the `⇄` marker.
-                    // Query mode reuses fallback behavior but has no public
-                    // result-entry timeline at all.
+                    // `progress` is present for selected-expectation and
+                    // `canon ask` timelines, where this fallback maps to the
+                    // `⇄` marker.
                     // Fallback attempts are the technical-failure exception to
                     // normal model/visible-context thread reuse. The failing
                     // model may have caused the app server to retire every live

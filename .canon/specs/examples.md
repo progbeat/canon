@@ -10,7 +10,7 @@ Created .canon/check.yml
 Install the pre-commit hook:
 
 ```sh
-$ canon hook install
+$ canon pre-commit install
 Installed .git/hooks/pre-commit
 ```
 
@@ -26,16 +26,16 @@ canon gate: .canon/** changes must not be mixed with non-.canon changes
 Uninstall the pre-commit hook:
 
 ```sh
-$ canon hook uninstall
+$ canon pre-commit uninstall
 Uninstalled .git/hooks/pre-commit
 ```
 
 If another pre-commit hook or hook manager is already installed:
 
 ```sh
-$ canon hook install
+$ canon pre-commit install
 Error: Can't safely install pre-commit hook.
-▷ Add `canon gate` manually to the existing hook setup or ask a human to handle it.
+▷ Add `canon gate` manually to the existing pre-commit setup or ask a human to handle it.
 ```
 
 If `canon check` is run before the project has a canon config:

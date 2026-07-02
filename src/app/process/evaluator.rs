@@ -115,7 +115,7 @@ pub(crate) fn turn_start_request(
     // ScopeTooNarrow before the evaluator turn is started. This is the
     // one-turn request boundary; retry and q-scope verification orchestration
     // lives in `src/check/run/execute/expectation.rs` for check runs and
-    // `src/check/interrogation/query/mod.rs` for query mode. The shared
+    // `src/check/interrogation/query/mod.rs` for `canon ask`. The shared
     // q-scope verification gate lives in `src/check/interrogation/policy.rs`.
     let mut request = json!({
         "threadId": session_id,

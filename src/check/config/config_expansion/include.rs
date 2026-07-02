@@ -19,6 +19,10 @@ pub(super) fn merge_include_generator_fields_as_item_fields(
 
 fn merge_generator_fields(fields: &mut RawExpectationFields, generator: &RawExpectationFields) {
     let declared_form = fields.declared_item_form();
+    // Generator fields count as generated item fields before preset/default
+    // resolution, but the merge stays form-aware: explicit items inherit
+    // explicit-form fields, path generators inherit path-generator fields, and
+    // unresolved/include items can still inherit either form's fields.
     if fields.a.is_none() {
         fields.a = generator.a.clone();
     }

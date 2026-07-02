@@ -14,15 +14,17 @@ use std::time::{Duration, Instant};
 
 const PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL: Duration = Duration::from_secs(60);
 
-// Check progress timeline ownership:
-// - `start_expectation_report_output` writes and flushes `<short ID>.` before
+// Progress timeline ownership:
+// - `start_expectation_report_output` writes and flushes `<short ID>` before
 //   evaluator work starts; that prefix is the started public report for the
-//   expectation, not an unowned placeholder.
+//   expectation, not a timeline marker.
+// - `start_query_report_output` flushes stdout before evaluator work starts
+//   without printing a marker.
 // - the progress worker writes and flushes elapsed markers every minute while
 //   evaluator work is still active.
-// - `finish_with_record` writes the due elapsed marker before the final
-//   ` OK`/` FAILED`/` ERROR` suffix when it wins the one-minute boundary race
-//   before the worker observes that tick.
+// - completion writes the final marker before the result suffix or response
+//   block. The final marker is emitted even when the final interval is 0
+//   seconds.
 // Event-to-marker priority and symbols live in `src/evaluator/progress.rs`.
 pub(crate) struct StartedExpectationReportOutput {
     output: SharedCheckOutput,
@@ -65,13 +67,23 @@ pub(crate) fn start_expectation_report_output(
     output: SharedCheckOutput,
     display_id: &str,
 ) -> StartedExpectationReportOutput {
+    start_progress_report_output(output, display_id, "started expectation report prefix")
+}
+
+pub(crate) fn start_query_report_output(
+    output: SharedCheckOutput,
+) -> StartedExpectationReportOutput {
+    start_progress_report_output(output, "", "started query report timeline")
+}
+
+fn start_progress_report_output(
+    output: SharedCheckOutput,
+    prefix: &str,
+    description: &str,
+) -> StartedExpectationReportOutput {
     let mut immediate_output = output.clone();
-    let prefix_completed = write_stdout_record(
-        &mut immediate_output,
-        format!("{}.", display_id).as_bytes(),
-        "started expectation report prefix",
-    )
-    .is_ok();
+    let prefix_completed =
+        write_stdout_record(&mut immediate_output, prefix.as_bytes(), description).is_ok();
 
     let (stop, stop_requested) = mpsc::channel();
     let active = Arc::new(AtomicBool::new(true));
@@ -134,23 +146,8 @@ impl StartedExpectationReportOutput {
         let _ = self.stop_progress_worker();
         let mut output = self.output.clone();
         if self.prefix_completed {
-            let markers = match self.due_elapsed_progress_markers() {
-                Ok(markers) => markers,
-                Err(_) => return FinishedExpectationReportOutput::with_stdout_completion_failed(),
-            };
-            for marker in markers {
-                if record_progress_marker(&self.timeline, marker).is_err() {
-                    return FinishedExpectationReportOutput::with_stdout_completion_failed();
-                }
-                if write_stdout_record(
-                    &mut output,
-                    marker.as_str().as_bytes(),
-                    "check live report progress marker",
-                )
-                .is_err()
-                {
-                    return FinishedExpectationReportOutput::with_stdout_completion_failed();
-                }
+            if self.write_completion_markers(&mut output).is_err() {
+                return FinishedExpectationReportOutput::with_stdout_completion_failed();
             }
             if assert_final_no_progress_turn_timeout_suffix(&self.timeline, record).is_err() {
                 return FinishedExpectationReportOutput::with_stdout_completion_failed();
@@ -167,6 +164,17 @@ impl StartedExpectationReportOutput {
         FinishedExpectationReportOutput::completed_report()
     }
 
+    pub(crate) fn finish_with_query_output(mut self, query_output: &str) -> Result<(), String> {
+        let _ = self.stop_progress_worker();
+        if !self.prefix_completed {
+            return Err("failed to flush started query report timeline to stdout".to_string());
+        }
+        let mut output = self.output.clone();
+        self.write_completion_markers(&mut output)?;
+        write_stdout_record(&mut output, b"\n", "query progress timeline newline")?;
+        write_stdout_record(&mut output, query_output.as_bytes(), "query result")
+    }
+
     fn stop_progress_worker(&mut self) -> Result<(), String> {
         self.active.store(false, Ordering::Release);
         let _ = self.stop.send(());
@@ -180,6 +188,18 @@ impl StartedExpectationReportOutput {
 
     fn due_elapsed_progress_markers(&self) -> Result<Vec<EvaluatorProgressMarker>, String> {
         completion_progress_markers_due(&self.progress, &self.timeline, Instant::now())
+    }
+
+    fn write_completion_markers(&self, output: &mut SharedCheckOutput) -> Result<(), String> {
+        for marker in self.due_elapsed_progress_markers()? {
+            record_progress_marker(&self.timeline, marker)?;
+            write_stdout_record(
+                output,
+                marker.as_str().as_bytes(),
+                "check live report progress marker",
+            )?;
+        }
+        Ok(())
     }
 }
 

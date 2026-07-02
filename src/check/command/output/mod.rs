@@ -16,9 +16,9 @@ mod summary;
 mod usage;
 
 pub(crate) use escape::escape_check_output_text;
-pub(crate) use query::write_query_output;
+pub(crate) use query::finish_query_output;
 pub(crate) use record::{
-    start_expectation_report_output, write_cached_non_pass_output,
+    start_expectation_report_output, start_query_report_output, write_cached_non_pass_output,
     write_result_output_without_started_report, StartedExpectationReportOutput,
 };
 pub(crate) use shared::{write_stdout_record, SharedCheckOutput};
@@ -30,12 +30,14 @@ pub(crate) use usage::render_token_usage_summary;
 // tests outside implementation files exercise public CLI behavior instead.
 mod tests {
     use super::{
-        render_check_agent_messages, render_token_usage_summary, start_expectation_report_output,
-        summary_outcome_counts, write_cached_non_pass_output,
-        write_result_output_without_started_report, write_summary_line, SharedCheckOutput,
+        finish_query_output, render_check_agent_messages, render_token_usage_summary,
+        start_expectation_report_output, start_query_report_output, summary_outcome_counts,
+        write_cached_non_pass_output, write_result_output_without_started_report,
+        write_summary_line, SharedCheckOutput,
     };
     use crate::check::core::{
-        CachedExpectation, CheckRecord, CheckResult, CheckRunReport, ERROR_INVALID_QUESTION,
+        BlockedCheckHook, CachedExpectation, CheckRecord, CheckResult, CheckRunReport,
+        ParsedAnswer, ERROR_INVALID_QUESTION,
     };
     use crate::check::SelectedExpectation;
     use crate::config_types::AgentConfig;
@@ -83,13 +85,14 @@ mod tests {
     }
 
     #[test]
-    fn summary_counts_cached_failures_separately_from_current_run_errors() {
+    fn summary_counts_cached_non_pass_records() {
         let evaluated_error = review_record_with_id("11111111111111111111", "j");
         let cached_failure = cached_expectation(failed_record_with_id("22222222222222222222", "k"));
         let cached_error = cached_expectation(review_record_with_id("33333333333333333333", "l"));
         let report = CheckRunReport {
             records: vec![evaluated_error],
             cached: vec![cached_failure, cached_error],
+            blocked: None,
             skipped: 0,
         };
 
@@ -97,7 +100,7 @@ mod tests {
 
         assert_eq!(counts.passed, 0);
         assert_eq!(counts.failed, 1);
-        assert_eq!(counts.errors, 1);
+        assert_eq!(counts.errors, 2);
     }
 
     #[test]
@@ -105,6 +108,7 @@ mod tests {
         let report = CheckRunReport {
             records: vec![passing_record()],
             cached: Vec::new(),
+            blocked: None,
             skipped: 2,
         };
         let mut summary_bytes = Vec::new();
@@ -127,6 +131,27 @@ mod tests {
             render_token_usage_summary(usage),
             "Token usage: total=9 input=4 (+ 3 cached) output=2 (reasoning 1)"
         );
+    }
+
+    #[test]
+    fn summary_orders_blocked_before_other_outcomes() {
+        let report = CheckRunReport {
+            records: vec![
+                failed_record_with_id("11111111111111111111", "j"),
+                passing_record_with_id("22222222222222222222", "k"),
+            ],
+            cached: Vec::new(),
+            blocked: Some(BlockedCheckHook {
+                repair_instruction: "repair".to_string(),
+            }),
+            skipped: 3,
+        };
+        let mut summary_bytes = Vec::new();
+
+        write_summary_line(&mut summary_bytes, &report, Duration::from_millis(500)).unwrap();
+
+        let summary = String::from_utf8(summary_bytes).unwrap();
+        assert!(summary.contains(" 1 blocked, 1 failed, 1 passed, 3 pending in 0.50s "));
     }
 
     #[test]
@@ -182,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn live_report_writes_initial_progress_marker_before_completion() {
+    fn live_report_flushes_short_id_before_first_progress_marker() {
         let bytes = Arc::new(Mutex::new(Vec::new()));
         let output = SharedCheckOutput::new(Box::new(CapturedOutput {
             bytes: bytes.clone(),
@@ -190,9 +215,30 @@ mod tests {
 
         let report = start_expectation_report_output(output, "j");
 
-        assert_eq!(captured_string(&bytes), "j.");
+        assert_eq!(captured_string(&bytes), "j");
         let finished = report.finish_with_record(&passing_record());
         assert!(!finished.stdout_completion_failed());
+    }
+
+    #[test]
+    fn query_output_starts_with_progress_timeline_line() {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let output = SharedCheckOutput::new(Box::new(CapturedOutput {
+            bytes: bytes.clone(),
+        }));
+        let report = start_query_report_output(output);
+        let answer = ParsedAnswer::answer(
+            "yes".to_string(),
+            "test evidence".to_string(),
+            Some(vec!["src/check".to_string()]),
+        );
+
+        finish_query_output(report, &answer).unwrap();
+
+        assert_eq!(
+            captured_string(&bytes),
+            ".\nObserved: yes\nEvidence: test evidence\nSuggested q-scope: [\"src/check\"]\n"
+        );
     }
 
     #[test]
@@ -253,6 +299,10 @@ mod tests {
         record_with_identity(CheckResult::Fail, "no", None, id, display_id)
     }
 
+    fn passing_record_with_id(id: &str, display_id: &str) -> CheckRecord {
+        record_with_identity(CheckResult::Pass, "yes", None, id, display_id)
+    }
+
     fn review_record_with_id(id: &str, display_id: &str) -> CheckRecord {
         record_with_identity(
             CheckResult::Fail,
@@ -273,7 +323,6 @@ mod tests {
                 expected_answer: record.expected_answer_text().unwrap_or("yes").to_string(),
                 question_context: String::new(),
                 diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
-                diff_from_configured: false,
                 target: None,
                 question_answer_only: true,
                 agent: AgentConfig::default(),

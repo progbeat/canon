@@ -1,6 +1,7 @@
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 // This mirrors the template include path used by canon init so the behavior can
@@ -87,12 +88,12 @@ fn init_creates_default_template_and_refuses_overwrite() {
 }
 
 #[test]
-fn hook_commands_render_documented_messages() {
-    let repo = temp_repo("canon-hook-example");
+fn pre_commit_commands_render_documented_messages() {
+    let repo = temp_repo("canon-pre-commit-example");
     init_git_repo(&repo);
 
     let output = canon()
-        .args(["hook", "install"])
+        .args(["pre-commit", "install"])
         .current_dir(&repo)
         .output()
         .unwrap();
@@ -111,7 +112,7 @@ fn hook_commands_render_documented_messages() {
     );
 
     let output = canon()
-        .args(["hook", "uninstall"])
+        .args(["pre-commit", "uninstall"])
         .current_dir(&repo)
         .output()
         .unwrap();
@@ -130,13 +131,13 @@ fn hook_commands_render_documented_messages() {
 }
 
 #[test]
-fn hook_install_rejects_existing_default_hook() {
-    let repo = temp_repo("canon-hook-existing-example");
+fn pre_commit_install_rejects_existing_default_hook() {
+    let repo = temp_repo("canon-pre-commit-existing-example");
     init_git_repo(&repo);
     fs::write(repo.join(".git/hooks/pre-commit"), "#!/usr/bin/env sh\n").unwrap();
 
     let output = canon()
-        .args(["hook", "install"])
+        .args(["pre-commit", "install"])
         .current_dir(&repo)
         .output()
         .unwrap();
@@ -147,7 +148,151 @@ fn hook_install_rejects_existing_default_hook() {
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
         "Error: Can't safely install pre-commit hook.\n\
-         ▷ Add `canon gate` manually to the existing hook setup or ask a human to handle it.\n"
+         ▷ Add `canon gate` manually to the existing pre-commit setup or ask a human to handle it.\n"
+    );
+}
+
+#[test]
+fn check_on_start_hook_confirmation_mismatch_blocks_without_result() {
+    let repo = temp_repo("canon-check-on-start-hook");
+    init_git_repo(&repo);
+    fs::create_dir_all(repo.join(".canon")).unwrap();
+    fs::write(
+        repo.join(".canon/check.yml"),
+        r#"
+version: 1
+presets:
+  default: {}
+hooks:
+  on-start:
+    print: "Type pass:\n"
+    confirm: "pass"
+    repair-instruction: "Run the blocker fix."
+expectations:
+  - q: "Does the hook block before evaluator work?"
+    a: "yes"
+"#,
+    )
+    .unwrap();
+    let add = Command::new("git")
+        .args(["add", ".canon/check.yml"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    let mut child = canon()
+        .arg("check")
+        .current_dir(&repo)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"fail\n").unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    let _ = fs::remove_dir_all(&repo);
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("Type pass:\n"));
+    assert!(stdout.contains(" 1 blocked, 1 pending in "));
+    assert!(stdout.ends_with("Run the blocker fix.\n"));
+    assert!(!stdout.contains(" OK\n"));
+    assert!(!stdout.contains(" FAILED\n"));
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "Token usage: total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n"
+    );
+}
+
+#[test]
+fn in_place_check_on_start_hook_confirmation_mismatch_blocks_without_result() {
+    let repo = temp_repo("canon-in-place-check-on-start-hook");
+    fs::create_dir_all(repo.join(".canon")).unwrap();
+    fs::write(
+        repo.join(".canon/check.yml"),
+        r#"
+version: 1
+presets:
+  default: {}
+hooks:
+  on-start:
+    print: "Type pass:\n"
+    confirm: "pass"
+    repair-instruction: "Run the blocker fix."
+expectations:
+  - q: "Does the hook block before evaluator work?"
+    a: "yes"
+"#,
+    )
+    .unwrap();
+
+    let mut child = canon()
+        .args(["check", "--in-place"])
+        .current_dir(&repo)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"fail\n").unwrap();
+    let output = child.wait_with_output().unwrap();
+
+    let _ = fs::remove_dir_all(&repo);
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("Type pass:\n"));
+    assert!(stdout.contains(" 1 blocked, 1 pending in "));
+    assert!(stdout.ends_with("Run the blocker fix.\n"));
+    assert!(!stdout.contains(" OK\n"));
+    assert!(!stdout.contains(" FAILED\n"));
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "Token usage: total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n"
+    );
+}
+
+#[test]
+fn in_place_prohibited_expectation_fields_fail_before_hooks() {
+    let repo = temp_repo("canon-in-place-invalid-config-before-hooks");
+    fs::create_dir_all(repo.join(".canon")).unwrap();
+    fs::write(
+        repo.join(".canon/check.yml"),
+        r#"
+version: 1
+presets:
+  default: {}
+hooks:
+  on-start:
+    print: "This should not print.\n"
+expectations:
+  - q: "Does in-place reject diff-from before hooks?"
+    a: "yes"
+    diff-from: :against-tree
+"#,
+    )
+    .unwrap();
+
+    let output = canon()
+        .args(["check", "--in-place", "unknown-selector"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_dir_all(&repo);
+
+    assert!(!output.status.success());
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "Error: expectation 1 has Git-backed-only config: diff-from\n"
     );
 }
 

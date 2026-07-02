@@ -11,9 +11,6 @@ Arguments:
 
 Options:
   -c, --config <PATH>          Read expectations from this config file [default: .canon/check.yml]
-  -q <QUESTION>                Ask one question
-  -s, --scope <PATHSPEC>       Set the visible scope for the question
-      --preset <PRESET>        Select a preset by name for the question [default: default]
       --tree <TREE>            Check this Git tree [default: :staged]
       --against-tree <TREE>    Compare against this Git tree [default: HEAD]
       --in-place               Check the current directory directly
@@ -33,12 +30,6 @@ Examples:
 
   canon check --tree HEAD --against-tree HEAD~1 a7F
       Check one canon expectation on HEAD with comparison against the previous commit.
-
-  canon check -q "Does the app expose Undo?"
-      Ask a one-off question.
-
-  canon check -q "Does the app expose Undo?" -s src/app.rs
-      Ask a one-off question with a restricted visible scope.
 ```
 
 *The `canon check --help` output may differ from this example in wording,
@@ -108,15 +99,12 @@ Then stdout contains one summary line:
 ============================= <outcome-list> in <duration>s =============================
 ```
 
-`outcome-list` is a comma-separated list of non-zero outcome counts in this
-order: failed, error/errors, passed, pending. If every count is zero, the
-outcome list is `0 passed`. The outcome text is surrounded by spaces and padded
-with `=` characters on both sides.
+`outcome-list` is a comma-separated list of non-zero outcome counts in this order: blocked, failed, error/errors, passed, pending. If every count is zero, the outcome list is `0 passed`.
+The outcome text is surrounded by spaces and padded with `=` characters on both sides.
 
-Outcome labels follow pytest pluralization: `failed`, `passed`, and `pending`
-are used for both singular and plural counts; `error` is used for one error and
-`errors` for every other error count.
+Outcome labels follow pytest pluralization: `failed`, `blocked`, `passed`, and `pending` are used for both singular and plural counts; `error` is used for one error and `errors` for every other error count.
 
+`blocked` is the number of hooks that blocked completion.
 `passed` is the number of expectations whose result is pass.
 `failed` is the number of expectations whose result is fail.
 `errors` is the number of expectations that encountered errors during evaluation in this run.
@@ -129,14 +117,19 @@ Each collected expectation is counted exactly once in passed, failed, errors, or
 Assuming no Ctrl-C or other interruption, when `canon check` runs without expectation selectors, with the default config, on the `:staged` tree, and against `HEAD`, it may emit instructions for the agent that ran it like this:
 
 ```python
-def print_agent_messages(failed, errors, num_new_passes, num_regressions, num_pending):
+def print_agent_messages(blocked, failed, errors, num_new_passes, num_regressions, num_pending):
     """
+    :param blocked: Blocked hooks.
     :param failed: Short IDs of failed expectations.
     :param errors: Short IDs of expectations that encountered errors in this run.
     :param num_new_passes: Number of xpecs classified as **new pass**.
     :param num_regressions: Number of xpecs classified as **regression**.
     :param num_pending: Number of pending expectations.
     """
+    if blocked:
+        assert len(blocked) == 1
+        print(blocked[0].repair_instruction)
+        return
     issues = failed + errors
     if num_regressions > 0 or (len(issues) > 0 and num_new_passes == 0):
         _repair_instructions(issues)
@@ -163,3 +156,22 @@ def _repair_instructions(issues):
     print(f"❕ Plan the repair, then run `canon show {selectors} [not:<ALREADY_IN_CONTEXT_EXPECTATION>]... -- <PATHSPEC>...` for the planned edit paths to identify expectations that may be affected.")
     print("❕ Use the matching expectations to avoid regressions while fixing the issues.")
 ```
+
+## Runtime Logs
+
+`canon check` logs runtime events including:
+
+- check lifecycle;
+- expectation outcomes;
+- evaluator communication;
+- model and fallback failures;
+- review-required diagnostics;
+- token usage when available.
+
+Evaluator communication events include tasks and responses before interpretation or repair, with context linking each exchange to the check run.
+
+Evaluator communication events identify the boundary between the command and the evaluator.
+
+Evaluator thread events include creation, reuse, and the effective evaluator instructions used for each thread.
+
+When usage data is available for an evaluator turn, token usage events include input tokens, cached input tokens, output tokens, and reasoning output tokens with enough context to match the usage to that turn.

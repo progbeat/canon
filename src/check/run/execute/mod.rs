@@ -12,7 +12,9 @@ use crate::xpec_state::XpecStateCache;
 use std::collections::BTreeSet;
 use std::io::Write;
 
-pub(crate) use report::skipped_count;
+pub(crate) use expectation::{
+    run_temporary_expectation_interrogation, TemporaryExpectationInterrogationContext,
+};
 pub(crate) use run::run_check_with_runner_and_caches;
 
 pub(crate) struct CheckRunCaches {

@@ -2,25 +2,27 @@ use super::failure::{
     fail_check_after_start, fail_check_before_selection, finish_check_error_report,
     CheckErrorReportFinish,
 };
-use super::in_place::{invalid_in_place_expectation_records, validate_in_place_global_config};
-use super::prepare::{prepare_check_execution, PrepareCheckExecutionOptions};
+use super::hooks::{run_check_hooks, CheckHookOutcome};
+use super::prepare::{
+    prepare_git_backed_check_execution, GitBackedCheckStorage,
+    PrepareGitBackedCheckExecutionOptions,
+};
 use super::query::{run_check_query_command, CheckQueryCommand};
 use super::trailer::{
-    check_command_writes_agent_message, check_report_passed, write_check_trailer, CompletedCheckRun,
+    check_command_writes_agent_message, check_report_passed, write_check_trailer,
+    write_check_trailer_with_usage, CompletedCheckRun,
 };
 use crate::app::LazyAppServerRunner;
-use crate::check::command::args::parse_check_command_args;
-use crate::check::command::output::{
-    write_result_output_without_started_report, SharedCheckOutput,
-};
+use crate::check::command::args::{parse_ask_command_args, parse_check_command_args};
+use crate::check::command::output::{write_stdout_record, SharedCheckOutput};
 use crate::check::command::{finish_check_report, CheckReportFinishContext};
-use crate::check::config::validation::check_config_loads_plugins;
-use crate::check::core::{CheckCommandArgs, CheckRunReport};
+use crate::check::config::validation::{
+    check_config_loads_plugins, validate_in_place_check_config,
+};
+use crate::check::core::{AskCommandArgs, BlockedCheckHook, CheckCommandArgs, CheckRunReport};
 use crate::check::interrogation::{state::CheckRuntime, write_check_lifecycle_start_event};
 use crate::check::run::selection::{expectation_identities, resolve_check_options_with_identities};
-use crate::check::{
-    run_check_with_runner_and_caches, skipped_count, CheckRunCaches, CheckRunSideEffects,
-};
+use crate::check::{run_check_with_runner_and_caches, CheckRunCaches, CheckRunSideEffects};
 use crate::cli::CommandError;
 use crate::git::TreeSource;
 use crate::logs::{write_cache_cleanup_event, DiagnosticLogWriter};
@@ -66,51 +68,14 @@ pub(crate) fn run_check_command(
     // evaluator request/response, thread lifecycle, review, token-usage, and
     // final-result paths below append flushed JSONL events through it.
     let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
-    let query_mode = command.query.is_some();
-    let query_start_field = if query_mode { Some(true) } else { None };
     let mut check_caches = CheckRunCaches::new();
-    let config = match repo_cache.load_check_config_with_default_agent_preset(
-        root,
-        &command.config_path,
-        &checked_tree,
-        command.default_agent_preset.as_deref(),
-    ) {
+    let config = match repo_cache.load_check_config(root, &command.config_path, &checked_tree) {
         Ok(config) => config,
-        Err(err) => {
-            return fail_check_before_selection(
-                &mut diagnostic_log,
-                query_start_field,
-                query_mode,
-                err,
-            )
-        }
+        Err(err) => return fail_check_before_selection(&mut diagnostic_log, None, false, err),
     };
-    if let Some(question) = command.query.as_deref() {
-        // Query mode is the documented `canon check -q` one-off question
-        // path. It writes query output/token usage through `query.rs`; the
-        // check-run result blocks, summary, and post-summary agent message are
-        // for non-query runs that process selected expectations.
-        return run_query_mode(
-            root,
-            &command,
-            &checked_tree,
-            &against_tree,
-            &config,
-            question,
-            diagnostic_log,
-            &mut check_caches,
-        );
-    }
     let identities = match expectation_identities(&config) {
         Ok(identities) => identities,
-        Err(err) => {
-            return fail_check_before_selection(
-                &mut diagnostic_log,
-                query_start_field,
-                query_mode,
-                err,
-            )
-        }
+        Err(err) => return fail_check_before_selection(&mut diagnostic_log, None, false, err),
     };
     let options =
         match resolve_check_options_with_identities(&config, &identities, &command.options) {
@@ -121,18 +86,44 @@ pub(crate) fn run_check_command(
         &mut diagnostic_log,
         None,
         options
-            .selected
+            .pre_cache_candidates
             .iter()
             .map(|expectation| expectation.id.clone())
             .collect(),
     )?;
-    let mut execution = match prepare_check_execution(
+    let shared_output = SharedCheckOutput::stdout();
+    let mut result_output = shared_output.clone();
+    let on_start_hook = match run_check_hooks(&config.hooks.on_start, &mut result_output) {
+        Ok(outcome) => outcome,
+        Err(err) => return fail_check_after_start(&mut diagnostic_log, false, err),
+    };
+    if let CheckHookOutcome::Blocked { repair_instruction } = on_start_hook {
+        let completed = blocked_check_run(
+            CheckRunReport {
+                records: Vec::new(),
+                cached: Vec::new(),
+                blocked: None,
+                skipped: config.expectations.len(),
+            },
+            repair_instruction,
+        );
+        return finish_blocked_check(
+            Some(&mut diagnostic_log),
+            &mut result_output,
+            &mut check_caches,
+            None,
+            &completed,
+            started,
+        );
+    }
+    let mut execution = match prepare_git_backed_check_execution(
         root,
         &config,
-        PrepareCheckExecutionOptions {
+        PrepareGitBackedCheckExecutionOptions {
             tree_source: &checked_tree,
             against_tree: &against_tree,
             no_sandbox: command.no_sandbox,
+            storage: GitBackedCheckStorage::Persistent,
         },
         &mut check_caches.visible_tree_oid,
     ) {
@@ -140,8 +131,6 @@ pub(crate) fn run_check_command(
         Err(err) => return fail_check_after_start(&mut diagnostic_log, false, err),
     };
     cleanup_cache_dirs(root, &identities, &mut diagnostic_log)?;
-    let shared_output = SharedCheckOutput::stdout();
-    let mut result_output = shared_output.clone();
     let runtime = CheckRuntime::materialized(
         root,
         &execution.staged_view,
@@ -173,6 +162,31 @@ pub(crate) fn run_check_command(
             interrupted: err.interrupted,
         },
     };
+    if completed.error.is_none() && check_report_passed(&completed.report) {
+        let on_pass_hook = match run_check_hooks(&config.hooks.on_pass, &mut result_output) {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                return finish_check_error_report(CheckErrorReportFinish {
+                    diagnostic_log: &mut diagnostic_log,
+                    result_output: &mut result_output,
+                    check_caches: &mut check_caches,
+                    report: &completed.report,
+                    error: err,
+                })
+            }
+        };
+        if let CheckHookOutcome::Blocked { repair_instruction } = on_pass_hook {
+            let completed = blocked_check_run(completed.report, repair_instruction);
+            return finish_blocked_check(
+                Some(&mut diagnostic_log),
+                &mut result_output,
+                &mut check_caches,
+                Some(&mut execution.runner),
+                &completed,
+                started,
+            );
+        }
+    }
     finish_completed_check(
         Some(&mut diagnostic_log),
         &mut result_output,
@@ -184,34 +198,114 @@ pub(crate) fn run_check_command(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run_query_mode(
+fn blocked_check_run(mut report: CheckRunReport, repair_instruction: String) -> CompletedCheckRun {
+    report.blocked = Some(BlockedCheckHook { repair_instruction });
+    CompletedCheckRun {
+        report,
+        error: Some("check hook blocked".to_string()),
+        interrupted: false,
+    }
+}
+
+pub(crate) fn run_ask_command(
     root: &Path,
-    command: &CheckCommandArgs,
-    checked_tree: &TreeSource,
-    against_tree: &TreeSource,
+    args: &[OsString],
+    default_in_place: bool,
+) -> Result<(), CommandError> {
+    install_check_signal_handlers().map_err(CommandError::from)?;
+    reset_check_interrupted();
+    let command = parse_ask_command_args(args, default_in_place)?;
+    if command.in_place {
+        return run_in_place_ask_command(root, &command);
+    }
+    let checked_tree = TreeSource::resolve(root, &command.tree, "--tree")?;
+    let against_tree = TreeSource::resolve_default_against_tree(
+        root,
+        &command.against_tree,
+        command.against_tree_explicit,
+    )?;
+    let mut repo_cache = RepoInspectionCache::new();
+    let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
+    let mut check_caches = CheckRunCaches::new();
+    // Command preparation must resolve the config before ask can build the
+    // temporary xpec: the resolved agent is part of the evaluator request.
+    let config = match repo_cache.load_check_config_with_default_agent_preset(
+        root,
+        &command.config_path,
+        &checked_tree,
+        command.default_agent_preset.as_deref(),
+    ) {
+        Ok(config) => config,
+        Err(err) => return fail_check_before_selection(&mut diagnostic_log, Some(true), true, err),
+    };
+    run_ask_query(
+        root,
+        &command,
+        Some(&checked_tree),
+        Some(&against_tree),
+        &config,
+        Some(diagnostic_log),
+        &mut check_caches,
+    )
+}
+
+fn run_in_place_ask_command(root: &Path, command: &AskCommandArgs) -> Result<(), CommandError> {
+    let mut repo_cache = RepoInspectionCache::new();
+    let mut check_caches = CheckRunCaches::new();
+    let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
+    // In-place ask has the same preparation boundary: load config first so the
+    // temporary xpec uses the resolved agent.
+    let config = match repo_cache.load_in_place_check_config_with_default_agent_preset(
+        root,
+        &command.config_path,
+        command.default_agent_preset.as_deref(),
+    ) {
+        Ok(config) => config,
+        Err(err) => return fail_check_before_selection(&mut diagnostic_log, Some(true), true, err),
+    };
+    run_ask_query(
+        root,
+        command,
+        None,
+        None,
+        &config,
+        Some(diagnostic_log),
+        &mut check_caches,
+    )
+}
+
+fn run_ask_query(
+    root: &Path,
+    command: &AskCommandArgs,
+    tree_source: Option<&TreeSource>,
+    against_tree: Option<&TreeSource>,
     config: &crate::config_types::CheckConfig,
-    question: &str,
-    diagnostic_log: DiagnosticLogWriter,
+    diagnostic_log: Option<DiagnosticLogWriter>,
     check_caches: &mut CheckRunCaches,
 ) -> Result<(), CommandError> {
-    // Query mode receives the same already-expanded `CheckConfig` as normal
-    // check execution. Preset selection is over by this point; query.rs can only
+    // Ask receives the same already-expanded `CheckConfig` as normal check
+    // execution. Preset selection is over by this point; query.rs can only
     // consume fields stored on `CheckConfig` and its expectations.
-    run_check_query_command(CheckQueryCommand {
+    // Once query.rs finishes command validation, the prepared ask path has no
+    // cache or last-result shortcut and always sends an evaluator turn.
+    let result = run_check_query_command(CheckQueryCommand {
         root,
         config,
-        question,
+        question: &command.question,
         query_scope: &command.query_scope,
         query_scope_provided: command.query_scope_provided,
-        tree_source: Some(checked_tree),
-        against_tree: Some(against_tree),
+        tree_source,
+        against_tree,
         no_sandbox: command.no_sandbox,
-        in_place: false,
-        diagnostic_log: Some(diagnostic_log),
+        in_place: command.in_place,
+        diagnostic_log,
         check_caches,
-    })
-    .map_err(CommandError::from)
+    });
+    match result {
+        Ok(()) => Ok(()),
+        Err(err) if err.public_output_already_reported() => Err(CommandError::AskFailed),
+        Err(err) => Err(CommandError::from(err.to_string())),
+    }
 }
 
 fn cleanup_cache_dirs(
@@ -237,12 +331,11 @@ fn run_in_place_check_command(
     started: Instant,
 ) -> Result<(), CommandError> {
     // In-place delegates stay behind their component boundaries: CLI dispatch
-    // supplies `root` and `default_in_place`, argument parsing rejects
-    // Git-tree, query-scope, and cache controls, repo inspection reads this
-    // directory directly, and `CheckRuntime::in_place` owns the evaluator view
-    // with no persistent xpec state root. This command path only coordinates
-    // those interfaces and rejects selected expectations that use
-    // in-place-prohibited fields before evaluator work starts.
+    // supplies `root` and `default_in_place`, argument parsing rejects Git-tree
+    // and cache controls, repo inspection reads this directory directly, and
+    // `CheckRuntime::in_place` owns the evaluator view with no persistent xpec
+    // state root. This command path coordinates those interfaces and runs
+    // config validation before evaluator work starts.
     let mut repo_cache = RepoInspectionCache::new();
     // In-place uses a fresh in-memory cache bundle only because the shared
     // execution APIs accept cache handles. It still writes runtime logs when
@@ -250,111 +343,67 @@ fn run_in_place_check_command(
     // and passes an in-place runtime whose lower layers skip xpec reads/writes.
     let mut check_caches = CheckRunCaches::new();
     let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
-    let query_mode = command.query.is_some();
-    let query_start_field = if query_mode { Some(true) } else { None };
     let config = match repo_cache.load_in_place_check_config_with_default_agent_preset(
         root,
         &command.config_path,
-        command.default_agent_preset.as_deref(),
+        None,
     ) {
         Ok(config) => config,
-        Err(err) => {
-            return fail_check_before_selection(
-                &mut diagnostic_log,
-                query_start_field,
-                query_mode,
-                err,
-            )
-        }
+        Err(err) => return fail_check_before_selection(&mut diagnostic_log, None, false, err),
     };
-    if let Some(question) = command.query.as_deref() {
-        // In-place query mode remains the same one-off question path as
-        // ordinary `canon check -q`; it is not a check-run report and does not
-        // finish through the check-run summary/trailer path. Query execution
-        // validates only the q/a expectation selected by the query, if any;
-        // unrelated collected expectations are not selected evaluator work for
-        // this invocation.
-        return run_check_query_command(CheckQueryCommand {
-            root,
-            config: &config,
-            question,
-            query_scope: &command.query_scope,
-            query_scope_provided: command.query_scope_provided,
-            tree_source: None,
-            against_tree: None,
-            no_sandbox: command.no_sandbox,
-            in_place: true,
-            diagnostic_log: Some(diagnostic_log),
-            check_caches: &mut check_caches,
-        })
-        .map_err(CommandError::from);
+    if let Err(err) = validate_in_place_check_config(&config) {
+        return fail_check_before_selection(&mut diagnostic_log, None, false, err);
     }
     let identities = expectation_identities(&config)?;
-    // This resolves selector/keep-going controls from the expanded config.
-    // Persistent state is not consulted here.
     let options =
         match resolve_check_options_with_identities(&config, &identities, &command.options) {
             Ok(options) => options,
             Err(err) => return fail_check_before_selection(&mut diagnostic_log, None, false, err),
         };
-    if let Err(err) = validate_in_place_global_config(&config.agent) {
-        return fail_check_before_selection(&mut diagnostic_log, None, false, err);
-    }
     write_check_lifecycle_start_event(
         &mut diagnostic_log,
         None,
         options
-            .selected
+            .pre_cache_candidates
             .iter()
             .map(|expectation| expectation.id.clone())
             .collect(),
     )?;
+    let shared_output = SharedCheckOutput::stdout();
+    let mut result_output = shared_output.clone();
+    let on_start_hook = match run_check_hooks(&config.hooks.on_start, &mut result_output) {
+        Ok(outcome) => outcome,
+        Err(err) => return fail_check_after_start(&mut diagnostic_log, false, err),
+    };
+    if let CheckHookOutcome::Blocked { repair_instruction } = on_start_hook {
+        let completed = blocked_check_run(
+            CheckRunReport {
+                records: Vec::new(),
+                cached: Vec::new(),
+                blocked: None,
+                skipped: config.expectations.len(),
+            },
+            repair_instruction,
+        );
+        return finish_blocked_check(
+            Some(&mut diagnostic_log),
+            &mut result_output,
+            &mut check_caches,
+            None,
+            &completed,
+            started,
+        );
+    }
     let mut runner = LazyAppServerRunner::new_in_place(
         root,
         check_config_loads_plugins(&config),
         &config.agent,
         command.no_sandbox,
     )?;
-    let shared_output = SharedCheckOutput::stdout();
-    let mut result_output = shared_output.clone();
-    let invalid_records = invalid_in_place_expectation_records(&config.agent, &options.selected)?;
-    if !invalid_records.is_empty() {
-        // In-place compatibility errors are result records. Each invalid
-        // selected expectation is printed with its short ID before the summary.
-        {
-            let mut output = Some(&mut result_output as &mut dyn Write);
-            for record in &invalid_records {
-                write_result_output_without_started_report(&mut output, record)
-                    .map_err(CommandError::from)?;
-            }
-        }
-        let records = invalid_records;
-        let cached = Vec::new();
-        let skipped = skipped_count(config.expectations.len(), &records, &cached);
-        let completed = CompletedCheckRun {
-            report: CheckRunReport {
-                records,
-                cached,
-                skipped,
-            },
-            error: Some("invalid-in-place-expectation".to_string()),
-            interrupted: false,
-        };
-        return finish_completed_check(
-            Some(&mut diagnostic_log),
-            &mut result_output,
-            &mut check_caches,
-            &mut runner,
-            &completed,
-            started,
-            false,
-        );
-    }
     let runtime = CheckRuntime::in_place(root, &config, command.no_sandbox);
     // The in-place runtime makes `run_check_with_runner_and_caches` build a
-    // direct Evaluate-only work queue: no pass snapshot, same-tree cache,
-    // cooldown cache, xpec ordering, or cached-result output is read. The
-    // completed records are returned in this invocation's
+    // direct Evaluate-only work queue: no Git-backed cache selection or xpec
+    // ordering is read. The completed records are returned in this invocation's
     // CheckRunReport; the runtime exposes no persistent check-state root for
     // xpec last-result or live-report files.
     let records_result = run_check_with_runner_and_caches(
@@ -380,6 +429,31 @@ fn run_in_place_check_command(
             interrupted: err.interrupted,
         },
     };
+    if completed.error.is_none() && check_report_passed(&completed.report) {
+        let on_pass_hook = match run_check_hooks(&config.hooks.on_pass, &mut result_output) {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                return finish_check_error_report(CheckErrorReportFinish {
+                    diagnostic_log: &mut diagnostic_log,
+                    result_output: &mut result_output,
+                    check_caches: &mut check_caches,
+                    report: &completed.report,
+                    error: err,
+                })
+            }
+        };
+        if let CheckHookOutcome::Blocked { repair_instruction } = on_pass_hook {
+            let completed = blocked_check_run(completed.report, repair_instruction);
+            return finish_blocked_check(
+                Some(&mut diagnostic_log),
+                &mut result_output,
+                &mut check_caches,
+                Some(&mut runner),
+                &completed,
+                started,
+            );
+        }
+    }
     finish_completed_check(
         Some(&mut diagnostic_log),
         &mut result_output,
@@ -445,4 +519,54 @@ fn finish_completed_check(
     } else {
         Err(CommandError::CheckFailed)
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn finish_blocked_check(
+    diagnostic_log: Option<&mut DiagnosticLogWriter>,
+    result_output: &mut dyn Write,
+    check_caches: &mut CheckRunCaches,
+    runner: Option<&mut crate::app::LazyAppServerRunner>,
+    completed: &CompletedCheckRun,
+    started: Instant,
+) -> Result<(), CommandError> {
+    match runner {
+        Some(runner) => write_check_trailer(runner, result_output, &completed.report, started)?,
+        None => write_check_trailer_with_usage(result_output, &completed.report, started, None)?,
+    }
+    write_blocked_repair_instruction(result_output, &completed.report)?;
+    finish_check_report(
+        CheckReportFinishContext {
+            diagnostic_log,
+            result_output,
+            check_caches,
+            write_agent_message: false,
+        },
+        &completed.report,
+        completed.error.as_deref(),
+    )?;
+    Err(CommandError::CheckFailed)
+}
+
+fn write_blocked_repair_instruction(
+    result_output: &mut dyn Write,
+    report: &CheckRunReport,
+) -> Result<(), String> {
+    let Some(blocked) = &report.blocked else {
+        return Ok(());
+    };
+    write_stdout_record(
+        result_output,
+        repair_instruction_line(&blocked.repair_instruction).as_bytes(),
+        "check hook repair instruction",
+    )
+}
+
+fn repair_instruction_line(instruction: &str) -> String {
+    if instruction.ends_with('\n') {
+        return instruction.to_string();
+    }
+    let mut line = instruction.to_string();
+    line.push('\n');
+    line
 }

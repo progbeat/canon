@@ -244,7 +244,6 @@ mod tests {
             expected_answer: "yes\tplease".to_string(),
             question_context: String::new(),
             diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
-            diff_from_configured: false,
             target: None,
             question_answer_only: false,
             agent: Default::default(),

@@ -33,6 +33,10 @@ pub(crate) fn parse_check_config_content_with_root_and_source_and_default_agent_
     source: CheckConfigSource,
     default_agent_preset: Option<&str>,
 ) -> Result<CheckConfig, String> {
+    // `RawCheckConfig` is the serde schema for the whole check.yml file,
+    // including optional top-level `canon check` hooks. Expansion resolves
+    // those hooks into `CheckConfig.hooks` before validation or command
+    // execution; Git pre-commit hook installation is a separate module.
     let raw = parse_raw_check_config(config_path, content)?;
     let config = expand_raw_check_config_with_options(
         Some(root),

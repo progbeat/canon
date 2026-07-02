@@ -79,13 +79,15 @@ impl EvaluatorFailureKind {
 pub(crate) fn record_from_response(
     expectation: &SelectedExpectation,
     response: ParsedAnswer,
-    enforced_scope: Vec<String>,
     visible_tree_oid: String,
 ) -> Result<CheckRecord, String> {
+    if expectation.expected_answer.is_empty() {
+        return Err("cannot derive a check result without an expected answer".to_string());
+    }
     let result = if response.error.is_some() {
         CheckResult::Fail
     } else {
-        CheckResult::from_expected_answer(&expectation.expected_answer, &response.answer)
+        CheckResult::from_expected_answer(&expectation.expected_answer, &response.observed)
     };
     let error = response.error.clone();
     let question_scope_suggestion = response.question_scope_suggestion.clone();
@@ -93,10 +95,10 @@ pub(crate) fn record_from_response(
         expectation,
         CheckRecordOutcome {
             result,
-            observed: response.answer,
+            observed: response.observed,
             error,
             evidence: response.evidence,
-            scope: enforced_scope,
+            scope: response.scope,
             question_scope_suggestion,
             visible_tree_oid,
         },
@@ -140,7 +142,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(parsed.answer.error, None);
-        assert_eq!(parsed.answer.answer, "yes");
+        assert_eq!(parsed.answer.observed, "yes");
         assert_eq!(parsed.answer.evidence, "`src/hidden.rs` supports it.");
         assert!(runner.responses.is_empty());
 
@@ -182,6 +184,34 @@ mod tests {
         assert_eq!(runner.responses.len(), 1);
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn check_record_requires_expected_answer() {
+        let expectation = SelectedExpectation {
+            number: 0,
+            id: String::new(),
+            display_id: "q".to_string(),
+            question: "Does ask report an answer?".to_string(),
+            expected_answer: String::new(),
+            question_context: String::new(),
+            diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
+            target: None,
+            question_answer_only: true,
+            agent: AgentConfig::default(),
+            cooldown: None,
+        };
+        let err = record_from_response(
+            &expectation,
+            ParsedAnswer::answer("yes".to_string(), "`src/main.rs`".to_string(), None),
+            "visible".to_string(),
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            "cannot derive a check result without an expected answer"
+        );
     }
 
     fn turn_context() -> EvaluatorTurnContext<'static> {

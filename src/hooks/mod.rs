@@ -1,13 +1,16 @@
 mod fs;
 mod git;
 
+// This module manages Git pre-commit hook installation only. Configured
+// `canon check` lifecycle hooks are parsed into `CheckConfig.hooks` and
+// executed from `src/check/command/execution/hooks.rs`.
 use self::fs::make_executable;
 use self::git::{
     configure_git_hooks_path, git_hooks_path_matches, has_canon_git_hooks_path,
     unset_git_hooks_path, uses_canon_git_hooks_path, HookInstallPreflight,
 };
 use crate::fs_util::{ensure_dir_without_symlinks, remove_optional_file, replace_file};
-use crate::output::write_stdout_line;
+use crate::output::{write_stderr, write_stdout, write_stdout_line};
 use clap::error::ErrorKind as ClapErrorKind;
 use clap::Command as ClapCommand;
 use std::ffi::OsString;
@@ -24,21 +27,21 @@ pub(super) const GIT_HOOKS_PATH: &str = "canon/hooks";
 pub(super) const PRE_COMMIT_HOOK_PATH: &str = "canon/hooks/pre-commit";
 const DEFAULT_PRE_COMMIT_HOOK: &str = include_str!("../../resources/git-hooks/pre-commit");
 const PRE_COMMIT_HOOK_MANUAL_ADVICE: &str =
-    "Can't safely install pre-commit hook.\n▷ Add `canon gate` manually to the existing hook setup or ask a human to handle it.";
+    "Can't safely install pre-commit hook.\n▷ Add `canon gate` manually to the existing pre-commit setup or ask a human to handle it.";
 pub(super) const GIT_WORKTREE_REQUIRED_FOR_HOOK_INSTALL: &str =
-    "Can't safely install pre-commit hook: canon hook install requires a Git worktree.";
+    "Can't safely install pre-commit hook: canon pre-commit install requires a Git worktree.";
 
-pub(crate) fn hook_help_command() -> ClapCommand {
-    ClapCommand::new("hook")
-        .bin_name("canon hook")
-        .about("Manage the canon Git hook")
+pub(crate) fn pre_commit_help_command() -> ClapCommand {
+    ClapCommand::new("pre-commit")
+        .bin_name("canon pre-commit")
+        .about("Manage the canon pre-commit hook")
         .subcommand_required(true)
-        .subcommand(ClapCommand::new("install").about("Install the canon Git hook"))
-        .subcommand(ClapCommand::new("uninstall").about("Uninstall the canon Git hook"))
+        .subcommand(ClapCommand::new("install").about("Install the canon pre-commit hook"))
+        .subcommand(ClapCommand::new("uninstall").about("Uninstall the canon pre-commit hook"))
 }
 
-pub(crate) fn run_hook_command(root: &Path, args: &[OsString]) -> Result<(), String> {
-    let Some(action) = parse_hook_action(args)? else {
+pub(crate) fn run_pre_commit_command(root: &Path, args: &[OsString]) -> Result<(), String> {
+    let Some(action) = parse_pre_commit_action(args)? else {
         return Ok(());
     };
     match action {
@@ -52,11 +55,11 @@ enum HookAction {
     Uninstall,
 }
 
-fn parse_hook_action(args: &[OsString]) -> Result<Option<HookAction>, String> {
-    let argv = std::iter::once(OsString::from("canon hook"))
+fn parse_pre_commit_action(args: &[OsString]) -> Result<Option<HookAction>, String> {
+    let argv = std::iter::once(OsString::from("canon pre-commit"))
         .chain(args.iter().cloned())
         .collect::<Vec<_>>();
-    let matches = match hook_help_command().try_get_matches_from(argv) {
+    let matches = match pre_commit_help_command().try_get_matches_from(argv) {
         Ok(matches) => matches,
         Err(err)
             if matches!(
@@ -64,8 +67,7 @@ fn parse_hook_action(args: &[OsString]) -> Result<Option<HookAction>, String> {
                 ClapErrorKind::DisplayHelp | ClapErrorKind::DisplayVersion
             ) =>
         {
-            err.print()
-                .map_err(|print_err| format!("failed to write help: {}", print_err))?;
+            write_clap_display_error(&err)?;
             return Ok(None);
         }
         Err(err) => return Err(err.to_string()),
@@ -73,8 +75,17 @@ fn parse_hook_action(args: &[OsString]) -> Result<Option<HookAction>, String> {
     match matches.subcommand_name() {
         Some("install") => Ok(Some(HookAction::Install)),
         Some("uninstall") => Ok(Some(HookAction::Uninstall)),
-        Some(action) => Err(format!("unknown hook command: {}", action)),
-        None => unreachable!("clap requires a hook subcommand"),
+        Some(action) => Err(format!("unknown pre-commit command: {}", action)),
+        None => unreachable!("clap requires a pre-commit subcommand"),
+    }
+}
+
+fn write_clap_display_error(err: &clap::Error) -> Result<(), String> {
+    let rendered = err.to_string();
+    if err.use_stderr() {
+        write_stderr(&rendered)
+    } else {
+        write_stdout(&rendered)
     }
 }
 

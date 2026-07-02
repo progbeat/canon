@@ -43,13 +43,21 @@ impl LazyAppServerRunner {
         agent: &AgentConfig,
         no_sandbox: bool,
     ) -> Result<LazyAppServerRunner, String> {
-        Ok(LazyAppServerRunner::with_state_root(
+        Ok(LazyAppServerRunner::new_without_state(
             app_server_root,
-            None,
             load_plugins,
             agent,
             no_sandbox,
         ))
+    }
+
+    pub(crate) fn new_without_state(
+        app_server_root: &std::path::Path,
+        load_plugins: bool,
+        agent: &AgentConfig,
+        no_sandbox: bool,
+    ) -> LazyAppServerRunner {
+        LazyAppServerRunner::with_state_root(app_server_root, None, load_plugins, agent, no_sandbox)
     }
 
     fn with_state_root(
@@ -223,5 +231,14 @@ mod tests {
 
         LazyAppServerRunner::new_in_place(&root, false, &AgentConfig::default(), false).unwrap();
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn runner_without_state_root_omits_persistent_state() {
+        let root = std::env::temp_dir();
+        let runner =
+            LazyAppServerRunner::new_without_state(&root, false, &AgentConfig::default(), false);
+
+        assert!(runner.app_server_state_root.is_none());
     }
 }

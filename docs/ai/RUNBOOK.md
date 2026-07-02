@@ -9,6 +9,12 @@ Use `README.md` as the map. Use this file for compact agent runbook notes.
 Run `canon show -- <PATHSPEC>...` for the exact planned paths, then keep the
 edit compatible with the shown expectations.
 
+## Manual Config Expectations
+
+`.canon/manual.yml` is not part of the main included canon path. Before removing
+it, check whether any manual-only expectations should move into included
+`.canon/**` files.
+
 ## Source Of Truth
 
 The canon is the source of truth. Treat `canon check` evidence as feedback to
@@ -43,6 +49,15 @@ add..." as unsupported unless it also cites direct project files that answer the
 question. Inspect the actual code path before changing behavior. If evidence
 contradicts the current file, check whether the evaluator read a removed diff
 hunk as current code.
+For `target: diff`, compare against the xpec's resolved `diff-from`, not an
+assumed branch or `HEAD`.
+
+## Diff-target Xpec Wording
+
+For evaluator-facing `target: diff` xpec text, avoid Git-side names like
+`master`, base tree, checked tree, or "from master". The config owns
+`diff-from`; the question should talk about the provided diff and
+repository/canon behavior.
 
 ## Diff-target Fast Path
 
@@ -87,15 +102,19 @@ Spec-compliance questions usually search the implementation as a whole; a
 restricted visible scope should become `ScopeTooNarrow`, not `InvalidQuestion`.
 For q-scope verification, `ScopeTooNarrow` rejects the proposed narrower scope;
 it is not the final response when the initial answer is kept.
+When diagnosing noisy `↘` markers, compare `last-pass.json` fields:
+`qScope` is the accepted scope for future runs, while `response.qScopeSuggestion` is only the evaluator proposal.
+A full-project `qScope` paired with a narrower suggestion often means narrowing was attempted but not accepted; confirm with `scope.narrowing accepted:false` near `interrogation.review_required reason=ScopeTooNarrow` in runtime logs.
 One-off query q-scope verification has no expected-answer pass/fail matrix;
 accept the narrowed result only when the answer string is unchanged.
-For in-place compatibility, validate collected config before evaluator work;
-do not let selectors hide configured diff-from/target/cooldown/ignore.
+For in-place compatibility, reject configured in-place-only-invalid fields before evaluator work.
 Canon-check-order sorts remaining selected work; cached-failure default
 selection can clear the evaluate queue before ordering applies.
 For target-diff project-quality "can you find any..." questions, treat the
 change set as broad unless the question names paths; stale narrow q-scopes can
 survive selector reruns.
+For reproducible global diff-quality q-scope cases, use
+`research/qscope-diff-quality/README.md`.
 
 ## Preset Evidence
 
@@ -111,8 +130,8 @@ as `q`, `a`, `q_template`, `path`, and `include`.
 ## `canon check --in-place`
 
 It still follows normal selected-expectation ordering, but it does not use
-persistent state for cache reuse, last-pass q-scope seeding, cooldowns,
-follow-up interrogations, or last-result writes.
+persistent state for cache reuse, last-pass q-scope seeding, follow-up
+interrogations, or last-result writes.
 
 ## Evaluator Cites Unrelated Files
 

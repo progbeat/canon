@@ -1,6 +1,7 @@
 use crate::check::{CheckRecord, CheckResult, SelectedExpectation};
 use crate::fs_util::{ensure_dir_without_symlinks, reject_symlink, write_temp_file_then_replace};
 use crate::git::{TreeSource, VisibleTreeOidCache};
+use crate::hash::hash_60;
 use crate::scope::visible_scope;
 use crate::time::{format_record_timestamp, parse_record_timestamp, unix_timestamp};
 use serde::{Deserialize, Serialize};
@@ -148,9 +149,6 @@ impl XpecStateCache {
         expectation: &SelectedExpectation,
         status: LastResultStatus,
     ) -> Result<Option<LastResult>, String> {
-        if self.persistent_history_is_absent(root) {
-            return Ok(None);
-        }
         let key = (root.to_path_buf(), expectation.id.clone(), status);
         if let Some(cached) = self.last_results.get(&key) {
             return Ok(cached.clone());
@@ -159,6 +157,28 @@ impl XpecStateCache {
         let result = read_last_result_path(&path, status)?;
         self.last_results.insert(key, result.clone());
         Ok(result)
+    }
+
+    pub(crate) fn read_same_tree_records(
+        &mut self,
+        root: &Path,
+        expectation: &SelectedExpectation,
+        status: LastResultStatus,
+    ) -> Result<Vec<LastResult>, String> {
+        assert!(matches!(
+            status,
+            LastResultStatus::Pass | LastResultStatus::Fail
+        ));
+        let key = (root.to_path_buf(), expectation.id.clone(), status);
+        if let Some(cached) = self.same_tree_records.get(&key) {
+            return Ok(cached.clone());
+        }
+        let results = read_same_tree_records_dir(
+            &self.same_tree_records_dir(root, expectation, status)?,
+            status,
+        )?;
+        self.same_tree_records.insert(key, results.clone());
+        Ok(results)
     }
 
     pub(crate) fn write_last_result_for_record(
@@ -248,6 +268,7 @@ impl XpecStateCache {
         validate_last_result(result.status, result)?;
         let path = self.last_result_path(root, expectation, result.status)?;
         let temp_path = temp_path_for(&path)?;
+        self.save_replaced_same_tree_record(root, expectation, result.status, &path, result)?;
         // Last-result files are whole-record snapshots. Refreshing a result
         // writes one complete newly persisted status record plus the `last.json`
         // alias below; it never rewrites an accumulated log or state prefix.
@@ -272,6 +293,53 @@ impl XpecStateCache {
         status: LastResultStatus,
     ) -> Result<PathBuf, String> {
         Ok(self.xpec_dir(root, expectation)?.join(status.file_name()))
+    }
+
+    fn same_tree_records_dir(
+        &mut self,
+        root: &Path,
+        expectation: &SelectedExpectation,
+        status: LastResultStatus,
+    ) -> Result<PathBuf, String> {
+        Ok(self
+            .xpec_dir(root, expectation)?
+            .join("same-tree-records")
+            .join(status.as_str()))
+    }
+
+    fn save_replaced_same_tree_record(
+        &mut self,
+        root: &Path,
+        expectation: &SelectedExpectation,
+        status: LastResultStatus,
+        status_path: &Path,
+        replacement: &LastResult,
+    ) -> Result<(), String> {
+        if !matches!(status, LastResultStatus::Pass | LastResultStatus::Fail) {
+            return Ok(());
+        }
+        let Some(previous) = read_last_result_path(status_path, status)? else {
+            return Ok(());
+        };
+        if !should_save_same_tree_record(&previous, replacement) {
+            return Ok(());
+        }
+        let dir = self.same_tree_records_dir(root, expectation, status)?;
+        ensure_dir_without_symlinks(&dir)?;
+        let path = dir.join(same_tree_record_file_name(&previous)?);
+        if !same_tree_record_is_newer_than_existing(&path, status, &previous)? {
+            return Ok(());
+        }
+        let temp_path = temp_path_for(&path)?;
+        write_temp_file_then_replace(&temp_path, &path, |file| {
+            serde_json::to_writer(&mut *file, &previous)
+                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
+            std::io::Write::write_all(file, b"\n")
+                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))
+        })?;
+        let key = (root.to_path_buf(), expectation.id.clone(), status);
+        self.same_tree_records.remove(&key);
+        Ok(())
     }
 }
 
@@ -492,6 +560,77 @@ fn validate_response_question_scope_suggestion(value: &Value) -> Result<(), Stri
         }
     }
     Ok(())
+}
+
+fn should_save_same_tree_record(previous: &LastResult, replacement: &LastResult) -> bool {
+    previous.status != replacement.status
+        || previous.response_timestamp != replacement.response_timestamp
+        || previous.response != replacement.response
+        || previous.q_scope != replacement.q_scope
+        || previous.visible_scope != replacement.visible_scope
+        || previous.visible_tree_oid != replacement.visible_tree_oid
+}
+
+fn same_tree_record_file_name(result: &LastResult) -> Result<String, String> {
+    let Some(visible_tree_oid) = result.visible_tree_oid.as_deref() else {
+        return Err("same-tree record must contain visibleTreeOid".to_string());
+    };
+    // Same-tree history keeps the latest record for each retained visible
+    // tree/scope pair instead of appending one file per replacement.
+    let key = serde_json::to_vec(&json!({
+        "visibleScope": result.visible_scope,
+        "visibleTreeOid": visible_tree_oid,
+    }))
+    .map_err(|err| format!("failed to serialize same-tree record key: {}", err))?;
+    Ok(format!(
+        "{}-{}.json",
+        path_safe_timestamp(visible_tree_oid),
+        hash_60(&key)
+    ))
+}
+
+fn path_safe_timestamp(timestamp: &str) -> String {
+    timestamp
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect()
+}
+
+fn read_same_tree_records_dir(
+    dir: &Path,
+    status: LastResultStatus,
+) -> Result<Vec<LastResult>, String> {
+    reject_symlink(dir)?;
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(format!("failed to read {}: {}", dir.display(), err)),
+    };
+    let mut results = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|err| format!("failed to read {}: {}", dir.display(), err))?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        if let Some(result) = read_last_result_path(&path, status)? {
+            results.push(result);
+        }
+    }
+    Ok(results)
+}
+
+fn same_tree_record_is_newer_than_existing(
+    path: &Path,
+    status: LastResultStatus,
+    candidate: &LastResult,
+) -> Result<bool, String> {
+    let Some(existing) = read_last_result_path(path, status)? else {
+        return Ok(true);
+    };
+    let existing_time = parse_record_timestamp(&existing.response_timestamp).unwrap_or(0);
+    let candidate_time = parse_record_timestamp(&candidate.response_timestamp).unwrap_or(0);
+    Ok(candidate_time > existing_time)
 }
 
 fn refresh_last_json_link(status_path: &Path, last_path: &Path) -> Result<(), String> {
