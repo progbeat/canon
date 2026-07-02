@@ -1,15 +1,18 @@
 # AGENTS.md
 
-- Alternate repeated `canon check` runs between `cargo run -- check` and the Docker wrapper to exercise both local and containerized paths.
+- Alternate repeated `canon check` runs between `cargo run -- check` and `docker build -t canon:local . && CANON_DOCKER_IMAGE=canon:local .canon/docker/scripts/canon check`.
 - After a successful commit, rebuild and refresh the installed `canon` binary available on PATH.
 - Treat tokens as a scarce resource. Avoid increasing token usage unless the correctness benefit justifies it, and prefer designs that preserve or reduce the model work needed to answer canon questions correctly.
 - If the evaluator returns a valid answer that does not match the expected answer, never try to influence the answer through developer instructions.
 - Optimize evaluator developer instructions only to reduce token usage or to fix errors such as unparseable answers.
 - Keep the evaluator agent’s developer instructions concise.
+- For every test declaration and every assert invocation, the behavior checked on that execution path must logically follow from the canon. Add a source-comment marker `xpec: <shortID>[,<shortID>...]` on the same line or immediately preceding non-blank line.
 - Treat any codex_app_server ERROR or permission-config warning during canon check as a blocker, even if the command exits successfully.
 - For reference, Codex GitHub: https://github.com/openai/codex
 
 ## AI Docs
+
+Read `docs/ai/README.md` for the AI docs purpose and usage.
 
 Use `docs/ai/**` for compact notes that reduce future confusion: recurring failures, reliable fixes, project gotchas, navigation tips, canon pain points, questionable canon decisions, implementation concerns, and improvement ideas.
 
