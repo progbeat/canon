@@ -1,11 +1,11 @@
 use crate::check::command::output::{escape_check_output_text, write_stdout_record};
 use crate::check::interrogation::policy::initial_q_scope_for_fresh_interrogation;
 use crate::check::run::selection::{
-    expectation_identities, order_by_absent_non_pass_history, order_by_latest_non_pass,
+    expectation_identities, order_by_latest_non_pass, order_in_place_by_absent_non_pass_history,
     select_expectations_with_identities,
 };
 use crate::check::CHECK_PATH;
-use crate::check::{CheckRunCaches, SelectedExpectation};
+use crate::check::{CheckRunCaches, ResolvedExpectation};
 use crate::cli::CommandError;
 use crate::git::{validate_tree_arg, TreeSource, VisibleTreeOidCache, STAGED_TREE_ARG};
 use crate::notes::arg_to_string;
@@ -105,7 +105,7 @@ pub(crate) fn render_show_for_current_run(
 
 fn select_show_expectations_for_current_run(
     request: ShowRenderRequest<'_>,
-) -> Result<Vec<SelectedExpectation>, String> {
+) -> Result<Vec<ResolvedExpectation>, String> {
     let identities = expectation_identities(request.config)?;
     // Shared with `canon check`; this handles include selectors and
     // `not:<ID-PREFIX>` exclusions before pathspec filtering.
@@ -134,7 +134,7 @@ fn select_show_expectations_for_current_run(
                 expectation
             })?
         }
-        None => order_by_absent_non_pass_history(filtered),
+        None => order_in_place_by_absent_non_pass_history(filtered),
     })
 }
 
@@ -180,11 +180,11 @@ fn show_value_arg(name: &'static str) -> Arg {
 fn filter_expectations_by_pathspecs(
     root: &Path,
     tree_source: &TreeSource,
-    expectations: Vec<SelectedExpectation>,
+    expectations: Vec<ResolvedExpectation>,
     pathspecs: &[String],
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
     xpec_state: &mut XpecStateCache,
-) -> Result<Vec<SelectedExpectation>, String> {
+) -> Result<Vec<ResolvedExpectation>, String> {
     if pathspecs.is_empty() {
         return Ok(expectations);
     }
@@ -207,7 +207,7 @@ fn filter_expectations_by_pathspecs(
 fn expectation_is_affected_by_pathspecs(
     root: &Path,
     tree_source: &TreeSource,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     pathspecs: &[String],
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
     xpec_state: &mut XpecStateCache,
@@ -231,13 +231,13 @@ fn expectation_is_affected_by_pathspecs(
 fn show_q_scope(
     root: &Path,
     _tree_source: &TreeSource,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     xpec_state: &mut XpecStateCache,
 ) -> Result<Vec<String>, String> {
     initial_q_scope_for_fresh_interrogation(root, expectation, xpec_state)
 }
 
-fn write_show_expectations(expectations: &[SelectedExpectation]) -> Result<(), String> {
+fn write_show_expectations(expectations: &[ResolvedExpectation]) -> Result<(), String> {
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
     write_show_expectations_to(&mut stdout, expectations)
@@ -245,7 +245,7 @@ fn write_show_expectations(expectations: &[SelectedExpectation]) -> Result<(), S
 
 fn write_show_expectations_to(
     output: &mut dyn std::io::Write,
-    expectations: &[SelectedExpectation],
+    expectations: &[ResolvedExpectation],
 ) -> Result<(), String> {
     for expectation in expectations {
         write_stdout_record(
@@ -257,14 +257,14 @@ fn write_show_expectations_to(
     Ok(())
 }
 
-fn render_show_output(expectations: &[SelectedExpectation]) -> String {
+fn render_show_output(expectations: &[ResolvedExpectation]) -> String {
     expectations
         .iter()
         .map(render_show_expectation)
         .collect::<String>()
 }
 
-fn render_show_expectation(expectation: &SelectedExpectation) -> String {
+fn render_show_expectation(expectation: &ResolvedExpectation) -> String {
     format!(
         "{}.\n{}\nExpected: {}\n",
         expectation.display_id,
@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn show_output_escapes_question_and_expected_answer() {
-        let expectation = SelectedExpectation {
+        let expectation = ResolvedExpectation {
             number: 1,
             id: "11111111111111111111".to_string(),
             display_id: "1".to_string(),

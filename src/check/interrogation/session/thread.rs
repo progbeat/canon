@@ -1,5 +1,5 @@
 use super::model_fallback::write_model_fallback_events;
-use crate::check::core::{InterrogationAnswer, InterrogationResult, SelectedExpectation};
+use crate::check::core::{InterrogationAnswer, InterrogationResult, ResolvedExpectation};
 use crate::check::interrogation::dynamic_tool::{
     canon_show_dynamic_tools, CanonShowDynamicToolHandler,
 };
@@ -54,7 +54,7 @@ pub(crate) enum ThreadTurnResponseContract {
 }
 
 impl ThreadTurnResponseContract {
-    fn for_expectation(expectation: &SelectedExpectation) -> ThreadTurnResponseContract {
+    fn for_expectation(expectation: &ResolvedExpectation) -> ThreadTurnResponseContract {
         if expectation.expected_answer.is_empty() {
             ThreadTurnResponseContract::AdHocQuestion
         } else {
@@ -628,7 +628,7 @@ fn fail_after_session_error<T>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
     runtime: &CheckRuntime<'_>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     state: &mut InterrogationRunState,
@@ -656,7 +656,7 @@ pub(crate) fn interrogate_expectation_with_model<R: EvaluatorRunner>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn interrogate_expectation_answer_with_model<R: EvaluatorRunner>(
     runtime: &CheckRuntime<'_>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     state: &mut InterrogationRunState,
@@ -696,7 +696,7 @@ pub(crate) fn interrogate_expectation_answer_with_model<R: EvaluatorRunner>(
 #[allow(clippy::too_many_arguments)]
 fn ask_expectation_turn<R: EvaluatorRunner>(
     runtime: &CheckRuntime<'_>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     state: &mut InterrogationRunState,
@@ -765,11 +765,11 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
 
 pub(crate) fn resolve_diff_from<'a>(
     runtime: &CheckRuntime<'_>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     last_pass: Option<&'a LastResult>,
 ) -> Result<ResolvedDiffFrom<'a>, EvaluatorError> {
     if runtime.is_in_place() {
-        // In-place mode has no Git-backed diff base. Its selected expectations
+        // In-place mode has no Git-backed diff base. Its resolved expectations
         // are validated before interrogation, and prompt rendering clears any
         // diff-only turn inputs for this mode.
         return Ok(ResolvedDiffFrom {

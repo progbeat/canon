@@ -5,7 +5,7 @@ use crate::check::command::output::{
 };
 use crate::check::core::errors::{error_record_from_visible_tree_oid, INTERNAL_ERROR_UNPARSABLE};
 use crate::check::core::{
-    CheckOptions, CheckRecord, InterrogationAnswer, SelectedExpectation, ERROR_SCOPE_TOO_NARROW,
+    CheckOptions, CheckRecord, InterrogationAnswer, ResolvedExpectation, ERROR_SCOPE_TOO_NARROW,
 };
 use crate::check::interrogation::policy::{
     initial_q_scope_for_fresh_interrogation, interrogate_or_error_answer,
@@ -56,7 +56,7 @@ pub(crate) struct TemporaryExpectationInterrogationContext<'a, 'log, R: Evaluato
 
 pub(crate) fn run_temporary_expectation_interrogation<R: EvaluatorRunner>(
     context: TemporaryExpectationInterrogationContext<'_, '_, R>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     verified_q_scope: &mut Vec<String>,
     progress: Option<&EvaluatorProgress>,
 ) -> Result<InterrogationAnswer, String> {
@@ -88,7 +88,7 @@ struct TemporaryExpectationRunContext<'a, 'log, R: EvaluatorRunner> {
 
 pub(super) fn run_expectation<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
 ) -> Result<ExpectationRunOutcome, String> {
     // Cache hits are resolved before this function is called. This path only
     // handles expectations that still need evaluator work, so every report
@@ -240,7 +240,7 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
 
 fn record_finished_expectation<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     record: &CheckRecord,
 ) -> Result<(), String> {
     // This is the durable result-reporting path used after a CheckRecord is
@@ -271,7 +271,7 @@ struct CompletedInterrogation {
 
 fn run_started_temporary_expectation_interrogation<R: EvaluatorRunner>(
     context: &mut TemporaryExpectationRunContext<'_, '_, R>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     verified_q_scope: &mut Vec<String>,
     progress: Option<&EvaluatorProgress>,
 ) -> Result<InterrogationAnswer, String> {
@@ -336,7 +336,7 @@ fn run_started_temporary_expectation_interrogation<R: EvaluatorRunner>(
 
 fn interrogate_temporary_initial_with_full_scope_retry<R: EvaluatorRunner>(
     context: &mut TemporaryExpectationRunContext<'_, '_, R>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     verified_q_scope: &mut Vec<String>,
     progress: Option<&EvaluatorProgress>,
 ) -> Result<(InterrogationAnswer, bool), String> {
@@ -378,7 +378,7 @@ fn interrogate_temporary_initial_with_full_scope_retry<R: EvaluatorRunner>(
 
 fn run_started_expectation_interrogation<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     verified_q_scope: &mut Vec<String>,
     progress: Option<&EvaluatorProgress>,
 ) -> Result<CompletedInterrogation, String> {
@@ -483,7 +483,7 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
 }
 
 fn q_scope_verification_result_becomes_final(
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     initial_result: crate::check::core::CheckResult,
     initial: &CheckRecord,
     narrowed: &CheckRecord,
@@ -499,7 +499,7 @@ fn q_scope_verification_result_becomes_final(
 }
 
 fn q_scope_verification_result_is_accepted(
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     initial_result: crate::check::core::CheckResult,
     _initial: &CheckRecord,
     narrowed: &CheckRecord,
@@ -530,7 +530,7 @@ fn temporary_q_scope_verification_answer_is_accepted(
 
 fn interrogate_initial_with_full_scope_retry<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     verified_q_scope: &mut Vec<String>,
     progress: Option<&EvaluatorProgress>,
 ) -> Result<PolicyInterrogationResult, String> {
@@ -581,7 +581,7 @@ fn interrogate_initial_with_full_scope_retry<R: EvaluatorRunner>(
 
 fn finish_unstarted_expectation_with_error_record<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     scope: Vec<String>,
     error: String,
 ) -> Result<ExpectationRunOutcome, String> {
@@ -601,7 +601,7 @@ fn finish_unstarted_expectation_with_error_record<R: EvaluatorRunner>(
 
 fn finish_unstarted_expectation_with_error_record_for_visible_tree_oid<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     scope: &[String],
     visible_tree_oid: &str,
     error: String,
@@ -618,7 +618,7 @@ fn finish_unstarted_expectation_with_error_record_for_visible_tree_oid<R: Evalua
 
 fn finish_started_expectation_with_error_record<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     scope: &[String],
     visible_tree_oid: &str,
     started_report: LiveExpectationReport,
@@ -659,7 +659,7 @@ fn assert_final_check_record_has_no_scope_too_narrow(record: &CheckRecord) -> Re
 
 fn finish_expectation_with_error_record<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     record: CheckRecord,
 ) -> Result<ExpectationRunOutcome, String> {
     record_finished_expectation(context, expectation, &record)?;
@@ -806,8 +806,8 @@ mod tests {
         }
     }
 
-    fn test_expectation(expected_answer: &str) -> crate::check::core::SelectedExpectation {
-        crate::check::core::SelectedExpectation {
+    fn test_expectation(expected_answer: &str) -> crate::check::core::ResolvedExpectation {
+        crate::check::core::ResolvedExpectation {
             number: 1,
             id: "expectation-id".to_string(),
             display_id: "e".to_string(),

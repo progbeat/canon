@@ -2,11 +2,12 @@
 // stable stdout/stderr surfaces by output kind while keeping callers away from
 // renderer internals.
 // `canon check` uses this facade instead of `crate::output` because live
-// progress shares stdout across threads. The documented check output surfaces
-// are split across `record`, `usage`, and `summary`; every exported writer
-// flushes through `shared::write_stdout_record` or `SharedCheckOutput` as soon
-// as a record, token line, summary, query answer, agent message, or progress
-// dot is eligible.
+// progress shares stdout across threads. Hook communication, expectation
+// result entries, token usage, and summary output are split across the command
+// execution layer plus `record`, `usage`, and `summary`;
+// every exported writer flushes through `shared::write_stdout_record` or
+// `SharedCheckOutput` as soon as a record, token line, summary, query answer,
+// agent message, or progress dot is eligible.
 // `canon gate` output is not routed through this check-output component.
 mod escape;
 mod query;
@@ -39,7 +40,7 @@ mod tests {
         BlockedCheckHook, CachedExpectation, CheckRecord, CheckResult, CheckRunReport,
         ParsedAnswer, ERROR_INVALID_QUESTION,
     };
-    use crate::check::SelectedExpectation;
+    use crate::check::ResolvedExpectation;
     use crate::config_types::AgentConfig;
     use crate::token_usage_types::TokenUsage;
     use std::io::{self, Write};
@@ -73,42 +74,23 @@ mod tests {
         assert_result_entry(&rendered, "OK");
     }
 
-    #[test]
+    #[test] // xpec: HW
     fn cached_non_pass_output_matches_documented_record_shape() {
-        let mut bytes = Vec::new();
-        let mut result_output = Some(&mut bytes as &mut dyn Write);
+        let mut failed_bytes = Vec::new();
+        let mut failed_output = Some(&mut failed_bytes as &mut dyn Write);
 
-        write_cached_non_pass_output(&mut result_output, &failed_record()).unwrap();
+        write_cached_non_pass_output(&mut failed_output, &failed_record()).unwrap();
 
-        let rendered = String::from_utf8(bytes).unwrap();
-        assert_result_entry(&rendered, "FAILED");
+        let failed_rendered = String::from_utf8(failed_bytes).unwrap();
+        assert_result_entry(&failed_rendered, "FAILED");
     }
 
-    #[test]
-    fn summary_counts_cached_non_pass_records() {
-        let evaluated_error = review_record_with_id("11111111111111111111", "j");
-        let cached_failure = cached_expectation(failed_record_with_id("22222222222222222222", "k"));
-        let cached_error = cached_expectation(review_record_with_id("33333333333333333333", "l"));
-        let report = CheckRunReport {
-            records: vec![evaluated_error],
-            cached: vec![cached_failure, cached_error],
-            blocked: None,
-            skipped: 0,
-        };
-
-        let counts = summary_outcome_counts(&report);
-
-        assert_eq!(counts.passed, 0);
-        assert_eq!(counts.failed, 1);
-        assert_eq!(counts.errors, 2);
-    }
-
-    #[test]
+    #[test] // xpec: HW
     fn summary_and_token_usage_output_match_documented_lines() {
         let report = CheckRunReport {
             records: vec![passing_record()],
             cached: Vec::new(),
-            blocked: None,
+            blocked_hooks: Vec::new(),
             skipped: 2,
         };
         let mut summary_bytes = Vec::new();
@@ -133,7 +115,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[test] // xpec: HW
     fn summary_orders_blocked_before_other_outcomes() {
         let report = CheckRunReport {
             records: vec![
@@ -141,9 +123,9 @@ mod tests {
                 passing_record_with_id("22222222222222222222", "k"),
             ],
             cached: Vec::new(),
-            blocked: Some(BlockedCheckHook {
+            blocked_hooks: vec![BlockedCheckHook {
                 repair_instruction: "repair".to_string(),
-            }),
+            }],
             skipped: 3,
         };
         let mut summary_bytes = Vec::new();
@@ -315,7 +297,7 @@ mod tests {
 
     fn cached_expectation(record: CheckRecord) -> CachedExpectation {
         CachedExpectation {
-            expectation: SelectedExpectation {
+            expectation: ResolvedExpectation {
                 number: record.number,
                 id: record.id.clone(),
                 display_id: record.display_id.clone(),

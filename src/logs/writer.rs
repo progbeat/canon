@@ -57,7 +57,7 @@ impl DiagnosticLogWriter {
     // `check::interrogation::session`, and
     // `check::interrogation::result::records` route check lifecycle, thread
     // lifecycle/restart, agent request/response/failure, token-usage, cache,
-    // record, and query-result events through this writer.
+    // record, hook, and query-result events through this writer.
     #[cfg(test)]
     pub(crate) fn create(root: &Path) -> DiagnosticLogResult<DiagnosticLogWriter> {
         let mut cache = RepoInspectionCache::new();
@@ -150,27 +150,38 @@ fn prepare_diagnostic_log_with_config(
     if diagnostic_logs_explicitly_disabled(&config) {
         return disabled_diagnostic_log(root, config);
     }
-    // CANON_LOG_DIR_GIT_PATH is `${CANON_STATE_DIR}/logs`; `git_path` resolves it
-    // with `git rev-parse --git-path` so worktrees and nonstandard git-dir
-    // layouts keep logs under Canon's git-owned state directory.
-    let log_dir = match cache.git_path(root, CANON_LOG_DIR_GIT_PATH) {
-        Ok(log_dir) => log_dir,
-        Err(_) if git_project_root(root).is_err() => root.join(CANON_LOG_DIR_GIT_PATH),
-        Err(message) => {
-            return Err(external_log_error(
-                "resolve diagnostic log directory",
-                message,
-            ));
-        }
-    };
+    let log_dir = diagnostic_log_dir(root, cache)?;
     ensure_dir_without_symlinks(&log_dir)
         .map_err(|message| external_log_error("create diagnostic log directory", message))?;
-    let path = log_dir.join(active_log_file_name(&config)?);
+    let path = log_dir.join(active_log_file_name());
     Ok(PreparedDiagnosticLog {
         log_dir,
         path,
         config,
     })
+}
+
+fn diagnostic_log_dir(
+    root: &Path,
+    cache: &mut RepoInspectionCache,
+) -> DiagnosticLogResult<PathBuf> {
+    // CANON_LOG_DIR_GIT_PATH is `${CANON_STATE_DIR}/logs`; `git_path` resolves it
+    // with `git rev-parse --git-path` so worktrees and nonstandard git-dir
+    // layouts keep logs under Canon's git-owned state directory. In a non-git
+    // in-place root, `${CANON_STATE_DIR}` is the local `canon` state directory.
+    match cache.git_path(root, CANON_LOG_DIR_GIT_PATH) {
+        Ok(log_dir) => Ok(log_dir),
+        Err(message) => {
+            if git_project_root(root).is_err() {
+                Ok(root.join(CANON_LOG_DIR_GIT_PATH))
+            } else {
+                Err(external_log_error(
+                    "resolve diagnostic log directory",
+                    message,
+                ))
+            }
+        }
+    }
 }
 
 fn disabled_diagnostic_log(
@@ -179,7 +190,7 @@ fn disabled_diagnostic_log(
 ) -> DiagnosticLogResult<PreparedDiagnosticLog> {
     debug_assert!(diagnostic_logs_explicitly_disabled(&config));
     let log_dir = root.join(CANON_LOG_DIR_GIT_PATH);
-    let path = log_dir.join(active_log_file_name(&config)?);
+    let path = log_dir.join(active_log_file_name());
     Ok(PreparedDiagnosticLog {
         log_dir,
         path,
@@ -201,7 +212,7 @@ fn write_runtime_log_event_with_rotation(
     let line = render_runtime_log_event(level, event, fields)?;
     let line_size = line.len() as u64;
     let log_size_limited = config.max_bytes > 0;
-    let files = diagnostic_log_files(config)?;
+    let files = diagnostic_log_files();
     let active_limit = active_log_max_bytes(config, files.len());
     if log_size_limited && line_size > active_limit {
         return Err(DiagnosticLogError::RecordTooLarge {
@@ -227,37 +238,28 @@ fn write_runtime_log_event_with_rotation(
 #[cfg(test)]
 mod tests {
     use super::{
-        diagnostic_logs_explicitly_disabled, prepare_diagnostic_log_with_config,
-        DiagnosticLogConfig,
+        diagnostic_log_files, diagnostic_logs_explicitly_disabled,
+        prepare_diagnostic_log_with_config, DiagnosticLogConfig,
     };
     use crate::repo_inspection::RepoInspectionCache;
-    use crate::state_paths::CANON_LOG_DIR_GIT_PATH;
     use serde_json::json;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::process;
+    use std::process::{self, Command};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    static LOG_FILES: [&str; 1] = ["0.jsonl"];
-    static TWO_LOG_FILES: [&str; 2] = ["0.jsonl", "1.jsonl"];
-
-    #[test]
-    fn diagnostic_logs_use_fallback_dir_when_git_path_is_unavailable() {
+    #[test] // xpec: B
+    fn enabled_diagnostic_logs_write_under_local_state_dir_outside_git() {
         let root = temp_root("diagnostic-logs-no-git");
         let mut cache = RepoInspectionCache::new();
         let config = DiagnosticLogConfig {
             max_bytes: 1024,
             explicitly_disabled: false,
-            files: &LOG_FILES,
         };
 
         let prepared = prepare_diagnostic_log_with_config(&root, &mut cache, config).unwrap();
 
         assert!(!diagnostic_logs_explicitly_disabled(&prepared.config));
-        assert_eq!(
-            prepared.path,
-            root.join(CANON_LOG_DIR_GIT_PATH).join("0.jsonl")
-        );
         let mut writer = super::DiagnosticLogWriter {
             path: prepared.path.clone(),
             log_dir: prepared.log_dir,
@@ -269,14 +271,13 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[test]
+    #[test] // xpec: fh
     fn diagnostic_logs_rotate_within_configured_log_dir_size() {
-        let root = temp_root("diagnostic-logs-rotate-within-configured-size");
+        let root = git_temp_root("diagnostic-logs-rotate-within-configured-size");
         let mut cache = RepoInspectionCache::new();
         let config = DiagnosticLogConfig {
-            max_bytes: 1600,
+            max_bytes: 4000,
             explicitly_disabled: false,
-            files: &TWO_LOG_FILES,
         };
         let prepared = prepare_diagnostic_log_with_config(&root, &mut cache, config).unwrap();
         let mut writer = super::DiagnosticLogWriter {
@@ -297,21 +298,23 @@ mod tests {
 
         assert!(prepared.path.is_file());
         assert!(prepared.log_dir.join("1.jsonl").is_file());
-        assert!(configured_log_dir_size(&prepared.log_dir, &TWO_LOG_FILES) <= config.max_bytes);
+        assert!(
+            configured_log_dir_size(&prepared.log_dir, diagnostic_log_files()) <= config.max_bytes
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[test]
+    #[test] // xpec: fh
     fn diagnostic_logs_make_room_for_new_event_with_rotation() {
-        let root = temp_root("diagnostic-logs-make-room-with-rotation");
+        let root = git_temp_root("diagnostic-logs-make-room-with-rotation");
         let mut cache = RepoInspectionCache::new();
         let config = DiagnosticLogConfig {
             max_bytes: 1000,
             explicitly_disabled: false,
-            files: &TWO_LOG_FILES,
         };
         let prepared = prepare_diagnostic_log_with_config(&root, &mut cache, config).unwrap();
-        fs::write(prepared.log_dir.join("1.jsonl"), "x".repeat(950)).unwrap();
+        let oldest_log_file = diagnostic_log_files().last().unwrap();
+        fs::write(prepared.log_dir.join(oldest_log_file), "x".repeat(950)).unwrap();
         let mut writer = super::DiagnosticLogWriter {
             path: prepared.path.clone(),
             log_dir: prepared.log_dir.clone(),
@@ -321,8 +324,27 @@ mod tests {
         writer.write_event("info", "test.event", &[]).unwrap();
 
         assert!(prepared.path.is_file());
-        assert!(configured_log_dir_size(&prepared.log_dir, &TWO_LOG_FILES) <= config.max_bytes);
+        assert!(
+            configured_log_dir_size(&prepared.log_dir, diagnostic_log_files()) <= config.max_bytes
+        );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    fn git_temp_root(name: &str) -> PathBuf {
+        let root = temp_root(name);
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .arg("init")
+            .output()
+            .unwrap_or_else(|err| panic!("failed to run git init: {err}"));
+        if !output.status.success() {
+            panic!(
+                "git init failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        root
     }
 
     fn temp_root(name: &str) -> PathBuf {

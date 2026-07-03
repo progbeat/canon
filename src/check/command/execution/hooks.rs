@@ -1,7 +1,8 @@
-use crate::check::command::output::write_stdout_record;
 use crate::config_types::{
     CheckHookCaseOutcome, CheckHookConfig, DEFAULT_CHECK_HOOK_REPAIR_INSTRUCTION,
 };
+use crate::logs::DiagnosticLogWriter;
+use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 use std::process::Command;
@@ -14,19 +15,35 @@ pub(super) enum CheckHookOutcome {
 pub(super) fn run_check_hooks(
     root: &Path,
     hooks: &[CheckHookConfig],
-    result_output: &mut dyn Write,
+    trigger: &str,
+    hook_output: &mut dyn Write,
+    diagnostic_log: &mut DiagnosticLogWriter,
 ) -> Result<CheckHookOutcome, String> {
-    run_check_hooks_with_input(root, hooks, result_output, &mut io::stdin().lock())
+    let stdin = io::stdin();
+    let mut input = stdin.lock();
+    run_check_hooks_with_input(
+        root,
+        hooks,
+        trigger,
+        hook_output,
+        &mut input,
+        Some(diagnostic_log),
+    )
 }
 
 pub(super) fn run_check_hooks_with_input(
     root: &Path,
     hooks: &[CheckHookConfig],
-    result_output: &mut dyn Write,
+    trigger: &str,
+    hook_output: &mut dyn Write,
     input: &mut dyn BufRead,
+    mut diagnostic_log: Option<&mut DiagnosticLogWriter>,
 ) -> Result<CheckHookOutcome, String> {
-    for hook in hooks {
-        match run_check_hook_with_input(root, hook, result_output, input)? {
+    for (index, hook) in hooks.iter().enumerate() {
+        write_hook_start_event(diagnostic_log.as_deref_mut(), trigger, index, hook)?;
+        let outcome = run_check_hook_with_input(root, hook, hook_output, input)?;
+        write_hook_finish_event(diagnostic_log.as_deref_mut(), trigger, index, &outcome)?;
+        match outcome {
             CheckHookOutcome::Continue => {}
             blocked @ CheckHookOutcome::Blocked { .. } => return Ok(blocked),
         }
@@ -37,23 +54,25 @@ pub(super) fn run_check_hooks_with_input(
 fn run_check_hook_with_input(
     root: &Path,
     hook: &CheckHookConfig,
-    result_output: &mut dyn Write,
+    hook_output: &mut dyn Write,
     input: &mut dyn BufRead,
 ) -> Result<CheckHookOutcome, String> {
+    // Check hooks print at lifecycle points outside expectation interrogation;
+    // these bytes are not expectation result entries.
     if let Some(print) = hook.print.as_deref() {
-        write_stdout_record(
-            result_output,
+        write_hook_output_fragment(
+            hook_output,
             hook_print_line(print).as_bytes(),
-            "check hook output",
+            "check hook print",
         )?;
     }
     if let Some(prompt) = hook.input.as_deref() {
-        write_stdout_record(result_output, prompt.as_bytes(), "check hook input prompt")?;
+        write_hook_output_fragment(hook_output, prompt.as_bytes(), "check hook input prompt")?;
         let key = read_hook_input_line(input)?;
         return Ok(match_hook_cases(hook, &key));
     }
     if let Some(argv) = hook.exec.as_deref() {
-        let key = run_hook_exec(root, result_output, argv)?;
+        let key = run_hook_exec(root, hook_output, argv)?;
         return Ok(match_hook_cases(hook, &key));
     }
     Ok(CheckHookOutcome::Continue)
@@ -70,18 +89,20 @@ fn read_hook_input_line(input: &mut dyn BufRead) -> Result<String, String> {
 
 fn run_hook_exec(
     root: &Path,
-    result_output: &mut dyn Write,
+    hook_output: &mut dyn Write,
     argv: &[String],
 ) -> Result<String, String> {
-    result_output
-        .flush()
-        .map_err(|err| format!("failed to flush check hook output before exec: {}", err))?;
+    write_hook_output_fragment(
+        hook_output,
+        hook_exec_command_line(argv).as_bytes(),
+        "check hook exec transcript",
+    )?;
     let Some(program) = argv.first() else {
         return Ok(String::new());
     };
-    let status = Command::new(program)
-        .args(&argv[1..])
-        .current_dir(root)
+    let mut command = Command::new(program);
+    command.args(&argv[1..]).current_dir(root);
+    let status = command
         .status()
         .map_err(|err| format!("failed to run check hook exec {}: {}", program, err))?;
     Ok(status
@@ -103,10 +124,136 @@ fn match_hook_cases(hook: &CheckHookConfig, key: &str) -> CheckHookOutcome {
     }
 }
 
+fn write_hook_start_event(
+    diagnostic_log: Option<&mut DiagnosticLogWriter>,
+    trigger: &str,
+    index: usize,
+    hook: &CheckHookConfig,
+) -> Result<(), String> {
+    let Some(writer) = diagnostic_log else {
+        return Ok(());
+    };
+    writer
+        .write_event(
+            "info",
+            "check.hook.start",
+            &hook_start_event_fields(trigger, index, hook),
+        )
+        .map_err(|err| err.to_string())
+}
+
+fn write_hook_finish_event(
+    diagnostic_log: Option<&mut DiagnosticLogWriter>,
+    trigger: &str,
+    index: usize,
+    outcome: &CheckHookOutcome,
+) -> Result<(), String> {
+    let Some(writer) = diagnostic_log else {
+        return Ok(());
+    };
+    let (level, fields) = match outcome {
+        CheckHookOutcome::Continue => (
+            "info",
+            vec![
+                ("trigger", json!(trigger)),
+                ("index", json!(index)),
+                ("outcome", json!("ok")),
+            ],
+        ),
+        CheckHookOutcome::Blocked { repair_instruction } => (
+            "warn",
+            vec![
+                ("trigger", json!(trigger)),
+                ("index", json!(index)),
+                ("outcome", json!("blocked")),
+                ("repairInstruction", json!(repair_instruction)),
+            ],
+        ),
+    };
+    writer
+        .write_event(level, "check.hook.finish", &fields)
+        .map_err(|err| err.to_string())
+}
+
+fn hook_start_event_fields(
+    trigger: &str,
+    index: usize,
+    hook: &CheckHookConfig,
+) -> Vec<(&'static str, Value)> {
+    let mut fields = vec![
+        ("trigger", json!(trigger)),
+        ("index", json!(index)),
+        ("action", json!(hook_action(hook))),
+    ];
+    if let Some(print) = hook.print.as_deref() {
+        fields.push(("print", json!(print)));
+    }
+    if let Some(input) = hook.input.as_deref() {
+        fields.push(("input", json!(input)));
+    }
+    if let Some(exec) = hook.exec.as_deref() {
+        fields.push(("exec", json!(exec)));
+    }
+    fields
+}
+
+fn hook_action(hook: &CheckHookConfig) -> &'static str {
+    if hook.input.is_some() {
+        "input"
+    } else if hook.exec.is_some() {
+        "exec"
+    } else {
+        "print"
+    }
+}
+
 fn hook_print_line(text: &str) -> String {
-    let mut line = text.trim_end_matches(['\r', '\n']).to_string();
+    let mut line = text.to_string();
     line.push('\n');
     line
+}
+
+fn write_hook_output_fragment(
+    output: &mut dyn Write,
+    bytes: &[u8],
+    description: &str,
+) -> Result<(), String> {
+    output
+        .write_all(bytes)
+        .map_err(|err| format!("failed to write {}: {}", description, err))?;
+    output
+        .flush()
+        .map_err(|err| format!("failed to flush {}: {}", description, err))
+}
+
+fn hook_exec_command_line(argv: &[String]) -> String {
+    let command = argv
+        .iter()
+        .map(|arg| hook_exec_command_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("$ {command}\n")
+}
+
+fn hook_exec_command_arg(arg: &str) -> String {
+    if !arg.is_empty()
+        && arg
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | ':' | '='))
+    {
+        return arg.to_string();
+    }
+    let mut quoted = String::from("'");
+    for ch in arg.chars() {
+        match ch {
+            '\'' => quoted.push_str("'\\''"),
+            '\n' => quoted.push_str("\\n"),
+            '\r' => quoted.push_str("\\r"),
+            _ => quoted.push(ch),
+        }
+    }
+    quoted.push('\'');
+    quoted
 }
 
 fn trim_stdin_line_ending(line: &mut String) {
@@ -120,7 +267,7 @@ fn trim_stdin_line_ending(line: &mut String) {
 
 #[cfg(test)]
 mod tests {
-    use super::{run_check_hooks_with_input, CheckHookOutcome};
+    use super::{hook_exec_command_line, run_check_hooks_with_input, CheckHookOutcome};
     use crate::config_types::{CheckHookCaseOutcome, CheckHookConfig};
     use std::collections::BTreeMap;
     use std::io::Cursor;
@@ -128,7 +275,7 @@ mod tests {
 
     // xpec: uY
     #[test]
-    fn print_only_hook_continues_and_prints_one_trailing_newline() {
+    fn print_only_hook_continues_and_appends_one_trailing_newline() {
         let hook = CheckHookConfig {
             print: Some("ready\n\n".to_string()),
             input: None,
@@ -138,13 +285,20 @@ mod tests {
         let mut output = Vec::new();
         let mut input = Cursor::new(Vec::<u8>::new());
 
-        let outcome =
-            run_check_hooks_with_input(Path::new("."), &[hook], &mut output, &mut input).unwrap();
+        let outcome = run_check_hooks_with_input(
+            Path::new("."),
+            &[hook],
+            "on-start",
+            &mut output,
+            &mut input,
+            None,
+        )
+        .unwrap();
 
         // xpec: uY
         assert!(matches!(outcome, CheckHookOutcome::Continue));
         // xpec: uY
-        assert_eq!(String::from_utf8(output).unwrap(), "ready\n");
+        assert_eq!(String::from_utf8(output).unwrap(), "ready\n\n\n");
     }
 
     // xpec: uY
@@ -159,8 +313,15 @@ mod tests {
         let mut output = Vec::new();
         let mut input = Cursor::new(b"pass \r\n".to_vec());
 
-        let outcome =
-            run_check_hooks_with_input(Path::new("."), &[hook], &mut output, &mut input).unwrap();
+        let outcome = run_check_hooks_with_input(
+            Path::new("."),
+            &[hook],
+            "on-start",
+            &mut output,
+            &mut input,
+            None,
+        )
+        .unwrap();
 
         // xpec: uY
         assert!(matches!(outcome, CheckHookOutcome::Continue));
@@ -180,8 +341,15 @@ mod tests {
         let mut output = Vec::new();
         let mut input = Cursor::new(b"fail\n".to_vec());
 
-        let outcome =
-            run_check_hooks_with_input(Path::new("."), &[hook], &mut output, &mut input).unwrap();
+        let outcome = run_check_hooks_with_input(
+            Path::new("."),
+            &[hook],
+            "on-start",
+            &mut output,
+            &mut input,
+            None,
+        )
+        .unwrap();
 
         match outcome {
             CheckHookOutcome::Blocked { repair_instruction } => {
@@ -199,25 +367,48 @@ mod tests {
     #[test]
     fn exec_hook_matches_process_exit_code() {
         let test_binary = std::env::current_exe().unwrap().display().to_string();
+        let exec = vec![
+            test_binary,
+            "--exact".to_string(),
+            "definitely_not_a_test".to_string(),
+            "--quiet".to_string(),
+        ];
         let hook = CheckHookConfig {
             print: None,
             input: None,
-            exec: Some(vec![
-                test_binary,
-                "--exact".to_string(),
-                "definitely_not_a_test".to_string(),
-                "--quiet".to_string(),
-            ]),
+            exec: Some(exec.clone()),
             cases: cases([("0", CheckHookCaseOutcome::Continue)]),
         };
         let mut output = Vec::new();
         let mut input = Cursor::new(Vec::<u8>::new());
 
-        let outcome =
-            run_check_hooks_with_input(Path::new("."), &[hook], &mut output, &mut input).unwrap();
+        let outcome = run_check_hooks_with_input(
+            Path::new("."),
+            &[hook],
+            "on-start",
+            &mut output,
+            &mut input,
+            None,
+        )
+        .unwrap();
 
         // xpec: uY
         assert!(matches!(outcome, CheckHookOutcome::Continue));
+        // xpec: w9
+        assert_eq!(
+            String::from_utf8(output).unwrap(),
+            hook_exec_command_line(&exec)
+        );
+    }
+
+    // xpec: w9
+    #[test]
+    fn exec_command_line_uses_command_transcript_format() {
+        // xpec: w9
+        assert_eq!(
+            hook_exec_command_line(&["cargo".to_string(), "test".to_string()]),
+            "$ cargo test\n"
+        );
     }
 
     // xpec: uY
@@ -251,8 +442,15 @@ mod tests {
         let mut output = Vec::new();
         let mut input = Cursor::new(b"fail\n".to_vec());
 
-        let outcome =
-            run_check_hooks_with_input(Path::new("."), &hooks, &mut output, &mut input).unwrap();
+        let outcome = run_check_hooks_with_input(
+            Path::new("."),
+            &hooks,
+            "on-start",
+            &mut output,
+            &mut input,
+            None,
+        )
+        .unwrap();
 
         match outcome {
             CheckHookOutcome::Blocked { repair_instruction } => {

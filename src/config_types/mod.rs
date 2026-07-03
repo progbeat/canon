@@ -1,4 +1,4 @@
-use serde::de::{self, Visitor};
+use serde::de::{self, EnumAccess, VariantAccess, Visitor};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -83,11 +83,9 @@ pub(crate) struct RawCheckHookMappingConfig {
     pub(crate) cases: Option<BTreeMap<RawCheckHookCaseKey, RawCheckHookCaseOutcome>>,
 }
 
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RawCheckHookCaseOutcome {
-    #[serde(rename = "ok")]
     Ok,
-    #[serde(rename = "block")]
     Block(String),
 }
 
@@ -126,9 +124,8 @@ impl RawCheckHookConfig {
             RawCheckHookConfig::List(hooks) => hooks
                 .into_iter()
                 .enumerate()
-                .map(|(index, hook)| hook.resolve(&format!("{}[{}]", label, index)))
-                .collect::<Result<Vec<_>, _>>()
-                .map(|hooks| hooks.into_iter().flatten().collect()),
+                .map(|(index, hook)| hook.resolve_one(&format!("{}[{}]", label, index)))
+                .collect(),
             hook => hook.resolve_one(label).map(|hook| vec![hook]),
         }
     }
@@ -142,7 +139,9 @@ impl RawCheckHookConfig {
                 cases: BTreeMap::new(),
             }),
             RawCheckHookConfig::Mapping(mapping) => resolve_hook_mapping(label, mapping),
-            RawCheckHookConfig::List(_) => unreachable!("hook list is resolved before hook item"),
+            RawCheckHookConfig::List(_) => {
+                Err(format!("{} must be a string or mapping hook", label))
+            }
         }
     }
 }
@@ -170,7 +169,7 @@ fn resolve_hook_mapping(
     if has_cases && !has_input && !has_exec {
         return Err(format!("{} cases requires input or exec", label));
     }
-    if (has_input || has_exec) && cases.is_empty() {
+    if (has_input || has_exec) && !has_cases {
         return Err(format!("{} input or exec requires cases", label));
     }
     if mapping.exec.as_ref().is_some_and(Vec::is_empty) {
@@ -191,6 +190,56 @@ impl RawCheckHookCaseOutcome {
             RawCheckHookCaseOutcome::Block(repair_instruction) => {
                 CheckHookCaseOutcome::Block { repair_instruction }
             }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RawCheckHookCaseOutcome {
+    fn deserialize<D>(deserializer: D) -> Result<RawCheckHookCaseOutcome, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // serde-saphyr exposes a YAML local tag such as `!block "repair"` as
+        // enum variant `block` with the tagged scalar as its newtype payload.
+        deserializer.deserialize_enum(
+            "YAML hook case outcome tag",
+            &["ok", "block"],
+            RawCheckHookCaseOutcomeVisitor,
+        )
+    }
+}
+
+struct RawCheckHookCaseOutcomeVisitor;
+
+impl<'de> Visitor<'de> for RawCheckHookCaseOutcomeVisitor {
+    type Value = RawCheckHookCaseOutcome;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("!ok or !block <repair-instruction>")
+    }
+
+    fn visit_enum<A>(self, data: A) -> Result<Self::Value, A::Error>
+    where
+        A: EnumAccess<'de>,
+    {
+        let (variant, access) = data.variant::<String>()?;
+        match variant.as_str() {
+            "ok" => {
+                let payload = access.newtype_variant::<Option<String>>()?;
+                if payload.as_deref().unwrap_or_default().is_empty() {
+                    Ok(RawCheckHookCaseOutcome::Ok)
+                } else {
+                    Err(de::Error::invalid_value(
+                        de::Unexpected::Str(payload.as_deref().unwrap_or_default()),
+                        &"empty !ok hook outcome",
+                    ))
+                }
+            }
+            "block" => {
+                let repair_instruction = access.newtype_variant::<String>()?;
+                Ok(RawCheckHookCaseOutcome::Block(repair_instruction))
+            }
+            _ => Err(de::Error::unknown_variant(&variant, &["ok", "block"])),
         }
     }
 }
@@ -256,14 +305,14 @@ impl Visitor<'_> for RawCheckHookCaseKeyVisitor {
     where
         E: de::Error,
     {
-        Err(E::invalid_type(de::Unexpected::Unit, &self))
+        Ok(RawCheckHookCaseKey("null".to_string()))
     }
 
     fn visit_unit<E>(self) -> Result<Self::Value, E>
     where
         E: de::Error,
     {
-        Err(E::invalid_type(de::Unexpected::Unit, &self))
+        Ok(RawCheckHookCaseKey("null".to_string()))
     }
 }
 

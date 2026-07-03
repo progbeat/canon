@@ -1,5 +1,5 @@
 use crate::check::{
-    CheckRecord, CheckRecordOutcome, CheckResult, ParsedAnswer, SelectedExpectation,
+    CheckRecord, CheckRecordOutcome, CheckResult, ParsedAnswer, ResolvedExpectation,
 };
 use crate::config_types::AgentConfig;
 use crate::evaluator::EvaluatorError;
@@ -24,7 +24,7 @@ pub(crate) fn evaluator_models(agent: &AgentConfig) -> Vec<Option<String>> {
 
 pub(crate) fn effective_thinking<'a>(
     _agent: &'a AgentConfig,
-    expectation: &'a SelectedExpectation,
+    expectation: &'a ResolvedExpectation,
 ) -> &'a str {
     &expectation.agent.thinking
 }
@@ -77,7 +77,7 @@ impl EvaluatorFailureKind {
 }
 
 pub(crate) fn record_from_response(
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     response: ParsedAnswer,
     visible_tree_oid: String,
 ) -> Result<CheckRecord, String> {
@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn check_record_requires_expected_answer() {
-        let expectation = SelectedExpectation {
+        let expectation = ResolvedExpectation {
             number: 0,
             id: String::new(),
             display_id: "q".to_string(),

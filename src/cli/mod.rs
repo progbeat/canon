@@ -15,7 +15,7 @@ use crate::notes::arg_to_string;
 use crate::project::print_root;
 use crate::project_types::Config;
 
-pub(crate) use error::CommandError;
+pub(crate) use error::{AskFailure, CommandError};
 
 pub(crate) fn main() {
     if run(env::args_os().skip(1).collect()).is_err() {

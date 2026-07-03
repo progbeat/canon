@@ -1,13 +1,13 @@
 use super::failure::{
     fail_check_after_start, fail_check_before_selection, finish_check_error_report,
-    CheckErrorReportFinish,
+    started_check_output, CheckErrorReportFinish,
 };
 use super::hooks::{run_check_hooks, CheckHookOutcome};
 use super::prepare::{
     prepare_git_backed_check_execution, GitBackedCheckStorage,
     PrepareGitBackedCheckExecutionOptions,
 };
-use super::query::{run_check_query_command, CheckQueryCommand};
+use super::query::{run_check_query_command, CheckQueryCommand, CheckQueryError};
 use super::trailer::{
     check_command_writes_agent_message, check_report_passed, write_check_trailer,
     write_check_trailer_with_usage, CompletedCheckRun,
@@ -23,7 +23,8 @@ use crate::check::core::{AskCommandArgs, BlockedCheckHook, CheckCommandArgs, Che
 use crate::check::interrogation::{state::CheckRuntime, write_check_lifecycle_start_event};
 use crate::check::run::selection::{expectation_identities, resolve_check_options_with_identities};
 use crate::check::{run_check_with_runner_and_caches, CheckRunCaches, CheckRunSideEffects};
-use crate::cli::CommandError;
+use crate::cli::{AskFailure, CommandError};
+use crate::config_types::{AgentConfig, CheckConfig, CheckHooksConfig};
 use crate::git::TreeSource;
 use crate::logs::{write_cache_cleanup_event, DiagnosticLogWriter};
 use crate::platform::{install_check_signal_handlers, reset_check_interrupted};
@@ -72,38 +73,78 @@ pub(crate) fn run_check_command(
     let mut check_caches = CheckRunCaches::new();
     let config = match repo_cache.load_check_config(root, &command.config_path, &checked_tree) {
         Ok(config) => config,
-        Err(err) => return fail_check_before_selection(&mut diagnostic_log, None, false, err),
+        Err(err) => {
+            // The config failed before expectation selection, so the check
+            // trailer has no records to summarize while the command error
+            // still carries the documented recovery text.
+            return fail_check_before_selection(
+                &mut diagnostic_log,
+                None,
+                false,
+                started_check_output(started),
+                err,
+            );
+        }
     };
     let identities = match expectation_identities(&config) {
         Ok(identities) => identities,
-        Err(err) => return fail_check_before_selection(&mut diagnostic_log, None, false, err),
+        Err(err) => {
+            return fail_check_before_selection(
+                &mut diagnostic_log,
+                None,
+                false,
+                started_check_output(started),
+                err,
+            )
+        }
     };
     let options =
         match resolve_check_options_with_identities(&config, &identities, &command.options) {
             Ok(options) => options,
-            Err(err) => return fail_check_before_selection(&mut diagnostic_log, None, false, err),
+            Err(err) => {
+                return fail_check_before_selection(
+                    &mut diagnostic_log,
+                    None,
+                    false,
+                    started_check_output(started),
+                    err,
+                )
+            }
         };
     write_check_lifecycle_start_event(
         &mut diagnostic_log,
         None,
         options
-            .pre_cache_candidates
+            .candidate_expectations
             .iter()
             .map(|expectation| expectation.id.clone())
             .collect(),
     )?;
     let shared_output = SharedCheckOutput::stdout();
     let mut result_output = shared_output.clone();
-    let on_start_hook = match run_check_hooks(root, &config.hooks.on_start, &mut result_output) {
+    let on_start_hook = match run_check_hooks(
+        root,
+        &config.hooks.on_start,
+        "on-start",
+        &mut result_output,
+        &mut diagnostic_log,
+    ) {
         Ok(outcome) => outcome,
-        Err(err) => return fail_check_after_start(&mut diagnostic_log, false, err),
+        Err(err) => {
+            return fail_check_after_start(
+                &mut diagnostic_log,
+                false,
+                started_check_output(started),
+                err,
+            )
+        }
     };
     if let CheckHookOutcome::Blocked { repair_instruction } = on_start_hook {
         let completed = blocked_check_run(
             CheckRunReport {
                 records: Vec::new(),
                 cached: Vec::new(),
-                blocked: None,
+                blocked_hooks: Vec::new(),
                 skipped: config.expectations.len(),
             },
             repair_instruction,
@@ -129,9 +170,16 @@ pub(crate) fn run_check_command(
         &mut check_caches.visible_tree_oid,
     ) {
         Ok(execution) => execution,
-        Err(err) => return fail_check_after_start(&mut diagnostic_log, false, err),
+        Err(err) => {
+            return fail_check_after_start(
+                &mut diagnostic_log,
+                false,
+                started_check_output(started),
+                err,
+            )
+        }
     };
-    cleanup_cache_dirs(root, &identities, &mut diagnostic_log)?;
+    cleanup_cache_dirs(root, &identities, &mut diagnostic_log, started)?;
     let runtime = CheckRuntime::materialized(
         root,
         &execution.staged_view,
@@ -164,14 +212,22 @@ pub(crate) fn run_check_command(
         },
     };
     if completed.error.is_none() && check_report_passed(&completed.report) {
-        let on_pass_hook = match run_check_hooks(root, &config.hooks.on_pass, &mut result_output) {
+        let on_pass_hook = match run_check_hooks(
+            root,
+            &config.hooks.on_pass,
+            "on-pass",
+            &mut result_output,
+            &mut diagnostic_log,
+        ) {
             Ok(outcome) => outcome,
             Err(err) => {
-                return finish_check_error_report(CheckErrorReportFinish {
+                return finish_check_error_after_trailer(CheckErrorAfterTrailerContext {
                     diagnostic_log: &mut diagnostic_log,
                     result_output: &mut result_output,
                     check_caches: &mut check_caches,
+                    runner: &mut execution.runner,
                     report: &completed.report,
+                    started,
                     error: err,
                 })
             }
@@ -200,7 +256,11 @@ pub(crate) fn run_check_command(
 }
 
 fn blocked_check_run(mut report: CheckRunReport, repair_instruction: String) -> CompletedCheckRun {
-    report.blocked = Some(BlockedCheckHook { repair_instruction });
+    // Hook execution stops at the first blocker, so a completed check run can
+    // contain at most one blocked hook outcome.
+    report
+        .blocked_hooks
+        .push(BlockedCheckHook { repair_instruction });
     CompletedCheckRun {
         report,
         error: Some("check hook blocked".to_string()),
@@ -226,19 +286,16 @@ pub(crate) fn run_ask_command(
         command.against_tree_explicit,
     )?;
     let mut repo_cache = RepoInspectionCache::new();
-    let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
+    let diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
     let mut check_caches = CheckRunCaches::new();
-    // Command preparation must resolve the config before ask can build the
-    // temporary xpec: the resolved agent is part of the evaluator request.
-    let config = match repo_cache.load_check_config_with_default_agent_preset(
-        root,
-        &command.config_path,
-        &checked_tree,
-        command.default_agent_preset.as_deref(),
-    ) {
-        Ok(config) => config,
-        Err(err) => return fail_check_before_selection(&mut diagnostic_log, Some(true), true, err),
-    };
+    let config = ask_config_from_optional_check_config(
+        repo_cache.load_check_config_with_default_agent_preset(
+            root,
+            &command.config_path,
+            &checked_tree,
+            command.default_agent_preset.as_deref(),
+        ),
+    );
     run_ask_query(
         root,
         &command,
@@ -253,20 +310,14 @@ pub(crate) fn run_ask_command(
 fn run_in_place_ask_command(root: &Path, command: &AskCommandArgs) -> Result<(), CommandError> {
     let mut repo_cache = RepoInspectionCache::new();
     let mut check_caches = CheckRunCaches::new();
-    let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
-    // In-place ask has the same preparation boundary: load config first so the
-    // temporary xpec uses the resolved agent. It does not call
-    // `validate_in_place_check_config` because `canon ask` does not collect or
-    // select config expectations; query.rs validates the in-place global agent
-    // settings that the temporary xpec actually consumes.
-    let config = match repo_cache.load_in_place_check_config_with_default_agent_preset(
-        root,
-        &command.config_path,
-        command.default_agent_preset.as_deref(),
-    ) {
-        Ok(config) => config,
-        Err(err) => return fail_check_before_selection(&mut diagnostic_log, Some(true), true, err),
-    };
+    let diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
+    let config = ask_config_from_optional_check_config(
+        repo_cache.load_in_place_check_config_with_default_agent_preset(
+            root,
+            &command.config_path,
+            command.default_agent_preset.as_deref(),
+        ),
+    );
     run_ask_query(
         root,
         command,
@@ -278,6 +329,29 @@ fn run_in_place_ask_command(root: &Path, command: &AskCommandArgs) -> Result<(),
     )
 }
 
+fn ask_config_from_optional_check_config(config: Result<CheckConfig, String>) -> CheckConfig {
+    // `canon ask` always asks the evaluator. Check config is only an optional
+    // source of resolved agent settings; after this point ask constructs one
+    // temporary xpec and sends it through the normal check interrogation path
+    // in query.rs.
+    config
+        .map(ask_config_from_check_config)
+        .unwrap_or_else(|_| ask_config_with_agent(AgentConfig::implementation_default()))
+}
+
+fn ask_config_from_check_config(config: CheckConfig) -> CheckConfig {
+    ask_config_with_agent(config.agent)
+}
+
+fn ask_config_with_agent(agent: AgentConfig) -> CheckConfig {
+    CheckConfig {
+        version: 1,
+        agent,
+        hooks: CheckHooksConfig::default(),
+        expectations: Vec::new(),
+    }
+}
+
 fn run_ask_query(
     root: &Path,
     command: &AskCommandArgs,
@@ -287,9 +361,8 @@ fn run_ask_query(
     diagnostic_log: Option<DiagnosticLogWriter>,
     check_caches: &mut CheckRunCaches,
 ) -> Result<(), CommandError> {
-    // Ask receives the same already-expanded `CheckConfig` as normal check
-    // execution. Preset selection is over by this point; query.rs can only
-    // consume fields stored on `CheckConfig` and its expectations.
+    // Ask receives an ask-only `CheckConfig`: agent settings may come from the
+    // expanded check config, but configured expectations/hooks are not selected.
     // Once query.rs finishes command validation, the prepared ask path has no
     // cache or last-result shortcut and always sends an evaluator turn.
     let result = run_check_query_command(CheckQueryCommand {
@@ -305,10 +378,22 @@ fn run_ask_query(
         diagnostic_log,
         check_caches,
     });
+    ask_query_command_result(result)
+}
+
+fn ask_query_command_result(result: Result<(), CheckQueryError>) -> Result<(), CommandError> {
     match result {
         Ok(()) => Ok(()),
-        Err(err) if err.public_output_already_reported() => Err(CommandError::AskFailed),
-        Err(err) => Err(CommandError::from(err.to_string())),
+        Err(err) => Err(CommandError::AskFailed(ask_failure_for_query_error(&err))),
+    }
+}
+
+fn ask_failure_for_query_error(err: &CheckQueryError) -> AskFailure {
+    match err {
+        CheckQueryError::ReviewRequired(_) => AskFailure::ReviewRequired,
+        CheckQueryError::Output(_) => AskFailure::Output,
+        CheckQueryError::TokenUsage(_) => AskFailure::TokenUsage,
+        CheckQueryError::Command(_) | CheckQueryError::Evaluator(_) => AskFailure::Query,
     }
 }
 
@@ -316,6 +401,7 @@ fn cleanup_cache_dirs(
     root: &Path,
     identities: &[crate::check::ExpectationIdentity],
     diagnostic_log: &mut DiagnosticLogWriter,
+    started: Instant,
 ) -> Result<(), CommandError> {
     let xpecs_dir = XpecStateCache::default()
         .xpecs_dir(root)
@@ -323,7 +409,14 @@ fn cleanup_cache_dirs(
     let active_ids = active_expectation_ids_from_identities(identities);
     let cleanup = match cleanup_stale_xpec_dirs(&xpecs_dir, &active_ids) {
         Ok(cleanup) => cleanup,
-        Err(err) => return fail_check_after_start(diagnostic_log, false, err),
+        Err(err) => {
+            return fail_check_after_start(
+                diagnostic_log,
+                false,
+                started_check_output(started),
+                err,
+            )
+        }
     };
     write_cache_cleanup_event(diagnostic_log, cleanup.removed, cleanup.kept)?;
     Ok(())
@@ -353,38 +446,73 @@ fn run_in_place_check_command(
         None,
     ) {
         Ok(config) => config,
-        Err(err) => return fail_check_before_selection(&mut diagnostic_log, None, false, err),
+        Err(err) => {
+            return fail_check_before_selection(
+                &mut diagnostic_log,
+                None,
+                false,
+                started_check_output(started),
+                err,
+            )
+        }
     };
     if let Err(err) = validate_in_place_check_config(&config) {
-        return fail_check_before_selection(&mut diagnostic_log, None, false, err);
+        return fail_check_before_selection(
+            &mut diagnostic_log,
+            None,
+            false,
+            started_check_output(started),
+            err,
+        );
     }
     let identities = expectation_identities(&config)?;
     let options =
         match resolve_check_options_with_identities(&config, &identities, &command.options) {
             Ok(options) => options,
-            Err(err) => return fail_check_before_selection(&mut diagnostic_log, None, false, err),
+            Err(err) => {
+                return fail_check_before_selection(
+                    &mut diagnostic_log,
+                    None,
+                    false,
+                    started_check_output(started),
+                    err,
+                )
+            }
         };
     write_check_lifecycle_start_event(
         &mut diagnostic_log,
         None,
         options
-            .pre_cache_candidates
+            .candidate_expectations
             .iter()
             .map(|expectation| expectation.id.clone())
             .collect(),
     )?;
     let shared_output = SharedCheckOutput::stdout();
     let mut result_output = shared_output.clone();
-    let on_start_hook = match run_check_hooks(root, &config.hooks.on_start, &mut result_output) {
+    let on_start_hook = match run_check_hooks(
+        root,
+        &config.hooks.on_start,
+        "on-start",
+        &mut result_output,
+        &mut diagnostic_log,
+    ) {
         Ok(outcome) => outcome,
-        Err(err) => return fail_check_after_start(&mut diagnostic_log, false, err),
+        Err(err) => {
+            return fail_check_after_start(
+                &mut diagnostic_log,
+                false,
+                started_check_output(started),
+                err,
+            )
+        }
     };
     if let CheckHookOutcome::Blocked { repair_instruction } = on_start_hook {
         let completed = blocked_check_run(
             CheckRunReport {
                 records: Vec::new(),
                 cached: Vec::new(),
-                blocked: None,
+                blocked_hooks: Vec::new(),
                 skipped: config.expectations.len(),
             },
             repair_instruction,
@@ -434,14 +562,22 @@ fn run_in_place_check_command(
         },
     };
     if completed.error.is_none() && check_report_passed(&completed.report) {
-        let on_pass_hook = match run_check_hooks(root, &config.hooks.on_pass, &mut result_output) {
+        let on_pass_hook = match run_check_hooks(
+            root,
+            &config.hooks.on_pass,
+            "on-pass",
+            &mut result_output,
+            &mut diagnostic_log,
+        ) {
             Ok(outcome) => outcome,
             Err(err) => {
-                return finish_check_error_report(CheckErrorReportFinish {
+                return finish_check_error_after_trailer(CheckErrorAfterTrailerContext {
                     diagnostic_log: &mut diagnostic_log,
                     result_output: &mut result_output,
                     check_caches: &mut check_caches,
+                    runner: &mut runner,
                     report: &completed.report,
+                    started,
                     error: err,
                 })
             }
@@ -469,6 +605,48 @@ fn run_in_place_check_command(
     )
 }
 
+struct CheckErrorAfterTrailerContext<'a> {
+    diagnostic_log: &'a mut DiagnosticLogWriter,
+    result_output: &'a mut dyn Write,
+    check_caches: &'a mut CheckRunCaches,
+    runner: &'a mut crate::app::LazyAppServerRunner,
+    report: &'a CheckRunReport,
+    started: Instant,
+    error: String,
+}
+
+fn finish_check_error_after_trailer(
+    context: CheckErrorAfterTrailerContext<'_>,
+) -> Result<(), CommandError> {
+    let CheckErrorAfterTrailerContext {
+        diagnostic_log,
+        result_output,
+        check_caches,
+        runner,
+        report,
+        started,
+        error,
+    } = context;
+    if let Err(err) = write_check_trailer(runner, result_output, report, started) {
+        return finish_check_error_report(CheckErrorReportFinish {
+            diagnostic_log,
+            result_output,
+            check_caches,
+            report,
+            error: err,
+            write_token_usage: false,
+        });
+    }
+    finish_check_error_report(CheckErrorReportFinish {
+        diagnostic_log,
+        result_output,
+        check_caches,
+        report,
+        error,
+        write_token_usage: false,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn finish_completed_check(
     mut diagnostic_log: Option<&mut DiagnosticLogWriter>,
@@ -490,6 +668,7 @@ fn finish_completed_check(
             check_caches,
             report: &completed.report,
             error: err,
+            write_token_usage: true,
         });
     }
     if let Err(err) = write_check_trailer(runner, result_output, &completed.report, started) {
@@ -502,6 +681,7 @@ fn finish_completed_check(
             check_caches,
             report: &completed.report,
             error: err,
+            write_token_usage: false,
         });
     }
     let completed_error = completed.error.clone();
@@ -556,7 +736,7 @@ fn write_blocked_repair_instruction(
     result_output: &mut dyn Write,
     report: &CheckRunReport,
 ) -> Result<(), String> {
-    let Some(blocked) = &report.blocked else {
+    let Some(blocked) = report.blocked_hooks.first() else {
         return Ok(());
     };
     write_stdout_record(
@@ -573,4 +753,30 @@ fn repair_instruction_line(instruction: &str) -> String {
     let mut line = instruction.to_string();
     line.push('\n');
     line
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test] // xpec: 5,HW
+    fn ask_query_error_uses_typed_sentinel_command_error() {
+        let result =
+            ask_query_command_result(Err(CheckQueryError::Evaluator("query failed".to_string())));
+
+        assert_eq!(result, Err(CommandError::AskFailed(AskFailure::Query)));
+        assert_eq!(
+            ask_query_command_result(Err(CheckQueryError::ReviewRequired("InvalidQuestion"))),
+            Err(CommandError::AskFailed(AskFailure::ReviewRequired))
+        );
+    }
+
+    #[test] // xpec: 5
+    fn ask_config_load_error_still_builds_temporary_query_config() {
+        let config = ask_config_from_optional_check_config(Err("config unavailable".to_string()));
+
+        assert!(config.expectations.is_empty());
+        assert!(config.hooks.on_start.is_empty());
+        assert!(config.hooks.on_pass.is_empty());
+    }
 }

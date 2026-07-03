@@ -2,7 +2,7 @@ use super::answer::CheckResult;
 use crate::config_types::{AgentConfig, ExpectationTarget};
 
 #[derive(Debug, Clone)]
-pub(crate) struct SelectedExpectation {
+pub(crate) struct ResolvedExpectation {
     pub(crate) number: usize,
     pub(crate) id: String,
     pub(crate) display_id: String,

@@ -19,7 +19,7 @@ pub(super) fn canon_show_dynamic_tools() -> Vec<Value> {
             {
                 "type": "function",
                 "name": "show",
-                "description": "Return canon show output for selected expectations in the current check run.",
+                "description": "Return canon show output for requested expectations in the current check run.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {

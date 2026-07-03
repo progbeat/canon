@@ -96,9 +96,8 @@ additional implementation-owned prompt templates.
 
 ## Generator item
 
-A config entry that expands matching Markdown specs into additional
-expectations. A generator item uses a path pattern, a question template, and an
-expected answer.
+A config entry that expands into additional expectations. Generator items
+include `include` entries and `path` + `q_template` + `a` entries.
 
 ## Observed answer
 

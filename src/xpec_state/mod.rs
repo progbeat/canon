@@ -1,7 +1,7 @@
 mod cleanup;
 mod last_result;
 
-use crate::check::{CheckRecord, CheckResult, Cooldown, SelectedExpectation};
+use crate::check::{CheckRecord, CheckResult, Cooldown, ResolvedExpectation};
 use crate::git::{resolve_git_path, TreeSource, VisibleTreeOidCache};
 use crate::state_paths::CANON_XPECS_DIR_GIT_PATH;
 use crate::time::parse_record_timestamp;
@@ -54,7 +54,7 @@ impl XpecStateCache {
     pub(crate) fn xpec_dir(
         &mut self,
         root: &Path,
-        expectation: &SelectedExpectation,
+        expectation: &ResolvedExpectation,
     ) -> Result<PathBuf, String> {
         let key = (root.to_path_buf(), expectation.id.clone());
         if let Some(path) = self.xpec_dirs.get(&key) {
@@ -68,7 +68,7 @@ impl XpecStateCache {
 
 pub(crate) fn snapshot_pass_ids(
     root: &Path,
-    expectations: &[SelectedExpectation],
+    expectations: &[ResolvedExpectation],
     cache: &mut XpecStateCache,
 ) -> Result<BTreeSet<String>, String> {
     let mut ids = BTreeSet::new();
@@ -89,7 +89,7 @@ pub(crate) struct CachedLastResultLookup {
 pub(crate) fn cached_last_result_for_expectation(
     root: &Path,
     source: &TreeSource,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     state_cache: &mut XpecStateCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
     lookup: CachedLastResultLookup,
@@ -130,7 +130,7 @@ pub(crate) fn cached_last_result_for_expectation(
 pub(crate) fn refresh_reused_same_tree_last_result(
     root: &Path,
     source: &TreeSource,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     state_cache: &mut XpecStateCache,
     mut hit: CachedLastResultHit,
 ) -> Result<CachedLastResultHit, String> {
@@ -150,7 +150,7 @@ pub(crate) fn refresh_reused_same_tree_last_result(
 }
 
 pub(crate) fn check_record_from_cached_result(
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     hit: &CachedLastResultHit,
 ) -> CheckRecord {
     match hit.status {
@@ -165,7 +165,7 @@ pub(crate) fn check_record_from_cached_result(
 
 pub(crate) fn latest_non_pass_timestamp(
     root: &Path,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     cache: &mut XpecStateCache,
 ) -> Result<Option<u64>, String> {
     // Human-review results are persisted as `last-error.json`: evaluator
@@ -185,7 +185,7 @@ pub(crate) fn latest_non_pass_timestamp(
 fn same_tree_last_result(
     root: &Path,
     source: &TreeSource,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     state_cache: &mut XpecStateCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<Option<(LastResult, CachedResultStatus)>, String> {
@@ -213,7 +213,7 @@ fn same_tree_last_result(
 fn matching_same_tree_last_results(
     resolver: &crate::git::VisibleTreeOidReuseResolver,
     root: &Path,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     state_cache: &mut XpecStateCache,
     last_status: LastResultStatus,
     cached_status: CachedResultStatus,
@@ -269,7 +269,7 @@ fn latest_matching_same_tree_last_result(
 
 fn cooldown_last_result(
     root: &Path,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     state_cache: &mut XpecStateCache,
     now: u64,
 ) -> Result<Option<LastResult>, String> {
@@ -302,7 +302,7 @@ fn cooldown_last_result(
 
 fn cooldown_last_result_for_status(
     root: &Path,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     state_cache: &mut XpecStateCache,
     now: u64,
     cooldown: Cooldown,
@@ -326,7 +326,7 @@ fn cooldown_last_result_for_status(
 
 #[cfg(test)]
 mod tests {
-    use crate::check::{CheckRecord, CheckResult, Cooldown, SelectedExpectation};
+    use crate::check::{CheckRecord, CheckResult, Cooldown, ResolvedExpectation};
     use crate::config_types::{AgentConfig, ExpectationTarget};
     use crate::git::{TreeSource, VisibleTreeOidCache};
     use crate::hash::full_scope;
@@ -1220,8 +1220,8 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    fn test_expectation() -> SelectedExpectation {
-        SelectedExpectation {
+    fn test_expectation() -> ResolvedExpectation {
+        ResolvedExpectation {
             number: 1,
             id: "abc123".to_string(),
             display_id: "a".to_string(),
@@ -1251,7 +1251,7 @@ mod tests {
     }
 
     fn test_record(
-        expectation: &SelectedExpectation,
+        expectation: &ResolvedExpectation,
         scope: &[String],
         observed: &str,
         error: Option<&str>,
@@ -1330,7 +1330,7 @@ mod tests {
 
     fn write_last_result_fixture(
         root: &Path,
-        expectation: &SelectedExpectation,
+        expectation: &ResolvedExpectation,
         result: LastResult,
     ) {
         let file_name = match result.status {

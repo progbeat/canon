@@ -219,8 +219,7 @@ impl<'a> CheckRuntime<'a> {
     }
 
     pub(crate) fn evaluator_interrogations_never_hide_files(&self) -> bool {
-        // In-place mode is the check mode whose selected expectations are
-        // evaluated against the checked directory as-is. Its evaluator
+        // In-place mode evaluates against the checked directory as-is. Its evaluator
         // interrogations never hide files through q-scope, expectation ignore,
         // scope narrowing, or retry behavior.
         self.is_in_place()

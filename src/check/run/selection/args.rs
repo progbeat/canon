@@ -12,7 +12,7 @@ pub(crate) fn resolve_check_options_with_identities(
 ) -> Result<CheckOptions, String> {
     let candidates = select_expectations_with_identities(config, identities, &options.selectors)?;
     Ok(CheckOptions {
-        pre_cache_candidates: candidates,
+        candidate_expectations: candidates,
         selectors_provided: !options.selectors.is_empty(),
         keep_going: options.keep_going,
         ignore_cooldown: options.ignore_cooldown,

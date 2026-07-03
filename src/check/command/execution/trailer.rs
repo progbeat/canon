@@ -98,7 +98,7 @@ mod tests {
         let report = CheckRunReport {
             records: Vec::new(),
             cached: Vec::new(),
-            blocked: None,
+            blocked_hooks: Vec::new(),
             skipped: 1,
         };
 

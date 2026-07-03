@@ -4,11 +4,11 @@ use super::CheckRunSideEffects;
 use crate::check::command::output::write_cached_non_pass_output;
 use crate::check::core::{
     check_run_error, interrupted_check_run_error, CachedExpectation, CheckOptions, CheckRecord,
-    CheckRunError, CheckRunReport, SelectedExpectation,
+    CheckRunError, CheckRunReport, ResolvedExpectation,
 };
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::run::selection::{
-    order_by_absent_non_pass_history, order_by_latest_non_pass,
+    order_by_latest_non_pass, order_in_place_by_absent_non_pass_history,
     select_git_backed_expectations_after_cache, CachedExpectationHit, CachedNonPassPolicy,
     GitBackedCacheFilterContext,
 };
@@ -65,13 +65,13 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     let check_work_queue = if runtime.is_in_place() {
         // In-place config compatibility has already been validated by the
         // command layer, and this runtime has no Git-backed cache source.
-        // Persisted xpec history is treated as absent, so every candidate is
-        // ordered as if its latest non-pass timestamp were the Unix epoch.
-        in_place_check_work_queue(options.pre_cache_candidates.clone())
+        // The canon check --in-place spec treats persisted xpec history as
+        // absent, so e5 ordering uses the Unix epoch for every candidate.
+        in_place_check_work_queue(options.candidate_expectations.clone())
     } else {
         caches.run_start_pass_ids = run_try!(snapshot_pass_ids(
             root,
-            &options.pre_cache_candidates,
+            &options.candidate_expectations,
             &mut caches.xpec_state,
         ));
         let source = runtime
@@ -97,21 +97,34 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 CachedNonPassPolicy::LeaveUncachedPending
             },
         ));
-        // Cache selection returns cached report work plus the evaluator queue.
-        // Sort both by latest non-pass timestamp so public output and evaluator
-        // work share one priority order.
-        run_try!(order_check_work(
-            root,
-            check_work.cached_hits,
-            check_work.evaluation_queue,
-            &mut caches.xpec_state,
-        ))
+        match check_work {
+            crate::check::run::selection::GitBackedCacheFilteredCheckWork::EvaluationAllowed {
+                cached_hits,
+                evaluation_queue,
+            } => {
+                // Cache selection returns cached report work plus the evaluator
+                // queue. Sort both by latest non-pass timestamp so public output
+                // and evaluator work share one priority order.
+                run_try!(order_check_work(
+                    root,
+                    cached_hits,
+                    evaluation_queue,
+                    &mut caches.xpec_state,
+                ))
+            }
+            crate::check::run::selection::GitBackedCacheFilteredCheckWork::CachedNonPassBlocksDefaultSelection {
+                cached_hits,
+            } => cached_hits
+                .into_iter()
+                .map(|hit| CheckWorkItem::Cached(Box::new(hit)))
+                .collect(),
+        }
     };
     let mut check_work_queue = check_work_queue.into_iter();
     while let Some(item) = check_work_queue.next() {
         match item {
             CheckWorkItem::Cached(hit) => {
-                write_cached_failures(vec![*hit], &mut cached, &mut result_output)
+                write_cached_non_passes(vec![*hit], &mut cached, &mut result_output)
                     .map_err(|err| current_error!(err))?;
             }
             CheckWorkItem::Evaluate(expectation) => {
@@ -143,7 +156,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                     // cache/state usage, not the stop-after-evaluated-non-pass
                     // rule.
                     if !interrupted {
-                        write_remaining_cached_failures_without_evaluation(
+                        write_remaining_cached_non_passes_without_evaluation(
                             &mut check_work_queue,
                             &mut cached,
                             &mut result_output,
@@ -169,17 +182,17 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     Ok(current_report(records, cached, total_expectations))
 }
 
-fn write_remaining_cached_failures_without_evaluation(
+fn write_remaining_cached_non_passes_without_evaluation(
     items: &mut impl Iterator<Item = CheckWorkItem>,
     cached: &mut Vec<CachedExpectation>,
     result_output: &mut Option<&mut dyn std::io::Write>,
 ) -> Result<(), String> {
     // The order spec stops evaluator work after the first evaluated non-pass.
-    // Remaining cached failures are already-known results, so writing their
+    // Remaining cached non-passes are already-known results, so writing their
     // public blocks does not evaluate another selected expectation.
     for item in items {
         if let CheckWorkItem::Cached(hit) = item {
-            write_cached_failures(vec![*hit], cached, result_output)?;
+            write_cached_non_passes(vec![*hit], cached, result_output)?;
         }
     }
     Ok(())
@@ -187,21 +200,21 @@ fn write_remaining_cached_failures_without_evaluation(
 
 enum CheckWorkItem {
     Cached(Box<CachedExpectationHit>),
-    Evaluate(Box<SelectedExpectation>),
+    Evaluate(Box<ResolvedExpectation>),
 }
 
-fn in_place_check_work_queue(evaluation_queue: Vec<SelectedExpectation>) -> Vec<CheckWorkItem> {
+fn in_place_check_work_queue(evaluation_queue: Vec<ResolvedExpectation>) -> Vec<CheckWorkItem> {
     let work = evaluation_queue
         .into_iter()
         .map(|expectation| CheckWorkItem::Evaluate(Box::new(expectation)))
         .collect();
-    order_by_absent_non_pass_history(work)
+    order_in_place_by_absent_non_pass_history(work)
 }
 
 fn order_check_work(
     root: &Path,
     cached_hits: Vec<CachedExpectationHit>,
-    evaluation_queue: Vec<SelectedExpectation>,
+    evaluation_queue: Vec<ResolvedExpectation>,
     xpec_state: &mut crate::xpec_state::XpecStateCache,
 ) -> Result<Vec<CheckWorkItem>, String> {
     let work = cached_hits
@@ -219,7 +232,7 @@ fn order_check_work(
     })
 }
 
-fn write_cached_failures(
+fn write_cached_non_passes(
     cached_hits: Vec<CachedExpectationHit>,
     cached: &mut Vec<CachedExpectation>,
     result_output: &mut Option<&mut dyn std::io::Write>,
@@ -228,9 +241,9 @@ fn write_cached_failures(
         let record = hit.record;
         // Cached passes are counted in the summary only; they are not emitted
         // as per-expectation stdout result entries and therefore have no
-        // progress timeline. Cache selection excludes human-review last-error
-        // records, so the only cached results with a printed short ID are
-        // failed answers, and this branch writes their complete public block.
+        // progress timeline. Cached non-passes are failed answers; human-review
+        // records stay uncached so their ERROR blocks come from evaluation in
+        // the current run.
         let cached_result_prints_short_id = !record.passed();
         if cached_result_prints_short_id {
             write_cached_non_pass_output(result_output, &record)?;
@@ -259,10 +272,10 @@ mod tests {
 
     // xpec: e5,6
     #[test]
-    fn in_place_check_work_queue_uses_absent_history_epoch_order() {
+    fn in_place_check_work_queue_uses_in_place_absent_history_epoch_order() {
         let queue = in_place_check_work_queue(vec![
-            selected_expectation("first"),
-            selected_expectation("second"),
+            resolved_expectation("first"),
+            resolved_expectation("second"),
         ]);
 
         let ids = queue
@@ -279,8 +292,8 @@ mod tests {
         assert_eq!(ids, vec!["first", "second"]);
     }
 
-    fn selected_expectation(id: &str) -> SelectedExpectation {
-        SelectedExpectation {
+    fn resolved_expectation(id: &str) -> ResolvedExpectation {
+        ResolvedExpectation {
             number: 1,
             id: id.to_string(),
             display_id: id.to_string(),

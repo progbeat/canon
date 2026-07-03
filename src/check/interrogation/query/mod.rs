@@ -1,5 +1,5 @@
 use crate::check::core::{
-    QueryResult, SelectedExpectation, ERROR_INVALID_QUESTION, ERROR_SCOPE_TOO_NARROW,
+    QueryResult, ResolvedExpectation, ERROR_INVALID_QUESTION, ERROR_SCOPE_TOO_NARROW,
     INTERNAL_ERROR_UNPARSABLE,
 };
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
@@ -21,7 +21,7 @@ pub(crate) struct QueryRequest<'a> {
 
 #[derive(Clone, Copy)]
 pub(crate) struct QueryExpectationContext<'a> {
-    pub(crate) expectation: &'a SelectedExpectation,
+    pub(crate) expectation: &'a ResolvedExpectation,
 }
 
 pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
@@ -118,7 +118,7 @@ mod tests {
             expectations: Vec::new(),
         };
         let runtime = CheckRuntime::in_place(&root, &config, true);
-        let expectation = SelectedExpectation {
+        let expectation = ResolvedExpectation {
             number: 0,
             id: String::new(),
             display_id: "q".to_string(),
@@ -190,7 +190,7 @@ mod tests {
             &config,
             true,
         );
-        let expectation = SelectedExpectation {
+        let expectation = ResolvedExpectation {
             number: 0,
             id: String::new(),
             display_id: "q".to_string(),

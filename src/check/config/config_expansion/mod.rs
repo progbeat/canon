@@ -428,11 +428,14 @@ hooks:
       input: " "
       cases:
         pass: !ok
+        ~: !block "Null key."
         _: !block "Run the blocker fix."
     - exec: ["cargo", "fmt", "--check"]
       cases:
         0: !ok
         _: !block "Format the code."
+    - input: "Empty cases:"
+      cases: {}
     - "Done."
 expectations:
   - q: "Does hook config parse?"
@@ -460,7 +463,7 @@ expectations:
         // xpec: uY
         assert_eq!(on_start.exec, None);
         // xpec: uY
-        assert_eq!(config.hooks.on_pass.len(), 3);
+        assert_eq!(config.hooks.on_pass.len(), 4);
         let on_pass = &config.hooks.on_pass[0];
         // xpec: uY
         assert_eq!(on_pass.print.as_deref(), Some("Type pass:"));
@@ -470,6 +473,13 @@ expectations:
         assert!(matches!(
             on_pass.cases.get("pass"),
             Some(CheckHookCaseOutcome::Continue)
+        ));
+        // xpec: uY
+        assert!(matches!(
+            on_pass.cases.get("null"),
+            Some(CheckHookCaseOutcome::Block {
+                repair_instruction
+            }) if repair_instruction == "Null key."
         ));
         // xpec: uY
         assert!(matches!(
@@ -494,6 +504,11 @@ expectations:
             Some(CheckHookCaseOutcome::Continue)
         ));
         let on_pass = &config.hooks.on_pass[2];
+        // xpec: uY
+        assert_eq!(on_pass.input.as_deref(), Some("Empty cases:"));
+        // xpec: uY
+        assert!(on_pass.cases.is_empty());
+        let on_pass = &config.hooks.on_pass[3];
         // xpec: uY
         assert_eq!(on_pass.print.as_deref(), Some("Done."));
         // xpec: uY
@@ -548,6 +563,58 @@ expectations:
                 "{name}: unexpected error: {error}"
             );
         }
+    }
+
+    // xpec: uY
+    #[test]
+    fn hook_case_outcomes_reject_plain_scalar_tags() {
+        serde_saphyr::from_str::<RawCheckConfig>(
+            r#"
+version: 1
+presets:
+  default: {}
+hooks:
+  on-start:
+    input: "Continue? "
+    cases:
+      y: ok
+expectations:
+  - q: "Does hook config parse?"
+    a: "yes"
+"#,
+        )
+        .expect_err("plain scalar hook outcomes must not parse");
+    }
+
+    // xpec: uY
+    #[test]
+    fn hook_list_rejects_nested_hook_lists() {
+        let raw = serde_saphyr::from_str::<RawCheckConfig>(
+            r#"
+version: 1
+presets:
+  default: {}
+hooks:
+  on-start:
+    - - print: "Nested."
+expectations:
+  - q: "Does hook config parse?"
+    a: "yes"
+"#,
+        )
+        .expect("parse raw check config");
+
+        let error = expand_raw_check_config(
+            None,
+            Path::new("check.yml"),
+            raw,
+            None,
+            CheckConfigSource::Tree(TreeSource::Staged),
+        )
+        .expect_err("nested hook list should fail validation");
+
+        // xpec: uY
+        assert!(error.contains("hooks.on-start[0]"));
     }
 
     // xpec: I8

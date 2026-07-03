@@ -1,4 +1,4 @@
-use crate::check::core::{CheckRecord, SelectedExpectation};
+use crate::check::core::{CheckRecord, ResolvedExpectation};
 use crate::check::interrogation::write_expectation_result_event;
 use crate::config_types::AgentConfig;
 use crate::git::{TreeSource, VisibleTreeOidCache};
@@ -32,7 +32,7 @@ pub(crate) fn cached_result_for_expectation(
     root: &Path,
     source: &TreeSource,
     _agent: &AgentConfig,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     xpec_state: &mut XpecStateCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
     lookup: CachedResultLookup,
@@ -60,6 +60,12 @@ pub(crate) fn cached_result_for_expectation(
     };
     let hit = refresh_reused_same_tree_last_result(root, source, expectation, xpec_state, hit)?;
     let record = check_record_from_cached_result(expectation, &hit);
+    // Human-review/error records are non-pass history for ordering, not
+    // cached results. Treat any legacy record shaped that way as uncached so a
+    // fresh evaluator run can produce the current-run ERROR output.
+    if record.requires_human_review() {
+        return Ok(None);
+    }
     let kind = match hit.kind {
         CachedLastResultKind::SameTree => CachedResultKind::SameTree,
         CachedLastResultKind::Cooldown => CachedResultKind::Cooldown,
@@ -84,8 +90,8 @@ pub(crate) fn write_cache_hit(
         )
         .map_err(|err| err.to_string())?;
     let mut diagnostic_log = Some(writer);
-    // Cached expectations still produce the same expectation.result and
-    // optional expectation.review_required runtime-log events as evaluated
-    // expectations, so logs expose every emitted expectation outcome.
+    // Cached expectations still produce the same expectation.result runtime-log
+    // events as evaluated expectations, so logs expose every emitted
+    // expectation outcome.
     write_expectation_result_event(&mut diagnostic_log, &hit.record)
 }

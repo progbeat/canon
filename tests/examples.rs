@@ -9,6 +9,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const DEFAULT_CHECK_TEMPLATE_FILE_CONTENTS: &str =
     include_str!("../.canon/templates/default/check.yml");
 const DEFAULT_PRE_COMMIT_HOOK_CONTENTS: &str = include_str!("../resources/git-hooks/pre-commit");
+const ZERO_TOKEN_USAGE_LINE: &str =
+    "Token usage: total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n";
 
 fn canon() -> Command {
     Command::new(env!("CARGO_BIN_EXE_canon"))
@@ -210,7 +212,7 @@ expectations:
     // xpec: uY
     assert!(!output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    // xpec: uY
+    // xpec: HW,uY
     assert!(stdout.starts_with("Type pass:\n "));
     // xpec: uY
     assert!(stdout.contains(" 1 blocked, 1 pending in "));
@@ -220,9 +222,10 @@ expectations:
     assert!(!stdout.contains(" OK\n"));
     // xpec: uY
     assert!(!stdout.contains(" FAILED\n"));
-    // xpec: uY
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    // xpec: HW
     assert_eq!(
-        String::from_utf8(output.stderr).unwrap(),
+        stderr,
         "Token usage: total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n"
     );
 }
@@ -268,7 +271,7 @@ expectations:
     // xpec: uY
     assert!(!output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    // xpec: uY
+    // xpec: HW,uY
     assert!(stdout.starts_with("Type pass:\n "));
     // xpec: uY
     assert!(stdout.contains(" 1 blocked, 1 pending in "));
@@ -278,9 +281,10 @@ expectations:
     assert!(!stdout.contains(" OK\n"));
     // xpec: uY
     assert!(!stdout.contains(" FAILED\n"));
-    // xpec: uY
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    // xpec: HW
     assert_eq!(
-        String::from_utf8(output.stderr).unwrap(),
+        stderr,
         "Token usage: total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n"
     );
 }
@@ -316,10 +320,15 @@ expectations:
     let _ = fs::remove_dir_all(&repo);
 
     assert!(!output.status.success());
-    assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // xpec: HW,6
+    assert!(stdout.contains(" 0 passed in "));
+    // xpec: HW,6
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
-        "Error: expectation 1 has Git-backed-only config: diff-from\n"
+        format!(
+            "{ZERO_TOKEN_USAGE_LINE}Error: expectation 1 has Git-backed-only config: diff-from\n"
+        )
     );
 }
 
@@ -456,7 +465,7 @@ fn gate_passes_non_canon_staged_change_without_config() {
     assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
 }
 
-// xpec: C
+// xpec: C,HW
 #[test]
 fn check_without_config_renders_documented_recovery_message() {
     let repo = temp_repo("canon-missing-config-example");
@@ -467,9 +476,12 @@ fn check_without_config_renders_documented_recovery_message() {
     let _ = fs::remove_dir_all(&repo);
 
     assert!(!output.status.success());
-    assert_eq!(
-        String::from_utf8(output.stderr).unwrap(),
-        "Error: No canon check config found at .canon/check.yml\n\
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(" 0 passed in "));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.ends_with(
+            "Error: No canon check config found at .canon/check.yml\n\
          ▷ If the human asked you to use any `canon-*` skill in this project, treat \
          the missing config as permission to set up canon rather than asking for \
          confirmation. Run `canon init`, inspect the current project enough to \
@@ -479,5 +491,7 @@ fn check_without_config_renders_documented_recovery_message() {
          `https://raw.githubusercontent.com/progbeat/canon/main/.canon/check.yml`. \
          Start with a few simple, objective expectations that protect important \
          user-facing behavior.\n"
+        ),
+        "{stderr}"
     );
 }

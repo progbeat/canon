@@ -1,6 +1,8 @@
 use super::shared::write_stdout_record;
-use crate::check::core::{CheckRecord, CheckRunReport};
-use std::collections::BTreeSet;
+use crate::check::core::{
+    for_each_unique_report_record_with_source, report_record_counts_as_error, CheckRecord,
+    CheckRunReport, ReportRecordSource,
+};
 use std::io::Write;
 use std::time::Duration;
 
@@ -31,6 +33,8 @@ fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -> String {
         errors,
     } = summary_outcome_counts(report);
     let mut outcomes = Vec::new();
+    // Blocked hooks are check outcomes even though they are not expectation
+    // records, so they lead the summary independently of record counts.
     if blocked > 0 {
         outcomes.push(format!("{} blocked", blocked));
     }
@@ -127,44 +131,25 @@ pub(crate) struct SummaryOutcomeCounts {
 
 pub(crate) fn summary_outcome_counts(report: &CheckRunReport) -> SummaryOutcomeCounts {
     let mut counts = SummaryOutcomeCounts {
-        blocked: usize::from(report.blocked.is_some()),
+        blocked: report.blocked_hooks.len(),
         passed: 0,
         failed: 0,
         errors: 0,
     };
-    let mut seen = BTreeSet::new();
-    for record in &report.records {
-        if seen.insert(record.id.clone()) {
-            add_evaluated_summary_record(&mut counts, record);
-        }
-    }
-    for cached in &report.cached {
-        let id = if cached.record.id.is_empty() {
-            &cached.expectation.id
-        } else {
-            &cached.record.id
-        };
-        if seen.insert(id.clone()) {
-            add_cached_summary_record(&mut counts, &cached.record);
-        }
-    }
+    for_each_unique_report_record_with_source(&report.records, &report.cached, |source, record| {
+        add_summary_record(&mut counts, source, record);
+    });
     counts
 }
 
-fn add_evaluated_summary_record(counts: &mut SummaryOutcomeCounts, record: &CheckRecord) {
+fn add_summary_record(
+    counts: &mut SummaryOutcomeCounts,
+    source: ReportRecordSource,
+    record: &CheckRecord,
+) {
     if record.passed() {
         counts.passed += 1;
-    } else if record.requires_human_review() {
-        counts.errors += 1;
-    } else {
-        counts.failed += 1;
-    }
-}
-
-fn add_cached_summary_record(counts: &mut SummaryOutcomeCounts, record: &CheckRecord) {
-    if record.passed() {
-        counts.passed += 1;
-    } else if record.requires_human_review() {
+    } else if report_record_counts_as_error(source, record) {
         counts.errors += 1;
     } else {
         counts.failed += 1;

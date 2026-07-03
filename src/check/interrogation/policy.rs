@@ -1,7 +1,7 @@
 use crate::check::core::errors::error_record_from_interrogation_error;
 use crate::check::core::{
     CheckRecord, CheckResult, InterrogationAnswer, InterrogationResult, ParsedAnswer,
-    SelectedExpectation, INTERNAL_ERROR_UNPARSABLE,
+    ResolvedExpectation, INTERNAL_ERROR_UNPARSABLE,
 };
 use crate::check::interrogation::session::interrogate_expectation_answer_with_model_fallbacks;
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
@@ -40,7 +40,7 @@ use crate::xpec_state::XpecStateCache;
 
 pub(crate) struct InterrogationCall<'a> {
     pub(crate) runtime: &'a CheckRuntime<'a>,
-    pub(crate) expectation: &'a SelectedExpectation,
+    pub(crate) expectation: &'a ResolvedExpectation,
     pub(crate) scope: &'a [String],
     pub(crate) request_kind: InterrogationRequestKind,
     pub(crate) progress: Option<&'a EvaluatorProgress>,
@@ -177,7 +177,7 @@ pub(crate) fn turn_has_context_compaction(interrogation: &InterrogationResult) -
 
 pub(crate) fn initial_q_scope_for_fresh_interrogation(
     root: &std::path::Path,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     xpec_state: &mut XpecStateCache,
 ) -> Result<Vec<String>, String> {
     // Fresh interrogation starts from the expectation's last passing q-scope.

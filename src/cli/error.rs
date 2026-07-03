@@ -9,9 +9,17 @@ pub(crate) enum CommandError {
     PwdDoesNotAcceptArguments,
     UnknownOption(String),
     UnknownCommand(String),
-    AskFailed,
+    AskFailed(AskFailure),
     CheckFailed,
     GateFailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AskFailure {
+    Query,
+    ReviewRequired,
+    Output,
+    TokenUsage,
 }
 
 impl From<String> for CommandError {
@@ -46,7 +54,7 @@ impl std::fmt::Display for CommandError {
             CommandError::UnknownCommand(command) => {
                 write!(formatter, "unknown command: {command}")
             }
-            CommandError::AskFailed => formatter.write_str("canon ask failed"),
+            CommandError::AskFailed(_) => formatter.write_str("canon ask failed"),
             CommandError::CheckFailed => formatter.write_str("canon check failed"),
             CommandError::GateFailed => formatter.write_str("canon gate failed"),
         }
@@ -65,7 +73,7 @@ fn command_error_has_public_diagnostic(err: &CommandError) -> bool {
     // sentinel error for the process exit status.
     !matches!(
         err,
-        CommandError::AskFailed | CommandError::CheckFailed | CommandError::GateFailed
+        CommandError::AskFailed(_) | CommandError::CheckFailed | CommandError::GateFailed
     )
 }
 
@@ -120,10 +128,10 @@ mod tests {
         assert_eq!(rendered, "Error: ordinary failure\n");
     }
 
-    #[test]
+    #[test] // xpec: 5
     fn ask_failed_has_no_extra_public_diagnostic() {
         assert!(!super::command_error_has_public_diagnostic(
-            &CommandError::AskFailed
+            &CommandError::AskFailed(super::AskFailure::Query)
         ));
     }
 }
