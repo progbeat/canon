@@ -38,17 +38,17 @@ options, defaults, and common examples.*
 
 ## Expectation Result Output
 
-When a check run processes expectations, stdout contains one result entry per
-passing evaluated expectation, failed expectation, or errored expectation that
-is emitted by the run.
+When a check run reports expectation results, each reported passing evaluated
+expectation, failed expectation, or errored expectation is emitted as one stdout
+result entry.
 
-For each passing evaluated expectation, stdout contains exactly one line:
+For each passing evaluated expectation, the result entry is exactly one line:
 
 ```
 <short ID><progress timeline> OK
 ```
 
-For each failed expectation, evaluated or cached, stdout contains exactly one block. The block has these required lines:
+For each failed expectation, evaluated or cached, the result entry is exactly one block. The block has these required lines:
 
 ```
 <short ID><progress timeline> FAILED
@@ -66,7 +66,7 @@ Suggested q-scope: <compact JSON array>
 
 The line is omitted when no q-scope suggestion is available.
 
-For each errored expectation, stdout contains exactly one block of lines:
+For each errored expectation, the result entry is exactly one block of lines:
 
 ```
 <short ID><progress timeline> ERROR
@@ -83,7 +83,7 @@ evaluator-provided text from injecting additional stdout lines.
 
 ## Token Usage Line
 
-Then stderr contains exactly one token usage line:
+The check run emits exactly one token usage line to stderr:
 
 ```
 Token usage: total=<n> input=<n> (+ <n> cached) output=<n> (reasoning <n>)
@@ -93,7 +93,7 @@ If token usage data is unavailable, every numeric field is `0`.
 
 ## Summary Line
 
-Then stdout contains one summary line:
+The check run emits one stdout summary line:
 
 ```
 ============================= <outcome-list> in <duration>s =============================
