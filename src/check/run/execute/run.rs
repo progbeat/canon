@@ -8,8 +8,9 @@ use crate::check::core::{
 };
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::run::selection::{
-    order_by_latest_non_pass, select_git_backed_expectations_after_cache, CachedExpectationHit,
-    CachedNonPassPolicy, GitBackedCacheFilterContext,
+    order_by_absent_non_pass_history, order_by_latest_non_pass,
+    select_git_backed_expectations_after_cache, CachedExpectationHit, CachedNonPassPolicy,
+    GitBackedCacheFilterContext,
 };
 use crate::evaluator::EvaluatorRunner;
 use crate::time::unix_timestamp;
@@ -18,7 +19,10 @@ use std::path::Path;
 
 // This runtime layer consumes resolved check options and owns cache/evaluator
 // work ordering. Command-line policy such as default-run agent messaging stays
-// in `check::command::execution`.
+// in `check::command::execution`. It does not define a separate persistent
+// state family; durable writes are delegated to xpec last-result storage and
+// diagnostic runtime logs, whose modules own cleanup, fixed file sets, and
+// rotation.
 pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     runtime: CheckRuntime<'_>,
     options: &CheckOptions,
@@ -61,8 +65,9 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     let check_work_queue = if runtime.is_in_place() {
         // In-place config compatibility has already been validated by the
         // command layer, and this runtime has no Git-backed cache source.
-        // Every candidate goes straight to evaluator work in stable order.
-        evaluate_only_check_work_queue(options.pre_cache_candidates.clone())
+        // Persisted xpec history is treated as absent, so every candidate is
+        // ordered as if its latest non-pass timestamp were the Unix epoch.
+        in_place_check_work_queue(options.pre_cache_candidates.clone())
     } else {
         caches.run_start_pass_ids = run_try!(snapshot_pass_ids(
             root,
@@ -185,13 +190,12 @@ enum CheckWorkItem {
     Evaluate(Box<SelectedExpectation>),
 }
 
-fn evaluate_only_check_work_queue(
-    evaluation_queue: Vec<SelectedExpectation>,
-) -> Vec<CheckWorkItem> {
-    evaluation_queue
+fn in_place_check_work_queue(evaluation_queue: Vec<SelectedExpectation>) -> Vec<CheckWorkItem> {
+    let work = evaluation_queue
         .into_iter()
         .map(|expectation| CheckWorkItem::Evaluate(Box::new(expectation)))
-        .collect()
+        .collect();
+    order_by_absent_non_pass_history(work)
 }
 
 fn order_check_work(
@@ -253,9 +257,10 @@ mod tests {
     use super::*;
     use crate::config_types::{AgentConfig, DEFAULT_DIFF_FROM};
 
+    // xpec: e5,6
     #[test]
-    fn evaluate_only_check_work_queue_preserves_candidate_order() {
-        let queue = evaluate_only_check_work_queue(vec![
+    fn in_place_check_work_queue_uses_absent_history_epoch_order() {
+        let queue = in_place_check_work_queue(vec![
             selected_expectation("first"),
             selected_expectation("second"),
         ]);
@@ -270,6 +275,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
+        // xpec: e5,6
         assert_eq!(ids, vec!["first", "second"]);
     }
 

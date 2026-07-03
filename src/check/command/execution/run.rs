@@ -63,10 +63,11 @@ pub(crate) fn run_check_command(
     let write_agent_message =
         check_command_writes_agent_message(&command, &checked_tree, &against_tree);
     let mut repo_cache = RepoInspectionCache::new();
-    // Runtime-log entry point for `canon check`: this writer resolves
-    // `${CANON_STATE_DIR}/logs/0.jsonl`, then the check lifecycle, cache,
-    // evaluator request/response, thread lifecycle, review, token-usage, and
-    // final-result paths below append flushed JSONL events through it.
+    // Runtime-log entry point for `canon check`: `src/logs/writer.rs` resolves
+    // `${CANON_STATE_DIR}/logs/0.jsonl` and owns JSONL append/flush/rotation.
+    // The check lifecycle, cache, evaluator request/response, thread
+    // lifecycle, review, token-usage, and final-result paths below route their
+    // events through this writer.
     let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
     let mut check_caches = CheckRunCaches::new();
     let config = match repo_cache.load_check_config(root, &command.config_path, &checked_tree) {
@@ -93,7 +94,7 @@ pub(crate) fn run_check_command(
     )?;
     let shared_output = SharedCheckOutput::stdout();
     let mut result_output = shared_output.clone();
-    let on_start_hook = match run_check_hooks(&config.hooks.on_start, &mut result_output) {
+    let on_start_hook = match run_check_hooks(root, &config.hooks.on_start, &mut result_output) {
         Ok(outcome) => outcome,
         Err(err) => return fail_check_after_start(&mut diagnostic_log, false, err),
     };
@@ -163,7 +164,7 @@ pub(crate) fn run_check_command(
         },
     };
     if completed.error.is_none() && check_report_passed(&completed.report) {
-        let on_pass_hook = match run_check_hooks(&config.hooks.on_pass, &mut result_output) {
+        let on_pass_hook = match run_check_hooks(root, &config.hooks.on_pass, &mut result_output) {
             Ok(outcome) => outcome,
             Err(err) => {
                 return finish_check_error_report(CheckErrorReportFinish {
@@ -254,7 +255,10 @@ fn run_in_place_ask_command(root: &Path, command: &AskCommandArgs) -> Result<(),
     let mut check_caches = CheckRunCaches::new();
     let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
     // In-place ask has the same preparation boundary: load config first so the
-    // temporary xpec uses the resolved agent.
+    // temporary xpec uses the resolved agent. It does not call
+    // `validate_in_place_check_config` because `canon ask` does not collect or
+    // select config expectations; query.rs validates the in-place global agent
+    // settings that the temporary xpec actually consumes.
     let config = match repo_cache.load_in_place_check_config_with_default_agent_preset(
         root,
         &command.config_path,
@@ -371,7 +375,7 @@ fn run_in_place_check_command(
     )?;
     let shared_output = SharedCheckOutput::stdout();
     let mut result_output = shared_output.clone();
-    let on_start_hook = match run_check_hooks(&config.hooks.on_start, &mut result_output) {
+    let on_start_hook = match run_check_hooks(root, &config.hooks.on_start, &mut result_output) {
         Ok(outcome) => outcome,
         Err(err) => return fail_check_after_start(&mut diagnostic_log, false, err),
     };
@@ -430,7 +434,7 @@ fn run_in_place_check_command(
         },
     };
     if completed.error.is_none() && check_report_passed(&completed.report) {
-        let on_pass_hook = match run_check_hooks(&config.hooks.on_pass, &mut result_output) {
+        let on_pass_hook = match run_check_hooks(root, &config.hooks.on_pass, &mut result_output) {
             Ok(outcome) => outcome,
             Err(err) => {
                 return finish_check_error_report(CheckErrorReportFinish {

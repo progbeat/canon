@@ -369,6 +369,7 @@ pub(crate) struct InterrogationRunState {
     pub(crate) session_instructions: BTreeMap<String, String>,
     pub(crate) session_roots_by_id: BTreeMap<String, PathBuf>,
     pub(crate) session_answered_short_ids: BTreeMap<String, BTreeSet<String>>,
+    pub(crate) session_dynamic_show_expectation_ids: BTreeMap<String, BTreeSet<String>>,
     pub(crate) visible_tree_oid_cache: VisibleTreeOidCache,
     pub(crate) parse_cache: EvaluatorResponseParseCache,
     pub(crate) prompt_template_output_dir_cache: Arc<PromptTemplateOutputDirCache>,
@@ -390,6 +391,7 @@ impl InterrogationRunState {
             session_instructions: BTreeMap::new(),
             session_roots_by_id: BTreeMap::new(),
             session_answered_short_ids: BTreeMap::new(),
+            session_dynamic_show_expectation_ids: BTreeMap::new(),
             visible_tree_oid_cache: VisibleTreeOidCache::new(),
             parse_cache: EvaluatorResponseParseCache::new(),
             prompt_template_output_dir_cache: Arc::new(PromptTemplateOutputDirCache::new()),
@@ -409,6 +411,7 @@ impl InterrogationRunState {
         self.session_instructions.clear();
         self.session_roots_by_id.clear();
         self.session_answered_short_ids.clear();
+        self.session_dynamic_show_expectation_ids.clear();
     }
 
     pub(crate) fn isolate_session_root(
@@ -451,11 +454,57 @@ impl InterrogationRunState {
             .or_default()
             .insert(short_id.to_string());
     }
+
+    pub(crate) fn session_has_seen_dynamic_show_expectation(
+        &self,
+        session_id: &str,
+        expectation_id: Option<&str>,
+    ) -> bool {
+        let Some(expectation_id) = expectation_id else {
+            return false;
+        };
+        self.session_dynamic_show_expectation_ids
+            .get(session_id)
+            .is_some_and(|ids| ids.contains(expectation_id))
+    }
+
+    pub(crate) fn record_session_dynamic_show_expectation_ids(
+        &mut self,
+        session_id: &str,
+        expectation_ids: BTreeSet<String>,
+    ) {
+        if expectation_ids.is_empty() {
+            return;
+        }
+        self.session_dynamic_show_expectation_ids
+            .entry(session_id.to_string())
+            .or_default()
+            .extend(expectation_ids);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // xpec: G6
+    #[test]
+    fn session_dynamic_show_expectation_ids_are_session_scoped() {
+        let mut state = InterrogationRunState::new(true).unwrap();
+        state.record_session_dynamic_show_expectation_ids(
+            "session-a",
+            BTreeSet::from(["expectation-a".to_string()]),
+        );
+
+        assert!(state.session_has_seen_dynamic_show_expectation("session-a", Some("expectation-a")));
+        assert!(
+            !state.session_has_seen_dynamic_show_expectation("session-a", Some("expectation-b"))
+        );
+        assert!(
+            !state.session_has_seen_dynamic_show_expectation("session-b", Some("expectation-a"))
+        );
+        assert!(!state.session_has_seen_dynamic_show_expectation("session-a", None));
+    }
 
     #[test]
     fn thread_reuse_key_includes_developer_instruction_tree_inputs() {

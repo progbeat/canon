@@ -320,6 +320,9 @@ fn render_check_output_record_with_initial_marker_timeline(record: &CheckRecord)
 }
 
 pub(super) fn render_check_output_record_status_and_details(record: &CheckRecord) -> String {
+    // Public rendering receives final normalized records. A ScopeTooNarrow here
+    // means the interrogation policy leaked a scope-control signal; the generic
+    // ERROR block shape still renders only normalized final check errors.
     assert_ne!(
         record.human_review_reason(),
         Some(ERROR_SCOPE_TOO_NARROW),

@@ -1,5 +1,7 @@
+use serde::de::{self, Visitor};
 use serde::Deserialize;
 use std::collections::BTreeMap;
+use std::fmt;
 
 #[derive(Debug, Clone)]
 // Resolved runtime config for check execution. `RawCheckConfig` is the parsed
@@ -37,9 +39,16 @@ pub(crate) struct CheckHooksConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CheckHookConfig {
-    pub(crate) print: String,
-    pub(crate) confirm: Option<String>,
-    pub(crate) repair_instruction: String,
+    pub(crate) print: Option<String>,
+    pub(crate) input: Option<String>,
+    pub(crate) exec: Option<Vec<String>>,
+    pub(crate) cases: BTreeMap<String, CheckHookCaseOutcome>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CheckHookCaseOutcome {
+    Continue,
+    Block { repair_instruction: String },
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -64,59 +73,197 @@ pub(crate) enum RawCheckHookConfig {
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawCheckHookMappingConfig {
-    pub(crate) print: String,
     #[serde(default)]
-    pub(crate) confirm: Option<String>,
+    pub(crate) print: Option<String>,
     #[serde(default)]
-    #[serde(rename = "repair-instruction")]
-    pub(crate) repair_instruction: Option<String>,
+    pub(crate) input: Option<String>,
+    #[serde(default)]
+    pub(crate) exec: Option<Vec<String>>,
+    #[serde(default)]
+    pub(crate) cases: Option<BTreeMap<RawCheckHookCaseKey, RawCheckHookCaseOutcome>>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+pub(crate) enum RawCheckHookCaseOutcome {
+    #[serde(rename = "ok")]
+    Ok,
+    #[serde(rename = "block")]
+    Block(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct RawCheckHookCaseKey(String);
+
+impl RawCheckHookCaseKey {
+    fn into_string(self) -> String {
+        self.0
+    }
 }
 
 pub(crate) const DEFAULT_CHECK_HOOK_REPAIR_INSTRUCTION: &str =
     "▷ Fix the blocker and run `canon check` again!";
 
 impl RawCheckHooksConfig {
-    pub(crate) fn resolve(self) -> CheckHooksConfig {
-        CheckHooksConfig {
+    pub(crate) fn resolve(self) -> Result<CheckHooksConfig, String> {
+        Ok(CheckHooksConfig {
             on_start: self
                 .on_start
-                .map(RawCheckHookConfig::resolve)
+                .map(|hooks| hooks.resolve("hooks.on-start"))
+                .transpose()?
                 .unwrap_or_default(),
             on_pass: self
                 .on_pass
-                .map(RawCheckHookConfig::resolve)
+                .map(|hooks| hooks.resolve("hooks.on-pass"))
+                .transpose()?
                 .unwrap_or_default(),
-        }
+        })
     }
 }
 
 impl RawCheckHookConfig {
-    pub(crate) fn resolve(self) -> Vec<CheckHookConfig> {
+    pub(crate) fn resolve(self, label: &str) -> Result<Vec<CheckHookConfig>, String> {
         match self {
             RawCheckHookConfig::List(hooks) => hooks
                 .into_iter()
-                .flat_map(RawCheckHookConfig::resolve)
-                .collect(),
-            hook => vec![hook.resolve_one()],
+                .enumerate()
+                .map(|(index, hook)| hook.resolve(&format!("{}[{}]", label, index)))
+                .collect::<Result<Vec<_>, _>>()
+                .map(|hooks| hooks.into_iter().flatten().collect()),
+            hook => hook.resolve_one(label).map(|hook| vec![hook]),
         }
     }
 
-    fn resolve_one(self) -> CheckHookConfig {
+    fn resolve_one(self, label: &str) -> Result<CheckHookConfig, String> {
         match self {
-            RawCheckHookConfig::Shorthand(print) => CheckHookConfig {
-                print,
-                confirm: None,
-                repair_instruction: DEFAULT_CHECK_HOOK_REPAIR_INSTRUCTION.to_string(),
-            },
-            RawCheckHookConfig::Mapping(mapping) => CheckHookConfig {
-                print: mapping.print,
-                confirm: mapping.confirm,
-                repair_instruction: mapping
-                    .repair_instruction
-                    .unwrap_or_else(|| DEFAULT_CHECK_HOOK_REPAIR_INSTRUCTION.to_string()),
-            },
+            RawCheckHookConfig::Shorthand(print) => Ok(CheckHookConfig {
+                print: Some(print),
+                input: None,
+                exec: None,
+                cases: BTreeMap::new(),
+            }),
+            RawCheckHookConfig::Mapping(mapping) => resolve_hook_mapping(label, mapping),
             RawCheckHookConfig::List(_) => unreachable!("hook list is resolved before hook item"),
         }
+    }
+}
+
+fn resolve_hook_mapping(
+    label: &str,
+    mapping: RawCheckHookMappingConfig,
+) -> Result<CheckHookConfig, String> {
+    let has_print = mapping.print.is_some();
+    let has_input = mapping.input.is_some();
+    let has_exec = mapping.exec.is_some();
+    let has_cases = mapping.cases.is_some();
+    if !has_print && !has_input && !has_exec {
+        return Err(format!("{} must contain print, input, or exec", label));
+    }
+    if has_input && has_exec {
+        return Err(format!("{} input and exec are mutually exclusive", label));
+    }
+    let cases = mapping
+        .cases
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(key, outcome)| (key.into_string(), outcome.resolve()))
+        .collect::<BTreeMap<_, _>>();
+    if has_cases && !has_input && !has_exec {
+        return Err(format!("{} cases requires input or exec", label));
+    }
+    if (has_input || has_exec) && cases.is_empty() {
+        return Err(format!("{} input or exec requires cases", label));
+    }
+    if mapping.exec.as_ref().is_some_and(Vec::is_empty) {
+        return Err(format!("{} exec must not be empty", label));
+    }
+    Ok(CheckHookConfig {
+        print: mapping.print,
+        input: mapping.input,
+        exec: mapping.exec,
+        cases,
+    })
+}
+
+impl RawCheckHookCaseOutcome {
+    fn resolve(self) -> CheckHookCaseOutcome {
+        match self {
+            RawCheckHookCaseOutcome::Ok => CheckHookCaseOutcome::Continue,
+            RawCheckHookCaseOutcome::Block(repair_instruction) => {
+                CheckHookCaseOutcome::Block { repair_instruction }
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RawCheckHookCaseKey {
+    fn deserialize<D>(deserializer: D) -> Result<RawCheckHookCaseKey, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(RawCheckHookCaseKeyVisitor)
+    }
+}
+
+struct RawCheckHookCaseKeyVisitor;
+
+impl Visitor<'_> for RawCheckHookCaseKeyVisitor {
+    type Value = RawCheckHookCaseKey;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a YAML scalar hook case key")
+    }
+
+    fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+        Ok(RawCheckHookCaseKey(value.to_string()))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+        Ok(RawCheckHookCaseKey(value.to_string()))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+        Ok(RawCheckHookCaseKey(value.to_string()))
+    }
+
+    fn visit_i128<E>(self, value: i128) -> Result<Self::Value, E> {
+        Ok(RawCheckHookCaseKey(value.to_string()))
+    }
+
+    fn visit_u128<E>(self, value: u128) -> Result<Self::Value, E> {
+        Ok(RawCheckHookCaseKey(value.to_string()))
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E> {
+        Ok(RawCheckHookCaseKey(value.to_string()))
+    }
+
+    fn visit_char<E>(self, value: char) -> Result<Self::Value, E> {
+        Ok(RawCheckHookCaseKey(value.to_string()))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(RawCheckHookCaseKey(value.to_string()))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+        Ok(RawCheckHookCaseKey(value))
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Err(E::invalid_type(de::Unexpected::Unit, &self))
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Err(E::invalid_type(de::Unexpected::Unit, &self))
     }
 }
 
@@ -357,13 +504,18 @@ pub(crate) struct RawExplicitExpectation {
 
 #[derive(Debug, Clone)]
 pub(crate) struct RawGeneratorExpectation {
-    // `q_template` is external configuration data for generated expectation
-    // questions. The stored value is not a Canon-owned interrogation prompt or
-    // instruction template.
-    pub(crate) generated_question_format: String,
+    pub(crate) q: RawGeneratedExpectationQuestion,
     pub(crate) path: String,
     pub(crate) a: String,
     pub(crate) common: RawExpectationCommonConfig,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RawGeneratedExpectationQuestion {
+    // `q_template` is external configuration data for generated expectation
+    // questions. Rendering it produces the generated expectation item's `q`,
+    // which has item-level precedence over an explicit-form `q` preset default.
+    pub(crate) q_template: String,
 }
 
 #[derive(Debug, Clone)]
@@ -374,7 +526,11 @@ pub(crate) struct RawIncludeExpectation {
 
 #[derive(Debug, Clone)]
 pub(crate) struct RawExpectationFields {
-    pub(crate) q: Option<String>,
+    // YAML `q` is the explicit-expectation question field. Path generators do
+    // not use this spelling for their item-level q; they render `q_template`.
+    pub(crate) explicit_q: Option<String>,
+    // In the path-generator form, `q_template` is the item-level source for the
+    // generated expectation's q.
     pub(crate) q_template: Option<String>,
     pub(crate) a: Option<String>,
     pub(crate) path: Option<String>,
@@ -412,7 +568,7 @@ impl RawExpectationItemForm {
 impl RawExpectationFields {
     pub(crate) fn declared_item_form(&self) -> Option<RawExpectationItemForm> {
         RawExpectationItemForm::from_shape_fields(
-            self.q.is_some(),
+            self.explicit_q.is_some(),
             self.q_template.is_some(),
             self.path.is_some(),
             self.include.is_some(),
@@ -478,7 +634,7 @@ impl From<RawExpectationFieldValues> for RawExpectationFields {
             plugins,
         } = fields;
         RawExpectationFields {
-            q,
+            explicit_q: q,
             q_template,
             a,
             path,
@@ -516,7 +672,7 @@ impl RawExpectationItem {
         resolved_form: Option<RawExpectationItemForm>,
     ) -> Result<RawExpectationItem, &'static str> {
         let RawExpectationFields {
-            q,
+            explicit_q,
             q_template,
             a,
             path,
@@ -534,7 +690,7 @@ impl RawExpectationItem {
                     Some(include) => Ok(RawExpectationItem::Include(RawIncludeExpectation {
                         include,
                         generated_item_defaults: RawExpectationFields {
-                            q,
+                            explicit_q,
                             q_template,
                             a,
                             path,
@@ -549,7 +705,7 @@ impl RawExpectationItem {
                 return match (q_template, path, a) {
                     (Some(q_template), Some(path), Some(a)) => {
                         Ok(RawExpectationItem::Generator(RawGeneratorExpectation {
-                            generated_question_format: q_template,
+                            q: RawGeneratedExpectationQuestion { q_template },
                             path,
                             a,
                             common,
@@ -568,7 +724,7 @@ impl RawExpectationItem {
                 };
             }
             Some(RawExpectationItemForm::Explicit) => {
-                return match (q, a) {
+                return match (explicit_q, a) {
                     (Some(q), Some(a)) => {
                         Ok(RawExpectationItem::Explicit(RawExplicitExpectation {
                             q,
@@ -586,7 +742,7 @@ impl RawExpectationItem {
             return Ok(RawExpectationItem::Include(RawIncludeExpectation {
                 include,
                 generated_item_defaults: RawExpectationFields {
-                    q,
+                    explicit_q,
                     q_template,
                     a,
                     path,
@@ -595,10 +751,10 @@ impl RawExpectationItem {
                 },
             }));
         }
-        match (q, q_template, path, a) {
+        match (explicit_q, q_template, path, a) {
             (_, Some(q_template), Some(path), Some(a)) => {
                 Ok(RawExpectationItem::Generator(RawGeneratorExpectation {
-                    generated_question_format: q_template,
+                    q: RawGeneratedExpectationQuestion { q_template },
                     path,
                     a,
                     common,

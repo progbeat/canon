@@ -259,6 +259,7 @@ mod tests {
             _model: Option<&str>,
             _thinking: &str,
             _scope: &[String],
+            _dynamic_tools: &[serde_json::Value],
         ) -> Result<String, crate::evaluator::EvaluatorError> {
             Ok("session".to_string())
         }
@@ -270,6 +271,7 @@ mod tests {
             _model: Option<&str>,
             _thinking: &str,
             _output_schema: &serde_json::Value,
+            _dynamic_tool_handler: Option<&mut dyn crate::evaluator::EvaluatorDynamicToolHandler>,
         ) -> Result<String, crate::evaluator::EvaluatorError> {
             self.ask_count += 1;
             Ok(self.response.clone())

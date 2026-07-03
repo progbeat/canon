@@ -19,4 +19,4 @@ pub(crate) use identity::{
     expectation_identities, minimal_unique_expectation_prefix, select_expectations_with_identities,
     ExpectationIdentity,
 };
-pub(crate) use order::order_by_latest_non_pass;
+pub(crate) use order::{order_by_absent_non_pass_history, order_by_latest_non_pass};

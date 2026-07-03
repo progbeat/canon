@@ -56,6 +56,7 @@ pub(crate) fn expand_raw_check_config_with_options(
     let resolved_presets = resolve_presets(raw_presets)?;
     let hooks = hooks
         .map(crate::config_types::RawCheckHooksConfig::resolve)
+        .transpose()?
         .unwrap_or_default();
     let default_agent_preset = options.default_agent_preset.unwrap_or("default");
     let default_agent = resolved_presets
@@ -158,7 +159,7 @@ impl RawExpectationExpansion<'_> {
     ) -> Result<(), String> {
         let item_number = index + 1;
         let files = self.expand_paths(config_path, &item.path, item_number, "path")?;
-        let uses_content = item.generated_question_format.contains("{{content}}");
+        let uses_content = item.q.q_template.contains("{{content}}");
         let common = self.resolve_raw_expectation_common(item.common)?;
         let target = resolve_expectation_target(common.target.clone())
             .map_err(|err| format!("expectation {} target: {}", item_number, err))?;
@@ -171,8 +172,11 @@ impl RawExpectationExpansion<'_> {
             } else {
                 String::new()
             };
+            // The rendered q_template is the generated expectation item's q.
+            let rendered_item_q =
+                render_generator_expectation_question(&item.q.q_template, &content);
             self.expectations.push(Expectation {
-                q: render_generator_expectation_question(&item.generated_question_format, &content),
+                q: rendered_item_q,
                 a: item.a.clone(),
                 question_context: resolved_question_context(common.question_context.clone()),
                 diff_from: resolved_expectation_diff_from(common.diff_from.clone()),
@@ -250,7 +254,12 @@ impl RawExpectationExpansion<'_> {
         content: &str,
     ) -> Result<Vec<RawExpectationItem>, String> {
         match self.cache.as_deref_mut() {
-            Some(cache) => cache.included_expectation_items(file, content),
+            Some(cache) => {
+                let root = self
+                    .root
+                    .ok_or_else(|| "config expansion has no project root".to_string())?;
+                cache.included_expectation_items(root, &self.source, file, content)
+            }
             None => serde_saphyr::from_str(content)
                 .map_err(|err| format!("failed to parse {}: {}", file, err)),
         }
@@ -295,6 +304,9 @@ impl RawExpectationExpansion<'_> {
             .presets
             .get(preset_name)
             .ok_or_else(|| format!("unknown preset: {}", preset_name))?;
+        // Preset defaults fill raw fields, but an item that already declares a
+        // form keeps that form; preset shape fields only classify unresolved
+        // items.
         let declared_form = fields.declared_item_form();
         apply_raw_expansion_item_preset_defaults(&mut fields, preset);
         let resolved_form = declared_form.or_else(|| fields.declared_item_form());
@@ -352,8 +364,10 @@ fn apply_raw_expansion_item_preset_defaults(
     fields: &mut RawExpectationFields,
     preset: &ResolvedPresetConfig,
 ) {
-    if fields.q.is_none() {
-        fields.q = preset.q.clone();
+    // Preset `q` is the explicit-form question default. A path generator's
+    // generated q is resolved from the item/preset `q_template` below.
+    if fields.explicit_q.is_none() {
+        fields.explicit_q = preset.q.clone();
     }
     if fields.q_template.is_none() {
         fields.q_template = preset.q_template.clone();

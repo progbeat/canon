@@ -14,4 +14,7 @@ pub(crate) use prompt::{
     EvaluatorTurnPromptContext, PromptTemplateArtifactDir, PromptTemplateOutputDirCache,
 };
 pub(crate) use response_cache::EvaluatorResponseParseCache;
-pub(crate) use types::{EvaluatorError, EvaluatorRunner};
+pub(crate) use types::{
+    EvaluatorDynamicToolCall, EvaluatorDynamicToolHandler, EvaluatorDynamicToolResult,
+    EvaluatorError, EvaluatorRunner,
+};

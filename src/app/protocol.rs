@@ -1,5 +1,7 @@
 use crate::app::APP_SERVER_TURN_TIMEOUT_SECS;
-use crate::evaluator::{EvaluatorError, EvaluatorFailureKind};
+use crate::evaluator::{
+    EvaluatorDynamicToolCall, EvaluatorDynamicToolResult, EvaluatorError, EvaluatorFailureKind,
+};
 use crate::token_usage_types::{ContextCompactionEvent, TokenUsage, TokenUsageUpdate};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -28,6 +30,51 @@ pub(crate) fn app_server_message(value: &Value) -> Result<AppServerMessage, Stri
         return Err("app-server message envelope missing both id and method".to_string());
     }
     Ok(message)
+}
+
+#[derive(Debug, Deserialize)]
+struct DynamicToolCallMessage {
+    method: Option<String>,
+    params: DynamicToolCallParams,
+}
+
+#[derive(Debug, Deserialize)]
+struct DynamicToolCallParams {
+    #[serde(rename = "threadId")]
+    _thread_id: String,
+    #[serde(rename = "turnId")]
+    _turn_id: String,
+    #[serde(rename = "callId")]
+    _call_id: String,
+    namespace: Option<String>,
+    tool: String,
+    #[serde(default)]
+    arguments: Value,
+}
+
+pub(crate) fn dynamic_tool_call(value: &Value) -> Result<EvaluatorDynamicToolCall, String> {
+    let message = serde_json::from_value::<DynamicToolCallMessage>(value.clone())
+        .map_err(|err| format!("failed to parse dynamic tool call: {}", err))?;
+    if message.method.as_deref() != Some("item/tool/call") {
+        return Err("app-server message is not a dynamic tool call".to_string());
+    }
+    Ok(EvaluatorDynamicToolCall {
+        namespace: message.params.namespace,
+        tool: message.params.tool,
+        arguments: message.params.arguments,
+    })
+}
+
+pub(crate) fn dynamic_tool_call_response(result: EvaluatorDynamicToolResult) -> Value {
+    json!({
+        "contentItems": [
+            {
+                "type": "inputText",
+                "text": result.text
+            }
+        ],
+        "success": result.success
+    })
 }
 
 #[derive(Deserialize)]
@@ -351,6 +398,49 @@ mod tests {
             }
         });
         assert!(context_compaction_event(&item_event).is_some());
+    }
+
+    // xpec: G6
+    #[test]
+    fn dynamic_tool_call_parses_namespaced_tool_request() {
+        let call = dynamic_tool_call(&json!({
+            "method": "item/tool/call",
+            "params": {
+                "threadId": "thread",
+                "turnId": "turn",
+                "callId": "call",
+                "namespace": "canon",
+                "tool": "show",
+                "arguments": {
+                    "selectors": ["abc"]
+                }
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(call.namespace.as_deref(), Some("canon"));
+        assert_eq!(call.tool, "show");
+        assert_eq!(call.arguments["selectors"], json!(["abc"]));
+    }
+
+    // xpec: G6
+    #[test]
+    fn dynamic_tool_call_response_uses_app_server_content_items() {
+        let response =
+            dynamic_tool_call_response(EvaluatorDynamicToolResult::success("show output"));
+
+        assert_eq!(
+            response,
+            json!({
+                "contentItems": [
+                    {
+                        "type": "inputText",
+                        "text": "show output"
+                    }
+                ],
+                "success": true
+            })
+        );
     }
 
     #[test]

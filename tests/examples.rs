@@ -152,8 +152,9 @@ fn pre_commit_install_rejects_existing_default_hook() {
     );
 }
 
+// xpec: uY
 #[test]
-fn check_on_start_hook_confirmation_mismatch_blocks_without_result() {
+fn check_on_start_hook_input_mismatch_blocks_without_result() {
     let repo = temp_repo("canon-check-on-start-hook");
     init_git_repo(&repo);
     fs::create_dir_all(repo.join(".canon")).unwrap();
@@ -165,9 +166,11 @@ presets:
   default: {}
 hooks:
   on-start:
-    print: "Type pass:\n"
-    confirm: "pass"
-    repair-instruction: "Run the blocker fix."
+    print: "Type pass:"
+    input: " "
+    cases:
+      pass: !ok
+      _: !block "Run the blocker fix."
 expectations:
   - q: "Does the hook block before evaluator work?"
     a: "yes"
@@ -179,6 +182,7 @@ expectations:
         .current_dir(&repo)
         .output()
         .unwrap();
+    // xpec: uY
     assert!(
         add.status.success(),
         "{}",
@@ -198,21 +202,29 @@ expectations:
 
     let _ = fs::remove_dir_all(&repo);
 
+    // xpec: uY
     assert!(!output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.starts_with("Type pass:\n"));
+    // xpec: uY
+    assert!(stdout.starts_with("Type pass:\n "));
+    // xpec: uY
     assert!(stdout.contains(" 1 blocked, 1 pending in "));
+    // xpec: uY
     assert!(stdout.ends_with("Run the blocker fix.\n"));
+    // xpec: uY
     assert!(!stdout.contains(" OK\n"));
+    // xpec: uY
     assert!(!stdout.contains(" FAILED\n"));
+    // xpec: uY
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
         "Token usage: total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n"
     );
 }
 
+// xpec: uY
 #[test]
-fn in_place_check_on_start_hook_confirmation_mismatch_blocks_without_result() {
+fn in_place_check_on_start_hook_input_mismatch_blocks_without_result() {
     let repo = temp_repo("canon-in-place-check-on-start-hook");
     fs::create_dir_all(repo.join(".canon")).unwrap();
     fs::write(
@@ -223,9 +235,11 @@ presets:
   default: {}
 hooks:
   on-start:
-    print: "Type pass:\n"
-    confirm: "pass"
-    repair-instruction: "Run the blocker fix."
+    print: "Type pass:"
+    input: " "
+    cases:
+      pass: !ok
+      _: !block "Run the blocker fix."
 expectations:
   - q: "Does the hook block before evaluator work?"
     a: "yes"
@@ -246,13 +260,20 @@ expectations:
 
     let _ = fs::remove_dir_all(&repo);
 
+    // xpec: uY
     assert!(!output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.starts_with("Type pass:\n"));
+    // xpec: uY
+    assert!(stdout.starts_with("Type pass:\n "));
+    // xpec: uY
     assert!(stdout.contains(" 1 blocked, 1 pending in "));
+    // xpec: uY
     assert!(stdout.ends_with("Run the blocker fix.\n"));
+    // xpec: uY
     assert!(!stdout.contains(" OK\n"));
+    // xpec: uY
     assert!(!stdout.contains(" FAILED\n"));
+    // xpec: uY
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
         "Token usage: total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n"

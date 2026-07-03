@@ -244,11 +244,11 @@ fn record_finished_expectation<R: EvaluatorRunner>(
     record: &CheckRecord,
 ) -> Result<(), String> {
     // This is the durable result-reporting path used after a CheckRecord is
-    // formed. Live output has already attempted its human-facing completion;
-    // this path keeps the completed result available for later inspection and
-    // cache decisions. The final call emits the evaluated expectation's
-    // expectation.result and, when needed, expectation.review_required runtime
-    // log events through DiagnosticLogWriter::write_record_event.
+    // formed. The xpec write below keeps the completed result available for
+    // later inspection and cache decisions; it is separate from runtime logs.
+    // The final call emits the evaluated expectation's expectation.result and,
+    // when needed, expectation.review_required events through
+    // DiagnosticLogWriter::write_record_event in `src/logs/writer.rs`.
     context
         .caches
         .xpec_state
@@ -638,6 +638,10 @@ fn user_visible_final_check_record(mut record: CheckRecord) -> CheckRecord {
     if assert_final_check_record_has_no_scope_too_narrow(&record).is_ok() {
         return record;
     }
+    // ScopeTooNarrow is an interrogation control signal, not a public final
+    // check error. The generic ERROR block schema applies after final-record
+    // normalization, so a ScopeTooNarrow that reaches this point is reported as
+    // an internal unparsable-result error instead of escaping to stdout.
     record.observed = INTERNAL_ERROR_UNPARSABLE.to_string();
     record.error = Some(INTERNAL_ERROR_UNPARSABLE.to_string());
     record.evidence = FORBIDDEN_FINAL_CHECK_SCOPE_ERROR.to_string();

@@ -13,7 +13,9 @@ mod tests {
         expand_raw_check_config_with_options, expansion::expand_raw_check_config,
         CheckConfigExpansionOptions, CheckConfigSource,
     };
-    use crate::config_types::{CooldownConfig, ExpectationTarget, RawCheckConfig};
+    use crate::config_types::{
+        CheckHookCaseOutcome, CooldownConfig, ExpectationTarget, RawCheckConfig,
+    };
     use crate::git::TreeSource;
     use crate::repo_inspection::RepoInspectionCache;
     use std::fs;
@@ -411,6 +413,7 @@ expectations:
         );
     }
 
+    // xpec: uY
     #[test]
     fn top_level_hooks_expand_shorthand_and_mapping() {
         let raw: RawCheckConfig = serde_saphyr::from_str(
@@ -419,12 +422,18 @@ version: 1
 presets:
   default: {}
 hooks:
-  on-start: "Starting check.\n"
+  on-start: "Starting check."
   on-pass:
-    - print: "Type pass:\n"
-      confirm: "pass"
-      repair-instruction: "Run the blocker fix."
-    - "Done.\n"
+    - print: "Type pass:"
+      input: " "
+      cases:
+        pass: !ok
+        _: !block "Run the blocker fix."
+    - exec: ["cargo", "fmt", "--check"]
+      cases:
+        0: !ok
+        _: !block "Format the code."
+    - "Done."
 expectations:
   - q: "Does hook config parse?"
     a: "yes"
@@ -441,26 +450,228 @@ expectations:
         )
         .expect("expand config");
 
+        // xpec: uY
         assert_eq!(config.hooks.on_start.len(), 1);
         let on_start = &config.hooks.on_start[0];
-        assert_eq!(on_start.print, "Starting check.\n");
-        assert_eq!(on_start.confirm, None);
-        assert_eq!(
-            on_start.repair_instruction,
-            crate::config_types::DEFAULT_CHECK_HOOK_REPAIR_INSTRUCTION
-        );
-        assert_eq!(config.hooks.on_pass.len(), 2);
+        // xpec: uY
+        assert_eq!(on_start.print.as_deref(), Some("Starting check."));
+        // xpec: uY
+        assert_eq!(on_start.input, None);
+        // xpec: uY
+        assert_eq!(on_start.exec, None);
+        // xpec: uY
+        assert_eq!(config.hooks.on_pass.len(), 3);
         let on_pass = &config.hooks.on_pass[0];
-        assert_eq!(on_pass.print, "Type pass:\n");
-        assert_eq!(on_pass.confirm.as_deref(), Some("pass"));
-        assert_eq!(on_pass.repair_instruction, "Run the blocker fix.");
+        // xpec: uY
+        assert_eq!(on_pass.print.as_deref(), Some("Type pass:"));
+        // xpec: uY
+        assert_eq!(on_pass.input.as_deref(), Some(" "));
+        // xpec: uY
+        assert!(matches!(
+            on_pass.cases.get("pass"),
+            Some(CheckHookCaseOutcome::Continue)
+        ));
+        // xpec: uY
+        assert!(matches!(
+            on_pass.cases.get("_"),
+            Some(CheckHookCaseOutcome::Block {
+                repair_instruction
+            }) if repair_instruction == "Run the blocker fix."
+        ));
         let on_pass = &config.hooks.on_pass[1];
-        assert_eq!(on_pass.print, "Done.\n");
-        assert_eq!(on_pass.confirm, None);
+        // xpec: uY
         assert_eq!(
-            on_pass.repair_instruction,
-            crate::config_types::DEFAULT_CHECK_HOOK_REPAIR_INSTRUCTION
+            on_pass.exec.as_ref().unwrap(),
+            &vec![
+                "cargo".to_string(),
+                "fmt".to_string(),
+                "--check".to_string()
+            ]
         );
+        // xpec: uY
+        assert!(matches!(
+            on_pass.cases.get("0"),
+            Some(CheckHookCaseOutcome::Continue)
+        ));
+        let on_pass = &config.hooks.on_pass[2];
+        // xpec: uY
+        assert_eq!(on_pass.print.as_deref(), Some("Done."));
+        // xpec: uY
+        assert!(on_pass.cases.is_empty());
+    }
+
+    // xpec: uY
+    #[test]
+    fn hook_mapping_validation_rejects_invalid_shapes() {
+        let invalid = [
+            ("missing action", "hooks:\n  on-start:\n    cases:\n      _: !ok\n"),
+            (
+                "input with exec",
+                "hooks:\n  on-start:\n    input: prompt\n    exec: [tool]\n    cases:\n      _: !ok\n",
+            ),
+            (
+                "cases without input or exec",
+                "hooks:\n  on-start:\n    print: prompt\n    cases:\n      _: !ok\n",
+            ),
+            (
+                "empty cases without input or exec",
+                "hooks:\n  on-start:\n    print: prompt\n    cases: {}\n",
+            ),
+            ("input without cases", "hooks:\n  on-start:\n    input: prompt\n"),
+        ];
+        for (name, hooks) in invalid {
+            let raw: RawCheckConfig = serde_saphyr::from_str(&format!(
+                r#"
+version: 1
+presets:
+  default: {{}}
+{hooks}
+expectations:
+  - q: "Does hook config parse?"
+    a: "yes"
+"#
+            ))
+            .unwrap_or_else(|err| panic!("{name}: failed to parse raw config: {err}"));
+
+            let error = expand_raw_check_config(
+                None,
+                Path::new("check.yml"),
+                raw,
+                None,
+                CheckConfigSource::Tree(TreeSource::Staged),
+            )
+            .expect_err("invalid hook shape should fail");
+
+            // xpec: uY
+            assert!(
+                error.contains("hooks.on-start"),
+                "{name}: unexpected error: {error}"
+            );
+        }
+    }
+
+    // xpec: I8
+    #[test]
+    fn yaml_include_expands_top_level_hooks_from_staged_source() {
+        let root = test_root("yaml-include-staged-hooks");
+        git(&root, &["init"]);
+        fs::create_dir_all(root.join(".canon/hooks")).unwrap();
+        fs::write(root.join(".canon/hooks/on-start.yml"), "\"Starting.\"").unwrap();
+        fs::write(
+            root.join(".canon/check.yml"),
+            r#"
+version: 1
+presets:
+  default: {}
+hooks:
+  on-start: !include hooks/on-start.yml
+expectations:
+  - q: "Does YAML include parse?"
+    a: "yes"
+"#,
+        )
+        .unwrap();
+        git(
+            &root,
+            &["add", ".canon/check.yml", ".canon/hooks/on-start.yml"],
+        );
+        let mut cache = RepoInspectionCache::new();
+        let config = cache
+            .load_check_config(&root, Path::new(".canon/check.yml"), &TreeSource::Staged)
+            .expect("expand included config");
+
+        // xpec: I8
+        assert_eq!(config.hooks.on_start.len(), 1);
+        // xpec: I8
+        assert_eq!(config.hooks.on_start[0].print.as_deref(), Some("Starting."));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    // xpec: I8
+    #[test]
+    fn yaml_include_uses_selected_git_tree_source() {
+        let root = test_root("yaml-include-selected-tree");
+        git(&root, &["init"]);
+        git(&root, &["config", "user.name", "Canon Test"]);
+        git(
+            &root,
+            &["config", "user.email", "canon-test@example.invalid"],
+        );
+        fs::create_dir_all(root.join(".canon/hooks")).unwrap();
+        fs::write(root.join(".canon/hooks/on-start.yml"), "\"From HEAD.\"").unwrap();
+        fs::write(
+            root.join(".canon/check.yml"),
+            r#"
+version: 1
+presets:
+  default: {}
+hooks:
+  on-start: !include hooks/on-start.yml
+expectations:
+  - q: "Does YAML include parse?"
+    a: "yes"
+"#,
+        )
+        .unwrap();
+        git(&root, &["add", ".canon"]);
+        git(&root, &["commit", "--quiet", "-m", "base"]);
+        fs::write(root.join(".canon/hooks/on-start.yml"), "\"From staged.\"").unwrap();
+        git(&root, &["add", ".canon/hooks/on-start.yml"]);
+        let selected_tree = TreeSource::resolve(&root, "HEAD", "--tree").unwrap();
+        let mut cache = RepoInspectionCache::new();
+
+        let config = cache
+            .load_check_config(&root, Path::new(".canon/check.yml"), &selected_tree)
+            .expect("expand included config from selected tree");
+
+        // xpec: I8
+        assert_eq!(
+            config.hooks.on_start[0].print.as_deref(),
+            Some("From HEAD.")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    // xpec: I8
+    #[test]
+    fn yaml_include_uses_in_place_filesystem_source() {
+        let root = test_root("yaml-include-in-place");
+        fs::create_dir_all(root.join(".canon/hooks")).unwrap();
+        fs::write(
+            root.join(".canon/hooks/on-start.yml"),
+            "\"From filesystem.\"",
+        )
+        .unwrap();
+        fs::write(
+            root.join(".canon/check.yml"),
+            r#"
+version: 1
+presets:
+  default: {}
+hooks:
+  on-start: !include hooks/on-start.yml
+expectations:
+  - q: "Does YAML include parse?"
+    a: "yes"
+"#,
+        )
+        .unwrap();
+        let mut cache = RepoInspectionCache::new();
+
+        let config = cache
+            .load_in_place_check_config_with_default_agent_preset(
+                &root,
+                Path::new(".canon/check.yml"),
+                None,
+            )
+            .expect("expand included in-place config");
+
+        // xpec: I8
+        assert_eq!(
+            config.hooks.on_start[0].print.as_deref(),
+            Some("From filesystem.")
+        );
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -507,6 +718,7 @@ expectations:
         assert_eq!(expectation.agent.thinking, "high");
     }
 
+    // xpec: WH,n7
     #[test]
     fn preset_supplies_generator_field_defaults() {
         let root = test_root("preset-generator-field-defaults");
@@ -546,6 +758,44 @@ expectations:
             config.expectations[0].q,
             "Alpha spec\n---\nIs this preset-generated spec implemented?\n"
         );
+        assert_eq!(config.expectations[0].a, "yes");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    // xpec: WH,n7
+    #[test]
+    fn path_generator_q_template_takes_item_precedence_over_preset_q() {
+        let root = test_root("preset-generator-q-template-precedence");
+        git(&root, &["init"]);
+        fs::create_dir_all(root.join("specs")).unwrap();
+        fs::write(root.join("specs/alpha.md"), "Alpha spec").unwrap();
+        git(&root, &["add", "specs/alpha.md"]);
+        let raw: RawCheckConfig = serde_saphyr::from_str(
+            r#"
+version: 1
+presets:
+  default:
+    q: "Does the preset question lose to the path generator item?"
+expectations:
+  - path: "specs/*.md"
+    q_template: "Generated: {{content}}"
+    a: "yes"
+"#,
+        )
+        .expect("parse raw check config");
+        let mut cache = RepoInspectionCache::new();
+
+        let config = expand_raw_check_config(
+            Some(&root),
+            Path::new("check.yml"),
+            raw,
+            Some(&mut cache),
+            CheckConfigSource::Tree(TreeSource::Staged),
+        )
+        .expect("expand config");
+
+        assert_eq!(config.expectations.len(), 1);
+        assert_eq!(config.expectations[0].q, "Generated: Alpha spec");
         assert_eq!(config.expectations[0].a, "yes");
         let _ = fs::remove_dir_all(root);
     }

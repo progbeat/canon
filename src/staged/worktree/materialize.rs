@@ -6,6 +6,12 @@ use crate::platform;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
+// Implements the hardlink materialization policy's materialize() step.
+// setup.rs owns tmp_dir/lazy_tree_dir/trees_dir/unpacked_paths initialization;
+// extract.rs unpacks missing visible entries into lazy_tree_dir and removes
+// file write permissions; this module reuses trees/<visible_tree_oid> when it
+// exists, hardlinks files or copies symlinks into a new tree, and removes write
+// permissions from each materialized directory.
 impl StagedWorktreeView {
     pub(crate) fn materialize_visible_scope(
         &self,

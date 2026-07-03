@@ -123,8 +123,7 @@ pub(crate) fn evaluator_runtime_permissions() -> EvaluatorConfigResult<BTreeMap<
     deny_runtime_path(&mut permissions, "/dev/null")?;
     deny_runtime_tree(&mut permissions, "/tmp")?;
     deny_runtime_tree(&mut permissions, "/private/tmp")?;
-    deny_runtime_tree(&mut permissions, "~/.codex/sessions")?;
-    deny_runtime_tree(&mut permissions, "~/.codex/memories")?;
+    deny_codex_home_runtime_state(&mut permissions, "~/.codex")?;
     add_home_runtime_permissions(&mut permissions, env::var_os("HOME"))?;
     Ok(permissions)
 }
@@ -138,10 +137,19 @@ fn add_home_runtime_permissions(
             .into_string()
             .map_err(|_| EvaluatorConfigError::HomeNotUtf8)?;
         let codex_home = format!("{}/.codex", home.trim_end_matches('/'));
-        deny_runtime_tree(permissions, &format!("{}/sessions", codex_home))?;
-        deny_runtime_tree(permissions, &format!("{}/memories", codex_home))?;
+        deny_codex_home_runtime_state(permissions, &codex_home)?;
     }
     Ok(())
+}
+
+fn deny_codex_home_runtime_state(
+    permissions: &mut BTreeMap<String, String>,
+    codex_home: &str,
+) -> EvaluatorConfigResult<()> {
+    // The evaluator app runs with a private CODEX_HOME. Filesystem tools should
+    // not read the source Codex home, which may contain logs, indexes, auth, or
+    // other non-project state that is not part of the visible checked tree.
+    deny_runtime_tree(permissions, codex_home)
 }
 
 fn deny_runtime_path(
@@ -178,6 +186,26 @@ mod tests {
         ] {
             assert_permission(&permissions, path, FILESYSTEM_DENY);
         }
+    }
+
+    // xpec: A8,9Y,83
+    #[test]
+    fn runtime_permissions_deny_codex_home_state() {
+        let permissions = evaluator_runtime_permissions().unwrap();
+
+        // xpec: A8,9Y,83
+        assert_permission(&permissions, "~/.codex", FILESYSTEM_DENY);
+        // xpec: A8,9Y,83
+        assert_permission(&permissions, "~/.codex/**", FILESYSTEM_DENY);
+
+        let mut permissions = BTreeMap::new();
+        add_home_runtime_permissions(&mut permissions, Some(OsString::from("/home/canon")))
+            .unwrap();
+
+        // xpec: A8,9Y,83
+        assert_permission(&permissions, "/home/canon/.codex", FILESYSTEM_DENY);
+        // xpec: A8,9Y,83
+        assert_permission(&permissions, "/home/canon/.codex/**", FILESYSTEM_DENY);
     }
 
     #[cfg(unix)]

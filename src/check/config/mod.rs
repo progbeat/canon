@@ -2,6 +2,7 @@ pub(super) mod config_expansion;
 pub(super) mod generator_paths;
 mod load;
 pub(super) mod validation;
+pub(crate) mod yaml_include;
 
 pub(crate) use config_expansion::CheckConfigSource;
 pub(crate) use generator_paths::expand_staged_generator_paths_from_listing;
@@ -10,3 +11,4 @@ pub(crate) use load::{
     parse_tree_check_config_content_with_root_and_default_agent_preset,
 };
 pub(crate) use validation::codex_reasoning_effort;
+pub(crate) use yaml_include::parse_yaml_config_with_includes;

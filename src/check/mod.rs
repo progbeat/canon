@@ -19,7 +19,8 @@ pub(crate) use command::{
 pub(crate) use config::{
     codex_reasoning_effort, expand_staged_generator_paths_from_listing,
     parse_check_config_content_with_root_and_source_and_default_agent_preset,
-    parse_tree_check_config_content_with_root_and_default_agent_preset, CheckConfigSource,
+    parse_tree_check_config_content_with_root_and_default_agent_preset,
+    parse_yaml_config_with_includes, CheckConfigSource,
 };
 pub(crate) use core::{
     evaluator_response_output_schema_for_scope, parse_evaluator_response_for_short_id, CheckRecord,

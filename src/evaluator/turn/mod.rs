@@ -115,6 +115,7 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
+    // xpec: 92
     #[test]
     fn schema_valid_evidence_file_refs_do_not_trigger_repair() {
         let root = temp_root("schema-valid-evidence");
@@ -138,6 +139,7 @@ mod tests {
             &mut parser_cache,
             &mut diagnostic_log,
             Some("expectation"),
+            None,
         )
         .unwrap();
 
@@ -149,6 +151,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    // xpec: 92
     #[test]
     fn malformed_response_stays_unparsable_without_repair() {
         let root = temp_root("unparsable");
@@ -170,6 +173,7 @@ mod tests {
             &mut parser_cache,
             &mut diagnostic_log,
             Some("expectation"),
+            None,
         )
         .unwrap();
 
@@ -256,6 +260,7 @@ mod tests {
             _model: Option<&str>,
             _thinking: &str,
             _scope: &[String],
+            _dynamic_tools: &[serde_json::Value],
         ) -> Result<String, EvaluatorError> {
             Ok("session".to_string())
         }
@@ -267,6 +272,7 @@ mod tests {
             _model: Option<&str>,
             _thinking: &str,
             _output_schema: &serde_json::Value,
+            _dynamic_tool_handler: Option<&mut dyn crate::evaluator::EvaluatorDynamicToolHandler>,
         ) -> Result<String, EvaluatorError> {
             Ok(self.responses.remove(0))
         }

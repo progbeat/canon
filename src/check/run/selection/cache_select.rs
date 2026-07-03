@@ -33,13 +33,16 @@ pub(crate) struct GitBackedCacheFilterContext<'a, 'log> {
     pub(crate) diagnostic_log: &'a mut Option<&'log mut DiagnosticLogWriter>,
 }
 
-// Git-backed cache filtering turns pre-cache candidates into the final
-// evaluator queue before evaluation starts: selector mode evaluates explicit
-// selections, all-pass cached state selects uncached candidates, and any cached
-// non-pass leaves uncached candidates pending.
+// Git-backed cache filtering applies the selected-expectations policy before
+// evaluation starts: selector mode evaluates explicit selections, all-pass
+// cached state selects uncached candidates, and any cached non-pass makes the
+// default selected set empty so uncached candidates remain pending.
 //
-// This layer only partitions work by cache availability. The execution layer
-// orders cached hits and evaluator work together before running them.
+// This layer only partitions work by cache availability and selectedness. The
+// execution layer orders cached report hits and the remaining selected
+// evaluator work together before running them. Cache selection reads existing
+// xpec state and may emit bounded runtime-log events through the supplied
+// writer, but it does not create a persistent state family of its own.
 //
 // This function receives command-independent `CheckOptions`; CLI/trailer policy
 // stays in the command layer before and after this selection step.
@@ -59,7 +62,7 @@ pub(crate) fn select_git_backed_expectations_after_cache(
         });
     }
 
-    let mut uncached = Vec::new();
+    let mut candidates_without_cached_result = Vec::new();
     let mut cached_hits = Vec::new();
     let mut cached_non_pass_seen = false;
     for expectation in options.pre_cache_candidates.clone() {
@@ -86,15 +89,16 @@ pub(crate) fn select_git_backed_expectations_after_cache(
                 }
                 cached_hits.push(CachedExpectationHit { expectation, hit });
             }
-            None => uncached.push(expectation),
+            None => candidates_without_cached_result.push(expectation),
         }
     }
-    let evaluation_queue = evaluation_queue_after_default_cache_policy(
-        cached_non_pass_seen,
-        uncached,
-        cached_non_pass_policy,
+    let cached_failure_blocks_default_selection =
+        cached_non_pass_seen && cached_non_pass_policy == CachedNonPassPolicy::LeaveUncachedPending;
+    let evaluation_queue = selected_evaluation_queue_after_cache_policy(
+        cached_failure_blocks_default_selection,
+        candidates_without_cached_result,
     );
-    if cached_non_pass_seen && cached_non_pass_policy == CachedNonPassPolicy::LeaveUncachedPending {
+    if cached_failure_blocks_default_selection {
         cached_hits =
             order_by_latest_non_pass(context.root, cached_hits, context.xpec_state, |hit| {
                 &hit.expectation
@@ -106,18 +110,18 @@ pub(crate) fn select_git_backed_expectations_after_cache(
     })
 }
 
-fn evaluation_queue_after_default_cache_policy(
-    cached_non_pass_seen: bool,
-    uncached_candidates: Vec<SelectedExpectation>,
-    cached_non_pass_policy: CachedNonPassPolicy,
+fn selected_evaluation_queue_after_cache_policy(
+    cached_failure_blocks_default_selection: bool,
+    candidates_without_cached_result: Vec<SelectedExpectation>,
 ) -> Vec<SelectedExpectation> {
-    if cached_non_pass_seen && cached_non_pass_policy == CachedNonPassPolicy::LeaveUncachedPending {
-        // Default cache policy finalizes the evaluator queue before evaluation
-        // starts. When a cached non-pass is present, uncached candidates remain
-        // pending and are outside the order rule for evaluated work.
+    if cached_failure_blocks_default_selection {
+        // Default selection says cached failures must be fixed first: the
+        // selected evaluator queue is empty before the order rule starts, so
+        // candidates without cached results remain pending rather than being
+        // skipped after an evaluated non-pass.
         Vec::new()
     } else {
-        uncached_candidates
+        candidates_without_cached_result
     }
 }
 

@@ -28,16 +28,16 @@ fn merge_generator_fields(fields: &mut RawExpectationFields, generator: &RawExpe
     }
     match declared_form {
         Some(RawExpectationItemForm::Explicit) => {
-            if fields.q.is_none() {
-                fields.q = generator.q.clone();
+            if fields.explicit_q.is_none() {
+                fields.explicit_q = generator.explicit_q.clone();
             }
         }
         Some(RawExpectationItemForm::Generator) => {
             merge_generator_path_fields(fields, generator);
         }
         Some(RawExpectationItemForm::Include) | None => {
-            if fields.q.is_none() {
-                fields.q = generator.q.clone();
+            if fields.explicit_q.is_none() {
+                fields.explicit_q = generator.explicit_q.clone();
             }
             merge_generator_path_fields(fields, generator);
         }

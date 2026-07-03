@@ -214,7 +214,9 @@ fn run_prepared_query(
 ) -> Result<(), CheckQueryError> {
     // `config` is already expanded: command `--preset` can only choose the
     // default agent during raw expansion, before `canon ask` consumes resolved
-    // expectation/config fields here.
+    // config-agent fields here. Unlike `canon check`, ask creates a temporary
+    // expectation instead of evaluating collected config expectations, so
+    // in-place query validation covers the global agent settings used below.
     if runtime.is_in_place() {
         validate_in_place_global_config(&config.agent)?;
         *enforced_scope = runtime

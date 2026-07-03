@@ -18,7 +18,7 @@ pub(super) struct CompletedCheckRun {
 
 pub(super) fn check_report_passed(report: &CheckRunReport) -> bool {
     let counts = summary_outcome_counts(report);
-    counts.blocked == 0 && counts.failed == 0 && counts.errors == 0
+    counts.blocked == 0 && counts.failed == 0 && counts.errors == 0 && report.skipped == 0
 }
 
 pub(super) fn check_command_writes_agent_message(
@@ -90,6 +90,20 @@ mod tests {
             &TreeSource::Staged,
             &default_against_tree()
         ));
+    }
+
+    // xpec: T
+    #[test]
+    fn check_report_passed_rejects_pending_expectations() {
+        let report = CheckRunReport {
+            records: Vec::new(),
+            cached: Vec::new(),
+            blocked: None,
+            skipped: 1,
+        };
+
+        // xpec: T
+        assert!(!check_report_passed(&report));
     }
 
     fn command_with_config_path(config_path: &str) -> CheckCommandArgs {

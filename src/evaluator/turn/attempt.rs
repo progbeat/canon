@@ -5,7 +5,8 @@ use crate::check::EvaluatorResponseSchemaScope;
 use crate::config_types::AgentConfig;
 use crate::evaluator::protocol::response_cache::response_excerpt;
 use crate::evaluator::{
-    EvaluatorError, EvaluatorFailureKind, EvaluatorResponseParseCache, EvaluatorRunner,
+    EvaluatorDynamicToolHandler, EvaluatorError, EvaluatorFailureKind, EvaluatorResponseParseCache,
+    EvaluatorRunner,
 };
 use crate::logs::DiagnosticLogWriter;
 use serde_json::Value;
@@ -26,6 +27,7 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
     parser_cache: &mut EvaluatorResponseParseCache,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     expectation_id: Option<&str>,
+    dynamic_tool_handler: Option<&mut dyn EvaluatorDynamicToolHandler>,
 ) -> Result<ParsedTurnResponse, EvaluatorError> {
     let response = ask_and_log(
         runner,
@@ -38,6 +40,7 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
             reason: "initial",
             output_schema,
         },
+        dynamic_tool_handler,
     )?;
     // One evaluator turn asks for exactly one interrogation short ID. The
     // parser rejects missing, already-answered, or extra short IDs to enforce

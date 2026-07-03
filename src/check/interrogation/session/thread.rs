@@ -1,5 +1,8 @@
 use super::model_fallback::write_model_fallback_events;
 use crate::check::core::{InterrogationAnswer, InterrogationResult, SelectedExpectation};
+use crate::check::interrogation::dynamic_tool::{
+    canon_show_dynamic_tools, CanonShowDynamicToolHandler,
+};
 use crate::check::interrogation::state::{
     evaluator_prerender_thread_reuse_key, evaluator_rendered_thread_reuse_key, CheckRuntime,
     InterrogationRunState, PrerenderEvaluatorThreadReuseKeyContext,
@@ -67,18 +70,7 @@ impl ThreadTurnResponseContract {
         if runtime.evaluator_interrogations_never_hide_files() {
             return EvaluatorResponseSchemaScope::WithoutQuestionScopeSuggestion;
         }
-        match self {
-            ThreadTurnResponseContract::ExpectationResult => {
-                EvaluatorResponseSchemaScope::for_scope_with_question_scope_suggestion(
-                    enforced_scope,
-                )
-            }
-            ThreadTurnResponseContract::AdHocQuestion => {
-                EvaluatorResponseSchemaScope::for_scope_with_question_scope_suggestion(
-                    enforced_scope,
-                )
-            }
-        }
+        EvaluatorResponseSchemaScope::for_scope_with_question_scope_suggestion(enforced_scope)
     }
 }
 
@@ -97,6 +89,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     state: &mut InterrogationRunState,
+    xpec_state: &mut XpecStateCache,
     request: ThreadTurnRequest<'_>,
 ) -> Result<ParsedTurnResponse, EvaluatorError> {
     request
@@ -131,7 +124,10 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
     let existing_session = state
         .thread_sessions_by_prerender_key
         .get(&session_key)
-        .cloned();
+        .cloned()
+        .filter(|session_id| {
+            !state.session_has_seen_dynamic_show_expectation(session_id, request.expectation_id)
+        });
     let selection = match existing_session {
         Some(existing) => ThreadSessionSelection {
             lifecycle_log: thread_reuse_log(state, existing, reuse_context.clone())?,
@@ -164,6 +160,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         &session_id,
         state,
         diagnostic_log,
+        xpec_state,
         &request,
     ) {
         Ok(response) => response,
@@ -208,6 +205,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
                 &session_id,
                 state,
                 diagnostic_log,
+                xpec_state,
                 &request,
             ) {
                 Ok(response) => response,
@@ -261,6 +259,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
                 &session_id,
                 state,
                 diagnostic_log,
+                xpec_state,
                 &request,
             ) {
                 Ok(response) => response,
@@ -283,6 +282,7 @@ fn ask_current_session<R: EvaluatorRunner>(
     session_id: &str,
     state: &mut InterrogationRunState,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    xpec_state: &mut XpecStateCache,
     request: &ThreadTurnRequest<'_>,
 ) -> Result<ParsedTurnResponse, EvaluatorError> {
     let Some(session_root) = state.session_roots_by_id.get(session_id).cloned() else {
@@ -302,10 +302,12 @@ fn ask_current_session<R: EvaluatorRunner>(
         session_root.as_path(),
         state,
         diagnostic_log,
+        xpec_state,
         request,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn ask_in_thread<R: EvaluatorRunner>(
     runtime: &CheckRuntime<'_>,
     runner: &mut R,
@@ -313,6 +315,7 @@ fn ask_in_thread<R: EvaluatorRunner>(
     session_root: &Path,
     state: &mut InterrogationRunState,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
+    xpec_state: &mut XpecStateCache,
     request: &ThreadTurnRequest<'_>,
 ) -> Result<ParsedTurnResponse, EvaluatorError> {
     let turn = EvaluatorTurnContext {
@@ -332,21 +335,57 @@ fn ask_in_thread<R: EvaluatorRunner>(
     // classifies whether it is an initial request or a non-initial follow-up,
     // and `ask_with_reused_thread` records any request-start timeline marker
     // before session setup can emit thread/start.
-    let response = ask_evaluator_once(
-        runner,
-        &turn,
-        request.prompt,
-        request.agent,
-        schema_scope,
-        &output_schema,
-        request.short_id,
-        &answered_short_ids,
-        &visible_scope,
-        session_root,
-        &mut state.parse_cache,
-        diagnostic_log,
-        request.expectation_id,
-    )?;
+    let (response, shown_expectation_ids) = {
+        let parse_cache = &mut state.parse_cache;
+        if request.expectation_id.is_some() {
+            let mut dynamic_tool_handler = CanonShowDynamicToolHandler::new(
+                runtime,
+                request.expectation_id,
+                xpec_state,
+                &mut state.visible_tree_oid_cache,
+            );
+            let response = ask_evaluator_once(
+                runner,
+                &turn,
+                request.prompt,
+                request.agent,
+                schema_scope,
+                &output_schema,
+                request.short_id,
+                &answered_short_ids,
+                &visible_scope,
+                session_root,
+                parse_cache,
+                diagnostic_log,
+                request.expectation_id,
+                Some(&mut dynamic_tool_handler),
+            );
+            let shown_expectation_ids = dynamic_tool_handler.into_shown_expectation_ids();
+            (response, shown_expectation_ids)
+        } else {
+            (
+                ask_evaluator_once(
+                    runner,
+                    &turn,
+                    request.prompt,
+                    request.agent,
+                    schema_scope,
+                    &output_schema,
+                    request.short_id,
+                    &answered_short_ids,
+                    &visible_scope,
+                    session_root,
+                    parse_cache,
+                    diagnostic_log,
+                    request.expectation_id,
+                    None,
+                ),
+                BTreeSet::new(),
+            )
+        }
+    };
+    state.record_session_dynamic_show_expectation_ids(session_id, shown_expectation_ids);
+    let response = response?;
     if response.schema_valid {
         state.record_session_answered_short_id(session_id, request.short_id);
     }
@@ -411,6 +450,9 @@ fn start_or_reuse_thread_session_after_rendering<R: EvaluatorRunner>(
         .thread_sessions_by_rendered_instructions_key
         .get(&rendered_key)
         .cloned()
+        .filter(|session_id| {
+            !state.session_has_seen_dynamic_show_expectation(session_id, request.expectation_id)
+        })
     {
         // This is the second evaluator-thread reuse lookup required by canon:
         // after rendering instructions anyway, reuse a live thread whose
@@ -438,6 +480,11 @@ fn start_or_reuse_thread_session_after_rendering<R: EvaluatorRunner>(
         .as_ref()
         .map(|isolation| isolation.path())
         .unwrap_or(session_root.as_path());
+    let dynamic_tools = if request.expectation_id.is_some() {
+        canon_show_dynamic_tools()
+    } else {
+        Vec::new()
+    };
     let created = match runner.start_session(
         session_cwd,
         &template_artifact_paths,
@@ -447,6 +494,7 @@ fn start_or_reuse_thread_session_after_rendering<R: EvaluatorRunner>(
         request.model,
         request.thinking,
         request.enforced_scope,
+        &dynamic_tools,
     ) {
         Ok(created) => created,
         Err(err) => return fail_after_session_error(state, err),
@@ -559,6 +607,9 @@ fn retire_thread_sessions_after_turn(
         .session_answered_short_ids
         .retain(|session_id, _| !retired_sessions.contains(session_id));
     state
+        .session_dynamic_show_expectation_ids
+        .retain(|session_id, _| !retired_sessions.contains(session_id));
+    state
         .session_isolations
         .retain(|session_id, _| !retired_sessions.contains(session_id));
     retired_sessions.contains(active_session_id)
@@ -633,6 +684,7 @@ pub(crate) fn interrogate_expectation_answer_with_model<R: EvaluatorRunner>(
         runner,
         diagnostic_log,
         state,
+        xpec_state,
         &enforced_scope,
         model,
         last_pass.as_ref(),
@@ -648,6 +700,7 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     state: &mut InterrogationRunState,
+    xpec_state: &mut XpecStateCache,
     enforced_scope: &[String],
     model: Option<&str>,
     last_pass: Option<&LastResult>,
@@ -677,6 +730,7 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
         runner,
         diagnostic_log,
         state,
+        xpec_state,
         ThreadTurnRequest {
             agent: &expectation.agent,
             enforced_scope,

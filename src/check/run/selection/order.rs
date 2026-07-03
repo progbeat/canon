@@ -19,6 +19,15 @@ pub(crate) fn order_by_latest_non_pass<T>(
     })
 }
 
+pub(crate) fn order_by_absent_non_pass_history<T>(items: Vec<T>) -> Vec<T> {
+    // In-place mode treats persisted xpec result history as absent. That makes
+    // every item's latest non-pass timestamp the Unix epoch, so the stable
+    // tie-breaker below preserves the existing candidate order without reading
+    // persistent state.
+    order_by_latest_non_pass_with(items, |_| Ok(UNIX_EPOCH_TIMESTAMP))
+        .expect("absent non-pass history ordering is infallible")
+}
+
 fn order_by_latest_non_pass_with<T>(
     items: Vec<T>,
     mut latest_for: impl FnMut(&T) -> Result<u64, String>,

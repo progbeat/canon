@@ -1,9 +1,12 @@
 use crate::app::protocol::{
     agent_message_delta, app_server_error_value, app_server_failure_from_value, app_server_message,
-    append_completed_agent_text, turn_idle_timed_out, turn_started_id, turn_text,
+    append_completed_agent_text, dynamic_tool_call, dynamic_tool_call_response,
+    turn_idle_timed_out, turn_started_id, turn_text,
 };
 use crate::app::APP_SERVER_TURN_TIMEOUT_SECS;
-use crate::evaluator::{EvaluatorError, EvaluatorFailureKind};
+use crate::evaluator::{
+    EvaluatorDynamicToolHandler, EvaluatorDynamicToolResult, EvaluatorError, EvaluatorFailureKind,
+};
 use crate::platform::check_interrupted;
 use serde_json::Value;
 use std::time::Instant;
@@ -78,6 +81,7 @@ impl AppServerRunner {
         &mut self,
         method: &str,
         request: AppServerTurnRequest,
+        mut dynamic_tool_handler: Option<&mut dyn EvaluatorDynamicToolHandler>,
     ) -> Result<String, EvaluatorError> {
         self.last_turn_usage = None;
         let id = match self.send_json_rpc_request(method, &request.params, "request") {
@@ -166,16 +170,21 @@ impl AppServerRunner {
                 }
                 saw_response = true;
                 if saw_completed {
-                    return self.finish_turn_request_with_progress(
-                        text,
-                        completed_text,
-                        &thread_id,
-                        turn_id,
-                    );
+                    return self.finish_turn_request(text, completed_text, &thread_id, turn_id);
                 }
                 continue;
             }
             match envelope.method.as_deref() {
+                Some("item/tool/call") => {
+                    let Some(tool_call_id) = envelope.id else {
+                        return Err(EvaluatorError::failure(
+                            EvaluatorFailureKind::UnknownAppServer,
+                            "app-server dynamic tool call missing id",
+                        ));
+                    };
+                    let response = handle_dynamic_tool_call(&message, &mut dynamic_tool_handler);
+                    self.send_json_rpc_response(tool_call_id, &response, "dynamic tool response")?;
+                }
                 Some("item/agentMessage/delta") => {
                     if let Some(delta) = agent_message_delta(&message) {
                         text.push_str(&delta);
@@ -200,12 +209,7 @@ impl AppServerRunner {
                     }
                     saw_completed = true;
                     if saw_response {
-                        return self.finish_turn_request_with_progress(
-                            text,
-                            completed_text,
-                            &thread_id,
-                            turn_id,
-                        );
+                        return self.finish_turn_request(text, completed_text, &thread_id, turn_id);
                     }
                 }
                 Some("error") => {
@@ -226,16 +230,6 @@ impl AppServerRunner {
                 _ => {}
             }
         }
-    }
-
-    fn finish_turn_request_with_progress(
-        &mut self,
-        text: String,
-        completed_text: String,
-        thread_id: &str,
-        turn_id: Option<String>,
-    ) -> Result<String, EvaluatorError> {
-        self.finish_turn_request(text, completed_text, thread_id, turn_id)
     }
 
     fn finish_turn_request(
@@ -269,6 +263,22 @@ impl AppServerRunner {
         self.last_turn_usage = turn_id.map(|turn_id| self.turn_usage_for_turn(thread_id, turn_id));
         app_server_failure_from_value(method, error)
     }
+}
+
+fn handle_dynamic_tool_call(
+    message: &Value,
+    handler: &mut Option<&mut dyn EvaluatorDynamicToolHandler>,
+) -> Value {
+    let result = match dynamic_tool_call(message) {
+        Ok(call) => match handler {
+            Some(handler) => handler.handle_dynamic_tool_call(call),
+            None => EvaluatorDynamicToolResult::failure(
+                "dynamic tool calls are not available for this evaluator turn",
+            ),
+        },
+        Err(err) => EvaluatorDynamicToolResult::failure(err),
+    };
+    dynamic_tool_call_response(result)
 }
 
 fn fail_without_turn_timeout_progress_marker(

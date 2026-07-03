@@ -2,7 +2,8 @@ use super::{AppServerRunner, AppServerTurnRequest};
 use crate::check::codex_reasoning_effort;
 use crate::config_types::AgentConfig;
 use crate::evaluator::{
-    evaluator_thread_config_with_no_sandbox, EvaluatorError, EvaluatorProgress, EvaluatorRunner,
+    evaluator_thread_config_with_no_sandbox, EvaluatorDynamicToolHandler, EvaluatorError,
+    EvaluatorProgress, EvaluatorRunner,
 };
 use crate::token_usage_types::EvaluatorTurnUsage;
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,7 @@ impl EvaluatorRunner for AppServerRunner {
         model: Option<&str>,
         thinking: &str,
         scope: &[String],
+        dynamic_tools: &[Value],
     ) -> Result<String, EvaluatorError> {
         let session_cwd_json = path_to_json_string(session_cwd, "thread/start cwd")?;
         // `session_cwd` is the staged Git snapshot root supplied by
@@ -52,6 +54,7 @@ impl EvaluatorRunner for AppServerRunner {
             // oversized carryover is handled by retiring the local session ID
             // so the next same-scope interrogation starts a fresh thread.
             ephemeral: true,
+            dynamic_tools,
             // Evaluator threads must not inherit the parent Codex conversation:
             // canon questions about "your dev instructions" refer only to the
             // rendered evaluator developerInstructions parameter below.
@@ -73,6 +76,7 @@ impl EvaluatorRunner for AppServerRunner {
         model: Option<&str>,
         thinking: &str,
         output_schema: &Value,
+        dynamic_tool_handler: Option<&mut dyn EvaluatorDynamicToolHandler>,
     ) -> Result<String, EvaluatorError> {
         let request = turn_start_request(
             session_id,
@@ -83,8 +87,11 @@ impl EvaluatorRunner for AppServerRunner {
             self.session_cwd(session_id),
             self.no_sandbox(),
         )?;
-        let response =
-            self.send_turn_request("turn/start", AppServerTurnRequest::new(session_id, request))?;
+        let response = self.send_turn_request(
+            "turn/start",
+            AppServerTurnRequest::new(session_id, request),
+            dynamic_tool_handler,
+        )?;
         Ok(response)
     }
 
@@ -173,8 +180,14 @@ struct ThreadStartParams<'a> {
     environments: Vec<TurnEnvironmentParams>,
     config: Value,
     ephemeral: bool,
+    #[serde(rename = "dynamicTools", skip_serializing_if = "value_slice_is_empty")]
+    dynamic_tools: &'a [Value],
     #[serde(rename = "sessionStartSource")]
     session_start_source: &'a str,
+}
+
+fn value_slice_is_empty(values: &[Value]) -> bool {
+    values.is_empty()
 }
 
 #[derive(Serialize)]

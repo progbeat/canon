@@ -4,7 +4,7 @@ use crate::check::{
     write_agent_turn_failure_event, write_agent_turn_missing_usage_event,
     write_agent_turn_request_event, write_agent_turn_response_event,
 };
-use crate::evaluator::{EvaluatorError, EvaluatorRunner};
+use crate::evaluator::{EvaluatorDynamicToolHandler, EvaluatorError, EvaluatorRunner};
 use crate::logs::{
     AgentTurnLogRequest, DiagnosticLogResult, DiagnosticLogWriter, ThreadLifecycleEventFields,
     ThreadRestartEventFields,
@@ -24,6 +24,7 @@ pub(super) fn ask_and_log<R: EvaluatorRunner>(
     runner: &mut R,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     request: LoggedTurnRequest<'_>,
+    dynamic_tool_handler: Option<&mut dyn EvaluatorDynamicToolHandler>,
 ) -> Result<RawTurnResponse, EvaluatorError> {
     write_optional_diagnostic_log(diagnostic_log, |writer| {
         write_agent_turn_request_event(
@@ -45,6 +46,7 @@ pub(super) fn ask_and_log<R: EvaluatorRunner>(
         request.turn.model,
         request.turn.thinking,
         request.output_schema,
+        dynamic_tool_handler,
     ) {
         Ok(response) => response,
         Err(err) => {
