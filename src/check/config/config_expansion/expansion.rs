@@ -283,7 +283,7 @@ impl RawExpectationExpansion<'_> {
             .presets
             .get(preset)
             .ok_or_else(|| format!("unknown preset: {}", preset))?;
-        apply_raw_expansion_common_preset_defaults(&mut common, &preset.common);
+        merge_raw_expectation_common_defaults(&mut common, &preset.common);
         Ok(common)
     }
 
@@ -330,33 +330,33 @@ fn resolved_common_settings_are_empty(settings: &RawExpectationSettings) -> bool
         && settings.plugins.is_none()
 }
 
-fn apply_raw_expansion_common_preset_defaults(
+pub(super) fn merge_raw_expectation_common_defaults(
     common: &mut RawExpectationCommonConfig,
-    preset: &RawExpectationCommonConfig,
+    defaults: &RawExpectationCommonConfig,
 ) {
     if common.question_context.is_none() {
-        common.question_context = preset.question_context.clone();
+        common.question_context = defaults.question_context.clone();
     }
     if common.diff_from.is_none() {
-        common.diff_from = preset.diff_from.clone();
+        common.diff_from = defaults.diff_from.clone();
     }
     if common.target.is_none() {
-        common.target = preset.target.clone();
+        common.target = defaults.target.clone();
     }
     if common.cooldown.is_none() {
-        common.cooldown = preset.cooldown.clone();
+        common.cooldown = defaults.cooldown.clone();
     }
     if common.settings.models.is_none() {
-        common.settings.models = preset.settings.models.clone();
+        common.settings.models = defaults.settings.models.clone();
     }
     if common.settings.thinking.is_none() {
-        common.settings.thinking = preset.settings.thinking.clone();
+        common.settings.thinking = defaults.settings.thinking.clone();
     }
     if common.settings.ignore.is_none() {
-        common.settings.ignore = preset.settings.ignore.clone();
+        common.settings.ignore = defaults.settings.ignore.clone();
     }
     if common.settings.plugins.is_none() {
-        common.settings.plugins = preset.settings.plugins.clone();
+        common.settings.plugins = defaults.settings.plugins.clone();
     }
 }
 
@@ -381,7 +381,7 @@ fn apply_raw_expansion_item_preset_defaults(
     if fields.include.is_none() {
         fields.include = preset.include.clone();
     }
-    apply_raw_expansion_common_preset_defaults(&mut fields.common, &preset.common);
+    merge_raw_expectation_common_defaults(&mut fields.common, &preset.common);
 }
 
 fn resolved_question_context(context: Option<String>) -> String {

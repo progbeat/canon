@@ -29,6 +29,7 @@ fn init_git_repo(repo: &Path) {
         .current_dir(repo)
         .output()
         .unwrap();
+    // xpec: C
     assert!(
         output.status.success(),
         "{}",
@@ -42,6 +43,7 @@ fn git_path(repo: &Path, path: &str) -> PathBuf {
         .current_dir(repo)
         .output()
         .unwrap();
+    // xpec: C
     assert!(
         output.status.success(),
         "{}",
@@ -50,6 +52,7 @@ fn git_path(repo: &Path, path: &str) -> PathBuf {
     repo.join(String::from_utf8(output.stdout).unwrap().trim())
 }
 
+// xpec: C
 #[test]
 fn init_creates_default_template_and_refuses_overwrite() {
     let repo = temp_repo("canon-init-example");
@@ -87,6 +90,7 @@ fn init_creates_default_template_and_refuses_overwrite() {
     );
 }
 
+// xpec: C
 #[test]
 fn pre_commit_commands_render_documented_messages() {
     let repo = temp_repo("canon-pre-commit-example");
@@ -130,6 +134,7 @@ fn pre_commit_commands_render_documented_messages() {
     );
 }
 
+// xpec: C
 #[test]
 fn pre_commit_install_rejects_existing_default_hook() {
     let repo = temp_repo("canon-pre-commit-existing-example");
@@ -280,6 +285,7 @@ expectations:
     );
 }
 
+// xpec: 6,uY
 #[test]
 fn in_place_prohibited_expectation_fields_fail_before_hooks() {
     let repo = temp_repo("canon-in-place-invalid-config-before-hooks");
@@ -317,6 +323,7 @@ expectations:
     );
 }
 
+// xpec: C
 #[test]
 fn gate_rejects_mixed_canon_and_implementation_changes() {
     let repo = temp_repo("canon-gate-example");
@@ -352,6 +359,7 @@ fn gate_rejects_mixed_canon_and_implementation_changes() {
     );
 }
 
+// xpec: C
 #[test]
 fn gate_passes_canon_only_staged_config_deletion() {
     let repo = temp_repo("canon-gate-canon-only-example");
@@ -418,6 +426,7 @@ fn gate_passes_canon_only_staged_config_deletion() {
     assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
 }
 
+// xpec: C
 #[test]
 fn gate_passes_non_canon_staged_change_without_config() {
     let repo = temp_repo("canon-gate-no-config-example");
@@ -447,6 +456,7 @@ fn gate_passes_non_canon_staged_change_without_config() {
     assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
 }
 
+// xpec: C
 #[test]
 fn check_without_config_renders_documented_recovery_message() {
     let repo = temp_repo("canon-missing-config-example");

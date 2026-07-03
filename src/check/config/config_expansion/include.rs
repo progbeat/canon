@@ -1,6 +1,5 @@
-use crate::config_types::{
-    RawExpectationCommonConfig, RawExpectationFields, RawExpectationItem, RawExpectationItemForm,
-};
+use super::expansion::merge_raw_expectation_common_defaults;
+use crate::config_types::{RawExpectationFields, RawExpectationItem, RawExpectationItemForm};
 
 pub(super) fn merge_include_generator_fields_as_item_fields(
     items: &mut [RawExpectationItem],
@@ -42,7 +41,10 @@ fn merge_generator_fields(fields: &mut RawExpectationFields, generator: &RawExpe
             merge_generator_path_fields(fields, generator);
         }
     }
-    merge_generator_common_config(&mut fields.common, &generator.common);
+    if fields.common.settings.preset.is_none() {
+        fields.common.settings.preset = generator.common.settings.preset.clone();
+    }
+    merge_raw_expectation_common_defaults(&mut fields.common, &generator.common);
 }
 
 fn merge_generator_path_fields(
@@ -54,38 +56,5 @@ fn merge_generator_path_fields(
     }
     if fields.path.is_none() {
         fields.path = generator.path.clone();
-    }
-}
-
-fn merge_generator_common_config(
-    config: &mut RawExpectationCommonConfig,
-    generator: &RawExpectationCommonConfig,
-) {
-    if config.settings.preset.is_none() {
-        config.settings.preset = generator.settings.preset.clone();
-    }
-    if config.settings.models.is_none() {
-        config.settings.models = generator.settings.models.clone();
-    }
-    if config.settings.thinking.is_none() {
-        config.settings.thinking = generator.settings.thinking.clone();
-    }
-    if config.settings.ignore.is_none() {
-        config.settings.ignore = generator.settings.ignore.clone();
-    }
-    if config.settings.plugins.is_none() {
-        config.settings.plugins = generator.settings.plugins.clone();
-    }
-    if config.cooldown.is_none() {
-        config.cooldown = generator.cooldown.clone();
-    }
-    merge_generator_text(&mut config.question_context, &generator.question_context);
-    merge_generator_text(&mut config.diff_from, &generator.diff_from);
-    merge_generator_text(&mut config.target, &generator.target);
-}
-
-fn merge_generator_text(value: &mut Option<String>, generator: &Option<String>) {
-    if value.is_none() {
-        *value = generator.clone();
     }
 }
