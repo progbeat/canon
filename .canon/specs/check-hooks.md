@@ -28,7 +28,7 @@ The default repair instruction is ``▷ Fix the blocker and run `canon check` ag
 When an event triggers, `canon` runs its hooks in order.
 For each hook, `canon` prints `print`, if present, and appends one trailing newline.
 Then `canon` prints `input`, if present, without appending a newline, reads one stdin line, and trims only the line ending before matching it.
-If `exec` is present, `canon` runs the command and matches the process exit code.
+If `exec` is present, `canon` first prints the command as `$ <command>\n`, then runs it.
 If neither `input` nor `exec` is present, the hook continues after printing `print`.
 
 `cases` keys are YAML scalar values normalized to their text form.

@@ -27,10 +27,6 @@ CHECKS = [
         "rule": "narrow",
     },
     {
-        "id": "tsSep0tNGLdzONNQPr2S",
-        "rule": "narrow",
-    },
-    {
         "id": "j6p47aey4JopPfBxY6Y3",
         "rule": "narrow",
     },
