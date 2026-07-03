@@ -71,9 +71,8 @@ When a restricted-scope initial interrogation returns `error: "ScopeTooNarrow"`,
 
 When the final evaluator response has `error`, human review is required.
 
-If the initial interrogation returns an answer, the follow-up interrogation verifies the suggested q-scope only when the visible tree induced by that suggestion contains at least 25% fewer files than the current visible tree.
-The narrowed scope is accepted only when the verification result is pass -> pass, pass -> fail, or fail -> fail relative to the initial result.
-It is rejected when verification would turn an initial fail into pass.
+When the initial interrogation produces a passing answer, the follow-up interrogation verifies the suggested q-scope only when the visible tree induced by that suggestion contains at least 25% fewer files than the current visible tree.
+The narrowed scope is accepted only when that verification returns an answer.
 
 If the evaluator returns an invalid `qScopeSuggestion`, `canon check` does not attempt narrowing from it.
 

@@ -26,10 +26,10 @@ A mapping hook must contain `print`, `input`, or `exec`.
 The default repair instruction is ``▷ Fix the blocker and run `canon check` again!``.
 
 When an event triggers, `canon` runs its hooks in order.
-For each hook, `canon` prints `print`, if present, and appends one trailing newline.
-Then `canon` prints `input`, if present, without appending a newline, reads one stdin line, and trims only the line ending before matching it.
-If `exec` is present, `canon` first prints the command as `$ <command>\n`, then runs it.
-If neither `input` nor `exec` is present, the hook continues after printing `print`.
+For each hook, `canon` writes `print`, if present, to stdout and appends one trailing newline.
+Then `canon` writes `input`, if present, to stdout without appending a newline, reads one stdin line, and trims only the line ending before matching it.
+If `exec` is present, `canon` first writes the command to stdout as `$ <command>\n`, then runs it with stdout inherited.
+If neither `input` nor `exec` is present, the hook continues after writing `print`.
 
 `cases` keys are YAML scalar values normalized to their text form.
 The key `_` is the fallback when no exact key matches.
