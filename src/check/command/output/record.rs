@@ -18,13 +18,16 @@ const PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL: Duration = Duration::from_secs(
 // - `start_expectation_report_output` writes and flushes `<short ID>` before
 //   evaluator work starts; that prefix is the started public report for the
 //   expectation, not a timeline marker.
-// - `start_query_report_output` flushes stdout before evaluator work starts
-//   without printing a marker.
+// - `start_query_report_output` has no prefix. It only performs the required
+//   pre-marker stdout flush for `canon ask`.
 // - the progress worker writes and flushes elapsed markers every minute while
 //   evaluator work is still active.
 // - completion writes the final marker before the result suffix or response
 //   block. The final marker is emitted even when the final interval is 0
 //   seconds.
+// - query completion writes the newline after those markers before the query
+//   response, so completed `canon ask` stdout starts with a standalone progress
+//   timeline line.
 // Event-to-marker priority and symbols live in `src/evaluator/progress.rs`.
 pub(crate) struct StartedExpectationReportOutput {
     output: SharedCheckOutput,

@@ -202,7 +202,7 @@ mod tests {
         assert!(!finished.stdout_completion_failed());
     }
 
-    #[test]
+    #[test] // xpec: 5
     fn query_output_starts_with_progress_timeline_line() {
         let bytes = Arc::new(Mutex::new(Vec::new()));
         let output = SharedCheckOutput::new(Box::new(CapturedOutput {

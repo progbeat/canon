@@ -685,7 +685,7 @@ mod tests {
     };
     use crate::hash::full_scope;
 
-    #[test]
+    #[test] // xpec: YD
     fn q_scope_verification_scope_too_narrow_rejects_scope_without_replacing_initial_result() {
         let narrowed = test_record(CheckResult::Fail, Some(ERROR_SCOPE_TOO_NARROW));
         let initial = test_record(CheckResult::Pass, None);
@@ -699,7 +699,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[test] // xpec: YD
     fn q_scope_verification_invalid_question_replaces_initial_result() {
         let narrowed = test_record(CheckResult::Fail, Some(ERROR_INVALID_QUESTION));
         let initial = test_record(CheckResult::Pass, None);
@@ -713,8 +713,8 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn q_scope_verification_pass_fail_matrix_still_applies_without_error() {
+    #[test] // xpec: YD
+    fn q_scope_verification_result_becomes_final_only_after_initial_pass() {
         let fail = test_record(CheckResult::Fail, None);
         let pass = test_record(CheckResult::Pass, None);
         let expectation = test_expectation("yes");
@@ -723,6 +723,12 @@ mod tests {
             &expectation,
             CheckResult::Pass,
             &pass,
+            &fail
+        ));
+        assert!(!q_scope_verification_result_becomes_final(
+            &expectation,
+            CheckResult::Fail,
+            &fail,
             &fail
         ));
         assert!(!q_scope_verification_result_becomes_final(

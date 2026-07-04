@@ -73,6 +73,11 @@ pub(crate) fn check_agent_messages(
     run_start_pass_ids: &BTreeSet<String>,
 ) -> Vec<String> {
     if let Some(blocked) = report.blocked_hooks.first() {
+        assert_eq!(
+            report.blocked_hooks.len(),
+            1,
+            "completed check report must contain at most one blocked hook"
+        );
         return vec![blocked.repair_instruction.clone()];
     }
     let num_new_passes = current_passes_without_prior_pass_count(report, run_start_pass_ids);
@@ -211,6 +216,26 @@ mod tests {
         let messages = check_agent_messages(&report, &BTreeSet::new());
 
         assert_eq!(messages, vec![repair_instruction]);
+    }
+
+    #[test] // xpec: HW
+    #[should_panic(expected = "completed check report must contain at most one blocked hook")]
+    fn blocked_hook_agent_message_asserts_single_blocker() {
+        let report = CheckRunReport {
+            records: Vec::new(),
+            cached: Vec::new(),
+            blocked_hooks: vec![
+                BlockedCheckHook {
+                    repair_instruction: "first repair".to_string(),
+                },
+                BlockedCheckHook {
+                    repair_instruction: "second repair".to_string(),
+                },
+            ],
+            skipped: 0,
+        };
+
+        let _ = check_agent_messages(&report, &BTreeSet::new());
     }
 
     #[test] // xpec: HW

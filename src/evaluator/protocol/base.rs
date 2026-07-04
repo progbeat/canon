@@ -106,33 +106,35 @@ mod tests {
         // xpec: 92,Wg,Nb
         assert!(rendered.contains("Restricted-scope only"));
         // xpec: 92,Wg,Nb
-        assert!(rendered.contains("Choose `qScopeSuggestion` from the question's search domain"));
+        assert!(rendered.contains("choose `qScopeSuggestion` from the question's search domain"));
+        // xpec: YD,v
+        assert!(rendered.contains("chosen search domain is not contained"));
+        // xpec: YD,v
+        assert!(rendered.contains("do not answer project-wide absence/avoid questions"));
         // xpec: 92,Wg,Nb
         assert!(!rendered.contains("Before answering, determine"));
         // xpec: 92,Wg,Nb
         assert!(rendered.contains("question's search domain"));
         // xpec: 92,Wg,Nb
         assert!(rendered.contains("implementation/spec compliance"));
+        // xpec: v
+        assert!(rendered.contains("project-wide quality/safety/dead-code"));
+        // xpec: v
+        assert!(rendered.contains("project-wide \"find any\" or \"avoid any\" questions"));
         // xpec: 92,Wg,Nb
         assert!(rendered.contains("change-set"));
         // xpec: 92,Wg,Nb
         assert!(rendered.contains("direct evidence, examples, and counterexamples"));
         // xpec: 92,Wg,Nb
-        assert!(rendered.contains("Answer from absence only when visible scope covers"));
-        // xpec: 92,Wg,Nb
         assert!(rendered.contains("paths that could contain direct evidence or counterexamples"));
         // xpec: 92,Wg,Nb
-        assert!(rendered.contains("concrete behavior questions may narrow"));
+        assert!(rendered.contains("Concrete behavior questions may narrow"));
         // xpec: 92,Wg,Nb
         assert!(rendered.contains("transcript relevance hints are not q-scope hiding"));
         // xpec: 92,Wg,Nb
         assert!(rendered.contains("Configured ignore exclusions and transcript relevance hints"));
         // xpec: 92,Wg,Nb
         assert!(rendered.contains("verify with `rg --files` or direct read/search"));
-        // xpec: 92,Wg,Nb
-        assert!(rendered.contains("Answer from absence"));
-        // xpec: 92,Wg,Nb
-        assert!(rendered.contains("visible scope covers the needed search domain"));
         // xpec: 92,Wg,Nb
         assert!(rendered.contains("not `InvalidQuestion` reasons"));
     }

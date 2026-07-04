@@ -210,7 +210,7 @@ pub(crate) fn question_scope_suggestion_scope_for_unused_follow_up(
     // `ScopeTooNarrow` full-scope retry and q-scope verification share the
     // Interrogation Policy's single follow-up budget. If the retry already
     // consumed that budget, no q-scope verification turn is allowed.
-    if result.follow_up_used() || result.interrogation.record.error.is_some() {
+    if !unused_follow_up_can_verify_q_scope(result) {
         return Ok(None);
     }
     question_scope_suggestion_scope_for_independent_verification(
@@ -224,6 +224,12 @@ pub(crate) fn question_scope_suggestion_scope_for_unused_follow_up(
         current_scope,
         visible_tree_oid_cache,
     )
+}
+
+fn unused_follow_up_can_verify_q_scope(result: &PolicyInterrogationResult) -> bool {
+    !result.follow_up_used()
+        && result.interrogation.record.error.is_none()
+        && result.interrogation.record.passed()
 }
 
 pub(crate) fn question_scope_suggestion_scope_for_independent_verification(
@@ -279,11 +285,9 @@ pub(crate) fn narrowed_scope_is_accepted(
     narrowed: &CheckRecord,
 ) -> bool {
     // Acceptance means the q-scope suggestion graduated from evaluator claim
-    // to verified reusable q-scope. A valid fail from a smaller scope is a
-    // local counterexample: while that scope stays unchanged, outside files
-    // cannot make the recorded failure disappear. A fail that turns into pass
-    // has the opposite shape, so the proposed scope omitted necessary failure
-    // evidence and is too narrow to trust.
+    // to verified reusable q-scope. The policy only verifies suggestions after
+    // an initial passing answer; non-pass initial answers must keep their
+    // current scope.
     // Error responses do not verify the proposed scope as reusable.
     // Verification ScopeTooNarrow is a concrete q-scope rejection, so the
     // initial answer remains the final response for the expectation. Other
@@ -292,10 +296,8 @@ pub(crate) fn narrowed_scope_is_accepted(
         return false;
     }
     match (initial_result, narrowed.result) {
-        (CheckResult::Fail, CheckResult::Pass) => false,
-        (CheckResult::Pass, CheckResult::Pass)
-        | (CheckResult::Pass, CheckResult::Fail)
-        | (CheckResult::Fail, CheckResult::Fail) => true,
+        (CheckResult::Pass, CheckResult::Pass) | (CheckResult::Pass, CheckResult::Fail) => true,
+        (CheckResult::Fail, _) => false,
     }
 }
 
@@ -322,7 +324,8 @@ pub(crate) fn write_scope_narrowing_event(
 mod tests {
     use super::{
         narrowed_scope_is_accepted, question_scope_suggestion_scope_for_independent_verification,
-        suggested_scope_is_at_least_25_percent_smaller,
+        suggested_scope_is_at_least_25_percent_smaller, unused_follow_up_can_verify_q_scope,
+        InterrogationResult, PolicyInterrogationResult,
     };
     use crate::check::core::{CheckRecord, CheckResult, ERROR_SCOPE_TOO_NARROW};
     use crate::check::interrogation::state::{CheckRuntime, CheckTreeContext};
@@ -355,8 +358,29 @@ mod tests {
         );
     }
 
-    #[test]
-    fn narrowed_scope_acceptance_rejects_only_fail_to_pass_answer_change() {
+    #[test] // xpec: YD
+    fn unused_follow_up_q_scope_verification_requires_initial_pass() {
+        let pass = test_policy_result(test_record("yes", CheckResult::Pass, None), false);
+        let fail = test_policy_result(test_record("no", CheckResult::Fail, None), false);
+        let error = test_policy_result(
+            test_record(
+                ERROR_SCOPE_TOO_NARROW,
+                CheckResult::Fail,
+                Some(ERROR_SCOPE_TOO_NARROW),
+            ),
+            false,
+        );
+        let already_followed_up =
+            test_policy_result(test_record("yes", CheckResult::Pass, None), true);
+
+        assert!(unused_follow_up_can_verify_q_scope(&pass));
+        assert!(!unused_follow_up_can_verify_q_scope(&fail));
+        assert!(!unused_follow_up_can_verify_q_scope(&error));
+        assert!(!unused_follow_up_can_verify_q_scope(&already_followed_up));
+    }
+
+    #[test] // xpec: YD
+    fn narrowed_scope_acceptance_requires_initial_pass_answer() {
         let pass = test_record("yes", CheckResult::Pass, None);
         let fail = test_record("no", CheckResult::Fail, None);
         let error = test_record(
@@ -366,7 +390,7 @@ mod tests {
         );
         assert!(narrowed_scope_is_accepted(CheckResult::Pass, &pass));
         assert!(narrowed_scope_is_accepted(CheckResult::Pass, &fail));
-        assert!(narrowed_scope_is_accepted(CheckResult::Fail, &fail));
+        assert!(!narrowed_scope_is_accepted(CheckResult::Fail, &fail));
         assert!(!narrowed_scope_is_accepted(CheckResult::Fail, &pass));
         assert!(!narrowed_scope_is_accepted(CheckResult::Pass, &error));
     }
@@ -487,5 +511,18 @@ mod tests {
             id: "expectation".to_string(),
             display_id: "e".to_string(),
         }
+    }
+
+    fn test_policy_result(record: CheckRecord, follow_up_used: bool) -> PolicyInterrogationResult {
+        PolicyInterrogationResult::new(
+            InterrogationResult {
+                record,
+                turn_usage: None,
+                context_compacted: false,
+                stop_after_current_expectation: false,
+                interrupted: false,
+            },
+            follow_up_used,
+        )
     }
 }
