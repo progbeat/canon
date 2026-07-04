@@ -74,14 +74,9 @@
   a: no
   target: diff
 
-- q: >-
-    Can you find any test declaration or assert invocation without an
-    `xpec: <token>(,<token>)*` source-comment marker?
-    A test declaration has a marker when the marker is on the same line or
-    immediately preceding non-blank line.
-    An assert invocation has a marker when the marker is on the same line,
-    immediately preceding non-blank line, or belongs to the enclosing test
-    declaration.
+- q: |-
+    Can you find any assert invocation whose effective `xpec: <shortID>(,<shortID>)*` source-comment marker is missing, whose checked behavior does not logically follow from the cited xpecs, or whose assert failure message does not name the claim from the cited xpecs that is broken by that failure?
+    A test declaration marker covers assert invocations in that test unless an assert has its own marker.
   a: no
   target: diff
 
