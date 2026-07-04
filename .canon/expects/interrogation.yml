@@ -42,7 +42,7 @@
 - q: "Does `canon check` assert that user-visible final results never have `error: \"ScopeTooNarrow\"`?"
   a: yes
 
-- q: |
+- q: |-
     Does `canon check` reuse evaluator threads by default as follows?
     First, look up a live thread by evaluator model plus the stable inputs for rendering evaluator base/developer instructions, without rendering instructions just to build that key.
     Then, after the current instructions have been rendered anyway, reuse an existing live thread with identical rendered base/developer instructions.
@@ -50,6 +50,9 @@
 
 - q: "Does evaluator base-instructions rendering `assert len(rendered) <= 6000`?"
   a: yes
+
+- q: "What expected answer does [3nSMjraHbFW7BMLJ4AcO] have?"
+  a: "4"
 
 # - q: "Do the dev instructions require knowing any specialized terms whose meaning is not available from the dev instructions themselves?"
 #   a: no
