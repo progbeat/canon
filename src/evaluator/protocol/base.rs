@@ -5,6 +5,8 @@ const EVALUATOR_BASE_INSTRUCTIONS_TEMPLATE: &str =
     include_str!("../../../resources/prompts/evaluator_base_instructions.txt");
 const MAX_EVALUATOR_BASE_INSTRUCTIONS_LEN: usize = 6000;
 
+// This template is compiled into runtime evaluator instructions; its source
+// stays compact so every rendered variant satisfies the length assertion below.
 pub(crate) struct BaseInstructionsContext {
     pub(crate) in_place: bool,
     pub(crate) full_scope: bool,

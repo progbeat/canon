@@ -7,6 +7,8 @@ use serde_saphyr::{
 };
 use std::path::{Path, PathBuf};
 
+// Shared by top-level check config loading and recursive expectation includes;
+// both paths need the same source-aware YAML `!include` resolver.
 pub(crate) fn parse_yaml_config_with_includes<T>(
     root: &Path,
     config_path: &Path,

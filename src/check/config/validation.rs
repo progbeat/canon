@@ -385,7 +385,9 @@ mod tests {
     use super::render_expectation_validation_error;
     use super::{validate_check_config, validate_in_place_check_config};
     use crate::check::core::ERROR_SCOPE_TOO_NARROW;
-    use crate::config_types::{AgentConfig, CheckConfig, Expectation, ExpectationTarget};
+    use crate::config_types::{
+        AgentConfig, CheckConfig, CooldownConfig, Expectation, ExpectationTarget,
+    };
 
     #[test]
     fn invalid_expected_answer_error_uses_expectation_block_format() {
@@ -471,21 +473,27 @@ mod tests {
     }
 
     #[test]
-    fn in_place_rejects_git_backed_only_expectation_config_after_expansion() {
+    // xpec: 6
+    fn in_place_rejects_git_backed_only_config_after_expansion() {
         let agent = AgentConfig::default();
-        let mut expectation = expectation(&agent, None);
-        expectation.diff_from_configured = true;
-        let config = CheckConfig {
-            version: 1,
-            agent,
-            hooks: Default::default(),
-            expectations: vec![expectation],
-        };
+        let mut item = expectation(&agent, None);
+        item.diff_from_configured = true;
+        assert!(validate_in_place_check_config(&config_with(&agent, item)).is_err());
 
-        assert_eq!(
-            validate_in_place_check_config(&config).unwrap_err(),
-            "expectation 1 has Git-backed-only config: diff-from"
-        );
+        let item = expectation(&agent, Some(ExpectationTarget::Diff));
+        assert!(validate_in_place_check_config(&config_with(&agent, item)).is_err());
+
+        let mut item = expectation(&agent, None);
+        item.cooldown = Some(CooldownConfig::Compact("1d".to_string()));
+        assert!(validate_in_place_check_config(&config_with(&agent, item)).is_err());
+
+        let mut check_config = config_with(&agent, expectation(&agent, None));
+        check_config.agent.ignore = vec!["target".to_string()];
+        assert!(validate_in_place_check_config(&check_config).is_err());
+
+        let mut item = expectation(&agent, None);
+        item.agent.ignore = vec!["target".to_string()];
+        assert!(validate_in_place_check_config(&config_with(&agent, item)).is_err());
     }
 
     #[test]
@@ -508,6 +516,15 @@ mod tests {
             question_answer_only: false,
             agent: agent.clone(),
             cooldown: None,
+        }
+    }
+
+    fn config_with(agent: &AgentConfig, expectation: Expectation) -> CheckConfig {
+        CheckConfig {
+            version: 1,
+            agent: agent.clone(),
+            hooks: Default::default(),
+            expectations: vec![expectation],
         }
     }
 }

@@ -1,4 +1,3 @@
-use super::generator::render_generator_expectation_question;
 use super::include::merge_include_generator_fields_as_item_fields;
 use super::presets::{apply_expectation_settings, raw_presets_from_config, resolve_presets};
 use super::source::CheckConfigSource;
@@ -172,9 +171,7 @@ impl RawExpectationExpansion<'_> {
             } else {
                 String::new()
             };
-            // The rendered q_template is the generated expectation item's q.
-            let rendered_item_q =
-                render_generator_expectation_question(&item.q.q_template, &content);
+            let rendered_item_q = item.q.q_template.replace("{{content}}", &content);
             self.expectations.push(Expectation {
                 q: rendered_item_q,
                 a: item.a.clone(),

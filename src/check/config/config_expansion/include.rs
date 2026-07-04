@@ -18,28 +18,20 @@ pub(super) fn merge_include_generator_fields_as_item_fields(
 
 fn merge_generator_fields(fields: &mut RawExpectationFields, generator: &RawExpectationFields) {
     let declared_form = fields.declared_item_form();
-    // Generator fields count as generated item fields before preset/default
-    // resolution, but the merge stays form-aware: explicit items inherit
-    // explicit-form fields, path generators inherit path-generator fields, and
-    // unresolved/include items can still inherit either form's fields.
+    // This is the pre-merge form. Unlike preset defaults, include defaults are
+    // applied before `resolve_raw_expectation_item` captures the child form, so
+    // don't copy shape fields that would reclassify a child that already
+    // declared a different form.
     if fields.a.is_none() {
         fields.a = generator.a.clone();
     }
-    match declared_form {
-        Some(RawExpectationItemForm::Explicit) => {
-            if fields.explicit_q.is_none() {
-                fields.explicit_q = generator.explicit_q.clone();
-            }
-        }
-        Some(RawExpectationItemForm::Generator) => {
-            merge_generator_path_fields(fields, generator);
-        }
-        Some(RawExpectationItemForm::Include) | None => {
-            if fields.explicit_q.is_none() {
-                fields.explicit_q = generator.explicit_q.clone();
-            }
-            merge_generator_path_fields(fields, generator);
-        }
+    if !matches!(declared_form, Some(RawExpectationItemForm::Generator))
+        && fields.explicit_q.is_none()
+    {
+        fields.explicit_q = generator.explicit_q.clone();
+    }
+    if !matches!(declared_form, Some(RawExpectationItemForm::Explicit)) {
+        merge_generator_path_fields(fields, generator);
     }
     if fields.common.settings.preset.is_none() {
         fields.common.settings.preset = generator.common.settings.preset.clone();

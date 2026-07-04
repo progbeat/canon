@@ -14,6 +14,7 @@ pub(crate) fn render_runtime_log_event(
     event: &str,
     fields: &[(&str, Value)],
 ) -> DiagnosticLogResult<String> {
+    // Runtime Logs requires `level` and `event` to be single-line labels.
     schema::validate_runtime_log_common_fields(level, event)?;
     schema::validate_runtime_log_extra_fields(fields)?;
     schema::validate_runtime_log_event_schema(event, fields)?;
@@ -86,6 +87,7 @@ mod tests {
     }
 
     #[test]
+    // xpec: B
     fn runtime_log_common_fields_are_single_line_labels() {
         let level_error = render_runtime_log_event("warn\nnext", "check.start", &[]).unwrap_err();
         let event_error = render_runtime_log_event("warn", "check.start\rnext", &[]).unwrap_err();
