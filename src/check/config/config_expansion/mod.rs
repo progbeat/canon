@@ -1,5 +1,4 @@
 mod expansion;
-mod include;
 mod presets;
 mod source;
 
@@ -197,6 +196,55 @@ expectations:
             .expectations
             .iter()
             .all(|expectation| expectation.a == "yes"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    // xpec: WH,n7
+    #[test]
+    fn include_generator_defaults_do_not_reclassify_explicit_child_items() {
+        let root = test_root("include-explicit-child-form");
+        git(&root, &["init"]);
+        fs::create_dir_all(root.join("expects")).unwrap();
+        fs::create_dir_all(root.join("expects/specs")).unwrap();
+        fs::write(root.join("expects/specs/alpha.md"), "Alpha spec").unwrap();
+        fs::write(
+            root.join("expects/included.yml"),
+            r#"
+- q: "Does the child stay explicit?"
+"#,
+        )
+        .unwrap();
+        git(
+            &root,
+            &["add", "expects/included.yml", "expects/specs/alpha.md"],
+        );
+        let raw: RawCheckConfig = serde_saphyr::from_str(
+            r#"
+version: 1
+presets:
+  default: {}
+expectations:
+  - include: "expects/*.yml"
+    path: "specs/*.md"
+    q_template: "Inherited generated: {{content}}"
+    a: "yes"
+"#,
+        )
+        .expect("parse raw check config");
+        let mut cache = RepoInspectionCache::new();
+
+        let config = expand_raw_check_config(
+            Some(&root),
+            Path::new("check.yml"),
+            raw,
+            Some(&mut cache),
+            CheckConfigSource::Tree(TreeSource::Staged),
+        )
+        .expect("expand config");
+
+        assert_eq!(config.expectations.len(), 1);
+        assert_eq!(config.expectations[0].q, "Does the child stay explicit?");
+        assert_eq!(config.expectations[0].a, "yes");
         let _ = fs::remove_dir_all(root);
     }
 

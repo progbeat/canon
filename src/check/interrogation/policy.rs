@@ -15,7 +15,7 @@ use crate::evaluator::EvaluatorRunner;
 use crate::git::VisibleTreeOidCache;
 use crate::hash::full_scope;
 use crate::logs::DiagnosticLogWriter;
-use crate::scope::sanitize_scope;
+use crate::scope::{sanitize_scope, scope_is_within};
 use crate::xpec_state::XpecStateCache;
 
 // Interrogation Policy implementation map:
@@ -253,6 +253,9 @@ pub(crate) fn question_scope_suggestion_scope_for_independent_verification(
         Ok(scope) => scope,
         Err(_) => return Ok(None),
     };
+    if !scope_is_within(&suggested_scope, current_scope) {
+        return Ok(None);
+    }
     if runtime
         .visible_tree_oid(visible_tree_oid_cache, agent, &suggested_scope)
         .is_err()
@@ -421,6 +424,48 @@ mod tests {
             CheckRuntime::materialized(&root, &staged_view, &source, tree_context, &config, false);
         let current_scope = vec![".".to_string()];
         let suggestion = vec!["src/present.rs".to_string(), "src/missing.rs".to_string()];
+
+        let proposed = question_scope_suggestion_scope_for_independent_verification(
+            &runtime,
+            &agent,
+            Some(&suggestion),
+            &current_scope,
+            &mut cache,
+        )
+        .unwrap();
+
+        assert!(proposed.is_none());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test] // xpec: YD
+    fn disjoint_suggestion_path_is_not_verified_for_narrowing() {
+        let root = git_project("disjoint-q-scope-suggestion");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("tests")).unwrap();
+        fs::write(root.join("src/one.rs"), "one\n").unwrap();
+        fs::write(root.join("src/two.rs"), "two\n").unwrap();
+        fs::write(root.join("tests/one.rs"), "test\n").unwrap();
+        git(&root, &["add", "src/one.rs", "src/two.rs", "tests/one.rs"]);
+        let source = TreeSource::Staged;
+        let agent = AgentConfig::default();
+        let config = CheckConfig {
+            version: 1,
+            agent: agent.clone(),
+            hooks: Default::default(),
+            expectations: Vec::new(),
+        };
+        let staged_view = StagedWorktreeView::apply_for_tree_source(&root, source.clone()).unwrap();
+        let mut cache = VisibleTreeOidCache::new();
+        let tree_context = CheckTreeContext {
+            checked_tree_oid: source.tree_oid_for_prompt_diff(&root).unwrap(),
+            against_tree_oid: source.tree_oid_for_prompt_diff(&root).unwrap(),
+            checked_file_count: cache.checked_file_count(&root, &source).unwrap(),
+        };
+        let runtime =
+            CheckRuntime::materialized(&root, &staged_view, &source, tree_context, &config, false);
+        let current_scope = vec!["src".to_string()];
+        let suggestion = vec!["tests".to_string()];
 
         let proposed = question_scope_suggestion_scope_for_independent_verification(
             &runtime,

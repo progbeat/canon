@@ -1,10 +1,10 @@
-use super::include::merge_include_generator_fields_as_item_fields;
 use super::presets::{apply_expectation_settings, raw_presets_from_config, resolve_presets};
 use super::source::CheckConfigSource;
 use crate::config_types::{
     AgentConfig, CheckConfig, Expectation, ExpectationTarget, RawCheckConfig,
-    RawExpectationCommonConfig, RawExpectationFields, RawExpectationItem, RawExpectationSettings,
-    RawGeneratorExpectation, RawIncludeExpectation, ResolvedPresetConfig, DEFAULT_DIFF_FROM,
+    RawExpectationCommonConfig, RawExpectationFields, RawExpectationItem, RawExpectationItemForm,
+    RawExpectationSettings, RawGeneratorExpectation, RawIncludeExpectation, ResolvedPresetConfig,
+    DEFAULT_DIFF_FROM,
 };
 use crate::repo_inspection::RepoInspectionCache;
 use std::collections::BTreeMap;
@@ -203,10 +203,16 @@ impl RawExpectationExpansion<'_> {
             let result = (|| {
                 let content = self.read_expanded_file(&file)?;
                 let mut included = self.parse_included_items(&file, &content)?;
-                merge_include_generator_fields_as_item_fields(
-                    &mut included,
-                    &item.generated_item_defaults,
-                );
+                let generated_item_defaults = &item.generated_item_defaults;
+                for included_item in &mut included {
+                    let RawExpectationItem::Unresolved(fields) = included_item else {
+                        unreachable!("included items are raw until include generator fields merge");
+                    };
+                    merge_declared_form_compatible_raw_expectation_field_defaults(
+                        fields,
+                        generated_item_defaults,
+                    );
+                }
                 self.expand_items(Path::new(&file), included)
             })();
             self.include_stack.pop();
@@ -357,28 +363,92 @@ pub(super) fn merge_raw_expectation_common_defaults(
     }
 }
 
+pub(super) fn merge_declared_form_compatible_raw_expectation_field_defaults(
+    fields: &mut RawExpectationFields,
+    defaults: &RawExpectationFields,
+) {
+    let declared_form = fields.declared_item_form();
+    merge_raw_expectation_value_defaults(fields, defaults);
+    if !matches!(declared_form, Some(RawExpectationItemForm::Generator)) {
+        merge_raw_expectation_explicit_q_default(fields, defaults);
+    }
+    if !matches!(declared_form, Some(RawExpectationItemForm::Explicit)) {
+        merge_raw_expectation_generator_shape_defaults(fields, defaults);
+    }
+}
+
+fn merge_all_raw_expectation_field_defaults(
+    fields: &mut RawExpectationFields,
+    defaults: &RawExpectationFields,
+) {
+    merge_raw_expectation_value_defaults(fields, defaults);
+    merge_raw_expectation_explicit_q_default(fields, defaults);
+    merge_raw_expectation_generator_shape_defaults(fields, defaults);
+    merge_raw_expectation_include_shape_default(fields, defaults);
+}
+
+fn merge_raw_expectation_value_defaults(
+    fields: &mut RawExpectationFields,
+    defaults: &RawExpectationFields,
+) {
+    if fields.a.is_none() {
+        fields.a = defaults.a.clone();
+    }
+    if fields.common.settings.preset.is_none() {
+        fields.common.settings.preset = defaults.common.settings.preset.clone();
+    }
+    merge_raw_expectation_common_defaults(&mut fields.common, &defaults.common);
+}
+
+fn merge_raw_expectation_explicit_q_default(
+    fields: &mut RawExpectationFields,
+    defaults: &RawExpectationFields,
+) {
+    if fields.explicit_q.is_none() {
+        fields.explicit_q = defaults.explicit_q.clone();
+    }
+}
+
+fn merge_raw_expectation_generator_shape_defaults(
+    fields: &mut RawExpectationFields,
+    defaults: &RawExpectationFields,
+) {
+    if fields.q_template.is_none() {
+        fields.q_template = defaults.q_template.clone();
+    }
+    if fields.path.is_none() {
+        fields.path = defaults.path.clone();
+    }
+}
+
+fn merge_raw_expectation_include_shape_default(
+    fields: &mut RawExpectationFields,
+    defaults: &RawExpectationFields,
+) {
+    if fields.include.is_none() {
+        fields.include = defaults.include.clone();
+    }
+}
+
 fn apply_raw_expansion_item_preset_defaults(
     fields: &mut RawExpectationFields,
     preset: &ResolvedPresetConfig,
 ) {
-    // Preset `q` is the explicit-form question default. A path generator's
-    // generated q is resolved from the item/preset `q_template` below.
-    if fields.explicit_q.is_none() {
-        fields.explicit_q = preset.q.clone();
+    let defaults = raw_expectation_fields_from_preset(preset);
+    merge_all_raw_expectation_field_defaults(fields, &defaults);
+}
+
+fn raw_expectation_fields_from_preset(preset: &ResolvedPresetConfig) -> RawExpectationFields {
+    RawExpectationFields {
+        // Preset `q` is the explicit-form question default. A path generator's
+        // generated q is resolved from the item/preset `q_template`.
+        explicit_q: preset.q.clone(),
+        q_template: preset.q_template.clone(),
+        a: preset.a.clone(),
+        path: preset.path.clone(),
+        include: preset.include.clone(),
+        common: preset.common.clone(),
     }
-    if fields.q_template.is_none() {
-        fields.q_template = preset.q_template.clone();
-    }
-    if fields.a.is_none() {
-        fields.a = preset.a.clone();
-    }
-    if fields.path.is_none() {
-        fields.path = preset.path.clone();
-    }
-    if fields.include.is_none() {
-        fields.include = preset.include.clone();
-    }
-    merge_raw_expectation_common_defaults(&mut fields.common, &preset.common);
 }
 
 fn resolved_question_context(context: Option<String>) -> String {

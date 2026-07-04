@@ -19,11 +19,12 @@ pub(super) fn canon_show_dynamic_tools() -> Vec<Value> {
             {
                 "type": "function",
                 "name": "show",
-                "description": "Return canon show output for requested expectations in the current check run.",
+                "description": "Return canon show output for requested expectation ID prefixes or full IDs in the current check run.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "selectors": {
+                            "description": "Expectation selectors: ID prefix/full ID or not:<ID prefix/full ID>.",
                             "type": "array",
                             "items": { "type": "string" }
                         },

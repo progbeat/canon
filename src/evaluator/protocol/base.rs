@@ -63,6 +63,10 @@ mod tests {
         assert!(rendered.contains("substantive answer"));
         // xpec: 92,Wg,Nb
         assert!(rendered.contains("Question text may itself define the specification"));
+        // xpec: G6
+        assert!(rendered.contains("available dynamic tool output"));
+        // xpec: G6
+        assert!(rendered.contains("cite dynamic tool output by tool name"));
         // xpec: 92,Wg,Nb
         assert!(rendered.contains("do not require a separate policy file"));
         // xpec: 92,Wg,Nb

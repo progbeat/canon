@@ -31,6 +31,9 @@ impl EvaluatorResponseSchemaScope {
     }
 
     fn error_enum(self) -> Value {
+        // Evaluator response schemas only constrain evaluator-produced result
+        // errors. Final `canon check` Error lines render CheckRecord errors,
+        // which may also come from runtime or configuration failures.
         match self {
             // Restricted-scope interrogations may ask for more visible scope.
             EvaluatorResponseSchemaScope::Restricted => {
@@ -57,6 +60,9 @@ impl EvaluatorResponseSchemaScope {
     }
 
     fn requires_question_scope_suggestion(self) -> bool {
+        // Interrogation Policy's restricted-scope schema requires
+        // qScopeSuggestion. Full-project scope keeps that requirement and only
+        // removes ScopeTooNarrow from the allowed error values.
         matches!(
             self,
             EvaluatorResponseSchemaScope::Restricted | EvaluatorResponseSchemaScope::FullProject
