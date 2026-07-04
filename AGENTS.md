@@ -1,6 +1,6 @@
 # AGENTS.md
 
-- Alternate repeated `canon check` runs between `cargo run -- check` and `docker build -t canon:local . && CANON_DOCKER_IMAGE=canon:local .canon/docker/scripts/canon check`.
+- Run repeated `canon check` invocations with `cargo run -- check` by default. For roughly 1/10 runs, rebuild `canon:local` first and run `CANON_DOCKER_IMAGE=canon:local .canon/docker/scripts/canon check` instead.
 - After a successful commit, rebuild and refresh the installed `canon` binary available on PATH.
 - Treat tokens as a scarce resource. Avoid increasing token usage unless the correctness benefit justifies it, and prefer designs that preserve or reduce the model work needed to answer canon questions correctly.
 - If the evaluator returns a valid answer that does not match the expected answer, never try to influence the answer through developer instructions.
