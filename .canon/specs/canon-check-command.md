@@ -48,36 +48,37 @@ For each passing evaluated expectation, the result entry is exactly one line:
 <short ID><progress timeline> OK
 ```
 
-For each failed expectation, evaluated or cached, the result entry is exactly one block. The block has these required lines:
+For each failed expectation, evaluated or cached, the result entry is exactly one block.
+The block has these lines in order:
 
 ```
 <short ID><progress timeline> FAILED
 <escaped question>
+[Diff-from: <Git-abbreviated resolved diff-from tree OID> (<configured diff-from>)]
 Expected: <escaped expected>
 Observed: <escaped observed>
 Evidence: <escaped evidence>
+[Suggested q-scope: <compact JSON array>]
 ```
 
-If a q-scope suggestion is available, the block appends this final line:
+Bracketed lines are optional and are not written with brackets.
 
-```
-Suggested q-scope: <compact JSON array>
-```
+The `Diff-from` line is included only when the result entry has the resolved `diff-from` tree OID used by the evaluator interrogation.
 
-The line is omitted when no q-scope suggestion is available.
+The `Suggested q-scope` line is included only when a q-scope suggestion is available.
 
 For each errored expectation, the result entry is exactly one block of lines:
 
 ```
 <short ID><progress timeline> ERROR
 <escaped question>
+[Diff-from: <Git-abbreviated resolved diff-from tree OID> (<configured diff-from>)]
 Error: <escaped error>
 Evidence: <escaped evidence>
 ```
 
-Embedded control characters in the question, expected answer, observed answer,
-error, and evidence are escaped before writing to stdout. Escaping prevents
-evaluator-provided text from injecting additional stdout lines.
+Embedded control characters in the question, expected answer, observed answer, error, and evidence are escaped before writing to stdout.
+Escaping prevents evaluator-provided text from injecting additional stdout lines.
 
 `Suggested q-scope` is rendered as a compact JSON array on one line.
 
