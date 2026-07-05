@@ -21,6 +21,8 @@ pub(crate) struct ResolvedExpectation {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Cooldown {
+    // Cached-result cooldowns are status-specific: a compact config populates
+    // only `pass_seconds`, while mapping config may populate pass and/or fail.
     pub(crate) pass_seconds: Option<u64>,
     pub(crate) fail_seconds: Option<u64>,
 }

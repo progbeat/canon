@@ -342,6 +342,20 @@ pub(super) fn render_check_output_record_status_and_details(record: &CheckRecord
     output.push_str(&format!(" {}\n", status));
     output.push_str(&escape_check_output_text(record.question_text()));
     output.push('\n');
+    // The `Diff-from:` line is part of the failed/error result block only when
+    // the record came from a Git-backed interrogation with a resolved diff
+    // base. Cached records reconstruct the same in-memory abbreviation before
+    // reaching this renderer.
+    if let (Some(diff_from), Some(diff_from_tree_oid_abbrev)) = (
+        record.diff_from.as_deref(),
+        record.diff_from_tree_oid_abbrev.as_deref(),
+    ) {
+        output.push_str("Diff-from: ");
+        output.push_str(&escape_check_output_text(diff_from_tree_oid_abbrev));
+        output.push_str(" (");
+        output.push_str(&escape_check_output_text(diff_from));
+        output.push_str(")\n");
+    }
     if is_error {
         output.push_str("Error: ");
         let error = record
@@ -459,6 +473,9 @@ mod tests {
             scope: vec![".".to_string()],
             question_scope_suggestion: None,
             visible_tree_oid: "visible".to_string(),
+            diff_from: None,
+            diff_from_tree_oid: None,
+            diff_from_tree_oid_abbrev: None,
             id: "11111111111111111111".to_string(),
             display_id: "j".to_string(),
         }

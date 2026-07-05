@@ -299,6 +299,9 @@ mod tests {
             scope: scope.to_vec(),
             question_scope_suggestion: None,
             visible_tree_oid,
+            diff_from: None,
+            diff_from_tree_oid: None,
+            diff_from_tree_oid_abbrev: None,
             id: expectation.id.clone(),
             display_id: expectation.display_id.clone(),
         }

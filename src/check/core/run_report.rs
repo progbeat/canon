@@ -15,6 +15,9 @@ pub(crate) struct InterrogationResult {
 pub(crate) struct InterrogationAnswer {
     pub(crate) answer: ParsedAnswer,
     pub(crate) visible_tree_oid: String,
+    pub(crate) diff_from: Option<String>,
+    pub(crate) diff_from_tree_oid: Option<String>,
+    pub(crate) diff_from_tree_oid_abbrev: Option<String>,
     pub(crate) turn_usage: Option<TokenUsage>,
     pub(crate) context_compacted: bool,
     pub(crate) stop_after_current_expectation: bool,

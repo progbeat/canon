@@ -36,6 +36,16 @@ pub(crate) struct CheckRecord {
     pub(crate) question_scope_suggestion: Option<Vec<String>>,
     #[serde(rename = "visibleTreeOid", alias = "scopeTreeOid", alias = "scopeHash")]
     pub(crate) visible_tree_oid: String,
+    // Git-backed evaluator turns attach the resolved diff base used for the
+    // prompt-rendered diff so failed/error stdout can print the public
+    // `Diff-from:` line. Persistent state stores the full OID; stdout uses the
+    // Git-produced abbreviation carried only in memory.
+    #[serde(default, rename = "diffFrom")]
+    pub(crate) diff_from: Option<String>,
+    #[serde(default, rename = "diffFromTreeOid")]
+    pub(crate) diff_from_tree_oid: Option<String>,
+    #[serde(default, skip)]
+    pub(crate) diff_from_tree_oid_abbrev: Option<String>,
     #[serde(default)]
     pub(crate) id: String,
     #[serde(default, skip)]
@@ -53,6 +63,9 @@ pub(crate) struct CheckRecordOutcome {
     // actually used, not this transient suggestion.
     pub(crate) question_scope_suggestion: Option<Vec<String>>,
     pub(crate) visible_tree_oid: String,
+    pub(crate) diff_from: Option<String>,
+    pub(crate) diff_from_tree_oid: Option<String>,
+    pub(crate) diff_from_tree_oid_abbrev: Option<String>,
 }
 
 impl CheckRecord {
@@ -89,6 +102,9 @@ impl CheckRecord {
             scope: outcome.scope,
             question_scope_suggestion: outcome.question_scope_suggestion,
             visible_tree_oid: outcome.visible_tree_oid,
+            diff_from: outcome.diff_from,
+            diff_from_tree_oid: outcome.diff_from_tree_oid,
+            diff_from_tree_oid_abbrev: outcome.diff_from_tree_oid_abbrev,
         })
     }
 

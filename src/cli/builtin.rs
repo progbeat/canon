@@ -19,6 +19,8 @@ use std::path::Path;
 pub(super) enum BuiltinCommand {
     // Keep this enum aligned with the public command surface. `ask` and
     // `pre-commit` are public builtins; the old `hook` command is not.
+    // `Ask` is dispatched to `run_ask_command` below, not routed through
+    // `Check`, because `canon ask` has its own response-output contract.
     Init,
     PreCommit,
     Ask,

@@ -998,7 +998,7 @@ mod tests {
         path
     }
 
-    #[test]
+    #[test] // xpec: 2
     fn target_diff_prompt_hint_uses_full_q_scope_suggestion() {
         let last_pass = LastResult {
             response_timestamp: "1970-01-01T00:00:01Z".to_string(),
@@ -1013,6 +1013,8 @@ mod tests {
             visible_scope: vec!["src/a.rs".to_string()],
             checked_tree_oid: Some("checked-tree".to_string()),
             visible_tree_oid: Some("visible-tree".to_string()),
+            diff_from: None,
+            diff_from_tree_oid: None,
         };
         let output_dir = test_output_dir("turn-prompt");
         let mut artifact_paths = Vec::new();
@@ -1045,7 +1047,7 @@ mod tests {
         let _ = fs::remove_dir_all(output_dir);
     }
 
-    #[test]
+    #[test] // xpec: 2
     fn target_diff_prompt_uses_expected_answer_when_diff_from_is_not_checkpoint() {
         let last_pass = LastResult {
             response_timestamp: "1970-01-01T00:00:01Z".to_string(),
@@ -1060,6 +1062,8 @@ mod tests {
             visible_scope: vec!["src/a.rs".to_string()],
             checked_tree_oid: Some("checked-tree".to_string()),
             visible_tree_oid: Some("visible-tree".to_string()),
+            diff_from: None,
+            diff_from_tree_oid: None,
         };
         let output_dir = test_output_dir("turn-prompt-against-tree");
         let mut artifact_paths = Vec::new();
@@ -1085,7 +1089,7 @@ mod tests {
         let _ = fs::remove_dir_all(output_dir);
     }
 
-    #[test]
+    #[test] // xpec: 2
     fn in_place_turn_prompt_omits_target_diff_hint() {
         let last_pass = LastResult {
             response_timestamp: "1970-01-01T00:00:01Z".to_string(),
@@ -1100,6 +1104,8 @@ mod tests {
             visible_scope: vec!["src/a.rs".to_string()],
             checked_tree_oid: Some("checked-tree".to_string()),
             visible_tree_oid: Some("visible-tree".to_string()),
+            diff_from: None,
+            diff_from_tree_oid: None,
         };
         let output_dir = test_output_dir("turn-prompt-in-place");
         let mut artifact_paths = Vec::new();

@@ -12,4 +12,4 @@ pub(crate) use runtime_logs::{
     write_check_lifecycle_finish_event, write_check_lifecycle_start_event,
     write_query_lifecycle_finish_event, write_query_lifecycle_start_event,
 };
-pub(crate) use thread::interrogate_expectation_with_model;
+pub(crate) use thread::{interrogate_expectation_with_model, resolve_diff_from};
