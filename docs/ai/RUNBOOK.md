@@ -145,6 +145,14 @@ the evaluator task. This is an answer-correctness check, not evidence that
 Stage the intended edits. `canon check` checks the staged tree, not unstaged
 files.
 
+## GitHub Copilot Reviews
+
+Use `gh pr edit <pr> --add-reviewer @copilot` to request or re-request Copilot
+review. The bot username can fail as a normal reviewer. For thread-aware reads,
+use `python3 .../gh-address-comments/scripts/fetch_comments.py`; flat PR review
+summaries can mention a comment before thread details are obvious. Treat canon
+as authoritative when a Copilot suggestion contradicts a current xpec.
+
 ## Before Committing
 
 Run `canon check`, never commit `.canon/` changes from an agent-authored commit,
