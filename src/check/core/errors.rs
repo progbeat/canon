@@ -1,4 +1,4 @@
-use crate::check::core::{CheckRecord, CheckResult, SelectedExpectation};
+use crate::check::core::{CheckRecord, CheckResult, ResolvedExpectation};
 use crate::check::interrogation::state::CheckRuntime;
 use crate::config_types::AgentConfig;
 use crate::git::VisibleTreeOidCache;
@@ -11,7 +11,7 @@ pub(crate) const INTERNAL_ERROR_UNPARSABLE: &str = "unparsable";
 pub(crate) fn error_record_from_interrogation_error(
     runtime: &CheckRuntime<'_>,
     agent: &AgentConfig,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     scope: &[String],
     error: &str,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
@@ -21,7 +21,7 @@ pub(crate) fn error_record_from_interrogation_error(
 }
 
 pub(crate) fn error_record_from_visible_tree_oid(
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     scope: &[String],
     error: &str,
     visible_tree_oid: String,
@@ -37,7 +37,7 @@ pub(crate) fn error_record_from_visible_tree_oid(
 }
 
 pub(crate) fn error_record_from_visible_tree_oid_at(
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     scope: &[String],
     error: &str,
     visible_tree_oid: String,

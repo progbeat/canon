@@ -1,5 +1,5 @@
 use super::thread::interrogate_expectation_answer_with_model;
-use crate::check::core::{InterrogationAnswer, InterrogationResult, SelectedExpectation};
+use crate::check::core::{InterrogationAnswer, InterrogationResult, ResolvedExpectation};
 use crate::check::interrogation::interrogate_expectation_with_model;
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::interrogation::InterrogationRequestKind;
@@ -14,7 +14,7 @@ use serde_json::json;
 
 pub(crate) struct ModelFallbackInterrogation<'a> {
     pub(crate) runtime: &'a CheckRuntime<'a>,
-    pub(crate) expectation: &'a SelectedExpectation,
+    pub(crate) expectation: &'a ResolvedExpectation,
     pub(crate) enforced_scope: &'a [String],
     pub(crate) request_kind: InterrogationRequestKind,
     pub(crate) progress: Option<&'a EvaluatorProgress>,

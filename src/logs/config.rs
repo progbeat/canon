@@ -4,14 +4,17 @@ use std::path::Path;
 
 const LOG_MAX_SIZE_CONFIG_KEY: &str = "canon.logs.maxSize";
 const DEFAULT_LOG_MAX_SIZE_CONFIG_VALUE: &str = "0M";
-const DEFAULT_DIAGNOSTIC_LOG_FILES: [&str; 8] = [
-    "0.jsonl", "1.jsonl", "2.jsonl", "3.jsonl", "4.jsonl", "5.jsonl", "6.jsonl", "7.jsonl",
+pub(crate) const ACTIVE_DIAGNOSTIC_LOG_FILE: &str = "0.jsonl";
+const DIAGNOSTIC_LOG_FILES: [&str; 8] = [
+    ACTIVE_DIAGNOSTIC_LOG_FILE,
+    "1.jsonl",
+    "2.jsonl",
+    "3.jsonl",
+    "4.jsonl",
+    "5.jsonl",
+    "6.jsonl",
+    "7.jsonl",
 ];
-const DEFAULT_DIAGNOSTIC_LOG_CONFIG: DiagnosticLogConfig = DiagnosticLogConfig {
-    max_bytes: 0,
-    explicitly_disabled: true,
-    files: &DEFAULT_DIAGNOSTIC_LOG_FILES,
-};
 
 #[derive(Clone, Copy)]
 pub(crate) struct DiagnosticLogConfig {
@@ -19,7 +22,6 @@ pub(crate) struct DiagnosticLogConfig {
     // size is the configured off switch, not a request to write zero-byte logs.
     pub(crate) max_bytes: u64,
     pub(crate) explicitly_disabled: bool,
-    pub(crate) files: &'static [&'static str],
 }
 
 pub(crate) fn diagnostic_log_config(root: &Path) -> DiagnosticLogResult<DiagnosticLogConfig> {
@@ -27,7 +29,6 @@ pub(crate) fn diagnostic_log_config(root: &Path) -> DiagnosticLogResult<Diagnost
     Ok(DiagnosticLogConfig {
         max_bytes,
         explicitly_disabled,
-        files: DEFAULT_DIAGNOSTIC_LOG_CONFIG.files,
     })
 }
 
@@ -92,15 +93,12 @@ fn invalid_log_config(reason: impl Into<String>) -> DiagnosticLogError {
     }
 }
 
-pub(crate) fn diagnostic_log_files(config: &DiagnosticLogConfig) -> DiagnosticLogResult<&[&str]> {
-    if config.files.is_empty() {
-        return Err(DiagnosticLogError::EmptyFileList);
-    }
-    Ok(config.files)
+pub(crate) fn diagnostic_log_files() -> &'static [&'static str] {
+    &DIAGNOSTIC_LOG_FILES
 }
 
-pub(crate) fn active_log_file_name(config: &DiagnosticLogConfig) -> DiagnosticLogResult<&str> {
-    Ok(diagnostic_log_files(config)?[0])
+pub(crate) fn active_log_file_name() -> &'static str {
+    ACTIVE_DIAGNOSTIC_LOG_FILE
 }
 
 pub(crate) fn active_log_max_bytes(config: &DiagnosticLogConfig, file_count: usize) -> u64 {

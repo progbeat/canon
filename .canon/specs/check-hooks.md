@@ -10,19 +10,38 @@ Both events use the same hook format; only their trigger differs.
 Each event value is either one hook or an ordered list of hooks.
 Each hook is either a string or a mapping.
 A string is shorthand for a hook with `print: <string>`.
+
 Mapping fields are:
 
-- `print`: text to print
-- `confirm`: optional stdin line to require; never printed
-- `repair-instruction`: optional instruction to print after the status when the hook blocks
+- `print`: optional text to print
+- `input`: optional inline prompt text to print before reading one stdin line
+- `exec`: optional command argv to run from the repository root, without shell expansion
+- `cases`: optional mapping from input lines or exit codes to hook outcomes
 
-If omitted, `repair-instruction` defaults to ``▷ Fix the blocker and run `canon check` again!``.
+A mapping hook must contain `print`, `input`, or `exec`.
+`input` and `exec` are mutually exclusive.
+`cases` is valid only when `input` or `exec` is present.
+`input` and `exec` require `cases`.
+
+The default repair instruction is ``▷ Fix the blocker and run `canon check` again!``.
 
 When an event triggers, `canon` runs its hooks in order.
-For each hook, blank `print` skips that hook.
-Otherwise `canon` prints `print`, then reads and exactly matches one stdin line if `confirm` is present.
-The printed text is not newline-normalized; if `print` does not end with a newline, confirm input appears on the same terminal line.
-A `confirm` mismatch blocks immediately, adds one `blocked` outcome, skips later hooks for that event, and is not an expectation result.
+For each hook, `canon` writes `print`, if present, to stdout and appends one trailing newline.
+Then `canon` writes `input`, if present, to stdout without appending a newline, reads one stdin line, and trims only the line ending before matching it.
+If `exec` is present, `canon` first writes the command to stdout as `$ <command>\n`, then runs it with stdout inherited.
+If neither `input` nor `exec` is present, the hook continues after writing `print`.
+
+`cases` keys are YAML scalar values normalized to their text form.
+The key `_` is the fallback when no exact key matches.
+Exact keys are tried before `_`.
+
+`cases` values are hook outcomes:
+
+- `!ok`: continue to the next hook
+- `!block <repair-instruction>`: block immediately with the given repair instruction
+
+A blocking hook adds one `blocked` outcome, skips later hooks for that event, and is not an expectation result.
+If no `cases` entry applies, the hook blocks with the default repair instruction.
 
 `on-start` runs after config/options validation, before the first interrogation.
 `on-pass` runs after the last interrogation and before status output, only when `canon check` would otherwise pass.
@@ -32,12 +51,13 @@ Example:
 ```yaml
 hooks:
   on-start:
-    - "Starting canon check.\n"
-    - print: "Confirm dependencies are installed [y/N] "
-      confirm: "y"
+    - input: "Confirm dependencies are installed [y/N] "
+      cases:
+        y: !ok
+        _: !block "▷ Install dependencies, then run `canon check` again."
   on-pass:
-    - print: "Run the required linters. If they pass, type lint-pass: "
-      confirm: "lint-pass"
-      repair-instruction: |
-        ▷ Run the linters, fix any issues, then run `canon check` again.
+    - exec: ["cargo", "test"]
+      cases:
+        0: !ok
+        _: !block "▷ Run the tests, fix any issues, then run `canon check` again."
 ```

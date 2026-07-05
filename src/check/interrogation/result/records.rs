@@ -1,5 +1,5 @@
 use crate::check::core::{
-    CheckRecord, InterrogationAnswer, InterrogationResult, ParsedAnswer, SelectedExpectation,
+    CheckRecord, InterrogationAnswer, InterrogationResult, ParsedAnswer, ResolvedExpectation,
 };
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::evaluator::{record_from_response, EvaluatorError};
@@ -8,7 +8,7 @@ use crate::scope::sanitize_scope;
 use serde_json::json;
 
 pub(crate) fn interrogation_result_from_answer(
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     answer: InterrogationAnswer,
 ) -> Result<InterrogationResult, EvaluatorError> {

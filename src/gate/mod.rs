@@ -1,6 +1,6 @@
 use crate::check::{
     expectation_identities, is_canon_only_staged_change_bytes, is_canon_project_path_bytes,
-    select_expectations_with_identities, staged_changed_path_bytes, SelectedExpectation,
+    select_expectations_with_identities, staged_changed_path_bytes, ResolvedExpectation,
     CHECK_PATH,
 };
 use crate::cli::CommandError;
@@ -147,7 +147,7 @@ pub(crate) fn gate_regression_count_with_config(
 fn gate_selected_regression_count(
     root: &Path,
     agent: &AgentConfig,
-    selected_expectations: &[SelectedExpectation],
+    selected_expectations: &[ResolvedExpectation],
     xpec_state: &mut XpecStateCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
     now: u64,
@@ -174,7 +174,7 @@ fn gate_selected_regression_count(
 fn gate_expectation_status(
     root: &Path,
     agent: &AgentConfig,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     xpec_state: &mut XpecStateCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
     now: u64,
@@ -242,7 +242,7 @@ pub(crate) enum GateCacheResult {
 fn gate_cache_result_for_tree_at(
     root: &Path,
     _agent: &AgentConfig,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     tree: GateComparisonTree,
     xpec_state: &mut XpecStateCache,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,

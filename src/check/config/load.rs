@@ -2,6 +2,7 @@ use crate::check::config::config_expansion::{
     expand_raw_check_config_with_options, CheckConfigExpansionOptions, CheckConfigSource,
 };
 use crate::check::config::validation::validate_check_config;
+use crate::check::config::yaml_include::parse_yaml_config_with_includes;
 use crate::config_types::{CheckConfig, RawCheckConfig};
 use crate::git::TreeSource;
 use crate::repo_inspection::RepoInspectionCache;
@@ -37,7 +38,7 @@ pub(crate) fn parse_check_config_content_with_root_and_source_and_default_agent_
     // including optional top-level `canon check` hooks. Expansion resolves
     // those hooks into `CheckConfig.hooks` before validation or command
     // execution; Git pre-commit hook installation is a separate module.
-    let raw = parse_raw_check_config(config_path, content)?;
+    let raw = parse_raw_check_config(root, config_path, content, source.clone())?;
     let config = expand_raw_check_config_with_options(
         Some(root),
         config_path,
@@ -52,7 +53,12 @@ pub(crate) fn parse_check_config_content_with_root_and_source_and_default_agent_
     Ok(config)
 }
 
-fn parse_raw_check_config(config_path: &Path, content: &str) -> Result<RawCheckConfig, String> {
-    serde_saphyr::from_str(content)
+fn parse_raw_check_config(
+    root: &Path,
+    config_path: &Path,
+    content: &str,
+    source: CheckConfigSource,
+) -> Result<RawCheckConfig, String> {
+    parse_yaml_config_with_includes(root, config_path, content, source)
         .map_err(|err| format!("failed to parse {}: {}", config_path.display(), err))
 }

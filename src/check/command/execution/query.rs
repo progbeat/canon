@@ -7,7 +7,7 @@ use crate::check::command::{
     GitBackedCheckStorage, PrepareGitBackedCheckExecutionOptions,
 };
 use crate::check::config::validation::validate_in_place_global_config;
-use crate::check::core::{ParsedAnswer, INTERNAL_ERROR_UNPARSABLE};
+use crate::check::core::ParsedAnswer;
 use crate::check::interrogation::query::{
     query_human_review_reason, run_query_with_runner, QueryExpectationContext, QueryRequest,
 };
@@ -15,7 +15,7 @@ use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::interrogation::{
     write_query_lifecycle_finish_event, write_query_lifecycle_start_event,
 };
-use crate::check::{CheckRunCaches, SelectedExpectation};
+use crate::check::{CheckRunCaches, ResolvedExpectation};
 use crate::config_types::{AgentConfig, CheckConfig, DEFAULT_DIFF_FROM};
 use crate::evaluator::EvaluatorRunner;
 use crate::git::TreeSource;
@@ -39,20 +39,20 @@ pub(crate) struct CheckQueryCommand<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CheckQueryError {
-    Message(String),
+    Command(String),
+    Evaluator(String),
+    Output(String),
+    TokenUsage(String),
     ReviewRequired(&'static str),
-}
-
-impl CheckQueryError {
-    pub(crate) fn public_output_already_reported(&self) -> bool {
-        matches!(self, CheckQueryError::ReviewRequired(_))
-    }
 }
 
 impl std::fmt::Display for CheckQueryError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CheckQueryError::Message(message) => formatter.write_str(message),
+            CheckQueryError::Command(message)
+            | CheckQueryError::Evaluator(message)
+            | CheckQueryError::Output(message)
+            | CheckQueryError::TokenUsage(message) => formatter.write_str(message),
             CheckQueryError::ReviewRequired(reason) => {
                 write!(formatter, "query requires human review: {reason}")
             }
@@ -62,7 +62,7 @@ impl std::fmt::Display for CheckQueryError {
 
 impl From<String> for CheckQueryError {
     fn from(message: String) -> CheckQueryError {
-        CheckQueryError::Message(message)
+        CheckQueryError::Command(message)
     }
 }
 
@@ -212,9 +212,10 @@ fn run_prepared_query(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     check_caches: &mut CheckRunCaches,
 ) -> Result<(), CheckQueryError> {
-    // `config` is already expanded: command `--preset` can only choose the
-    // default agent during raw expansion, before `canon ask` consumes resolved
-    // expectation/config fields here.
+    // `config` is the ask-only config assembled by run.rs: command `--preset`
+    // can only choose the default agent during raw expansion, and configured
+    // check expectations/hooks are not part of this query. In-place query
+    // validation therefore covers the global agent settings used below.
     if runtime.is_in_place() {
         validate_in_place_global_config(&config.agent)?;
         *enforced_scope = runtime
@@ -251,9 +252,11 @@ fn run_prepared_query(
     let result = match result {
         Ok(result) => result,
         Err(err) => {
-            let answer = ParsedAnswer::error(INTERNAL_ERROR_UNPARSABLE.to_string(), err.clone());
-            finish_query_output_and_print_usage(started_report, &answer, runner)?;
-            return Err(CheckQueryError::Message(err));
+            let answer = query_failure_answer(&err);
+            return match finish_query_output_and_print_usage(started_report, &answer, runner) {
+                Ok(()) => Err(CheckQueryError::Evaluator(err)),
+                Err(output_err) => Err(output_err),
+            };
         }
     };
     finish_query_output_and_print_usage(started_report, &result.answer, runner)?;
@@ -263,18 +266,25 @@ fn run_prepared_query(
     Ok(())
 }
 
+fn query_failure_answer(error: &str) -> ParsedAnswer {
+    ParsedAnswer::error(error.to_string(), error.to_string())
+}
+
 fn finish_query_output_and_print_usage(
     started_report: crate::check::command::output::StartedExpectationReportOutput,
     answer: &ParsedAnswer,
     runner: &mut LazyAppServerRunner,
 ) -> Result<(), CheckQueryError> {
-    // Compute both results before returning either error. This still attempts
-    // the token usage stderr line when query stdout finishing fails.
+    // Attempt both public output surfaces before returning either error. This
+    // preserves the query token-usage stderr line even when stdout finishing
+    // reports a write/flush failure.
     let output_result = finish_query_output(started_report, answer);
     let usage_result = print_query_token_usage(runner);
-    output_result?;
-    usage_result?;
-    Ok(())
+    match (output_result, usage_result) {
+        (Err(err), _) => Err(CheckQueryError::Output(err)),
+        (Ok(()), Err(err)) => Err(CheckQueryError::TokenUsage(err)),
+        (Ok(()), Ok(())) => Ok(()),
+    }
 }
 
 fn print_query_token_usage(runner: &mut LazyAppServerRunner) -> Result<(), String> {
@@ -286,8 +296,8 @@ fn query_enforced_scope(query_scope: &[String]) -> Result<Vec<String>, String> {
     sanitize_scope(query_scope).map_err(|err| format!("--scope: {}", err))
 }
 
-fn temporary_query_expectation(question: &str, agent: &AgentConfig) -> SelectedExpectation {
-    SelectedExpectation {
+fn temporary_query_expectation(question: &str, agent: &AgentConfig) -> ResolvedExpectation {
+    ResolvedExpectation {
         number: 0,
         id: String::new(),
         display_id: "q".to_string(),
@@ -316,5 +326,13 @@ mod tests {
         assert_eq!(expectation.expected_answer, "");
         assert_eq!(expectation.display_id, "q");
         assert!(expectation.id.is_empty());
+    }
+
+    #[test] // xpec: 5
+    fn query_failure_answer_reports_runtime_error_as_error_text() {
+        let answer = query_failure_answer("transport failed");
+
+        assert_eq!(answer.error.as_deref(), Some("transport failed"));
+        assert_eq!(answer.evidence, "transport failed");
     }
 }

@@ -1,4 +1,4 @@
-use crate::check::{CheckRecord, CheckResult, SelectedExpectation};
+use crate::check::{CheckRecord, CheckResult, ResolvedExpectation};
 use crate::fs_util::{ensure_dir_without_symlinks, reject_symlink, write_temp_file_then_replace};
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::hash::hash_60;
@@ -112,7 +112,7 @@ impl XpecStateCache {
     pub(crate) fn read_last_pass_q_scope(
         &mut self,
         root: &Path,
-        expectation: &SelectedExpectation,
+        expectation: &ResolvedExpectation,
     ) -> Result<Option<Vec<String>>, String> {
         Ok(self
             .read_last_pass(root, expectation)?
@@ -122,7 +122,7 @@ impl XpecStateCache {
     pub(crate) fn read_last_pass(
         &mut self,
         root: &Path,
-        expectation: &SelectedExpectation,
+        expectation: &ResolvedExpectation,
     ) -> Result<Option<LastResult>, String> {
         self.read_last_result(root, expectation, LastResultStatus::Pass)
     }
@@ -130,7 +130,7 @@ impl XpecStateCache {
     pub(crate) fn read_last_fail(
         &mut self,
         root: &Path,
-        expectation: &SelectedExpectation,
+        expectation: &ResolvedExpectation,
     ) -> Result<Option<LastResult>, String> {
         self.read_last_result(root, expectation, LastResultStatus::Fail)
     }
@@ -138,7 +138,7 @@ impl XpecStateCache {
     pub(crate) fn read_last_error(
         &mut self,
         root: &Path,
-        expectation: &SelectedExpectation,
+        expectation: &ResolvedExpectation,
     ) -> Result<Option<LastResult>, String> {
         self.read_last_result(root, expectation, LastResultStatus::Error)
     }
@@ -146,7 +146,7 @@ impl XpecStateCache {
     pub(crate) fn read_last_result(
         &mut self,
         root: &Path,
-        expectation: &SelectedExpectation,
+        expectation: &ResolvedExpectation,
         status: LastResultStatus,
     ) -> Result<Option<LastResult>, String> {
         let key = (root.to_path_buf(), expectation.id.clone(), status);
@@ -162,7 +162,7 @@ impl XpecStateCache {
     pub(crate) fn read_same_tree_records(
         &mut self,
         root: &Path,
-        expectation: &SelectedExpectation,
+        expectation: &ResolvedExpectation,
         status: LastResultStatus,
     ) -> Result<Vec<LastResult>, String> {
         assert!(matches!(
@@ -185,7 +185,7 @@ impl XpecStateCache {
         &mut self,
         root: &Path,
         checked_tree_oid: &str,
-        expectation: &SelectedExpectation,
+        expectation: &ResolvedExpectation,
         record: &CheckRecord,
     ) -> Result<LastResult, String> {
         self.write_last_result_for_record_inner(root, checked_tree_oid, expectation, record)
@@ -195,7 +195,7 @@ impl XpecStateCache {
         &mut self,
         root: Option<&Path>,
         checked_tree_oid: &str,
-        expectation: &SelectedExpectation,
+        expectation: &ResolvedExpectation,
         record: &CheckRecord,
     ) -> Result<Option<LastResult>, String> {
         let Some(root) = root else {
@@ -212,7 +212,7 @@ impl XpecStateCache {
         &mut self,
         root: &Path,
         checked_tree_oid: &str,
-        expectation: &SelectedExpectation,
+        expectation: &ResolvedExpectation,
         record: &CheckRecord,
     ) -> Result<LastResult, String> {
         let status = last_result_status_for_record(expectation, record);
@@ -248,7 +248,7 @@ impl XpecStateCache {
         &mut self,
         root: &Path,
         current_checked_tree_oid: &str,
-        expectation: &SelectedExpectation,
+        expectation: &ResolvedExpectation,
         result: &LastResult,
     ) -> Result<LastResult, String> {
         let mut refreshed = result.clone();
@@ -262,7 +262,7 @@ impl XpecStateCache {
     fn write_last_result(
         &mut self,
         root: &Path,
-        expectation: &SelectedExpectation,
+        expectation: &ResolvedExpectation,
         result: &LastResult,
     ) -> Result<(), String> {
         validate_last_result(result.status, result)?;
@@ -289,7 +289,7 @@ impl XpecStateCache {
     fn last_result_path(
         &mut self,
         root: &Path,
-        expectation: &SelectedExpectation,
+        expectation: &ResolvedExpectation,
         status: LastResultStatus,
     ) -> Result<PathBuf, String> {
         Ok(self.xpec_dir(root, expectation)?.join(status.file_name()))
@@ -298,7 +298,7 @@ impl XpecStateCache {
     fn same_tree_records_dir(
         &mut self,
         root: &Path,
-        expectation: &SelectedExpectation,
+        expectation: &ResolvedExpectation,
         status: LastResultStatus,
     ) -> Result<PathBuf, String> {
         Ok(self
@@ -310,7 +310,7 @@ impl XpecStateCache {
     fn save_replaced_same_tree_record(
         &mut self,
         root: &Path,
-        expectation: &SelectedExpectation,
+        expectation: &ResolvedExpectation,
         status: LastResultStatus,
         status_path: &Path,
         replacement: &LastResult,
@@ -344,7 +344,7 @@ impl XpecStateCache {
 }
 
 pub(super) fn check_record_from_last_result(
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     result: &LastResult,
 ) -> CheckRecord {
     let error = result.error().map(str::to_string);
@@ -372,7 +372,7 @@ pub(super) fn check_record_from_last_result(
 }
 
 pub(super) fn pass_record_from_cooldown_result(
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     result: &LastResult,
 ) -> CheckRecord {
     let response_question_scope_suggestion = result.question_scope_suggestion();
@@ -394,7 +394,7 @@ pub(super) fn pass_record_from_cooldown_result(
 }
 
 fn last_result_status_for_record(
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     record: &CheckRecord,
 ) -> LastResultStatus {
     // Last-result status follows the final response shape: error responses and
@@ -429,7 +429,7 @@ fn normalized_response_from_record(record: &CheckRecord) -> Value {
 fn visible_tree_oid_for_persisted_scope(
     root: &Path,
     checked_tree_oid: &str,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     record: &CheckRecord,
     q_scope: &[String],
 ) -> Result<String, String> {

@@ -2,7 +2,8 @@ use crate::check::CheckConfigSource;
 use crate::check::{
     expand_staged_generator_paths_from_listing,
     parse_check_config_content_with_root_and_source_and_default_agent_preset,
-    parse_tree_check_config_content_with_root_and_default_agent_preset, CHECK_PATH,
+    parse_tree_check_config_content_with_root_and_default_agent_preset,
+    parse_yaml_config_with_includes, CHECK_PATH,
 };
 use crate::config_types::{CheckConfig, RawExpectationItem};
 use crate::fs_util::reject_symlink;
@@ -20,7 +21,7 @@ type InPlaceFileContentCacheKey = (PathBuf, PathBuf);
 type StagedFileContentCacheKey = (PathBuf, PathBuf);
 type TreeFileContentCacheKey = (PathBuf, String, PathBuf);
 type CheckConfigCacheKey = (PathBuf, PathBuf, String, String, Option<String>);
-type IncludedExpectationsCacheKey = (String, String);
+type IncludedExpectationsCacheKey = (PathBuf, String, String, String);
 type StagedBlobContents = BTreeMap<Vec<u8>, Vec<u8>>;
 
 #[derive(Default)]
@@ -385,15 +386,23 @@ impl RepoInspectionCache {
 
     pub(crate) fn included_expectation_items(
         &mut self,
+        root: &Path,
+        source: &CheckConfigSource,
         file: &str,
         content: &str,
     ) -> Result<Vec<RawExpectationItem>, String> {
-        let key = (file.to_string(), content.to_string());
+        let key = (
+            root.to_path_buf(),
+            source.cache_key(),
+            file.to_string(),
+            content.to_string(),
+        );
         if let Some(cached) = self.included_expectations.get(&key) {
             return cached.clone();
         }
-        let parsed = serde_saphyr::from_str(content)
-            .map_err(|err| format!("failed to parse {}: {}", file, err));
+        let parsed =
+            parse_yaml_config_with_includes(root, Path::new(file), content, source.clone())
+                .map_err(|err| format!("failed to parse {}: {}", file, err));
         self.included_expectations.insert(key, parsed.clone());
         parsed
     }

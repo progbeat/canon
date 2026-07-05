@@ -37,7 +37,6 @@ pub(crate) enum DiagnosticLogError {
     SizeOverflow {
         path: PathBuf,
     },
-    EmptyFileList,
 }
 
 impl fmt::Display for DiagnosticLogError {
@@ -69,9 +68,6 @@ impl fmt::Display for DiagnosticLogError {
             DiagnosticLogError::SizeOverflow { path } => {
                 write!(formatter, "{} size is too large", path.display())
             }
-            DiagnosticLogError::EmptyFileList => {
-                formatter.write_str("diagnostic log config must include at least one log file")
-            }
         }
     }
 }
@@ -87,8 +83,7 @@ impl Error for DiagnosticLogError {
             | DiagnosticLogError::InvalidRuntimeField { .. }
             | DiagnosticLogError::InvalidConfig { .. }
             | DiagnosticLogError::RecordTooLarge { .. }
-            | DiagnosticLogError::SizeOverflow { .. }
-            | DiagnosticLogError::EmptyFileList => None,
+            | DiagnosticLogError::SizeOverflow { .. } => None,
         }
     }
 }

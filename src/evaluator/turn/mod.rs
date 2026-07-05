@@ -1,5 +1,5 @@
 use crate::check::{
-    CheckRecord, CheckRecordOutcome, CheckResult, ParsedAnswer, SelectedExpectation,
+    CheckRecord, CheckRecordOutcome, CheckResult, ParsedAnswer, ResolvedExpectation,
 };
 use crate::config_types::AgentConfig;
 use crate::evaluator::EvaluatorError;
@@ -24,7 +24,7 @@ pub(crate) fn evaluator_models(agent: &AgentConfig) -> Vec<Option<String>> {
 
 pub(crate) fn effective_thinking<'a>(
     _agent: &'a AgentConfig,
-    expectation: &'a SelectedExpectation,
+    expectation: &'a ResolvedExpectation,
 ) -> &'a str {
     &expectation.agent.thinking
 }
@@ -77,7 +77,7 @@ impl EvaluatorFailureKind {
 }
 
 pub(crate) fn record_from_response(
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     response: ParsedAnswer,
     visible_tree_oid: String,
 ) -> Result<CheckRecord, String> {
@@ -115,6 +115,7 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
+    // xpec: 92
     #[test]
     fn schema_valid_evidence_file_refs_do_not_trigger_repair() {
         let root = temp_root("schema-valid-evidence");
@@ -138,6 +139,7 @@ mod tests {
             &mut parser_cache,
             &mut diagnostic_log,
             Some("expectation"),
+            None,
         )
         .unwrap();
 
@@ -149,6 +151,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    // xpec: 92
     #[test]
     fn malformed_response_stays_unparsable_without_repair() {
         let root = temp_root("unparsable");
@@ -170,6 +173,7 @@ mod tests {
             &mut parser_cache,
             &mut diagnostic_log,
             Some("expectation"),
+            None,
         )
         .unwrap();
 
@@ -188,7 +192,7 @@ mod tests {
 
     #[test]
     fn check_record_requires_expected_answer() {
-        let expectation = SelectedExpectation {
+        let expectation = ResolvedExpectation {
             number: 0,
             id: String::new(),
             display_id: "q".to_string(),
@@ -256,6 +260,7 @@ mod tests {
             _model: Option<&str>,
             _thinking: &str,
             _scope: &[String],
+            _dynamic_tools: &[serde_json::Value],
         ) -> Result<String, EvaluatorError> {
             Ok("session".to_string())
         }
@@ -267,6 +272,7 @@ mod tests {
             _model: Option<&str>,
             _thinking: &str,
             _output_schema: &serde_json::Value,
+            _dynamic_tool_handler: Option<&mut dyn crate::evaluator::EvaluatorDynamicToolHandler>,
         ) -> Result<String, EvaluatorError> {
             Ok(self.responses.remove(0))
         }

@@ -1,5 +1,5 @@
 use super::answer::{default_check_result, CheckResult};
-use super::expectation::SelectedExpectation;
+use super::expectation::ResolvedExpectation;
 use crate::time::{format_record_timestamp, unix_timestamp};
 use serde::Deserialize;
 
@@ -72,7 +72,7 @@ impl CheckRecord {
     }
 
     pub(crate) fn current_from_expectation(
-        expectation: &SelectedExpectation,
+        expectation: &ResolvedExpectation,
         outcome: CheckRecordOutcome,
     ) -> Result<CheckRecord, String> {
         Ok(CheckRecord {

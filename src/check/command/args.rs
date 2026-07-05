@@ -360,6 +360,17 @@ mod tests {
         assert!(err.contains("unexpected argument"));
     }
 
+    #[test] // xpec: HW
+    fn check_help_excludes_ask_only_options() {
+        let mut help = Vec::new();
+        check_help_command().write_long_help(&mut help).unwrap();
+        let help = String::from_utf8(help).unwrap();
+
+        assert!(!help.contains("-q"));
+        assert!(!help.contains("--preset"));
+        assert!(!help.contains("--scope"));
+    }
+
     #[test]
     fn ask_accepts_preset() {
         let command = parse_ask(&["Can this pass?", "--preset", "smart"]).unwrap();

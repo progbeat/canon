@@ -1,15 +1,19 @@
 # AGENTS.md
 
-- Alternate repeated `canon check` runs between `cargo run -- check` and the Docker wrapper to exercise both local and containerized paths.
+- Run repeated `canon check` invocations with `cargo run -- check` by default. For roughly 1/10 runs, rebuild `canon:local` first and run `CANON_DOCKER_IMAGE=canon:local .canon/docker/scripts/canon check` instead.
 - After a successful commit, rebuild and refresh the installed `canon` binary available on PATH.
 - Treat tokens as a scarce resource. Avoid increasing token usage unless the correctness benefit justifies it, and prefer designs that preserve or reduce the model work needed to answer canon questions correctly.
 - If the evaluator returns a valid answer that does not match the expected answer, never try to influence the answer through developer instructions.
 - Optimize evaluator developer instructions only to reduce token usage or to fix errors such as unparseable answers.
 - Keep the evaluator agent’s developer instructions concise.
+- For every test declaration and every assert invocation, the behavior checked on that execution path must logically follow from the canon. Add a source-comment marker `xpec: <shortID>[,<shortID>...]`, preferring the same line over the immediately preceding non-blank line. A marker on a test declaration covers assert invocations in that test unless an assert has its own marker.
+- Source comments may reference xpecs compactly as `[<shortID>]` or `[<shortID>,<shortID>...]`, e.g. `[e5]` or `[e5,nT]`.
 - Treat any codex_app_server ERROR or permission-config warning during canon check as a blocker, even if the command exits successfully.
 - For reference, Codex GitHub: https://github.com/openai/codex
 
 ## AI Docs
+
+Read `docs/ai/README.md` for the AI docs purpose and usage.
 
 Use `docs/ai/**` for compact notes that reduce future confusion: recurring failures, reliable fixes, project gotchas, navigation tips, canon pain points, questionable canon decisions, implementation concerns, and improvement ideas.
 
@@ -30,7 +34,7 @@ When running canon check, **do not pass options** unless the human explicitly re
 
 **Never ever make unrequested changes unless they directly improve the project's compliance with the canon.**
 
-If a request contradicts the canon or the canon is internally inconsistent, stop, show the human evidence based only on files under `.canon/`, and ask them to update the canon first.
+If a request appears to contradict the canon, or if the canon appears internally inconsistent, use `$canon-conflict` before reporting a conflict to the human.
 
 Do not edit files under `.canon/` proactively. Edit them only when a human explicitly insists.
 

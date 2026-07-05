@@ -1,5 +1,5 @@
 use super::evaluator_response::ParsedAnswer;
-use super::expectation::SelectedExpectation;
+use super::expectation::ResolvedExpectation;
 use super::record::CheckRecord;
 use crate::token_usage_types::TokenUsage;
 use std::collections::BTreeSet;
@@ -28,7 +28,7 @@ pub(crate) struct QueryResult {
 
 #[derive(Debug, Clone)]
 pub(crate) struct CachedExpectation {
-    pub(crate) expectation: SelectedExpectation,
+    pub(crate) expectation: ResolvedExpectation,
     pub(crate) record: CheckRecord,
 }
 
@@ -42,10 +42,22 @@ pub(crate) struct CheckRunReport {
     // Structured result records produced by evaluator work in this run.
     pub(crate) records: Vec<CheckRecord>,
     pub(crate) cached: Vec<CachedExpectation>,
-    pub(crate) blocked: Option<BlockedCheckHook>,
-    // Expectations not covered by pass, fail, or human-review summary
-    // categories.
+    pub(crate) blocked_hooks: Vec<BlockedCheckHook>,
+    // Expectations not covered by evaluated records or cached results.
     pub(crate) skipped: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReportRecordSource {
+    Evaluated,
+    Cached,
+}
+
+pub(crate) fn report_record_counts_as_error(
+    source: ReportRecordSource,
+    record: &CheckRecord,
+) -> bool {
+    source == ReportRecordSource::Evaluated && record.requires_human_review()
 }
 
 pub(crate) fn for_each_unique_report_record(
@@ -53,10 +65,18 @@ pub(crate) fn for_each_unique_report_record(
     cached: &[CachedExpectation],
     mut visit: impl FnMut(&CheckRecord),
 ) {
+    for_each_unique_report_record_with_source(records, cached, |_, record| visit(record));
+}
+
+pub(crate) fn for_each_unique_report_record_with_source(
+    records: &[CheckRecord],
+    cached: &[CachedExpectation],
+    mut visit: impl FnMut(ReportRecordSource, &CheckRecord),
+) {
     let mut seen = BTreeSet::new();
     for record in records {
         if seen.insert(record.id.clone()) {
-            visit(record);
+            visit(ReportRecordSource::Evaluated, record);
         }
     }
     for cached in cached {
@@ -66,7 +86,7 @@ pub(crate) fn for_each_unique_report_record(
             &cached.record.id
         };
         if seen.insert(id.clone()) {
-            visit(&cached.record);
+            visit(ReportRecordSource::Cached, &cached.record);
         }
     }
 }

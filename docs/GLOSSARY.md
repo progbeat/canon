@@ -59,7 +59,8 @@ The resolved `instructions` config value for an expectation, or empty text when
 none is configured. Despite the config field name, this is expectation context
 data, not an implementation-owned evaluator-agent prompt or instruction source.
 Evaluator prompt and instruction templates live under `resources/prompts/` and
-decide how to embed this data.
+decide how to embed this data. Storing this human-authored canon data in config
+does not make the config file an evaluator prompt source.
 
 ## Expectation ID
 
@@ -92,13 +93,14 @@ tree context.
 The implementation-owned evaluator prompt and instruction templates are the
 resource files under `resources/prompts/`. Config values such as expectation
 `instructions` are human-authored canon data passed into those templates, not
-additional implementation-owned prompt templates.
+additional implementation-owned prompt templates or instruction sources.
 
 ## Generator item
 
-A config entry that expands matching Markdown specs into additional
-expectations. A generator item uses a path pattern, a question template, and an
-expected answer.
+A config entry that expands into additional expectations. Generator items
+include `include` entries and path-generator entries. A path-generator entry
+uses a path pattern, a question template, and an expected answer, and expands
+matching checked files.
 
 ## Observed answer
 

@@ -1,5 +1,5 @@
 use super::order::order_by_latest_non_pass;
-use crate::check::core::{CheckOptions, SelectedExpectation};
+use crate::check::core::{CheckOptions, ResolvedExpectation};
 use crate::check::run::cache::{
     cached_result_for_expectation, write_cache_hit, CachedResultLookup, CheckCacheHit,
 };
@@ -8,14 +8,23 @@ use crate::logs::DiagnosticLogWriter;
 use crate::xpec_state::XpecStateCache;
 use std::path::Path;
 
-pub(crate) struct GitBackedCacheFilteredCheckWork {
-    // Expectations that cache policy sends to the evaluator.
-    pub(crate) evaluation_queue: Vec<SelectedExpectation>,
-    pub(crate) cached_hits: Vec<CachedExpectationHit>,
+pub(crate) enum GitBackedCacheFilteredCheckWork {
+    EvaluationAllowed {
+        // Expectations that cache policy sends to the evaluator.
+        evaluation_queue: Vec<ResolvedExpectation>,
+        cached_hits: Vec<CachedExpectationHit>,
+    },
+    CachedNonPassBlocksDefaultSelection {
+        // xpec: nT,e5
+        // A cached non-pass blocks default selection before evaluation starts:
+        // uncached candidates remain pending instead of becoming selected
+        // evaluator work, so `e5` has no uncached selected work to order here.
+        cached_hits: Vec<CachedExpectationHit>,
+    },
 }
 
 pub(crate) struct CachedExpectationHit {
-    pub(crate) expectation: SelectedExpectation,
+    pub(crate) expectation: ResolvedExpectation,
     pub(crate) hit: CheckCacheHit,
 }
 
@@ -33,13 +42,16 @@ pub(crate) struct GitBackedCacheFilterContext<'a, 'log> {
     pub(crate) diagnostic_log: &'a mut Option<&'log mut DiagnosticLogWriter>,
 }
 
-// Git-backed cache filtering turns pre-cache candidates into the final
-// evaluator queue before evaluation starts: selector mode evaluates explicit
-// selections, all-pass cached state selects uncached candidates, and any cached
-// non-pass leaves uncached candidates pending.
+// Git-backed cache filtering applies nT selection before evaluation starts:
+// selector mode evaluates explicit selections, all-pass cached state selects
+// uncached candidates, and any cached non-pass blocks default selection so
+// uncached candidates remain pending.
 //
-// This layer only partitions work by cache availability. The execution layer
-// orders cached hits and evaluator work together before running them.
+// This layer only partitions work by cache availability and selectedness. The
+// execution layer orders cached report hits and the remaining selected
+// evaluator work together before running them. Cache selection reads existing
+// xpec state and may emit bounded runtime-log events through the supplied
+// writer, but it does not create a persistent state family of its own.
 //
 // This function receives command-independent `CheckOptions`; CLI/trailer policy
 // stays in the command layer before and after this selection step.
@@ -53,16 +65,16 @@ pub(crate) fn select_git_backed_expectations_after_cache(
         // Explicit expectation selectors are forced selections. Do not inspect
         // cached results here: a cache hit must not move an explicit candidate
         // out of the evaluator queue.
-        return Ok(GitBackedCacheFilteredCheckWork {
-            evaluation_queue: options.pre_cache_candidates.clone(),
+        return Ok(GitBackedCacheFilteredCheckWork::EvaluationAllowed {
+            evaluation_queue: options.candidate_expectations.clone(),
             cached_hits: Vec::new(),
         });
     }
 
-    let mut uncached = Vec::new();
+    let mut candidates_without_cached_result = Vec::new();
     let mut cached_hits = Vec::new();
     let mut cached_non_pass_seen = false;
-    for expectation in options.pre_cache_candidates.clone() {
+    for expectation in options.candidate_expectations.clone() {
         // Cached results come only from pass/fail same-tree or cooldown state;
         // last-error human-review records remain non-pass history for ordering,
         // but are not cache hits.
@@ -86,39 +98,28 @@ pub(crate) fn select_git_backed_expectations_after_cache(
                 }
                 cached_hits.push(CachedExpectationHit { expectation, hit });
             }
-            None => uncached.push(expectation),
+            None => candidates_without_cached_result.push(expectation),
         }
     }
-    let evaluation_queue = evaluation_queue_after_default_cache_policy(
-        cached_non_pass_seen,
-        uncached,
-        cached_non_pass_policy,
-    );
-    if cached_non_pass_seen && cached_non_pass_policy == CachedNonPassPolicy::LeaveUncachedPending {
+    let cached_failure_blocks_default_selection =
+        cached_non_pass_seen && cached_non_pass_policy == CachedNonPassPolicy::LeaveUncachedPending;
+    if cached_failure_blocks_default_selection {
+        // xpec: nT,e5
+        // These are already-known cached report hits, not a selected evaluator
+        // queue. The uncached candidates collected above remain pending under
+        // default selection because cached failures must be fixed first.
         cached_hits =
             order_by_latest_non_pass(context.root, cached_hits, context.xpec_state, |hit| {
                 &hit.expectation
             })?;
+        return Ok(
+            GitBackedCacheFilteredCheckWork::CachedNonPassBlocksDefaultSelection { cached_hits },
+        );
     }
-    Ok(GitBackedCacheFilteredCheckWork {
-        evaluation_queue,
+    Ok(GitBackedCacheFilteredCheckWork::EvaluationAllowed {
+        evaluation_queue: candidates_without_cached_result,
         cached_hits,
     })
-}
-
-fn evaluation_queue_after_default_cache_policy(
-    cached_non_pass_seen: bool,
-    uncached_candidates: Vec<SelectedExpectation>,
-    cached_non_pass_policy: CachedNonPassPolicy,
-) -> Vec<SelectedExpectation> {
-    if cached_non_pass_seen && cached_non_pass_policy == CachedNonPassPolicy::LeaveUncachedPending {
-        // Default cache policy finalizes the evaluator queue before evaluation
-        // starts. When a cached non-pass is present, uncached candidates remain
-        // pending and are outside the order rule for evaluated work.
-        Vec::new()
-    } else {
-        uncached_candidates
-    }
 }
 
 #[cfg(test)]
@@ -132,7 +133,7 @@ mod tests {
     use std::process::{self, Command};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test]
+    #[test] // xpec: D,nT
     fn default_runs_reuse_cached_results() {
         let root = git_project("default-reuses-cache");
         fs::create_dir_all(root.join("src")).unwrap();
@@ -156,12 +157,18 @@ mod tests {
             .unwrap();
 
         let work = cache_filtered_work(&root, &source, expectation);
-        assert_eq!(work.cached_hits.len(), 1);
-        assert!(work.evaluation_queue.is_empty());
+        match work {
+            GitBackedCacheFilteredCheckWork::CachedNonPassBlocksDefaultSelection {
+                cached_hits,
+            } => assert_eq!(cached_hits.len(), 1),
+            GitBackedCacheFilteredCheckWork::EvaluationAllowed { .. } => {
+                panic!("cached non-pass must block default selection")
+            }
+        }
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test]
+    #[test] // xpec: nT,e5
     fn selector_mode_forces_evaluation_despite_cached_results() {
         let root = git_project("selector-cache-continues");
         fs::create_dir_all(root.join("src")).unwrap();
@@ -192,14 +199,24 @@ mod tests {
             true,
             CachedNonPassPolicy::EvaluateUncached,
         );
-        assert!(work.cached_hits.is_empty());
-        assert_eq!(work.evaluation_queue.len(), 2);
-        assert_eq!(work.evaluation_queue[0].id, "abc123");
-        assert_eq!(work.evaluation_queue[1].id, "def456");
+        match work {
+            GitBackedCacheFilteredCheckWork::EvaluationAllowed {
+                cached_hits,
+                evaluation_queue,
+            } => {
+                assert!(cached_hits.is_empty());
+                assert_eq!(evaluation_queue.len(), 2);
+                assert_eq!(evaluation_queue[0].id, "abc123");
+                assert_eq!(evaluation_queue[1].id, "def456");
+            }
+            GitBackedCacheFilteredCheckWork::CachedNonPassBlocksDefaultSelection { .. } => {
+                panic!("explicit selectors must force evaluation")
+            }
+        }
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test]
+    #[test] // xpec: nT,e5
     fn default_cached_non_pass_leaves_uncached_candidates_pending() {
         let root = git_project("default-cached-non-pass-leaves-uncached-pending");
         fs::create_dir_all(root.join("src")).unwrap();
@@ -231,15 +248,21 @@ mod tests {
             CachedNonPassPolicy::LeaveUncachedPending,
         );
 
-        assert_eq!(work.cached_hits.len(), 1);
-        assert!(work.evaluation_queue.is_empty());
+        match work {
+            GitBackedCacheFilteredCheckWork::CachedNonPassBlocksDefaultSelection {
+                cached_hits,
+            } => assert_eq!(cached_hits.len(), 1),
+            GitBackedCacheFilteredCheckWork::EvaluationAllowed { .. } => {
+                panic!("cached non-pass must block default selection")
+            }
+        }
         let _ = fs::remove_dir_all(root);
     }
 
     fn cache_filtered_work(
         root: &Path,
         source: &TreeSource,
-        expectation: SelectedExpectation,
+        expectation: ResolvedExpectation,
     ) -> GitBackedCacheFilteredCheckWork {
         cache_filtered_work_with_mode(
             root,
@@ -253,7 +276,7 @@ mod tests {
     fn cache_filtered_work_with_mode(
         root: &Path,
         source: &TreeSource,
-        expectations: Vec<SelectedExpectation>,
+        expectations: Vec<ResolvedExpectation>,
         selectors_provided: bool,
         cached_non_pass_policy: CachedNonPassPolicy,
     ) -> GitBackedCacheFilteredCheckWork {
@@ -269,7 +292,7 @@ mod tests {
                 diagnostic_log: &mut diagnostic_log,
             },
             &CheckOptions {
-                pre_cache_candidates: expectations,
+                candidate_expectations: expectations,
                 selectors_provided,
                 keep_going: false,
                 ignore_cooldown: false,
@@ -281,7 +304,7 @@ mod tests {
         .unwrap()
     }
 
-    fn test_expectation() -> SelectedExpectation {
+    fn test_expectation() -> ResolvedExpectation {
         test_expectation_with_identity(1, "abc123", "a")
     }
 
@@ -289,8 +312,8 @@ mod tests {
         number: usize,
         id: &str,
         display_id: &str,
-    ) -> SelectedExpectation {
-        SelectedExpectation {
+    ) -> ResolvedExpectation {
+        ResolvedExpectation {
             number,
             id: id.to_string(),
             display_id: display_id.to_string(),
@@ -306,7 +329,7 @@ mod tests {
     }
 
     fn test_record(
-        expectation: &SelectedExpectation,
+        expectation: &ResolvedExpectation,
         scope: &[String],
         observed: &str,
         visible_tree_oid: String,

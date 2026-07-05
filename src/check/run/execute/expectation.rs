@@ -3,15 +3,15 @@ use super::CheckRunCaches;
 use crate::check::command::output::{
     write_result_output_without_started_report, SharedCheckOutput,
 };
-use crate::check::core::errors::{error_record_from_visible_tree_oid, INTERNAL_ERROR_UNPARSABLE};
+use crate::check::core::errors::error_record_from_visible_tree_oid;
 use crate::check::core::{
-    CheckOptions, CheckRecord, InterrogationAnswer, SelectedExpectation, ERROR_SCOPE_TOO_NARROW,
+    CheckOptions, CheckRecord, InterrogationAnswer, ResolvedExpectation, ERROR_SCOPE_TOO_NARROW,
 };
 use crate::check::interrogation::policy::{
     initial_q_scope_for_fresh_interrogation, interrogate_or_error_answer,
     interrogate_or_error_record, narrowed_scope_is_accepted,
-    question_scope_suggestion_scope_for_independent_verification,
-    question_scope_suggestion_scope_for_unused_follow_up, turn_exceeds_break_after_tokens,
+    q_scope_verification_scope_after_initial_pass,
+    question_scope_suggestion_scope_for_independent_verification, turn_exceeds_break_after_tokens,
     turn_has_context_compaction, write_scope_narrowing_event, InterrogationCall,
     PolicyInterrogationResult,
 };
@@ -26,8 +26,6 @@ use crate::logs::DiagnosticLogWriter;
 use crate::platform::check_interrupted;
 use crate::scope::scope_is_within;
 use std::io::Write;
-
-const FORBIDDEN_FINAL_CHECK_SCOPE_ERROR: &str = "internal error: forbidden final check scope error";
 
 pub(super) struct ExpectationRunContext<'a, 'out, 'log, R: EvaluatorRunner> {
     pub(super) runtime: &'a CheckRuntime<'a>,
@@ -56,7 +54,7 @@ pub(crate) struct TemporaryExpectationInterrogationContext<'a, 'log, R: Evaluato
 
 pub(crate) fn run_temporary_expectation_interrogation<R: EvaluatorRunner>(
     context: TemporaryExpectationInterrogationContext<'_, '_, R>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     verified_q_scope: &mut Vec<String>,
     progress: Option<&EvaluatorProgress>,
 ) -> Result<InterrogationAnswer, String> {
@@ -88,7 +86,7 @@ struct TemporaryExpectationRunContext<'a, 'log, R: EvaluatorRunner> {
 
 pub(super) fn run_expectation<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
 ) -> Result<ExpectationRunOutcome, String> {
     // Cache hits are resolved before this function is called. This path only
     // handles expectations that still need evaluator work, so every report
@@ -204,13 +202,16 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     };
     context.runner.set_progress_reporter(None);
     let CompletedInterrogation {
-        mut record,
+        record,
         break_after_tokens_hit,
         context_compaction_hit,
         stop_after_current_expectation,
         interrupted: interrogation_interrupted,
     } = completed_interrogation;
-    record = user_visible_final_check_record(record);
+    // q-scope policy has already decided whether a verification result can be
+    // final; assert the public final-result invariant before public output or
+    // durable state observes the record.
+    assert_final_check_result_has_no_scope_too_narrow(&record);
     started_report.finish_public_output_before_structured_report(&record);
     // `record_finished_expectation` is the structured report path after public
     // output is finished: returning the completed CheckRecord lets the caller
@@ -240,15 +241,15 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
 
 fn record_finished_expectation<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     record: &CheckRecord,
 ) -> Result<(), String> {
     // This is the durable result-reporting path used after a CheckRecord is
-    // formed. Live output has already attempted its human-facing completion;
-    // this path keeps the completed result available for later inspection and
-    // cache decisions. The final call emits the evaluated expectation's
-    // expectation.result and, when needed, expectation.review_required runtime
-    // log events through DiagnosticLogWriter::write_record_event.
+    // formed. The xpec write below keeps the completed result available for
+    // later inspection and cache decisions; it is separate from runtime logs.
+    // The final call emits the evaluated expectation's expectation.result and,
+    // when needed, expectation.review_required events through
+    // DiagnosticLogWriter::write_record_event in `src/logs/writer.rs`.
     context
         .caches
         .xpec_state
@@ -261,6 +262,15 @@ fn record_finished_expectation<R: EvaluatorRunner>(
     write_expectation_result_event(context.diagnostic_log, record)
 }
 
+fn assert_final_check_result_has_no_scope_too_narrow(record: &CheckRecord) {
+    // xpec: RC
+    assert_ne!(
+        record.error.as_deref(),
+        Some(ERROR_SCOPE_TOO_NARROW),
+        "user-visible final check results must not expose ScopeTooNarrow"
+    );
+}
+
 struct CompletedInterrogation {
     record: CheckRecord,
     break_after_tokens_hit: bool,
@@ -271,7 +281,7 @@ struct CompletedInterrogation {
 
 fn run_started_temporary_expectation_interrogation<R: EvaluatorRunner>(
     context: &mut TemporaryExpectationRunContext<'_, '_, R>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     verified_q_scope: &mut Vec<String>,
     progress: Option<&EvaluatorProgress>,
 ) -> Result<InterrogationAnswer, String> {
@@ -286,6 +296,9 @@ fn run_started_temporary_expectation_interrogation<R: EvaluatorRunner>(
         *verified_q_scope = answer_scope;
     }
 
+    // `canon ask` reports an answer-only temporary xpec, so it has no
+    // pass/fail result. The `canon check` initial-pass gate is the selected
+    // expectation path's `q_scope_verification_scope_after_initial_pass` call.
     let q_scope_verification_scope = if follow_up_used || initial.answer.error.is_some() {
         None
     } else {
@@ -319,7 +332,7 @@ fn run_started_temporary_expectation_interrogation<R: EvaluatorRunner>(
                 progress.record_q_scope_verification_returned_scope_too_narrow();
             }
         }
-        let accepted = temporary_q_scope_verification_answer_is_accepted(&interrogation, &narrowed);
+        let accepted = temporary_q_scope_verification_answer_is_accepted(&narrowed);
         write_scope_narrowing_event(
             context.diagnostic_log,
             &expectation.id,
@@ -327,7 +340,7 @@ fn run_started_temporary_expectation_interrogation<R: EvaluatorRunner>(
             &proposed_scope,
             accepted,
         )?;
-        if temporary_q_scope_verification_answer_becomes_final(&interrogation, &narrowed) {
+        if temporary_q_scope_verification_answer_becomes_final(&narrowed) {
             interrogation = narrowed;
         }
     }
@@ -336,7 +349,7 @@ fn run_started_temporary_expectation_interrogation<R: EvaluatorRunner>(
 
 fn interrogate_temporary_initial_with_full_scope_retry<R: EvaluatorRunner>(
     context: &mut TemporaryExpectationRunContext<'_, '_, R>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     verified_q_scope: &mut Vec<String>,
     progress: Option<&EvaluatorProgress>,
 ) -> Result<(InterrogationAnswer, bool), String> {
@@ -378,7 +391,7 @@ fn interrogate_temporary_initial_with_full_scope_retry<R: EvaluatorRunner>(
 
 fn run_started_expectation_interrogation<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     verified_q_scope: &mut Vec<String>,
     progress: Option<&EvaluatorProgress>,
 ) -> Result<CompletedInterrogation, String> {
@@ -402,13 +415,11 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
         *verified_q_scope = record_scope.clone();
     }
     debug_assert!(scope_is_within(&record_scope, verified_q_scope));
-    let initial_record = initial_interrogation.record.clone();
-    let initial_result = initial_record.result;
     // This is the selected-expectation path's Interrogation Policy q-scope
     // verification follow-up. The only decision made from an evaluator
     // `qScopeSuggestion` is whether this verification follow-up should run;
     // the rest of this function only executes that planned verification turn.
-    let q_scope_verification_scope = question_scope_suggestion_scope_for_unused_follow_up(
+    let q_scope_verification_scope = q_scope_verification_scope_after_initial_pass(
         context.runtime,
         &expectation.agent,
         &initial,
@@ -424,8 +435,7 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
         // Verification ScopeTooNarrow is a concrete rejection of the proposed
         // q-scope, not the final evaluator response for the expectation; the
         // initial answer stays final. Other verification errors remain final
-        // human-review results. Pass/fail results use the acceptance matrix
-        // below.
+        // human-review results. Pass/fail answers become final.
         let verification_scope = proposed_scope.clone();
         let narrowed = interrogate_or_error_record(
             InterrogationCall {
@@ -451,12 +461,7 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
         context_compaction_hit |= turn_has_context_compaction(&narrowed);
         stop_after_current_expectation |= narrowed.stop_after_current_expectation;
         interrupted |= narrowed.interrupted;
-        let accepted = q_scope_verification_result_is_accepted(
-            expectation,
-            initial_result,
-            &initial_record,
-            &narrowed.record,
-        );
+        let accepted = q_scope_verification_result_is_accepted(&narrowed.record);
         write_scope_narrowing_event(
             context.diagnostic_log,
             &expectation.id,
@@ -464,12 +469,7 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
             &proposed_scope,
             accepted,
         )?;
-        if q_scope_verification_result_becomes_final(
-            expectation,
-            initial_result,
-            &initial_record,
-            &narrowed.record,
-        ) {
+        if q_scope_verification_result_becomes_final(&narrowed.record) {
             interrogation = narrowed;
         }
     }
@@ -482,55 +482,44 @@ fn run_started_expectation_interrogation<R: EvaluatorRunner>(
     })
 }
 
-fn q_scope_verification_result_becomes_final(
-    expectation: &SelectedExpectation,
-    initial_result: crate::check::core::CheckResult,
-    initial: &CheckRecord,
-    narrowed: &CheckRecord,
-) -> bool {
+fn q_scope_verification_result_becomes_final(narrowed: &CheckRecord) -> bool {
     if narrowed.error.as_deref() == Some(ERROR_SCOPE_TOO_NARROW) {
         // The verification result is not final here: it only proves that the
         // proposed narrowed q-scope is too narrow, so the initial answer remains
         // the final evaluator response for the expectation.
+        // xpec: YD,RC
+        assert!(
+            !q_scope_verification_result_is_accepted(narrowed),
+            "ScopeTooNarrow q-scope verification must not become a user-visible final check result"
+        );
         return false;
     }
-    narrowed.error.is_some()
-        || q_scope_verification_result_is_accepted(expectation, initial_result, initial, narrowed)
+    true
 }
 
-fn q_scope_verification_result_is_accepted(
-    expectation: &SelectedExpectation,
-    initial_result: crate::check::core::CheckResult,
-    _initial: &CheckRecord,
-    narrowed: &CheckRecord,
-) -> bool {
-    debug_assert!(!expectation.expected_answer.is_empty());
-    narrowed_scope_is_accepted(initial_result, narrowed)
+fn q_scope_verification_result_is_accepted(narrowed: &CheckRecord) -> bool {
+    narrowed_scope_is_accepted(narrowed)
 }
 
-fn temporary_q_scope_verification_answer_becomes_final(
-    initial: &InterrogationAnswer,
-    narrowed: &InterrogationAnswer,
-) -> bool {
+fn temporary_q_scope_verification_answer_becomes_final(narrowed: &InterrogationAnswer) -> bool {
     if narrowed.answer.error.as_deref() == Some(ERROR_SCOPE_TOO_NARROW) {
+        // xpec: YD
+        assert!(
+            !temporary_q_scope_verification_answer_is_accepted(narrowed),
+            "ScopeTooNarrow q-scope verification must not become a user-visible final query result"
+        );
         return false;
     }
-    narrowed.answer.error.is_some()
-        || temporary_q_scope_verification_answer_is_accepted(initial, narrowed)
+    true
 }
 
-fn temporary_q_scope_verification_answer_is_accepted(
-    initial: &InterrogationAnswer,
-    narrowed: &InterrogationAnswer,
-) -> bool {
-    initial.answer.error.is_none()
-        && narrowed.answer.error.is_none()
-        && initial.answer.observed == narrowed.answer.observed
+fn temporary_q_scope_verification_answer_is_accepted(narrowed: &InterrogationAnswer) -> bool {
+    narrowed.answer.error.is_none()
 }
 
 fn interrogate_initial_with_full_scope_retry<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     verified_q_scope: &mut Vec<String>,
     progress: Option<&EvaluatorProgress>,
 ) -> Result<PolicyInterrogationResult, String> {
@@ -581,7 +570,7 @@ fn interrogate_initial_with_full_scope_retry<R: EvaluatorRunner>(
 
 fn finish_unstarted_expectation_with_error_record<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     scope: Vec<String>,
     error: String,
 ) -> Result<ExpectationRunOutcome, String> {
@@ -601,61 +590,42 @@ fn finish_unstarted_expectation_with_error_record<R: EvaluatorRunner>(
 
 fn finish_unstarted_expectation_with_error_record_for_visible_tree_oid<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     scope: &[String],
     visible_tree_oid: &str,
     error: String,
 ) -> Result<ExpectationRunOutcome, String> {
-    let record = user_visible_final_check_record(error_record_from_visible_tree_oid(
+    let record = error_record_from_visible_tree_oid(
         expectation,
         scope,
         &error,
         visible_tree_oid.to_string(),
-    )?);
+    )?;
     write_result_output_without_started_report(context.result_output, &record)?;
     finish_expectation_with_error_record(context, expectation, record)
 }
 
 fn finish_started_expectation_with_error_record<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     scope: &[String],
     visible_tree_oid: &str,
     started_report: LiveExpectationReport,
     error: String,
 ) -> Result<ExpectationRunOutcome, String> {
-    let record = user_visible_final_check_record(error_record_from_visible_tree_oid(
+    let record = error_record_from_visible_tree_oid(
         expectation,
         scope,
         &error,
         visible_tree_oid.to_string(),
-    )?);
+    )?;
     started_report.finish_public_output_before_structured_report(&record);
     finish_expectation_with_error_record(context, expectation, record)
 }
 
-fn user_visible_final_check_record(mut record: CheckRecord) -> CheckRecord {
-    if assert_final_check_record_has_no_scope_too_narrow(&record).is_ok() {
-        return record;
-    }
-    record.observed = INTERNAL_ERROR_UNPARSABLE.to_string();
-    record.error = Some(INTERNAL_ERROR_UNPARSABLE.to_string());
-    record.evidence = FORBIDDEN_FINAL_CHECK_SCOPE_ERROR.to_string();
-    record.question_scope_suggestion = None;
-    record
-}
-
-fn assert_final_check_record_has_no_scope_too_narrow(record: &CheckRecord) -> Result<(), String> {
-    if record.error.as_deref() == Some(ERROR_SCOPE_TOO_NARROW) {
-        Err(FORBIDDEN_FINAL_CHECK_SCOPE_ERROR.to_string())
-    } else {
-        Ok(())
-    }
-}
-
 fn finish_expectation_with_error_record<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
     record: CheckRecord,
 ) -> Result<ExpectationRunOutcome, String> {
     record_finished_expectation(context, expectation, &record)?;
@@ -671,92 +641,53 @@ fn finish_expectation_with_error_record<R: EvaluatorRunner>(
 mod tests {
     use super::{
         q_scope_verification_result_becomes_final,
-        temporary_q_scope_verification_answer_becomes_final, user_visible_final_check_record,
-        FORBIDDEN_FINAL_CHECK_SCOPE_ERROR,
+        temporary_q_scope_verification_answer_becomes_final,
     };
-    use crate::check::core::errors::INTERNAL_ERROR_UNPARSABLE;
     use crate::check::core::{
         CheckRecord, CheckResult, InterrogationAnswer, ParsedAnswer, ERROR_INVALID_QUESTION,
         ERROR_SCOPE_TOO_NARROW,
     };
     use crate::hash::full_scope;
 
-    #[test]
+    #[test] // xpec: YD,RC
     fn q_scope_verification_scope_too_narrow_rejects_scope_without_replacing_initial_result() {
         let narrowed = test_record(CheckResult::Fail, Some(ERROR_SCOPE_TOO_NARROW));
-        let initial = test_record(CheckResult::Pass, None);
-        let expectation = test_expectation("yes");
 
-        assert!(!q_scope_verification_result_becomes_final(
-            &expectation,
-            CheckResult::Pass,
-            &initial,
-            &narrowed
-        ));
+        assert!(!q_scope_verification_result_becomes_final(&narrowed));
     }
 
-    #[test]
+    #[test] // xpec: YD
     fn q_scope_verification_invalid_question_replaces_initial_result() {
         let narrowed = test_record(CheckResult::Fail, Some(ERROR_INVALID_QUESTION));
-        let initial = test_record(CheckResult::Pass, None);
-        let expectation = test_expectation("yes");
 
-        assert!(q_scope_verification_result_becomes_final(
-            &expectation,
-            CheckResult::Pass,
-            &initial,
-            &narrowed
-        ));
+        assert!(q_scope_verification_result_becomes_final(&narrowed));
     }
 
-    #[test]
-    fn q_scope_verification_pass_fail_matrix_still_applies_without_error() {
+    #[test] // xpec: YD
+    fn q_scope_verification_answer_result_becomes_final() {
         let fail = test_record(CheckResult::Fail, None);
         let pass = test_record(CheckResult::Pass, None);
-        let expectation = test_expectation("yes");
 
-        assert!(q_scope_verification_result_becomes_final(
-            &expectation,
-            CheckResult::Pass,
-            &pass,
-            &fail
-        ));
-        assert!(!q_scope_verification_result_becomes_final(
-            &expectation,
-            CheckResult::Fail,
-            &fail,
-            &pass
-        ));
+        assert!(q_scope_verification_result_becomes_final(&fail));
+        assert!(q_scope_verification_result_becomes_final(&pass));
     }
 
-    #[test]
-    fn temporary_verification_accepts_only_same_observed_answer() {
-        let initial = test_answer("yes", None);
-        let same = test_answer("yes", None);
+    #[test] // xpec: YD
+    fn temporary_verification_answer_becomes_final_even_when_observed_changes() {
         let changed = test_answer("no", None);
 
         assert!(temporary_q_scope_verification_answer_becomes_final(
-            &initial, &same
-        ));
-        assert!(!temporary_q_scope_verification_answer_becomes_final(
-            &initial, &changed
+            &changed
         ));
     }
 
-    #[test]
-    fn final_check_record_replaces_forbidden_scope_too_narrow_error() {
-        let mut record = test_record(CheckResult::Fail, Some(ERROR_SCOPE_TOO_NARROW));
-        record.question_scope_suggestion = Some(vec!["src".to_string()]);
+    #[test] // xpec: YD,RC
+    fn temporary_scope_too_narrow_verification_does_not_become_final() {
+        let narrowed = test_answer("yes", Some(ERROR_SCOPE_TOO_NARROW));
 
-        let final_record = user_visible_final_check_record(record);
-
-        assert_eq!(final_record.observed, INTERNAL_ERROR_UNPARSABLE);
-        assert_eq!(
-            final_record.error.as_deref(),
-            Some(INTERNAL_ERROR_UNPARSABLE)
-        );
-        assert_eq!(final_record.evidence, FORBIDDEN_FINAL_CHECK_SCOPE_ERROR);
-        assert!(final_record.question_scope_suggestion.is_none());
+        assert!(!temporary_q_scope_verification_answer_becomes_final(
+            &narrowed
+        ));
     }
 
     fn test_record(result: CheckResult, error: Option<&str>) -> CheckRecord {
@@ -799,22 +730,6 @@ mod tests {
             context_compacted: false,
             stop_after_current_expectation: false,
             interrupted: false,
-        }
-    }
-
-    fn test_expectation(expected_answer: &str) -> crate::check::core::SelectedExpectation {
-        crate::check::core::SelectedExpectation {
-            number: 1,
-            id: "expectation-id".to_string(),
-            display_id: "e".to_string(),
-            question: "Does it pass?".to_string(),
-            expected_answer: expected_answer.to_string(),
-            question_context: String::new(),
-            diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
-            target: None,
-            question_answer_only: true,
-            agent: crate::config_types::AgentConfig::implementation_default(),
-            cooldown: None,
         }
     }
 }

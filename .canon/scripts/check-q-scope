@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+import sys
+import json
+import subprocess
+from pathlib import Path
+
+
+CHECKS = [
+    {
+        "id": "PY776cRJsSdWMU116cbI",
+        "rule": "full",
+    },
+    {
+        "id": "YgEF5ArVSSVFxRMvXVpu",
+        "rule": "full",
+    },
+    {
+        "id": "hCpbWFmLigFKBCj3LGa4",
+        "rule": "full",
+    },
+    {
+        "id": "JNRw7JiGLPqPc1dHRV7h",
+        "rule": "full",
+    },
+    {
+        "id": "e5bgmTJWbLFTcR8RISXA",
+        "rule": "narrow",
+    },
+    {
+        "id": "j6p47aey4JopPfBxY6Y3",
+        "rule": "narrow",
+    },
+    {
+        "id": "1M6C9GbWy9HxFTATAdXM",
+        "rule": "narrow",
+    },
+    {
+        "id": "nTZhaOs4Sq6iqCiPSTNI",
+        "rule": "narrow",
+    },
+]
+
+
+def git_output(args):
+    process = subprocess.run(
+        ["git", *args],
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if process.returncode != 0:
+        message = process.stderr.strip() or process.stdout.strip()
+        raise RuntimeError(f"git {' '.join(args)} failed: {message}")
+    return process.stdout.strip()
+
+
+def expected_text(rule):
+    if rule == "full":
+        return 'full project q-scope'
+    if rule == "narrow":
+        return 'narrow q-scope'
+    raise ValueError(f"unknown rule: {rule}")
+
+
+def actual_text(value):
+    return json.dumps(value, ensure_ascii=False)
+
+
+def q_scope_matches(rule, q_scope):
+    if not isinstance(q_scope, list) or not all(isinstance(item, str) for item in q_scope):
+        return False
+    if rule == "full":
+        return q_scope == ["."]
+    if rule == "narrow":
+        return bool(q_scope) and "." not in q_scope
+    raise ValueError(f"unknown rule: {rule}")
+
+
+def read_q_scope(path):
+    try:
+        with path.open(encoding="utf-8") as file:
+            data = json.load(file)
+    except OSError as error:
+        return f"<read error: {error}>"
+    except json.JSONDecodeError as error:
+        return f"<invalid JSON: {error}>"
+    if not isinstance(data, dict):
+        return "<last-pass.json is not an object>"
+    if "qScope" not in data:
+        return "<missing qScope>"
+    return data["qScope"]
+
+
+def main():
+    root = Path(git_output(["rev-parse", "--show-toplevel"])).resolve()
+    state_path = Path(git_output(["rev-parse", "--git-path", "canon"]))
+    if not state_path.is_absolute():
+        state_path = root / state_path
+    failures = []
+    for check in CHECKS:
+        path = state_path / "xpecs" / check["id"] / "last-pass.json"
+        if not path.exists():
+            failures.append((check, "missing-last-pass", None))
+            continue
+        q_scope = read_q_scope(path)
+        if not q_scope_matches(check["rule"], q_scope):
+            failures.append((check, "unexpected-scope", q_scope))
+    if not failures:
+        print(f"q-scope guard passed: {len(CHECKS)} checked")
+        return 0
+    missing = [failure for failure in failures if failure[1] == "missing-last-pass"]
+    if missing:
+        for check, _, _ in missing:
+            print(f"{check['id']}: missing last-pass.json")
+        return 2
+    for check, _, q_scope in failures:
+        print(
+            f"{check['id']}: "
+            f"expected {expected_text(check['rule'])}, got {actual_text(q_scope)}"
+        )
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

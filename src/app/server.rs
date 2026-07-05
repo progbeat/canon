@@ -2,7 +2,9 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::config_types::AgentConfig;
-use crate::evaluator::{is_model_technical_failure, EvaluatorError, EvaluatorRunner};
+use crate::evaluator::{
+    is_model_technical_failure, EvaluatorDynamicToolHandler, EvaluatorError, EvaluatorRunner,
+};
 use crate::git::resolve_git_path;
 use crate::state_paths::CANON_STATE_DIR_GIT_PATH;
 use crate::token_usage_types::{EvaluatorTurnUsage, TokenUsage};
@@ -144,6 +146,7 @@ impl EvaluatorRunner for LazyAppServerRunner {
         model: Option<&str>,
         thinking: &str,
         scope: &[String],
+        dynamic_tools: &[serde_json::Value],
     ) -> Result<String, EvaluatorError> {
         let result = self.inner()?.start_session(
             session_cwd,
@@ -154,6 +157,7 @@ impl EvaluatorRunner for LazyAppServerRunner {
             model,
             thinking,
             scope,
+            dynamic_tools,
         );
         match result {
             Ok(session_id) => {
@@ -174,6 +178,7 @@ impl EvaluatorRunner for LazyAppServerRunner {
         model: Option<&str>,
         thinking: &str,
         output_schema: &serde_json::Value,
+        dynamic_tool_handler: Option<&mut dyn EvaluatorDynamicToolHandler>,
     ) -> Result<String, EvaluatorError> {
         if !self.sessions.contains(session_id) {
             return Err("app-server runner does not own session".into());
@@ -182,7 +187,14 @@ impl EvaluatorRunner for LazyAppServerRunner {
             .inner
             .as_mut()
             .ok_or_else(|| EvaluatorError::message("app-server runner is not initialized"))?
-            .ask(session_id, prompt, model, thinking, output_schema);
+            .ask(
+                session_id,
+                prompt,
+                model,
+                thinking,
+                output_schema,
+                dynamic_tool_handler,
+            );
         if let Err(err) = &result {
             self.retire_inner_after_model_failure(err)?;
         }

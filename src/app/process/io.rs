@@ -68,6 +68,28 @@ impl AppServerRunner {
         Ok(id)
     }
 
+    pub(crate) fn send_json_rpc_response(
+        &mut self,
+        id: u64,
+        result: &Value,
+        operation: &str,
+    ) -> Result<(), EvaluatorError> {
+        if check_interrupted() {
+            return Err("interrupted".into());
+        }
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result
+        });
+        writeln!(self.stdin, "{}", response)
+            .map_err(|err| format!("failed to write app-server {}: {}", operation, err))?;
+        self.stdin
+            .flush()
+            .map_err(|err| format!("failed to flush app-server {}: {}", operation, err))?;
+        Ok(())
+    }
+
     pub(crate) fn read_message_or_timeout(&mut self) -> Result<Option<Value>, EvaluatorError> {
         match self.messages.recv_timeout(Duration::from_millis(100)) {
             Ok(result) => result.map(Some).map_err(EvaluatorError::message),

@@ -1,4 +1,4 @@
-use crate::check::core::SelectedExpectation;
+use crate::check::core::ResolvedExpectation;
 use crate::xpec_state::{latest_non_pass_timestamp, XpecStateCache};
 use std::path::Path;
 
@@ -8,7 +8,7 @@ pub(crate) fn order_by_latest_non_pass<T>(
     root: &Path,
     items: Vec<T>,
     state_cache: &mut XpecStateCache,
-    expectation: impl Fn(&T) -> &SelectedExpectation,
+    expectation: impl Fn(&T) -> &ResolvedExpectation,
 ) -> Result<Vec<T>, String> {
     // The caller passes only work that remains after selection/cache policy:
     // cached report blocks plus final selected evaluator work. Ordering is
@@ -17,6 +17,15 @@ pub(crate) fn order_by_latest_non_pass<T>(
         latest_non_pass_timestamp(root, expectation(item), state_cache)
             .map(|latest| latest.unwrap_or(UNIX_EPOCH_TIMESTAMP))
     })
+}
+
+pub(crate) fn order_in_place_by_absent_non_pass_history<T>(items: Vec<T>) -> Vec<T> {
+    // Canon check --in-place treats persisted xpec last-result history as
+    // absent. Under e5, an expectation with no non-pass result uses the Unix
+    // epoch, so every in-place selected expectation has the same ordering key
+    // and the stable tie-breaker preserves candidate order without state reads.
+    order_by_latest_non_pass_with(items, |_| Ok(UNIX_EPOCH_TIMESTAMP))
+        .expect("absent non-pass history ordering is infallible")
 }
 
 fn order_by_latest_non_pass_with<T>(

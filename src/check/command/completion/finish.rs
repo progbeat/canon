@@ -1,5 +1,8 @@
 use crate::check::command::output::{render_check_agent_messages, write_stdout_record};
-use crate::check::core::{for_each_unique_report_record, CheckRunReport};
+use crate::check::core::{
+    for_each_unique_report_record, for_each_unique_report_record_with_source,
+    report_record_counts_as_error, CheckRunReport,
+};
 use crate::check::interrogation::write_check_lifecycle_finish_event;
 use crate::check::CheckRunCaches;
 use crate::cli::CommandError;
@@ -69,7 +72,12 @@ pub(crate) fn check_agent_messages(
     report: &CheckRunReport,
     run_start_pass_ids: &BTreeSet<String>,
 ) -> Vec<String> {
-    if let Some(blocked) = &report.blocked {
+    if let Some(blocked) = report.blocked_hooks.first() {
+        assert_eq!(
+            report.blocked_hooks.len(),
+            1,
+            "completed check report must contain at most one blocked hook"
+        );
         return vec![blocked.repair_instruction.clone()];
     }
     let num_new_passes = current_passes_without_prior_pass_count(report, run_start_pass_ids);
@@ -94,11 +102,11 @@ fn report_issue_display_ids(report: &CheckRunReport) -> IssueDisplayIds {
         failed: Vec::new(),
         errors: Vec::new(),
     };
-    for_each_unique_report_record(&report.records, &report.cached, |record| {
+    for_each_unique_report_record_with_source(&report.records, &report.cached, |source, record| {
         if record.passed() {
             return;
         }
-        if record.requires_human_review() {
+        if report_record_counts_as_error(source, record) {
             issue_ids.errors.push(record.display_id.clone());
         } else {
             issue_ids.failed.push(record.display_id.clone());
@@ -140,7 +148,7 @@ fn current_failures_with_prior_pass_count(
 mod tests {
     use super::*;
     use crate::check::core::{
-        BlockedCheckHook, CheckRecord, CheckResult, CheckRunReport, SelectedExpectation,
+        BlockedCheckHook, CheckRecord, CheckResult, CheckRunReport, ResolvedExpectation,
     };
     use crate::config_types::{AgentConfig, CheckConfig, Expectation};
     use crate::git::{TreeSource, VisibleTreeOidCache};
@@ -152,7 +160,7 @@ mod tests {
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test]
+    #[test] // xpec: HW
     fn new_pass_emits_commit_message() {
         let root = git_project("new-pass-emits-commit-message");
         let agent = AgentConfig::default();
@@ -172,7 +180,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test]
+    #[test] // xpec: HW
     fn prior_pass_is_not_a_new_pass() {
         let root = git_project("prior-pass-is-not-a-new-pass");
         let agent = AgentConfig::default();
@@ -193,15 +201,15 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test]
+    #[test] // xpec: HW
     fn blocked_hook_agent_message_is_repair_instruction() {
         let repair_instruction = "Run the required checks, then rerun canon.".to_string();
         let report = CheckRunReport {
             records: Vec::new(),
             cached: Vec::new(),
-            blocked: Some(BlockedCheckHook {
+            blocked_hooks: vec![BlockedCheckHook {
                 repair_instruction: repair_instruction.clone(),
-            }),
+            }],
             skipped: 0,
         };
 
@@ -210,7 +218,27 @@ mod tests {
         assert_eq!(messages, vec![repair_instruction]);
     }
 
-    #[test]
+    #[test] // xpec: HW
+    #[should_panic(expected = "completed check report must contain at most one blocked hook")]
+    fn blocked_hook_agent_message_asserts_single_blocker() {
+        let report = CheckRunReport {
+            records: Vec::new(),
+            cached: Vec::new(),
+            blocked_hooks: vec![
+                BlockedCheckHook {
+                    repair_instruction: "first repair".to_string(),
+                },
+                BlockedCheckHook {
+                    repair_instruction: "second repair".to_string(),
+                },
+            ],
+            skipped: 0,
+        };
+
+        let _ = check_agent_messages(&report, &BTreeSet::new());
+    }
+
+    #[test] // xpec: HW
     fn prior_pass_regression_agent_message_repairs_instead_of_commits() {
         let root = git_project("prior-pass-regression-agent-message");
         let agent = AgentConfig::default();
@@ -220,7 +248,7 @@ mod tests {
         let report = CheckRunReport {
             records: vec![staged_scope_record(&root, &expectation, &scope, "no")],
             cached: Vec::new(),
-            blocked: None,
+            blocked_hooks: Vec::new(),
             skipped: 0,
         };
         let run_start_pass_ids = BTreeSet::from([expectation.id.clone()]);
@@ -238,20 +266,20 @@ mod tests {
 
     fn passing_report_for_staged_scope(
         root: &std::path::Path,
-        expectation: &SelectedExpectation,
+        expectation: &ResolvedExpectation,
         scope: &[String],
     ) -> CheckRunReport {
         CheckRunReport {
             records: vec![staged_scope_record(root, expectation, scope, "yes")],
             cached: Vec::new(),
-            blocked: None,
+            blocked_hooks: Vec::new(),
             skipped: 0,
         }
     }
 
     fn staged_scope_record(
         root: &std::path::Path,
-        expectation: &SelectedExpectation,
+        expectation: &ResolvedExpectation,
         scope: &[String],
         observed: &str,
     ) -> CheckRecord {
@@ -295,7 +323,7 @@ mod tests {
         }
     }
 
-    fn test_expectation_from_config(config: &CheckConfig) -> SelectedExpectation {
+    fn test_expectation_from_config(config: &CheckConfig) -> ResolvedExpectation {
         let identities = crate::check::expectation_identities(config).unwrap();
         crate::check::select_expectations_with_identities(config, &identities, &[])
             .unwrap()

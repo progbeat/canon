@@ -9,6 +9,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const DEFAULT_CHECK_TEMPLATE_FILE_CONTENTS: &str =
     include_str!("../.canon/templates/default/check.yml");
 const DEFAULT_PRE_COMMIT_HOOK_CONTENTS: &str = include_str!("../resources/git-hooks/pre-commit");
+const ZERO_TOKEN_USAGE_LINE: &str =
+    "Token usage: total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n";
 
 fn canon() -> Command {
     Command::new(env!("CARGO_BIN_EXE_canon"))
@@ -29,6 +31,7 @@ fn init_git_repo(repo: &Path) {
         .current_dir(repo)
         .output()
         .unwrap();
+    // xpec: C
     assert!(
         output.status.success(),
         "{}",
@@ -42,6 +45,7 @@ fn git_path(repo: &Path, path: &str) -> PathBuf {
         .current_dir(repo)
         .output()
         .unwrap();
+    // xpec: C
     assert!(
         output.status.success(),
         "{}",
@@ -50,6 +54,7 @@ fn git_path(repo: &Path, path: &str) -> PathBuf {
     repo.join(String::from_utf8(output.stdout).unwrap().trim())
 }
 
+// xpec: C
 #[test]
 fn init_creates_default_template_and_refuses_overwrite() {
     let repo = temp_repo("canon-init-example");
@@ -87,6 +92,7 @@ fn init_creates_default_template_and_refuses_overwrite() {
     );
 }
 
+// xpec: C
 #[test]
 fn pre_commit_commands_render_documented_messages() {
     let repo = temp_repo("canon-pre-commit-example");
@@ -130,6 +136,7 @@ fn pre_commit_commands_render_documented_messages() {
     );
 }
 
+// xpec: C
 #[test]
 fn pre_commit_install_rejects_existing_default_hook() {
     let repo = temp_repo("canon-pre-commit-existing-example");
@@ -152,8 +159,9 @@ fn pre_commit_install_rejects_existing_default_hook() {
     );
 }
 
+// xpec: uY
 #[test]
-fn check_on_start_hook_confirmation_mismatch_blocks_without_result() {
+fn check_on_start_hook_input_mismatch_blocks_without_result() {
     let repo = temp_repo("canon-check-on-start-hook");
     init_git_repo(&repo);
     fs::create_dir_all(repo.join(".canon")).unwrap();
@@ -165,9 +173,11 @@ presets:
   default: {}
 hooks:
   on-start:
-    print: "Type pass:\n"
-    confirm: "pass"
-    repair-instruction: "Run the blocker fix."
+    print: "Type pass:"
+    input: " "
+    cases:
+      pass: !ok
+      _: !block "Run the blocker fix."
 expectations:
   - q: "Does the hook block before evaluator work?"
     a: "yes"
@@ -179,6 +189,7 @@ expectations:
         .current_dir(&repo)
         .output()
         .unwrap();
+    // xpec: uY
     assert!(
         add.status.success(),
         "{}",
@@ -198,21 +209,30 @@ expectations:
 
     let _ = fs::remove_dir_all(&repo);
 
+    // xpec: uY
     assert!(!output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.starts_with("Type pass:\n"));
+    // xpec: HW,uY
+    assert!(stdout.starts_with("Type pass:\n "));
+    // xpec: uY
     assert!(stdout.contains(" 1 blocked, 1 pending in "));
+    // xpec: uY
     assert!(stdout.ends_with("Run the blocker fix.\n"));
+    // xpec: uY
     assert!(!stdout.contains(" OK\n"));
+    // xpec: uY
     assert!(!stdout.contains(" FAILED\n"));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    // xpec: HW
     assert_eq!(
-        String::from_utf8(output.stderr).unwrap(),
+        stderr,
         "Token usage: total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n"
     );
 }
 
+// xpec: uY
 #[test]
-fn in_place_check_on_start_hook_confirmation_mismatch_blocks_without_result() {
+fn in_place_check_on_start_hook_input_mismatch_blocks_without_result() {
     let repo = temp_repo("canon-in-place-check-on-start-hook");
     fs::create_dir_all(repo.join(".canon")).unwrap();
     fs::write(
@@ -223,9 +243,11 @@ presets:
   default: {}
 hooks:
   on-start:
-    print: "Type pass:\n"
-    confirm: "pass"
-    repair-instruction: "Run the blocker fix."
+    print: "Type pass:"
+    input: " "
+    cases:
+      pass: !ok
+      _: !block "Run the blocker fix."
 expectations:
   - q: "Does the hook block before evaluator work?"
     a: "yes"
@@ -246,19 +268,28 @@ expectations:
 
     let _ = fs::remove_dir_all(&repo);
 
+    // xpec: uY
     assert!(!output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.starts_with("Type pass:\n"));
+    // xpec: HW,uY
+    assert!(stdout.starts_with("Type pass:\n "));
+    // xpec: uY
     assert!(stdout.contains(" 1 blocked, 1 pending in "));
+    // xpec: uY
     assert!(stdout.ends_with("Run the blocker fix.\n"));
+    // xpec: uY
     assert!(!stdout.contains(" OK\n"));
+    // xpec: uY
     assert!(!stdout.contains(" FAILED\n"));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    // xpec: HW
     assert_eq!(
-        String::from_utf8(output.stderr).unwrap(),
+        stderr,
         "Token usage: total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n"
     );
 }
 
+// xpec: HW,6,uY
 #[test]
 fn in_place_prohibited_expectation_fields_fail_before_hooks() {
     let repo = temp_repo("canon-in-place-invalid-config-before-hooks");
@@ -281,6 +312,8 @@ expectations:
     .unwrap();
 
     let output = canon()
+        // This public command path covers the `canon check --in-place` output
+        // and token-usage contract for invalid in-place config.
         .args(["check", "--in-place", "unknown-selector"])
         .current_dir(&repo)
         .output()
@@ -289,13 +322,19 @@ expectations:
     let _ = fs::remove_dir_all(&repo);
 
     assert!(!output.status.success());
-    assert_eq!(String::from_utf8(output.stdout).unwrap(), "");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    // xpec: HW,6
+    assert!(stdout.contains(" 0 passed in "));
+    // xpec: HW,6
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
-        "Error: expectation 1 has Git-backed-only config: diff-from\n"
+        format!(
+            "{ZERO_TOKEN_USAGE_LINE}Error: expectation 1 has Git-backed-only config: diff-from\n"
+        )
     );
 }
 
+// xpec: C
 #[test]
 fn gate_rejects_mixed_canon_and_implementation_changes() {
     let repo = temp_repo("canon-gate-example");
@@ -331,6 +370,7 @@ fn gate_rejects_mixed_canon_and_implementation_changes() {
     );
 }
 
+// xpec: C
 #[test]
 fn gate_passes_canon_only_staged_config_deletion() {
     let repo = temp_repo("canon-gate-canon-only-example");
@@ -397,6 +437,7 @@ fn gate_passes_canon_only_staged_config_deletion() {
     assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
 }
 
+// xpec: C
 #[test]
 fn gate_passes_non_canon_staged_change_without_config() {
     let repo = temp_repo("canon-gate-no-config-example");
@@ -426,6 +467,7 @@ fn gate_passes_non_canon_staged_change_without_config() {
     assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
 }
 
+// xpec: C,HW
 #[test]
 fn check_without_config_renders_documented_recovery_message() {
     let repo = temp_repo("canon-missing-config-example");
@@ -436,9 +478,12 @@ fn check_without_config_renders_documented_recovery_message() {
     let _ = fs::remove_dir_all(&repo);
 
     assert!(!output.status.success());
-    assert_eq!(
-        String::from_utf8(output.stderr).unwrap(),
-        "Error: No canon check config found at .canon/check.yml\n\
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(" 0 passed in "));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.ends_with(
+            "Error: No canon check config found at .canon/check.yml\n\
          ▷ If the human asked you to use any `canon-*` skill in this project, treat \
          the missing config as permission to set up canon rather than asking for \
          confirmation. Run `canon init`, inspect the current project enough to \
@@ -448,5 +493,7 @@ fn check_without_config_renders_documented_recovery_message() {
          `https://raw.githubusercontent.com/progbeat/canon/main/.canon/check.yml`. \
          Start with a few simple, objective expectations that protect important \
          user-facing behavior.\n"
+        ),
+        "{stderr}"
     );
 }

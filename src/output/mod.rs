@@ -56,3 +56,48 @@ fn write_segments_and_flush(
         .flush()
         .map_err(|err| format!("failed to flush {}: {}", stream, err))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::write_segments_and_flush;
+    use std::io::{self, Write};
+
+    #[derive(Debug, PartialEq)]
+    enum Event {
+        Write(Vec<u8>),
+        Flush,
+    }
+
+    struct RecordingWriter {
+        events: Vec<Event>,
+    }
+
+    impl Write for RecordingWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.events.push(Event::Write(bytes.to_vec()));
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.events.push(Event::Flush);
+            Ok(())
+        }
+    }
+
+    // xpec: 1h
+    #[test]
+    fn general_output_helpers_flush_eligible_stream_fragments() {
+        let mut writer = RecordingWriter { events: Vec::new() };
+
+        write_segments_and_flush(&mut writer, "stdout", &[b"hello", b"\n"]).unwrap();
+
+        assert_eq!(
+            writer.events,
+            vec![
+                Event::Write(b"hello".to_vec()),
+                Event::Write(b"\n".to_vec()),
+                Event::Flush,
+            ]
+        );
+    }
+}

@@ -1,11 +1,11 @@
-use super::expectation::SelectedExpectation;
+use super::expectation::ResolvedExpectation;
 use std::ffi::OsString;
 use std::path::PathBuf;
 
 pub(crate) struct CheckOptions {
     // CLI-expanded candidates before cache filtering determines the final
     // evaluator queue.
-    pub(crate) pre_cache_candidates: Vec<SelectedExpectation>,
+    pub(crate) candidate_expectations: Vec<ResolvedExpectation>,
     pub(crate) selectors_provided: bool,
     // `--keep-going` continues evaluator work after non-pass results; it does
     // not bypass default cache-based selection.

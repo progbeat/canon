@@ -36,7 +36,7 @@ pub(crate) fn rotate_diagnostic_logs_with_config(
     if diagnostic_logs_explicitly_disabled(config) {
         return Ok(());
     }
-    let files = diagnostic_log_files(config)?;
+    let files = diagnostic_log_files();
     let active = log_dir.join(files[0]);
     let active_limit = active_log_max_bytes(config, files.len());
     let should_rotate = match active.metadata() {
@@ -82,9 +82,9 @@ pub(crate) fn rotate_active_diagnostic_logs_to_fit(
     if diagnostic_logs_explicitly_disabled(config) {
         return Ok(());
     }
-    let files = diagnostic_log_files(config)?;
+    let files = diagnostic_log_files();
     loop {
-        let size = diagnostic_log_dir_size(log_dir, config)?;
+        let size = diagnostic_log_dir_size(log_dir)?;
         let total =
             size.checked_add(incoming_size)
                 .ok_or_else(|| DiagnosticLogError::SizeOverflow {
@@ -94,7 +94,7 @@ pub(crate) fn rotate_active_diagnostic_logs_to_fit(
             return Ok(());
         }
         rotate_active_diagnostic_logs(log_dir, files)?;
-        if diagnostic_log_dir_size(log_dir, config)? >= size {
+        if diagnostic_log_dir_size(log_dir)? >= size {
             return Err(DiagnosticLogError::RecordTooLarge {
                 size: total,
                 max_bytes: config.max_bytes,
@@ -111,12 +111,9 @@ fn rename_file_if_exists(from: &Path, to: &Path) -> DiagnosticLogResult<()> {
     }
 }
 
-fn diagnostic_log_dir_size(
-    log_dir: &Path,
-    config: &DiagnosticLogConfig,
-) -> DiagnosticLogResult<u64> {
+fn diagnostic_log_dir_size(log_dir: &Path) -> DiagnosticLogResult<u64> {
     let mut total = 0u64;
-    for file_name in diagnostic_log_files(config)? {
+    for file_name in diagnostic_log_files() {
         let path = log_dir.join(file_name);
         reject_symlink(&path)
             .map_err(|message| log_io_error("inspect", &path, io::Error::other(message)))?;

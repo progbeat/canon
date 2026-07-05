@@ -15,7 +15,7 @@
 
 - q: "Do your base instructions contain any answer directive whose condition depends on the topic of a substantive project claim? Treat answer directive as any instruction that affects the semantic value of the final `answer`."
   a: no
-  cooldown: 7d
+  cooldown: 1h
 
 - q: "Can you find any logic that depends on the content of the evidence provided by the evaluator agent?"
   a: no
@@ -32,7 +32,6 @@
 
 - q: "Is the q-scope verification follow-up the only `canon check` decision logic that may depend on a `qScopeSuggestion` from an evaluator response?"
   a: yes
-  cooldown: 7d
 
 - q: "Can `canon check` make a non-initial evaluator request whose request kind has no dedicated progress timeline marker symbol?"
   a: no
@@ -43,11 +42,17 @@
 - q: "Does `canon check` assert that user-visible final results never have `error: \"ScopeTooNarrow\"`?"
   a: yes
 
-- q: |
+- q: |-
     Does `canon check` reuse evaluator threads by default as follows?
     First, look up a live thread by evaluator model plus the stable inputs for rendering evaluator base/developer instructions, without rendering instructions just to build that key.
     Then, after the current instructions have been rendered anyway, reuse an existing live thread with identical rendered base/developer instructions.
   a: yes
+
+- q: "Does evaluator base-instructions rendering `assert len(rendered) <= 6000`?"
+  a: yes
+
+- q: "What expected answer does [3nSMjraHbFW7BMLJ4AcO] have?"
+  a: "4"
 
 # - q: "Do the dev instructions require knowing any specialized terms whose meaning is not available from the dev instructions themselves?"
 #   a: no

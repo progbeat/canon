@@ -7,4 +7,6 @@ help agents work correctly.
   and more detailed turn diagnostics.
 - `clarify-in-place-selected-expectations.md`: clarify whether in-place
   compatibility applies only to the CLI-selected expectation set.
+- `docker-check-run-policy.md`: clarify when agents may defer the Docker
+  `canon check` variant during repair loops.
 - `show-pending-expectations.md`: add a pending-only xpec inspection mode.

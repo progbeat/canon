@@ -72,6 +72,9 @@ pub(crate) fn developer_instructions(
         ],
         json!({
             "xpec": {
+                // [UZ] This is human-authored expectation context rendered by
+                // the resource template, not another implementation-owned
+                // evaluator prompt or instruction source.
                 "instructions": context.question_context,
                 "q_scope": context.q_scope,
                 "ignore": context.ignore,
@@ -102,7 +105,7 @@ pub(crate) fn evaluator_turn_prompt(
 ) -> Result<String, String> {
     let (diff_from, target, last_pass) = if context.in_place {
         // In-place mode has no Git diff target or checkpoint context. The
-        // caller validates selected expectations before interrogation; this
+        // caller validates resolved expectations before interrogation; this
         // clamp keeps the rendered prompt diff-free even if an invalid in-place
         // expectation reaches this component.
         ("", None, None)

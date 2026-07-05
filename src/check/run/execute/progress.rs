@@ -1,7 +1,7 @@
 use crate::check::command::output::{
     start_expectation_report_output, SharedCheckOutput, StartedExpectationReportOutput,
 };
-use crate::check::core::{CheckRecord, SelectedExpectation};
+use crate::check::core::{CheckRecord, ResolvedExpectation};
 use crate::evaluator::EvaluatorProgress;
 use crate::output::write_stderr_line;
 use std::path::Path;
@@ -13,7 +13,7 @@ pub(super) struct LiveExpectationReport {
 pub(super) fn start_live_expectation_report(
     _state_root: Option<&Path>,
     output: &SharedCheckOutput,
-    expectation: &SelectedExpectation,
+    expectation: &ResolvedExpectation,
 ) -> Result<LiveExpectationReport, String> {
     // The flushed `<short ID>.` prefix is already public output for this
     // expectation: it starts the report before evaluator work. This module owns

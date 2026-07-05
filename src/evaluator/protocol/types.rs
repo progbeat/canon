@@ -6,6 +6,40 @@ use crate::token_usage_types::EvaluatorTurnUsage;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
+pub(crate) struct EvaluatorDynamicToolCall {
+    pub(crate) namespace: Option<String>,
+    pub(crate) tool: String,
+    pub(crate) arguments: Value,
+}
+
+pub(crate) struct EvaluatorDynamicToolResult {
+    pub(crate) text: String,
+    pub(crate) success: bool,
+}
+
+impl EvaluatorDynamicToolResult {
+    pub(crate) fn success(text: impl Into<String>) -> EvaluatorDynamicToolResult {
+        EvaluatorDynamicToolResult {
+            text: text.into(),
+            success: true,
+        }
+    }
+
+    pub(crate) fn failure(text: impl Into<String>) -> EvaluatorDynamicToolResult {
+        EvaluatorDynamicToolResult {
+            text: text.into(),
+            success: false,
+        }
+    }
+}
+
+pub(crate) trait EvaluatorDynamicToolHandler {
+    fn handle_dynamic_tool_call(
+        &mut self,
+        call: EvaluatorDynamicToolCall,
+    ) -> EvaluatorDynamicToolResult;
+}
+
 pub(crate) trait EvaluatorRunner {
     // Session startup prepares evaluator context but does not send the
     // expectation prompt. Progress-timeline request kinds belong to `ask`
@@ -22,6 +56,7 @@ pub(crate) trait EvaluatorRunner {
         model: Option<&str>,
         thinking: &str,
         scope: &[String],
+        dynamic_tools: &[Value],
     ) -> Result<String, EvaluatorError>;
     fn ask(
         &mut self,
@@ -30,6 +65,7 @@ pub(crate) trait EvaluatorRunner {
         model: Option<&str>,
         thinking: &str,
         output_schema: &Value,
+        dynamic_tool_handler: Option<&mut dyn EvaluatorDynamicToolHandler>,
     ) -> Result<String, EvaluatorError>;
 
     // Returns usage for the last app-server turn when a turn id was created.

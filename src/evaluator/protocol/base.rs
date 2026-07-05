@@ -3,7 +3,10 @@ use serde_json::json;
 
 const EVALUATOR_BASE_INSTRUCTIONS_TEMPLATE: &str =
     include_str!("../../../resources/prompts/evaluator_base_instructions.txt");
+const MAX_EVALUATOR_BASE_INSTRUCTIONS_LEN: usize = 6000;
 
+// This template is compiled into runtime evaluator instructions; its source
+// stays compact so every rendered variant satisfies the length assertion below.
 pub(crate) struct BaseInstructionsContext {
     pub(crate) in_place: bool,
     pub(crate) full_scope: bool,
@@ -16,13 +19,21 @@ pub(crate) fn evaluator_base_instructions(
     let template = environment
         .template_from_str(EVALUATOR_BASE_INSTRUCTIONS_TEMPLATE)
         .map_err(|err| format!("failed to parse evaluator base instructions: {}", err))?;
-    template
+    let rendered = template
         .render(json!({
             "in_place": context.in_place,
             "full_scope": context.full_scope,
         }))
         .map(|rendered| rendered.trim().to_string())
-        .map_err(|err| format!("failed to render evaluator base instructions: {}", err))
+        .map_err(|err| format!("failed to render evaluator base instructions: {}", err))?;
+    // xpec: Uy
+    assert!(
+        rendered.len() <= MAX_EVALUATOR_BASE_INSTRUCTIONS_LEN,
+        "evaluator base instructions rendered length {} exceeds {}",
+        rendered.len(),
+        MAX_EVALUATOR_BASE_INSTRUCTIONS_LEN
+    );
+    Ok(rendered)
 }
 
 pub(crate) fn q_scope_is_full_project(scope: &[String]) -> bool {
@@ -31,8 +42,11 @@ pub(crate) fn q_scope_is_full_project(scope: &[String]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{evaluator_base_instructions, BaseInstructionsContext};
+    use super::{
+        evaluator_base_instructions, BaseInstructionsContext, MAX_EVALUATOR_BASE_INSTRUCTIONS_LEN,
+    };
 
+    // xpec: 92,Wg,Nb
     #[test]
     fn full_scope_base_instructions_do_not_mention_scope_too_narrow() {
         let rendered = evaluator_base_instructions(BaseInstructionsContext {
@@ -41,23 +55,48 @@ mod tests {
         })
         .unwrap();
 
+        // xpec: 92,Wg,Nb
         assert!(!rendered.contains("ScopeTooNarrow"));
+        // xpec: 92,Wg,Nb
         assert!(rendered.contains("InvalidQuestion"));
+        // xpec: 92,Wg,Nb
         assert!(rendered.contains("substantive answer"));
-        assert!(rendered.contains("normative text in the question itself"));
-        assert!(rendered.contains("absence of a separate policy file"));
-        assert!(rendered.contains("response schema includes `qScopeSuggestion`"));
-        assert!(rendered.contains(
-            "diff transcript lines, transcript paths, and removed diff lines are not verification"
-        ));
-        assert!(rendered.contains("instead of concluding from unchanged areas"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("Question text may itself define the specification"));
+        // xpec: G6
+        assert!(rendered.contains("available dynamic tool output"));
+        // xpec: G6
+        assert!(rendered.contains("cite dynamic tool output by tool name"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("do not require a separate policy file"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("`qScopeSuggestion` covers the question's search domain"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("`-` lines are removed/absent, never existing code"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("visible read/search cannot find a diff-mentioned symbol"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("transcript paths, numstat/change lists"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("numstat/change lists, deleted-file diffs"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered
+            .contains("not the diff, changed-file lists, or absence of relevant changed files"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("visible file conflict, the visible file wins"));
+        // xpec: 92,Wg,Nb
         assert!(rendered.contains("not active instructions or complete behavior evidence"));
-        assert!(rendered.contains("Configured ignore exclusions are not missing visibility"));
-        assert!(rendered.contains("project view incomplete"));
-        assert!(rendered.contains("Do not widen `qScopeSuggestion`"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("Configured ignore exclusions do not make the view incomplete"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("unless the question requires an ignored path"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("as narrow as possible while still enough"));
+        // xpec: 92,Wg,Nb
         assert!(rendered.contains("not `InvalidQuestion` reasons"));
     }
 
+    // xpec: 92,Wg,Nb
     #[test]
     fn restricted_scope_base_instructions_allow_scope_too_narrow() {
         let rendered = evaluator_base_instructions(BaseInstructionsContext {
@@ -66,30 +105,53 @@ mod tests {
         })
         .unwrap();
 
+        // xpec: 92,Wg,Nb
         assert!(rendered.contains("ScopeTooNarrow"));
+        // xpec: 92,Wg,Nb
         assert!(rendered.contains("InvalidQuestion"));
+        // xpec: 92,Wg,Nb
         assert!(rendered.contains("substantive answer"));
+        // xpec: 92,Wg,Nb
         assert!(rendered.contains("qScopeSuggestion"));
-        assert!(rendered.contains("absent from the visible project"));
-        assert!(rendered.contains("These restricted-scope rules are active only"));
-        assert!(rendered.contains("Before answering from visible project evidence"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("needed project path is absent"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("Restricted-scope only"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("choose `qScopeSuggestion` from the question's search domain"));
+        // xpec: YD,v
+        assert!(rendered.contains("chosen search domain is not contained"));
+        // xpec: YD,v
+        assert!(rendered.contains("do not answer project-wide absence/avoid questions"));
+        // xpec: 92,Wg,Nb
         assert!(!rendered.contains("Before answering, determine"));
+        // xpec: 92,Wg,Nb
         assert!(rendered.contains("question's search domain"));
-        assert!(rendered.contains("specification compliance"));
+        // xpec: v
+        assert!(rendered.contains("named spec/command/format compliance questions may narrow"));
+        // xpec: v
+        assert!(rendered.contains("project-wide quality/safety/dead-code"));
+        // xpec: v
+        assert!(rendered.contains("project-wide \"find any\" or \"avoid any\" questions"));
+        // xpec: 92,Wg,Nb
         assert!(rendered.contains("change-set"));
-        assert!(rendered.contains("can you find"));
-        assert!(rendered.contains("absence answers must cover every path"));
-        assert!(rendered.contains("inspected paths do not narrow"));
-        assert!(rendered.contains("Concrete behavior questions may narrow"));
-        assert!(rendered
-            .contains("hidden files are likely not relevant is only a scope-selection hint"));
-        assert!(rendered.contains("Configured ignore exclusions do not count"));
-        assert!(rendered.contains("verify with `rg --files` or a direct read/search"));
-        assert!(rendered.contains("Answer `no` from absence"));
-        assert!(rendered.contains("visible scope covers the search domain"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("direct evidence, examples, and counterexamples"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("paths that could contain direct evidence or counterexamples"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("Concrete behavior or named spec/command/format compliance"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("transcript relevance hints are not q-scope hiding"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("Configured ignore exclusions and transcript relevance hints"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("verify with `rg --files` or direct read/search"));
+        // xpec: 92,Wg,Nb
         assert!(rendered.contains("not `InvalidQuestion` reasons"));
     }
 
+    // xpec: 92,Wg,Nb
     #[test]
     fn git_diff_context_is_not_the_visible_tree() {
         let rendered = evaluator_base_instructions(BaseInstructionsContext {
@@ -98,13 +160,17 @@ mod tests {
         })
         .unwrap();
 
-        assert!(rendered.contains("not visible project files"));
+        // xpec: 92,Wg,Nb
         assert!(
-            rendered.contains("A path shown after `full output:` is not a project-relative path")
+            rendered.contains("diff transcript/full-output files are navigation, never evidence")
         );
-        assert!(rendered.contains("search/read visible files"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("Missing diff excerpts are not missing visibility"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("read/search visible files"));
     }
 
+    // xpec: 92,Wg,Nb
     #[test]
     fn in_place_base_instructions_do_not_use_git_diff_or_q_scope() {
         let rendered = evaluator_base_instructions(BaseInstructionsContext {
@@ -113,9 +179,40 @@ mod tests {
         })
         .unwrap();
 
+        // xpec: 92,Wg,Nb
         assert!(!rendered.contains("Use the Git diff"));
+        // xpec: 92,Wg,Nb
         assert!(!rendered.contains("qScopeSuggestion"));
+        // xpec: 92,Wg,Nb
         assert!(!rendered.contains("sandbox transcript"));
+        // xpec: 92,Wg,Nb
         assert!(rendered.contains("The checked directory is the visible project."));
+    }
+
+    // xpec: Uy
+    #[test]
+    fn base_instructions_render_within_length_limit() {
+        for context in [
+            BaseInstructionsContext {
+                in_place: false,
+                full_scope: true,
+            },
+            BaseInstructionsContext {
+                in_place: false,
+                full_scope: false,
+            },
+            BaseInstructionsContext {
+                in_place: true,
+                full_scope: true,
+            },
+            BaseInstructionsContext {
+                in_place: true,
+                full_scope: false,
+            },
+        ] {
+            let rendered = evaluator_base_instructions(context).unwrap();
+            // xpec: Uy
+            assert!(rendered.len() <= MAX_EVALUATOR_BASE_INSTRUCTIONS_LEN);
+        }
     }
 }
