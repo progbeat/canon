@@ -15,6 +15,10 @@ pub(crate) enum GitBackedCacheFilteredCheckWork {
         cached_hits: Vec<CachedExpectationHit>,
     },
     CachedNonPassBlocksDefaultSelection {
+        // xpec: nT,e5
+        // A cached non-pass blocks default selection before evaluation starts:
+        // uncached candidates remain pending instead of becoming selected
+        // evaluator work, so `e5` has no uncached selected work to order here.
         cached_hits: Vec<CachedExpectationHit>,
     },
 }
@@ -100,6 +104,10 @@ pub(crate) fn select_git_backed_expectations_after_cache(
     let cached_failure_blocks_default_selection =
         cached_non_pass_seen && cached_non_pass_policy == CachedNonPassPolicy::LeaveUncachedPending;
     if cached_failure_blocks_default_selection {
+        // xpec: nT,e5
+        // These are already-known cached report hits, not a selected evaluator
+        // queue. The uncached candidates collected above remain pending under
+        // default selection because cached failures must be fixed first.
         cached_hits =
             order_by_latest_non_pass(context.root, cached_hits, context.xpec_state, |hit| {
                 &hit.expectation

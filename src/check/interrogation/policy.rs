@@ -1,7 +1,7 @@
 use crate::check::core::errors::error_record_from_interrogation_error;
 use crate::check::core::{
-    CheckRecord, CheckResult, InterrogationAnswer, InterrogationResult, ParsedAnswer,
-    ResolvedExpectation, INTERNAL_ERROR_UNPARSABLE,
+    CheckRecord, InterrogationAnswer, InterrogationResult, ParsedAnswer, ResolvedExpectation,
+    INTERNAL_ERROR_UNPARSABLE,
 };
 use crate::check::interrogation::session::interrogate_expectation_answer_with_model_fallbacks;
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
@@ -22,8 +22,8 @@ use crate::xpec_state::XpecStateCache;
 // - full vs restricted response schema selection, `ScopeTooNarrow`,
 //   `InvalidQuestion`, `answer`, `evidence`, and `qScopeSuggestion` schema
 //   parsing: `src/check/core/evaluator_response.rs`
-// - initial q-scope, invalid qScopeSuggestion rejection, 25%-smaller gate, and
-//   narrowed-scope acceptance: this file
+// - initial q-scope, no-hide follow-up suppression, invalid qScopeSuggestion
+//   rejection, 25%-smaller gate, and narrowed-scope acceptance: this file
 // - check-run `ScopeTooNarrow` retry and q-scope verification sequencing:
 //   `src/check/run/execute/expectation.rs`
 // - `canon ask` retry and q-scope verification sequencing:
@@ -200,13 +200,15 @@ pub(crate) fn initial_scope_from_last_pass_q_scope(
     last_pass_q_scope.unwrap_or_else(full_scope)
 }
 
-pub(crate) fn question_scope_suggestion_scope_for_unused_follow_up(
+pub(crate) fn q_scope_verification_scope_after_initial_pass(
     runtime: &CheckRuntime<'_>,
     agent: &AgentConfig,
     result: &PolicyInterrogationResult,
     current_scope: &[String],
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<Option<Vec<String>>, String> {
+    // [YD] `canon check` schedules q-scope verification only after the
+    // initial record passed and the full-scope retry follow-up was not used.
     // `ScopeTooNarrow` full-scope retry and q-scope verification share the
     // Interrogation Policy's single follow-up budget. If the retry already
     // consumed that budget, no q-scope verification turn is allowed.
@@ -239,6 +241,9 @@ pub(crate) fn question_scope_suggestion_scope_for_independent_verification(
     current_scope: &[String],
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<Option<Vec<String>>, String> {
+    if runtime.evaluator_interrogations_never_hide_files() {
+        return Ok(None);
+    }
     // Glossary-level q-scope suggestions are evaluator-provided claims. This
     // helper rejects syntactically invalid suggestions before the
     // Interrogation Policy's 25%-smaller verification gate. The response JSON
@@ -283,25 +288,13 @@ fn suggested_scope_is_at_least_25_percent_smaller(
         && suggested_count.saturating_mul(4) <= current_count.saturating_mul(3)
 }
 
-pub(crate) fn narrowed_scope_is_accepted(
-    initial_result: CheckResult,
-    narrowed: &CheckRecord,
-) -> bool {
+pub(crate) fn narrowed_scope_is_accepted(narrowed: &CheckRecord) -> bool {
     // Acceptance means the q-scope suggestion graduated from evaluator claim
-    // to verified reusable q-scope. The policy only verifies suggestions after
-    // an initial passing answer; non-pass initial answers must keep their
-    // current scope.
-    // Error responses do not verify the proposed scope as reusable.
-    // Verification ScopeTooNarrow is a concrete q-scope rejection, so the
-    // initial answer remains the final response for the expectation. Other
-    // verification errors become final human-review results.
-    if narrowed.error.is_some() {
-        return false;
-    }
-    match (initial_result, narrowed.result) {
-        (CheckResult::Pass, CheckResult::Pass) | (CheckResult::Pass, CheckResult::Fail) => true,
-        (CheckResult::Fail, _) => false,
-    }
+    // to verified reusable q-scope. The initial-pass requirement lives in the
+    // verification scheduling gate; once verification runs, any answer result
+    // verifies the proposed scope. Error responses do not verify it as
+    // reusable, even when they become the final human-review result.
+    narrowed.error.is_none()
 }
 
 pub(crate) fn write_scope_narrowing_event(
@@ -383,7 +376,7 @@ mod tests {
     }
 
     #[test] // xpec: YD
-    fn narrowed_scope_acceptance_requires_initial_pass_answer() {
+    fn narrowed_scope_acceptance_requires_verification_answer() {
         let pass = test_record("yes", CheckResult::Pass, None);
         let fail = test_record("no", CheckResult::Fail, None);
         let error = test_record(
@@ -391,11 +384,9 @@ mod tests {
             CheckResult::Fail,
             Some(ERROR_SCOPE_TOO_NARROW),
         );
-        assert!(narrowed_scope_is_accepted(CheckResult::Pass, &pass));
-        assert!(narrowed_scope_is_accepted(CheckResult::Pass, &fail));
-        assert!(!narrowed_scope_is_accepted(CheckResult::Fail, &fail));
-        assert!(!narrowed_scope_is_accepted(CheckResult::Fail, &pass));
-        assert!(!narrowed_scope_is_accepted(CheckResult::Pass, &error));
+        assert!(narrowed_scope_is_accepted(&pass));
+        assert!(narrowed_scope_is_accepted(&fail));
+        assert!(!narrowed_scope_is_accepted(&error));
     }
 
     #[test]
@@ -480,8 +471,8 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test]
-    fn in_place_suggested_q_scope_does_not_induce_smaller_visible_tree() {
+    #[test] // xpec: YD
+    fn no_hide_runtime_never_verifies_q_scope_suggestion() {
         let root = PathBuf::from("/tmp/canon-in-place-policy");
         let agent = AgentConfig::default();
         let config = CheckConfig {

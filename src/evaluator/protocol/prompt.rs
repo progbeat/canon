@@ -72,6 +72,9 @@ pub(crate) fn developer_instructions(
         ],
         json!({
             "xpec": {
+                // [UZ] This is human-authored expectation context rendered by
+                // the resource template, not another implementation-owned
+                // evaluator prompt or instruction source.
                 "instructions": context.question_context,
                 "q_scope": context.q_scope,
                 "ignore": context.ignore,

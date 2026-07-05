@@ -7,24 +7,26 @@ use super::prepare::{
     prepare_git_backed_check_execution, GitBackedCheckStorage,
     PrepareGitBackedCheckExecutionOptions,
 };
-use super::query::{run_check_query_command, CheckQueryCommand, CheckQueryError};
 use super::trailer::{
     check_command_writes_agent_message, check_report_passed, write_check_trailer,
     write_check_trailer_with_usage, CompletedCheckRun,
 };
+mod ask;
+
+pub(crate) use ask::run_ask_command;
+
 use crate::app::LazyAppServerRunner;
-use crate::check::command::args::{parse_ask_command_args, parse_check_command_args};
+use crate::check::command::args::parse_check_command_args;
 use crate::check::command::output::{write_stdout_record, SharedCheckOutput};
 use crate::check::command::{finish_check_report, CheckReportFinishContext};
 use crate::check::config::validation::{
     check_config_loads_plugins, validate_in_place_check_config,
 };
-use crate::check::core::{AskCommandArgs, BlockedCheckHook, CheckCommandArgs, CheckRunReport};
+use crate::check::core::{BlockedCheckHook, CheckCommandArgs, CheckRunReport};
 use crate::check::interrogation::{state::CheckRuntime, write_check_lifecycle_start_event};
 use crate::check::run::selection::{expectation_identities, resolve_check_options_with_identities};
 use crate::check::{run_check_with_runner_and_caches, CheckRunCaches, CheckRunSideEffects};
-use crate::cli::{AskFailure, CommandError};
-use crate::config_types::{AgentConfig, CheckConfig, CheckHooksConfig};
+use crate::cli::CommandError;
 use crate::git::TreeSource;
 use crate::logs::{write_cache_cleanup_event, DiagnosticLogWriter};
 use crate::platform::{install_check_signal_handlers, reset_check_interrupted};
@@ -268,135 +270,6 @@ fn blocked_check_run(mut report: CheckRunReport, repair_instruction: String) -> 
     }
 }
 
-pub(crate) fn run_ask_command(
-    root: &Path,
-    args: &[OsString],
-    default_in_place: bool,
-) -> Result<(), CommandError> {
-    install_check_signal_handlers().map_err(CommandError::from)?;
-    reset_check_interrupted();
-    let command = parse_ask_command_args(args, default_in_place)?;
-    if command.in_place {
-        return run_in_place_ask_command(root, &command);
-    }
-    let checked_tree = TreeSource::resolve(root, &command.tree, "--tree")?;
-    let against_tree = TreeSource::resolve_default_against_tree(
-        root,
-        &command.against_tree,
-        command.against_tree_explicit,
-    )?;
-    let mut repo_cache = RepoInspectionCache::new();
-    let diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
-    let mut check_caches = CheckRunCaches::new();
-    let config = ask_config_from_optional_check_config(
-        repo_cache.load_check_config_with_default_agent_preset(
-            root,
-            &command.config_path,
-            &checked_tree,
-            command.default_agent_preset.as_deref(),
-        ),
-    );
-    run_ask_query(
-        root,
-        &command,
-        Some(&checked_tree),
-        Some(&against_tree),
-        &config,
-        Some(diagnostic_log),
-        &mut check_caches,
-    )
-}
-
-fn run_in_place_ask_command(root: &Path, command: &AskCommandArgs) -> Result<(), CommandError> {
-    let mut repo_cache = RepoInspectionCache::new();
-    let mut check_caches = CheckRunCaches::new();
-    let diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
-    let config = ask_config_from_optional_check_config(
-        repo_cache.load_in_place_check_config_with_default_agent_preset(
-            root,
-            &command.config_path,
-            command.default_agent_preset.as_deref(),
-        ),
-    );
-    run_ask_query(
-        root,
-        command,
-        None,
-        None,
-        &config,
-        Some(diagnostic_log),
-        &mut check_caches,
-    )
-}
-
-fn ask_config_from_optional_check_config(config: Result<CheckConfig, String>) -> CheckConfig {
-    // `canon ask` always asks the evaluator. Check config is only an optional
-    // source of resolved agent settings; after this point ask constructs one
-    // temporary xpec and sends it through the normal check interrogation path
-    // in query.rs.
-    config
-        .map(ask_config_from_check_config)
-        .unwrap_or_else(|_| ask_config_with_agent(AgentConfig::implementation_default()))
-}
-
-fn ask_config_from_check_config(config: CheckConfig) -> CheckConfig {
-    ask_config_with_agent(config.agent)
-}
-
-fn ask_config_with_agent(agent: AgentConfig) -> CheckConfig {
-    CheckConfig {
-        version: 1,
-        agent,
-        hooks: CheckHooksConfig::default(),
-        expectations: Vec::new(),
-    }
-}
-
-fn run_ask_query(
-    root: &Path,
-    command: &AskCommandArgs,
-    tree_source: Option<&TreeSource>,
-    against_tree: Option<&TreeSource>,
-    config: &crate::config_types::CheckConfig,
-    diagnostic_log: Option<DiagnosticLogWriter>,
-    check_caches: &mut CheckRunCaches,
-) -> Result<(), CommandError> {
-    // Ask receives an ask-only `CheckConfig`: agent settings may come from the
-    // expanded check config, but configured expectations/hooks are not selected.
-    // Once query.rs finishes command validation, the prepared ask path has no
-    // cache or last-result shortcut and always sends an evaluator turn.
-    let result = run_check_query_command(CheckQueryCommand {
-        root,
-        config,
-        question: &command.question,
-        query_scope: &command.query_scope,
-        query_scope_provided: command.query_scope_provided,
-        tree_source,
-        against_tree,
-        no_sandbox: command.no_sandbox,
-        in_place: command.in_place,
-        diagnostic_log,
-        check_caches,
-    });
-    ask_query_command_result(result)
-}
-
-fn ask_query_command_result(result: Result<(), CheckQueryError>) -> Result<(), CommandError> {
-    match result {
-        Ok(()) => Ok(()),
-        Err(err) => Err(CommandError::AskFailed(ask_failure_for_query_error(&err))),
-    }
-}
-
-fn ask_failure_for_query_error(err: &CheckQueryError) -> AskFailure {
-    match err {
-        CheckQueryError::ReviewRequired(_) => AskFailure::ReviewRequired,
-        CheckQueryError::Output(_) => AskFailure::Output,
-        CheckQueryError::TokenUsage(_) => AskFailure::TokenUsage,
-        CheckQueryError::Command(_) | CheckQueryError::Evaluator(_) => AskFailure::Query,
-    }
-}
-
 fn cleanup_cache_dirs(
     root: &Path,
     identities: &[crate::check::ExpectationIdentity],
@@ -440,6 +313,10 @@ fn run_in_place_check_command(
     // and passes an in-place runtime whose lower layers skip xpec reads/writes.
     let mut check_caches = CheckRunCaches::new();
     let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
+    // This is the `canon check --in-place` validation boundary. Config load or
+    // validation failures return through `fail_check_before_selection`, which
+    // owns the check summary, token usage line, and runtime log reporting before
+    // hook, selection, or evaluator work can start.
     let config = match repo_cache.load_in_place_check_config_with_default_agent_preset(
         root,
         &command.config_path,
@@ -753,30 +630,4 @@ fn repair_instruction_line(instruction: &str) -> String {
     let mut line = instruction.to_string();
     line.push('\n');
     line
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test] // xpec: 5,HW
-    fn ask_query_error_uses_typed_sentinel_command_error() {
-        let result =
-            ask_query_command_result(Err(CheckQueryError::Evaluator("query failed".to_string())));
-
-        assert_eq!(result, Err(CommandError::AskFailed(AskFailure::Query)));
-        assert_eq!(
-            ask_query_command_result(Err(CheckQueryError::ReviewRequired("InvalidQuestion"))),
-            Err(CommandError::AskFailed(AskFailure::ReviewRequired))
-        );
-    }
-
-    #[test] // xpec: 5
-    fn ask_config_load_error_still_builds_temporary_query_config() {
-        let config = ask_config_from_optional_check_config(Err("config unavailable".to_string()));
-
-        assert!(config.expectations.is_empty());
-        assert!(config.hooks.on_start.is_empty());
-        assert!(config.hooks.on_pass.is_empty());
-    }
 }

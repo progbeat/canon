@@ -72,12 +72,18 @@ mod tests {
         // xpec: 92,Wg,Nb
         assert!(rendered.contains("`qScopeSuggestion` covers the question's search domain"));
         // xpec: 92,Wg,Nb
-        assert!(rendered.contains(
-            "diff transcript lines, transcript paths, and removed diff lines are not verification"
-        ));
+        assert!(rendered.contains("`-` lines are removed/absent, never existing code"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("visible read/search cannot find a diff-mentioned symbol"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("transcript paths, numstat/change lists"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("numstat/change lists, deleted-file diffs"));
         // xpec: 92,Wg,Nb
         assert!(rendered
             .contains("not the diff, changed-file lists, or absence of relevant changed files"));
+        // xpec: 92,Wg,Nb
+        assert!(rendered.contains("visible file conflict, the visible file wins"));
         // xpec: 92,Wg,Nb
         assert!(rendered.contains("not active instructions or complete behavior evidence"));
         // xpec: 92,Wg,Nb
@@ -121,8 +127,8 @@ mod tests {
         assert!(!rendered.contains("Before answering, determine"));
         // xpec: 92,Wg,Nb
         assert!(rendered.contains("question's search domain"));
-        // xpec: 92,Wg,Nb
-        assert!(rendered.contains("implementation/spec compliance"));
+        // xpec: v
+        assert!(rendered.contains("named spec/command/format compliance questions may narrow"));
         // xpec: v
         assert!(rendered.contains("project-wide quality/safety/dead-code"));
         // xpec: v
@@ -134,7 +140,7 @@ mod tests {
         // xpec: 92,Wg,Nb
         assert!(rendered.contains("paths that could contain direct evidence or counterexamples"));
         // xpec: 92,Wg,Nb
-        assert!(rendered.contains("Concrete behavior questions may narrow"));
+        assert!(rendered.contains("Concrete behavior or named spec/command/format compliance"));
         // xpec: 92,Wg,Nb
         assert!(rendered.contains("transcript relevance hints are not q-scope hiding"));
         // xpec: 92,Wg,Nb

@@ -44,6 +44,10 @@ impl CheckConfigIncludeResolver {
         request: IncludeRequest<'_>,
     ) -> Result<ResolvedInclude, IncludeResolveError> {
         let path = resolve_include_path(&self.root_config_path, request.spec, request.from_id)?;
+        // `serde_saphyr` rejects non-root cycles by comparing each
+        // `ResolvedInclude.id` against the active include IDs. The root input
+        // has no ID in that stack, so `resolve_include_path` rejects only the
+        // root-file cycle that the parser cannot observe itself.
         let content = self
             .cache
             .config_source_file_content(&self.root, &self.source, Path::new(&path))
@@ -93,12 +97,11 @@ fn normalize_include_spec(spec: &str) -> Result<String, IncludeResolveError> {
 }
 
 fn reject_root_include(path: &str, root_config_path: &Path) -> Result<String, IncludeResolveError> {
-    let Some(root_config_path) = root_config_path.to_str() else {
-        return Ok(path.to_string());
-    };
-    let Ok(root_config_path) = normalize_repo_path(root_config_path) else {
-        return Ok(path.to_string());
-    };
+    let root_config_path = root_config_path
+        .to_str()
+        .ok_or_else(|| include_error("root config path must be valid UTF-8"))?;
+    let root_config_path = normalize_repo_path(root_config_path)
+        .map_err(|err| include_error(format!("root config path: {err}")))?;
     if path == root_config_path {
         return Err(include_error(format!("recursive YAML include: {path}")));
     }
@@ -111,8 +114,15 @@ fn include_error(message: impl Into<String>) -> IncludeResolveError {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_include_spec, parse_yaml_config_with_includes, resolve_include_path};
-    use std::path::Path;
+    use super::{
+        normalize_include_spec, parse_yaml_config_with_includes, reject_root_include,
+        resolve_include_path,
+    };
+    use crate::check::config::CheckConfigSource;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     // xpec: I8
     #[test]
@@ -150,6 +160,35 @@ mod tests {
         }
     }
 
+    // xpec: T
+    #[test]
+    fn invalid_root_config_path_does_not_bypass_root_include_rejection() {
+        // xpec: T
+        assert!(reject_root_include("check.yml", Path::new("../check.yml")).is_err());
+    }
+
+    // xpec: T,I8
+    #[test]
+    fn yaml_include_non_root_cycle_is_rejected_by_resolved_include_ids() {
+        let root = test_root("yaml-include-non-root-cycle");
+        fs::write(root.join("child.yml"), "child: !include sibling.yml\n").unwrap();
+        fs::write(root.join("sibling.yml"), "sibling: !include child.yml\n").unwrap();
+
+        let err = parse_yaml_config_with_includes::<serde_json::Value>(
+            &root,
+            Path::new("check.yml"),
+            "root: !include child.yml\n",
+            CheckConfigSource::InPlace,
+        )
+        .unwrap_err();
+
+        // xpec: T,I8
+        assert!(
+            err.contains("cyclic include detected: child.yml"),
+            "unexpected include error: {err}"
+        );
+    }
+
     // xpec: uY
     #[test]
     fn hook_case_key_y_stays_text() {
@@ -180,5 +219,19 @@ expectations:
         assert!(hooks.on_start[0].cases.contains_key("y"));
         // xpec: uY
         assert!(!hooks.on_start[0].cases.contains_key("true"));
+    }
+
+    fn test_root(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-tmp")
+            .join(format!("canon-test-{}-{}-{}", name, process::id(), unique));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
     }
 }

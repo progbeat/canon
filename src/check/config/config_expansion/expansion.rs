@@ -307,14 +307,25 @@ impl RawExpectationExpansion<'_> {
             .presets
             .get(preset_name)
             .ok_or_else(|| format!("unknown preset: {}", preset_name))?;
-        // Preset defaults fill raw fields, but an item that already declares a
-        // form keeps that form; preset shape fields only classify unresolved
-        // items.
-        let declared_form = fields.declared_item_form();
-        apply_raw_expansion_item_preset_defaults(&mut fields, preset);
-        let resolved_form = declared_form.or_else(|| fields.declared_item_form());
-        RawExpectationItem::from_fields_with_resolved_form(fields, resolved_form)
-            .map_err(str::to_string)
+        match fields.declared_item_form() {
+            Some(RawExpectationItemForm::Include) => {
+                apply_raw_expansion_item_preset_defaults(&mut fields, preset);
+                RawExpectationItem::include_from_fields(fields)
+            }
+            Some(RawExpectationItemForm::Generator) => {
+                apply_raw_expansion_item_preset_defaults(&mut fields, preset);
+                RawExpectationItem::generator_from_fields(fields)
+            }
+            Some(RawExpectationItemForm::Explicit) => {
+                apply_raw_expansion_item_preset_defaults(&mut fields, preset);
+                RawExpectationItem::explicit_from_fields(fields)
+            }
+            None => {
+                apply_raw_expansion_item_preset_defaults(&mut fields, preset);
+                RawExpectationItem::from_resolved_fields(fields)
+            }
+        }
+        .map_err(str::to_string)
     }
 }
 

@@ -125,6 +125,9 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         .thread_sessions_by_prerender_key
         .get(&session_key)
         .cloned()
+        // xpec: G6
+        // A thread that received `canon.show` output for this expectation must
+        // not be reused to interrogate that same expectation again.
         .filter(|session_id| {
             !state.session_has_seen_dynamic_show_expectation(session_id, request.expectation_id)
         });
@@ -384,6 +387,10 @@ fn ask_in_thread<R: EvaluatorRunner>(
             )
         }
     };
+    // xpec: G6
+    // The dynamic tool handler records the expectation IDs actually rendered
+    // into `canon.show` output; future reuse lookups reject this session for
+    // those expectation IDs.
     state.record_session_dynamic_show_expectation_ids(session_id, shown_expectation_ids);
     let response = response?;
     if response.schema_valid {
@@ -450,6 +457,9 @@ fn start_or_reuse_thread_session_after_rendering<R: EvaluatorRunner>(
         .thread_sessions_by_rendered_instructions_key
         .get(&rendered_key)
         .cloned()
+        // xpec: G6
+        // Apply the same dynamic-tool reuse prohibition to the post-render
+        // reuse pool as to the pre-render pool.
         .filter(|session_id| {
             !state.session_has_seen_dynamic_show_expectation(session_id, request.expectation_id)
         })

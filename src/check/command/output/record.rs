@@ -328,13 +328,11 @@ fn render_check_output_record_with_initial_marker_timeline(record: &CheckRecord)
 
 pub(super) fn render_check_output_record_status_and_details(record: &CheckRecord) -> String {
     // Public rendering receives final normalized records, not just evaluator
-    // response payloads. The ERROR block accepts any final CheckRecord error
-    // string, while ScopeTooNarrow remains an internal scope-control signal.
-    assert_ne!(
-        record.human_review_reason(),
-        Some(ERROR_SCOPE_TOO_NARROW),
-        "user-visible final check results must not expose ScopeTooNarrow"
-    );
+    // response payloads. It renders the final CheckRecord as provided;
+    // selected-expectation execution asserts ScopeTooNarrow is never a final
+    // check result before this public-output boundary.
+    // xpec: RC
+    debug_assert_ne!(record.error.as_deref(), Some(ERROR_SCOPE_TOO_NARROW));
     if record.passed() {
         return " OK\n".to_string();
     }

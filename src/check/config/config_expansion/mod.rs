@@ -914,6 +914,40 @@ expectations:
         let _ = fs::remove_dir_all(root);
     }
 
+    // xpec: n7
+    #[test]
+    fn explicit_item_with_generator_shape_extra_fields_stays_explicit() {
+        let raw: RawCheckConfig = serde_saphyr::from_str(
+            r#"
+version: 1
+presets:
+  default: {}
+expectations:
+  - q: "Does the explicit item stay explicit?"
+    a: "yes"
+    path: "specs/*.md"
+    q_template: "Generated: {{content}}"
+"#,
+        )
+        .expect("parse raw check config");
+
+        let config = expand_raw_check_config(
+            None,
+            Path::new("check.yml"),
+            raw,
+            None,
+            CheckConfigSource::Tree(TreeSource::Staged),
+        )
+        .expect("expand config");
+
+        assert_eq!(config.expectations.len(), 1);
+        assert_eq!(
+            config.expectations[0].q,
+            "Does the explicit item stay explicit?"
+        );
+        assert_eq!(config.expectations[0].a, "yes");
+    }
+
     #[test]
     fn item_shape_fields_prevent_preset_shape_defaults_from_overriding_form() {
         let raw: RawCheckConfig = serde_saphyr::from_str(

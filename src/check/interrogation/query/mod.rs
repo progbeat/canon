@@ -1,6 +1,5 @@
 use crate::check::core::{
-    QueryResult, ResolvedExpectation, ERROR_INVALID_QUESTION, ERROR_SCOPE_TOO_NARROW,
-    INTERNAL_ERROR_UNPARSABLE,
+    QueryResult, ResolvedExpectation, ERROR_INVALID_QUESTION, INTERNAL_ERROR_UNPARSABLE,
 };
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::interrogation::{write_query_result_event, write_query_review_required_event};
@@ -63,7 +62,6 @@ fn finish_query_result(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     result: QueryResult,
 ) -> Result<QueryResult, String> {
-    assert_final_query_result_has_no_scope_too_narrow(&result)?;
     if let Some(reason) = query_human_review_reason(&result) {
         write_query_review_required_event(question, diagnostic_log, &result.answer, reason)
             .map_err(|err| err.to_string())?;
@@ -74,18 +72,8 @@ fn finish_query_result(
     Ok(result)
 }
 
-fn assert_final_query_result_has_no_scope_too_narrow(result: &QueryResult) -> Result<(), String> {
-    if result.answer.error.as_deref() == Some(ERROR_SCOPE_TOO_NARROW) {
-        return Err("internal error: forbidden final query scope error".to_string());
-    }
-    Ok(())
-}
-
 pub(crate) fn query_human_review_reason(result: &QueryResult) -> Option<&'static str> {
     match result.answer.error.as_deref() {
-        Some(ERROR_SCOPE_TOO_NARROW) => {
-            unreachable!("final query result cannot expose scope-too-narrow")
-        }
         Some(ERROR_INVALID_QUESTION) => Some("invalid question"),
         Some(INTERNAL_ERROR_UNPARSABLE) => Some("unparsable evaluator response"),
         None => None,

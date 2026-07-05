@@ -604,11 +604,11 @@ impl RawExpectationItemForm {
         if has_include {
             return Some(Self::Include);
         }
-        if has_path || has_q_template {
-            return Some(Self::Generator);
-        }
         if has_q {
             return Some(Self::Explicit);
+        }
+        if has_path || has_q_template {
+            return Some(Self::Generator);
         }
         None
     }
@@ -716,9 +716,83 @@ impl<'de> Deserialize<'de> for RawExpectationItem {
 }
 
 impl RawExpectationItem {
-    pub(crate) fn from_fields_with_resolved_form(
+    pub(crate) fn include_from_fields(
         fields: RawExpectationFields,
-        resolved_form: Option<RawExpectationItemForm>,
+    ) -> Result<RawExpectationItem, &'static str> {
+        let RawExpectationFields {
+            explicit_q,
+            q_template,
+            a,
+            path,
+            include,
+            common,
+        } = fields;
+        match include {
+            Some(include) => Ok(RawExpectationItem::Include(RawIncludeExpectation {
+                include,
+                generated_item_defaults: RawExpectationFields {
+                    explicit_q,
+                    q_template,
+                    a,
+                    path,
+                    include: None,
+                    common,
+                },
+            })),
+            None => Err("missing required field after default resolution: include"),
+        }
+    }
+
+    pub(crate) fn generator_from_fields(
+        fields: RawExpectationFields,
+    ) -> Result<RawExpectationItem, &'static str> {
+        let RawExpectationFields {
+            q_template,
+            a,
+            path,
+            common,
+            ..
+        } = fields;
+        match (q_template, path, a) {
+            (Some(q_template), Some(path), Some(a)) => {
+                Ok(RawExpectationItem::Generator(RawGeneratorExpectation {
+                    q: RawGeneratedExpectationQuestion { q_template },
+                    path,
+                    a,
+                    common,
+                }))
+            }
+            (Some(_), None, _) => Err("missing required field after default resolution: path"),
+            (Some(_), Some(_), None) => Err("missing required field after default resolution: a"),
+            (None, Some(_), _) => {
+                Err("missing required field after default resolution: q_template")
+            }
+            _ => Err("invalid expectation item"),
+        }
+    }
+
+    pub(crate) fn explicit_from_fields(
+        fields: RawExpectationFields,
+    ) -> Result<RawExpectationItem, &'static str> {
+        let RawExpectationFields {
+            explicit_q,
+            a,
+            common,
+            ..
+        } = fields;
+        match (explicit_q, a) {
+            (Some(q), Some(a)) => Ok(RawExpectationItem::Explicit(RawExplicitExpectation {
+                q,
+                a,
+                common,
+            })),
+            (Some(_), None) => Err("missing required field after default resolution: a"),
+            _ => Err("invalid expectation item"),
+        }
+    }
+
+    pub(crate) fn from_resolved_fields(
+        fields: RawExpectationFields,
     ) -> Result<RawExpectationItem, &'static str> {
         let RawExpectationFields {
             explicit_q,
@@ -733,60 +807,6 @@ impl RawExpectationItem {
         // no synthetic defaults: inventing an `include`, `q`+`a`, or
         // `path`+`q_template`+`a` would change the expectation form instead of
         // resolving it, so absence after resolution is a config error.
-        match resolved_form {
-            Some(RawExpectationItemForm::Include) => {
-                return match include {
-                    Some(include) => Ok(RawExpectationItem::Include(RawIncludeExpectation {
-                        include,
-                        generated_item_defaults: RawExpectationFields {
-                            explicit_q,
-                            q_template,
-                            a,
-                            path,
-                            include: None,
-                            common,
-                        },
-                    })),
-                    None => Err("missing required field after default resolution: include"),
-                };
-            }
-            Some(RawExpectationItemForm::Generator) => {
-                return match (q_template, path, a) {
-                    (Some(q_template), Some(path), Some(a)) => {
-                        Ok(RawExpectationItem::Generator(RawGeneratorExpectation {
-                            q: RawGeneratedExpectationQuestion { q_template },
-                            path,
-                            a,
-                            common,
-                        }))
-                    }
-                    (Some(_), None, _) => {
-                        Err("missing required field after default resolution: path")
-                    }
-                    (Some(_), Some(_), None) => {
-                        Err("missing required field after default resolution: a")
-                    }
-                    (None, Some(_), _) => {
-                        Err("missing required field after default resolution: q_template")
-                    }
-                    _ => Err("invalid expectation item"),
-                };
-            }
-            Some(RawExpectationItemForm::Explicit) => {
-                return match (explicit_q, a) {
-                    (Some(q), Some(a)) => {
-                        Ok(RawExpectationItem::Explicit(RawExplicitExpectation {
-                            q,
-                            a,
-                            common,
-                        }))
-                    }
-                    (Some(_), None) => Err("missing required field after default resolution: a"),
-                    _ => Err("invalid expectation item"),
-                };
-            }
-            None => {}
-        }
         if let Some(include) = include {
             return Ok(RawExpectationItem::Include(RawIncludeExpectation {
                 include,

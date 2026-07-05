@@ -289,7 +289,7 @@ expectations:
     );
 }
 
-// xpec: 6,uY
+// xpec: HW,6,uY
 #[test]
 fn in_place_prohibited_expectation_fields_fail_before_hooks() {
     let repo = temp_repo("canon-in-place-invalid-config-before-hooks");
@@ -312,6 +312,8 @@ expectations:
     .unwrap();
 
     let output = canon()
+        // This public command path covers the `canon check --in-place` output
+        // and token-usage contract for invalid in-place config.
         .args(["check", "--in-place", "unknown-selector"])
         .current_dir(&repo)
         .output()

@@ -164,3 +164,25 @@ fn pad_summary_line(inner: &str) -> String {
     let right = padding - left;
     format!("{}{}{}", "=".repeat(left), inner, "=".repeat(right))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::check::core::BlockedCheckHook;
+
+    #[test] // xpec: HW
+    fn summary_includes_blocked_before_pending() {
+        let report = CheckRunReport {
+            records: Vec::new(),
+            cached: Vec::new(),
+            blocked_hooks: vec![BlockedCheckHook {
+                repair_instruction: "repair".to_string(),
+            }],
+            skipped: 1,
+        };
+
+        let rendered = render_check_summary(&report, Duration::from_millis(500));
+
+        assert!(rendered.contains(" 1 blocked, 1 pending in 0.50s "));
+    }
+}
