@@ -8,8 +8,8 @@ use crate::check::core::{
     CheckOptions, CheckRecord, InterrogationAnswer, ResolvedExpectation, ERROR_SCOPE_TOO_NARROW,
 };
 use crate::check::interrogation::policy::{
-    initial_q_scope_for_fresh_interrogation, interrogate_or_error_answer,
-    interrogate_or_error_record, narrowed_scope_is_accepted,
+    git_backed_interrogation_diff_provenance, initial_q_scope_for_fresh_interrogation,
+    interrogate_or_error_answer, interrogate_or_error_record, narrowed_scope_is_accepted,
     q_scope_verification_scope_after_initial_pass,
     question_scope_suggestion_scope_for_independent_verification, turn_exceeds_break_after_tokens,
     turn_has_context_compaction, write_scope_narrowing_event, InterrogationCall,
@@ -219,7 +219,12 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     // update persistent xpec/live-report state.
     // Later state/cache/logging errors can fail the command, but they occur
     // after the result has been reported through the active report channel.
-    record_finished_expectation(context, expectation, &record)?;
+    record_finished_expectation(
+        context,
+        expectation,
+        &record,
+        FinishedRecordSource::Interrogation,
+    )?;
     let human_review_required = record.requires_human_review();
     let run_stop_signal_hit =
         break_after_tokens_hit || context_compaction_hit || stop_after_current_expectation;
@@ -243,6 +248,7 @@ fn record_finished_expectation<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
     expectation: &ResolvedExpectation,
     record: &CheckRecord,
+    source: FinishedRecordSource,
 ) -> Result<(), String> {
     // This is the durable result-reporting path used after a CheckRecord is
     // formed. The xpec write below keeps the completed result available for
@@ -250,15 +256,53 @@ fn record_finished_expectation<R: EvaluatorRunner>(
     // The final call emits the evaluated expectation's expectation.result and,
     // when needed, expectation.review_required events through
     // DiagnosticLogWriter::write_record_event in `src/logs/writer.rs`.
-    context
-        .caches
-        .xpec_state
-        .write_last_result_for_record_or_absent_history(
-            context.runtime.persistent_check_state_root(),
-            context.runtime.checked_tree_oid(),
-            expectation,
-            record,
-        )?;
+    match source {
+        FinishedRecordSource::Interrogation => {
+            context
+                .caches
+                .xpec_state
+                .write_interrogation_last_result_for_record_or_absent_history(
+                    context.runtime.persistent_check_state_root(),
+                    context.runtime.checked_tree_oid(),
+                    expectation,
+                    record,
+                )?;
+        }
+        FinishedRecordSource::InterrogationAttemptError => {
+            let diff_provenance = git_backed_interrogation_diff_provenance(
+                context.runtime,
+                expectation,
+                &mut context.caches.xpec_state,
+            )?;
+            let mut record_for_state = record.clone();
+            if let Some(diff_provenance) = diff_provenance {
+                record_for_state.diff_from = Some(diff_provenance.diff_from);
+                record_for_state.diff_from_tree_oid = Some(diff_provenance.diff_from_tree_oid);
+                record_for_state.diff_from_tree_oid_abbrev =
+                    Some(diff_provenance.diff_from_tree_oid_abbrev);
+            }
+            context
+                .caches
+                .xpec_state
+                .write_interrogation_last_result_for_record_or_absent_history(
+                    context.runtime.persistent_check_state_root(),
+                    context.runtime.checked_tree_oid(),
+                    expectation,
+                    &record_for_state,
+                )?;
+        }
+        FinishedRecordSource::NonInterrogationError => {
+            context
+                .caches
+                .xpec_state
+                .write_last_result_for_record_or_absent_history(
+                    context.runtime.persistent_check_state_root(),
+                    context.runtime.checked_tree_oid(),
+                    expectation,
+                    record,
+                )?;
+        }
+    }
     write_expectation_result_event(context.diagnostic_log, record)
 }
 
@@ -277,6 +321,20 @@ struct CompletedInterrogation {
     context_compaction_hit: bool,
     stop_after_current_expectation: bool,
     interrupted: bool,
+}
+
+#[derive(Clone, Copy)]
+enum FinishedRecordSource {
+    // The CheckRecord already came from an evaluator interrogation and carries
+    // any prompt-diff provenance that should be visible in stdout and state.
+    Interrogation,
+    // The public ERROR record was produced by check plumbing while evaluator
+    // work was underway. Stdout should not claim the plumbing error used a
+    // diff base, but last-result state still records the attempted prompt diff
+    // context for the normalized error response.
+    InterrogationAttemptError,
+    // The error happened before evaluator prompt rendering was attempted.
+    NonInterrogationError,
 }
 
 fn run_started_temporary_expectation_interrogation<R: EvaluatorRunner>(
@@ -602,7 +660,12 @@ fn finish_unstarted_expectation_with_error_record_for_visible_tree_oid<R: Evalua
         visible_tree_oid.to_string(),
     )?;
     write_result_output_without_started_report(context.result_output, &record)?;
-    finish_expectation_with_error_record(context, expectation, record)
+    finish_expectation_with_error_record(
+        context,
+        expectation,
+        record,
+        FinishedRecordSource::NonInterrogationError,
+    )
 }
 
 fn finish_started_expectation_with_error_record<R: EvaluatorRunner>(
@@ -619,16 +682,26 @@ fn finish_started_expectation_with_error_record<R: EvaluatorRunner>(
         &error,
         visible_tree_oid.to_string(),
     )?;
+    // Public output for this plumbing error does not claim that the error
+    // itself came from a prompt diff. The durable last-result write below uses
+    // `InterrogationAttemptError` to attach the attempted evaluator prompt
+    // diff only to state.
     started_report.finish_public_output_before_structured_report(&record);
-    finish_expectation_with_error_record(context, expectation, record)
+    finish_expectation_with_error_record(
+        context,
+        expectation,
+        record,
+        FinishedRecordSource::InterrogationAttemptError,
+    )
 }
 
 fn finish_expectation_with_error_record<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
     expectation: &ResolvedExpectation,
     record: CheckRecord,
+    source: FinishedRecordSource,
 ) -> Result<ExpectationRunOutcome, String> {
-    record_finished_expectation(context, expectation, &record)?;
+    record_finished_expectation(context, expectation, &record, source)?;
     context.interrogation_run_state.clear_thread_sessions();
     Ok(ExpectationRunOutcome {
         record,
@@ -711,6 +784,9 @@ mod tests {
             scope: full_scope(),
             question_scope_suggestion: None,
             visible_tree_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            diff_from: None,
+            diff_from_tree_oid: None,
+            diff_from_tree_oid_abbrev: None,
             id: "expectation-id".to_string(),
             display_id: "e".to_string(),
         }
@@ -726,6 +802,9 @@ mod tests {
         InterrogationAnswer {
             answer,
             visible_tree_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            diff_from: None,
+            diff_from_tree_oid: None,
+            diff_from_tree_oid_abbrev: None,
             turn_usage: None,
             context_compacted: false,
             stop_after_current_expectation: false,

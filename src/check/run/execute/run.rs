@@ -92,9 +92,9 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             options,
             run_try!(unix_timestamp()),
             if options.selectors_provided {
-                CachedNonPassPolicy::EvaluateUncached
+                CachedNonPassPolicy::EvaluateUncachedCandidates
             } else {
-                CachedNonPassPolicy::LeaveUncachedPending
+                CachedNonPassPolicy::EmptySelectionLeavesUncachedPending
             },
         ));
         match check_work {
@@ -112,12 +112,20 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                     &mut caches.xpec_state,
                 ))
             }
-            crate::check::run::selection::GitBackedCacheFilteredCheckWork::CachedNonPassBlocksDefaultSelection {
+            crate::check::run::selection::GitBackedCacheFilteredCheckWork::DefaultSelectionEmptyWithCachedNonPassReports {
                 cached_hits,
-            } => cached_hits
-                .into_iter()
-                .map(|hit| CheckWorkItem::Cached(Box::new(hit)))
-                .collect(),
+            } => {
+                // xpec: nT
+                // This is the Selected Expectations `selected = empty` case
+                // for default-mode cached failures. These cached report items
+                // are emitted without evaluator work, so e5's selected
+                // expectation ordering and stop-after-evaluated-non-pass rule
+                // have no evaluator queue to apply to here.
+                cached_hits
+                    .into_iter()
+                    .map(|hit| CheckWorkItem::Cached(Box::new(hit)))
+                    .collect()
+            }
         }
     };
     let mut check_work_queue = check_work_queue.into_iter();

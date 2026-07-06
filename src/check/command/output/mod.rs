@@ -8,7 +8,10 @@
 // every exported writer flushes through `shared::write_stdout_record` or
 // `SharedCheckOutput` as soon as a record, token line, summary, query answer,
 // agent message, or progress dot is eligible.
-// `canon gate` output is not routed through this check-output component.
+// `canon gate` is outside this check-output component because it has no live
+// result/progress stream. Its user-visible lines are emitted through
+// `crate::output::write_stderr_line` at the validation, error, or regression
+// decision points where those lines first become eligible.
 mod escape;
 mod query;
 mod record;
@@ -136,36 +139,44 @@ mod tests {
         assert!(summary.contains(" 1 blocked, 1 failed, 1 passed, 3 pending in 0.50s "));
     }
 
-    #[test]
+    #[test] // xpec: et
     fn failed_result_output_matches_documented_detail_lines() {
         let mut bytes = Vec::new();
         let mut result_output = Some(&mut bytes as &mut dyn Write);
         let mut record = failed_record();
         record.question_scope_suggestion = Some(vec!["src/check".to_string()]);
+        record.diff_from = Some(":against-tree".to_string());
+        record.diff_from_tree_oid = Some("1234567890abcdef1234567890abcdef12345678".to_string());
+        record.diff_from_tree_oid_abbrev = Some("1234567".to_string());
 
         write_result_output_without_started_report(&mut result_output, &record).unwrap();
 
         let rendered = String::from_utf8(bytes).unwrap();
         assert_result_entry(&rendered, "FAILED");
         assert!(rendered.contains("Does it pass?\n"));
+        assert!(rendered.contains("Diff-from: 1234567 (:against-tree)\n"));
         assert!(rendered.contains("Expected: yes\n"));
         assert!(rendered.contains("Observed: no\n"));
         assert!(rendered.contains("Evidence: test evidence\n"));
         assert!(rendered.contains("Suggested q-scope: [\"src/check\"]\n"));
     }
 
-    #[test]
+    #[test] // xpec: et
     fn error_result_output_matches_documented_detail_lines() {
         let mut bytes = Vec::new();
         let mut result_output = Some(&mut bytes as &mut dyn Write);
         let mut record = review_record_with_id("11111111111111111111", "j");
         record.question_scope_suggestion = Some(vec!["src/check".to_string()]);
+        record.diff_from = Some(":checkpoint".to_string());
+        record.diff_from_tree_oid = Some("abcdef1234567890abcdef1234567890abcdef12".to_string());
+        record.diff_from_tree_oid_abbrev = Some("abcdef1".to_string());
 
         write_result_output_without_started_report(&mut result_output, &record).unwrap();
 
         let rendered = String::from_utf8(bytes).unwrap();
         assert_result_entry(&rendered, "ERROR");
         assert!(rendered.contains("Does it pass?\n"));
+        assert!(rendered.contains("Diff-from: abcdef1 (:checkpoint)\n"));
         assert!(rendered.contains("Error: InvalidQuestion\n"));
         assert!(rendered.contains("Evidence: test evidence\n"));
         assert!(!rendered.contains("Expected:"));
@@ -337,6 +348,9 @@ mod tests {
             scope: vec![".".to_string()],
             question_scope_suggestion: None,
             visible_tree_oid: "visible".to_string(),
+            diff_from: None,
+            diff_from_tree_oid: None,
+            diff_from_tree_oid_abbrev: None,
             id: id.to_string(),
             display_id: display_id.to_string(),
         }

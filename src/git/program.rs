@@ -115,6 +115,23 @@ pub(crate) fn resolve_tree_oid(root: &Path, treeish: &str) -> Result<String, Str
     command_output_trimmed(&output.stdout, "git rev-parse stdout").map(str::to_string)
 }
 
+pub(crate) fn abbreviate_git_oid(root: &Path, oid: &str) -> Result<String, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--short", oid])
+        .output()
+        .map_err(|err| format!("failed to run git rev-parse --short: {}", err))?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed to abbreviate Git object {}: {}",
+            oid,
+            command_output_trimmed(&output.stderr, "git rev-parse stderr")?
+        ));
+    }
+    command_output_trimmed(&output.stdout, "git rev-parse stdout").map(str::to_string)
+}
+
 pub(crate) fn tree_object_exists(root: &Path, tree_oid: &str) -> Result<bool, String> {
     let output = Command::new("git")
         .arg("-C")

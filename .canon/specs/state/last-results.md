@@ -27,5 +27,9 @@ Each `last-<status>.json` file stores a JSON object with this schema:
 - `checkedTreeOid` is required when `status` is `pass` and omitted otherwise.
   It records the current checked tree OID and is not inherited from the reused pass result.
 - `visibleTreeOid` is required when `status` is `pass` or `fail` and omitted when `status` is `error`.
+- `diffFrom` is required when `response` came from a Git-backed evaluator interrogation whose context included a prompt-rendered Git diff.
+  It records the configured `diff-from` value used by that interrogation.
+- `diffFromTreeOid` is required when `diffFrom` is present.
+  It records the full resolved `diff-from` tree OID used by that interrogation.
 
 `response` is the normalized final evaluator response. If evaluator work fails before producing a schema-valid evaluator response, `response` is the normalized error response recorded for that failure.

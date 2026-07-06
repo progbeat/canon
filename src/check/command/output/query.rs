@@ -7,8 +7,11 @@ pub(crate) fn finish_query_output(
     started_report: StartedExpectationReportOutput,
     answer: &ParsedAnswer,
 ) -> Result<(), String> {
-    // `render_query_output` renders only the evaluator response. The started
-    // report wrapper writes the standalone progress timeline line first.
+    // `canon ask` stdout is the started progress report plus this response
+    // block. `render_query_output` intentionally renders only the response
+    // lines; `finish_with_query_output` first writes the standalone progress
+    // timeline line, then appends these `Observed`/`Error` and `Evidence`
+    // lines.
     let output = render_query_output(answer);
     started_report.finish_with_query_output(&output)
 }

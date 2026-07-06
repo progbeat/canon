@@ -762,7 +762,7 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
             progress,
         },
     )?;
-    finalize_interrogation_answer(
+    let mut answer = finalize_interrogation_answer(
         runtime,
         state,
         &expectation.agent,
@@ -770,7 +770,16 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
         response.answer,
         response.usage,
         response.context_compacted,
-    )
+    )?;
+    if !runtime.is_in_place() {
+        let diff_from_tree_oid_abbrev =
+            crate::git::abbreviate_git_oid(runtime.root, &diff_from.tree_oid)
+                .map_err(EvaluatorError::message)?;
+        answer.diff_from = Some(expectation.diff_from.clone());
+        answer.diff_from_tree_oid = Some(diff_from.tree_oid);
+        answer.diff_from_tree_oid_abbrev = Some(diff_from_tree_oid_abbrev);
+    }
+    Ok(answer)
 }
 
 pub(crate) fn resolve_diff_from<'a>(
@@ -874,7 +883,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test]
+    #[test] // xpec: XH
     fn checkpoint_diff_base_ignores_non_oid_checkpoint_tree() {
         let root = git_project("checkpoint-revspec");
         let last_pass = last_pass_with_checked_tree_oid("HEAD^{tree}");
@@ -900,6 +909,8 @@ mod tests {
             visible_scope: vec![".".to_string()],
             checked_tree_oid: Some(checked_tree_oid.to_string()),
             visible_tree_oid: None,
+            diff_from: None,
+            diff_from_tree_oid: None,
         }
     }
 

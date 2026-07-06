@@ -15,12 +15,22 @@ pub(crate) fn interrogation_result_from_answer(
     let InterrogationAnswer {
         answer,
         visible_tree_oid,
+        diff_from,
+        diff_from_tree_oid,
+        diff_from_tree_oid_abbrev,
         turn_usage,
         context_compacted,
         stop_after_current_expectation,
         interrupted,
     } = answer;
-    let record = record_from_response(expectation, answer, visible_tree_oid)?;
+    let record = record_from_response(
+        expectation,
+        answer,
+        visible_tree_oid,
+        diff_from,
+        diff_from_tree_oid,
+        diff_from_tree_oid_abbrev,
+    )?;
     if let Some(writer) = diagnostic_log.as_deref_mut() {
         writer.write_record_event(DiagnosticRecordEvent::Interrogation, &record)?;
     }
@@ -49,6 +59,9 @@ pub(crate) fn finalize_interrogation_answer(
     Ok(InterrogationAnswer {
         answer: finalized.response,
         visible_tree_oid: finalized.visible_tree_oid,
+        diff_from: None,
+        diff_from_tree_oid: None,
+        diff_from_tree_oid_abbrev: None,
         turn_usage,
         context_compacted,
         stop_after_current_expectation: false,

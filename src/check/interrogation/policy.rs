@@ -1,9 +1,12 @@
-use crate::check::core::errors::error_record_from_interrogation_error;
+use crate::check::core::errors::{
+    error_record_from_interrogation_error, InterrogationDiffProvenance,
+};
 use crate::check::core::{
     CheckRecord, InterrogationAnswer, InterrogationResult, ParsedAnswer, ResolvedExpectation,
     INTERNAL_ERROR_UNPARSABLE,
 };
 use crate::check::interrogation::session::interrogate_expectation_answer_with_model_fallbacks;
+use crate::check::interrogation::session::resolve_diff_from;
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::interrogation::{
     interrogate_expectation_with_model_fallbacks, scope_narrowing_log_fields,
@@ -99,6 +102,7 @@ pub(crate) fn interrogate_or_error_record<R: EvaluatorRunner>(
         Ok(interrogation) => Ok(interrogation),
         Err(err) => {
             let interrupted = err == "interrupted";
+            let diff_provenance = interrogation_error_diff_provenance(&call, xpec_state)?;
             Ok(InterrogationResult {
                 record: error_record_from_interrogation_error(
                     call.runtime,
@@ -106,6 +110,7 @@ pub(crate) fn interrogate_or_error_record<R: EvaluatorRunner>(
                     call.expectation,
                     call.scope,
                     &err,
+                    diff_provenance,
                     visible_tree_oid_cache,
                 )?,
                 turn_usage: None,
@@ -115,6 +120,37 @@ pub(crate) fn interrogate_or_error_record<R: EvaluatorRunner>(
             })
         }
     }
+}
+
+pub(crate) fn git_backed_interrogation_diff_provenance(
+    runtime: &CheckRuntime<'_>,
+    expectation: &ResolvedExpectation,
+    xpec_state: &mut XpecStateCache,
+) -> Result<Option<InterrogationDiffProvenance>, String> {
+    if runtime.is_in_place() {
+        return Ok(None);
+    }
+    let last_pass = if expectation.id.is_empty() {
+        None
+    } else {
+        xpec_state.read_last_pass(runtime.root, expectation)?
+    };
+    let diff_from = resolve_diff_from(runtime, expectation, last_pass.as_ref())
+        .map_err(|err| err.to_string())?;
+    let diff_from_tree_oid_abbrev =
+        crate::git::abbreviate_git_oid(runtime.root, &diff_from.tree_oid)?;
+    Ok(Some(InterrogationDiffProvenance {
+        diff_from: expectation.diff_from.clone(),
+        diff_from_tree_oid: diff_from.tree_oid,
+        diff_from_tree_oid_abbrev,
+    }))
+}
+
+fn interrogation_error_diff_provenance(
+    call: &InterrogationCall<'_>,
+    xpec_state: &mut XpecStateCache,
+) -> Result<Option<InterrogationDiffProvenance>, String> {
+    git_backed_interrogation_diff_provenance(call.runtime, call.expectation, xpec_state)
 }
 
 pub(crate) fn interrogate_or_error_answer<R: EvaluatorRunner>(
@@ -146,12 +182,25 @@ pub(crate) fn interrogate_or_error_answer<R: EvaluatorRunner>(
                 &call.expectation.agent,
                 call.scope,
             )?;
+            let diff_provenance = interrogation_error_diff_provenance(&call, xpec_state)?;
+            let (diff_from, diff_from_tree_oid, diff_from_tree_oid_abbrev) = diff_provenance
+                .map(|provenance| {
+                    (
+                        Some(provenance.diff_from),
+                        Some(provenance.diff_from_tree_oid),
+                        Some(provenance.diff_from_tree_oid_abbrev),
+                    )
+                })
+                .unwrap_or((None, None, None));
             let mut answer =
                 ParsedAnswer::error(INTERNAL_ERROR_UNPARSABLE.to_string(), err.to_string());
             answer.scope = call.scope.to_vec();
             Ok(InterrogationAnswer {
                 answer,
                 visible_tree_oid,
+                diff_from,
+                diff_from_tree_oid,
+                diff_from_tree_oid_abbrev,
                 turn_usage: None,
                 context_compacted: false,
                 stop_after_current_expectation: false,
@@ -319,16 +368,22 @@ pub(crate) fn write_scope_narrowing_event(
 #[cfg(test)]
 mod tests {
     use super::{
-        narrowed_scope_is_accepted, question_scope_suggestion_scope_for_independent_verification,
+        interrogation_error_diff_provenance, narrowed_scope_is_accepted,
+        question_scope_suggestion_scope_for_independent_verification,
         suggested_scope_is_at_least_25_percent_smaller, unused_follow_up_can_verify_q_scope,
-        InterrogationResult, PolicyInterrogationResult,
+        InterrogationCall, InterrogationResult, PolicyInterrogationResult,
     };
-    use crate::check::core::{CheckRecord, CheckResult, ERROR_SCOPE_TOO_NARROW};
+    use crate::check::core::errors::error_record_from_interrogation_error;
+    use crate::check::core::{
+        CheckRecord, CheckResult, ResolvedExpectation, ERROR_SCOPE_TOO_NARROW,
+    };
     use crate::check::interrogation::state::{CheckRuntime, CheckTreeContext};
-    use crate::config_types::{AgentConfig, CheckConfig};
+    use crate::check::interrogation::InterrogationRequestKind;
+    use crate::config_types::{AgentConfig, CheckConfig, AGAINST_TREE_DIFF_FROM};
     use crate::git::{TreeSource, VisibleTreeOidCache};
     use crate::hash::full_scope;
     use crate::staged::StagedWorktreeView;
+    use crate::xpec_state::XpecStateCache;
     use std::fs;
     use std::path::PathBuf;
     use std::process;
@@ -497,6 +552,70 @@ mod tests {
         assert!(proposed.is_none());
     }
 
+    #[test] // xpec: 8m,et
+    fn git_backed_interrogation_error_record_preserves_diff_provenance() {
+        let root = git_project("interrogation-error-diff-provenance");
+        fs::write(root.join("subject.txt"), "subject\n").unwrap();
+        git(&root, &["add", "subject.txt"]);
+        let source = TreeSource::Staged;
+        let agent = AgentConfig::default();
+        let config = CheckConfig {
+            version: 1,
+            agent: agent.clone(),
+            hooks: Default::default(),
+            expectations: Vec::new(),
+        };
+        let staged_view = StagedWorktreeView::apply_for_tree_source(&root, source.clone()).unwrap();
+        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
+        let tree_context = CheckTreeContext {
+            checked_tree_oid: source.tree_oid_for_prompt_diff(&root).unwrap(),
+            against_tree_oid: source.tree_oid_for_prompt_diff(&root).unwrap(),
+            checked_file_count: visible_tree_oid_cache
+                .checked_file_count(&root, &source)
+                .unwrap(),
+        };
+        let against_tree_oid = tree_context.against_tree_oid.clone();
+        let runtime =
+            CheckRuntime::materialized(&root, &staged_view, &source, tree_context, &config, false);
+        let expectation = test_expectation(&agent);
+        let scope = full_scope();
+        let call = InterrogationCall {
+            runtime: &runtime,
+            expectation: &expectation,
+            scope: &scope,
+            request_kind: InterrogationRequestKind::Initial,
+            progress: None,
+        };
+        let mut xpec_state = XpecStateCache::default();
+
+        let diff_provenance = interrogation_error_diff_provenance(&call, &mut xpec_state).unwrap();
+        let record = error_record_from_interrogation_error(
+            &runtime,
+            &agent,
+            &expectation,
+            &scope,
+            "turn failed",
+            diff_provenance,
+            &mut visible_tree_oid_cache,
+        )
+        .unwrap();
+
+        assert_eq!(record.diff_from.as_deref(), Some(AGAINST_TREE_DIFF_FROM));
+        assert_eq!(
+            record.diff_from_tree_oid.as_deref(),
+            Some(against_tree_oid.as_str())
+        );
+        assert_eq!(
+            record.diff_from_tree_oid_abbrev.as_deref(),
+            Some(
+                crate::git::abbreviate_git_oid(&root, &against_tree_oid)
+                    .unwrap()
+                    .as_str()
+            )
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
     fn git_project(name: &str) -> PathBuf {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -544,8 +663,27 @@ mod tests {
             scope: full_scope(),
             question_scope_suggestion: None,
             visible_tree_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            diff_from: None,
+            diff_from_tree_oid: None,
+            diff_from_tree_oid_abbrev: None,
             id: "expectation".to_string(),
             display_id: "e".to_string(),
+        }
+    }
+
+    fn test_expectation(agent: &AgentConfig) -> ResolvedExpectation {
+        ResolvedExpectation {
+            number: 0,
+            id: "expectation-id".to_string(),
+            display_id: "e".to_string(),
+            question: "Does this fail technically?".to_string(),
+            expected_answer: "yes".to_string(),
+            question_context: String::new(),
+            diff_from: AGAINST_TREE_DIFF_FROM.to_string(),
+            target: None,
+            question_answer_only: false,
+            agent: agent.clone(),
+            cooldown: None,
         }
     }
 

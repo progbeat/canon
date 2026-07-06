@@ -59,7 +59,7 @@ pub(crate) fn cached_result_for_expectation(
         return Ok(None);
     };
     let hit = refresh_reused_same_tree_last_result(root, source, expectation, xpec_state, hit)?;
-    let record = check_record_from_cached_result(expectation, &hit);
+    let record = check_record_from_cached_result(root, expectation, &hit)?;
     // Human-review/error records are non-pass history for ordering, not
     // cached results. Treat any legacy record shaped that way as uncached so a
     // fresh evaluator run can produce the current-run ERROR output.

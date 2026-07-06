@@ -80,6 +80,9 @@ pub(crate) fn record_from_response(
     expectation: &ResolvedExpectation,
     response: ParsedAnswer,
     visible_tree_oid: String,
+    diff_from: Option<String>,
+    diff_from_tree_oid: Option<String>,
+    diff_from_tree_oid_abbrev: Option<String>,
 ) -> Result<CheckRecord, String> {
     if expectation.expected_answer.is_empty() {
         return Err("cannot derive a check result without an expected answer".to_string());
@@ -101,6 +104,9 @@ pub(crate) fn record_from_response(
             scope: response.scope,
             question_scope_suggestion,
             visible_tree_oid,
+            diff_from,
+            diff_from_tree_oid,
+            diff_from_tree_oid_abbrev,
         },
     )
 }
@@ -209,6 +215,9 @@ mod tests {
             &expectation,
             ParsedAnswer::answer("yes".to_string(), "`src/main.rs`".to_string(), None),
             "visible".to_string(),
+            None,
+            None,
+            None,
         )
         .unwrap_err();
 

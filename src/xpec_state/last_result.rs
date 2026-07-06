@@ -51,10 +51,12 @@ impl LastResultStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct LastResult {
-    // This struct is the persisted last-result schema. Prompt-rendering inputs
-    // such as `diff-from` are intentionally not part of this state record. The
-    // containing xpec directory is keyed by the full expectation ID; the JSON
-    // body does not persist the expectation ID or human display prefix.
+    // This struct is the persisted last-result schema. Git-backed evaluator
+    // interrogation responses store the prompt-rendered diff base as
+    // `diffFrom` and `diffFromTreeOid`; records from paths without such an
+    // interrogation leave those fields absent. The containing xpec directory
+    // is keyed by the full expectation ID; the JSON body does not persist the
+    // expectation ID or human display prefix.
     #[serde(rename = "responseTimestamp")]
     pub(crate) response_timestamp: String,
     #[serde(rename = "updatedTimestamp")]
@@ -77,6 +79,14 @@ pub(crate) struct LastResult {
         skip_serializing_if = "Option::is_none"
     )]
     pub(crate) visible_tree_oid: Option<String>,
+    #[serde(rename = "diffFrom", default, skip_serializing_if = "Option::is_none")]
+    pub(crate) diff_from: Option<String>,
+    #[serde(
+        rename = "diffFromTreeOid",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) diff_from_tree_oid: Option<String>,
 }
 
 impl LastResult {
@@ -191,6 +201,31 @@ impl XpecStateCache {
         self.write_last_result_for_record_inner(root, checked_tree_oid, expectation, record)
     }
 
+    pub(crate) fn write_interrogation_last_result_for_record_or_absent_history(
+        &mut self,
+        root: Option<&Path>,
+        checked_tree_oid: &str,
+        expectation: &ResolvedExpectation,
+        record: &CheckRecord,
+    ) -> Result<Option<LastResult>, String> {
+        let Some(root) = root else {
+            // Last Results are file-backed xpec state under XPECS_DIR. A
+            // runtime with absent persistent history has no status-specific
+            // files to update.
+            return Ok(None);
+        };
+        // Normal Git-backed check interrogations render a prompt diff, so this
+        // interrogation-only writer requires the resolved diff provenance.
+        // Lower-level writers still accept absent provenance for refreshed or
+        // synthetic records that did not come from such an interrogation.
+        require_git_backed_diff_provenance(
+            record.diff_from.as_deref(),
+            record.diff_from_tree_oid.as_deref(),
+        )?;
+        self.write_last_result_for_record(root, checked_tree_oid, expectation, record)
+            .map(Some)
+    }
+
     pub(crate) fn write_last_result_for_record_or_absent_history(
         &mut self,
         root: Option<&Path>,
@@ -239,6 +274,8 @@ impl XpecStateCache {
                     )
                 })
                 .transpose()?,
+            diff_from: record.diff_from.clone(),
+            diff_from_tree_oid: record.diff_from_tree_oid.clone(),
         };
         self.write_last_result(root, expectation, &result)?;
         Ok(result)
@@ -343,10 +380,41 @@ impl XpecStateCache {
     }
 }
 
+fn require_git_backed_diff_provenance(
+    diff_from: Option<&str>,
+    diff_from_tree_oid: Option<&str>,
+) -> Result<(), String> {
+    validate_optional_diff_provenance_pair(diff_from, diff_from_tree_oid)?;
+    match (diff_from, diff_from_tree_oid) {
+        (Some(_), Some(_)) => Ok(()),
+        (None, None) => Err(
+            "Git-backed interrogation last-result records must include diffFrom and diffFromTreeOid"
+                .to_string(),
+        ),
+        (Some(_), None) | (None, Some(_)) => unreachable!(
+            "validate_optional_diff_provenance_pair rejects partial diff provenance"
+        ),
+    }
+}
+
+fn validate_optional_diff_provenance_pair(
+    diff_from: Option<&str>,
+    diff_from_tree_oid: Option<&str>,
+) -> Result<(), String> {
+    match (diff_from, diff_from_tree_oid) {
+        (Some(""), _) => Err("diffFrom must not be empty".to_string()),
+        (_, Some("")) => Err("diffFromTreeOid must not be empty".to_string()),
+        (Some(_), None) => Err("diffFromTreeOid is required with diffFrom".to_string()),
+        (None, Some(_)) => Err("diffFrom is required with diffFromTreeOid".to_string()),
+        (Some(_), Some(_)) | (None, None) => Ok(()),
+    }
+}
+
 pub(super) fn check_record_from_last_result(
+    root: &Path,
     expectation: &ResolvedExpectation,
     result: &LastResult,
-) -> CheckRecord {
+) -> Result<CheckRecord, String> {
     let error = result.error().map(str::to_string);
     let response_question_scope_suggestion = result.question_scope_suggestion();
     let observed = result
@@ -354,7 +422,7 @@ pub(super) fn check_record_from_last_result(
         .or_else(|| result.error())
         .unwrap_or("")
         .to_string();
-    CheckRecord {
+    Ok(CheckRecord {
         timestamp: result.response_timestamp.clone(),
         number: expectation.number,
         result: result.status.check_result(),
@@ -366,17 +434,21 @@ pub(super) fn check_record_from_last_result(
         scope: result.q_scope.clone(),
         question_scope_suggestion: response_question_scope_suggestion,
         visible_tree_oid: result.visible_tree_oid.clone().unwrap_or_default(),
+        diff_from: result.diff_from.clone(),
+        diff_from_tree_oid: result.diff_from_tree_oid.clone(),
+        diff_from_tree_oid_abbrev: diff_from_tree_oid_abbrev(root, result),
         id: expectation.id.clone(),
         display_id: expectation.display_id.clone(),
-    }
+    })
 }
 
 pub(super) fn pass_record_from_cooldown_result(
+    root: &Path,
     expectation: &ResolvedExpectation,
     result: &LastResult,
-) -> CheckRecord {
+) -> Result<CheckRecord, String> {
     let response_question_scope_suggestion = result.question_scope_suggestion();
-    CheckRecord {
+    Ok(CheckRecord {
         timestamp: result.response_timestamp.clone(),
         number: expectation.number,
         result: CheckResult::Pass,
@@ -388,9 +460,23 @@ pub(super) fn pass_record_from_cooldown_result(
         scope: result.q_scope.clone(),
         question_scope_suggestion: response_question_scope_suggestion,
         visible_tree_oid: result.visible_tree_oid.clone().unwrap_or_default(),
+        diff_from: result.diff_from.clone(),
+        diff_from_tree_oid: result.diff_from_tree_oid.clone(),
+        diff_from_tree_oid_abbrev: diff_from_tree_oid_abbrev(root, result),
         id: expectation.id.clone(),
         display_id: expectation.display_id.clone(),
-    }
+    })
+}
+
+fn diff_from_tree_oid_abbrev(root: &Path, result: &LastResult) -> Option<String> {
+    result.diff_from_tree_oid.as_deref().map(|oid| {
+        crate::git::abbreviate_git_oid(root, oid)
+            .unwrap_or_else(|_| fallback_diff_from_tree_oid_abbrev(oid))
+    })
+}
+
+fn fallback_diff_from_tree_oid_abbrev(oid: &str) -> String {
+    oid.chars().take(7).collect()
 }
 
 fn last_result_status_for_record(
@@ -495,6 +581,14 @@ fn validate_last_result(
     if let Some(suggestion) = result.response.get("qScopeSuggestion") {
         validate_response_question_scope_suggestion(suggestion)?;
     }
+    // Reads of existing state and generic last-result writes can observe
+    // optional diff provenance independently of the stricter Git-backed
+    // interrogation writer, so schema validation rejects malformed partial
+    // pairs while still allowing the pair to be absent.
+    validate_optional_diff_provenance_pair(
+        result.diff_from.as_deref(),
+        result.diff_from_tree_oid.as_deref(),
+    )?;
     match expected_status {
         LastResultStatus::Pass => {
             if result.answer().is_none() {
@@ -569,6 +663,8 @@ fn should_save_same_tree_record(previous: &LastResult, replacement: &LastResult)
         || previous.q_scope != replacement.q_scope
         || previous.visible_scope != replacement.visible_scope
         || previous.visible_tree_oid != replacement.visible_tree_oid
+        || previous.diff_from != replacement.diff_from
+        || previous.diff_from_tree_oid != replacement.diff_from_tree_oid
 }
 
 fn same_tree_record_file_name(result: &LastResult) -> Result<String, String> {
@@ -576,10 +672,13 @@ fn same_tree_record_file_name(result: &LastResult) -> Result<String, String> {
         return Err("same-tree record must contain visibleTreeOid".to_string());
     };
     // Same-tree history keeps the latest record for each retained visible
-    // tree/scope pair instead of appending one file per replacement.
+    // tree/scope/provenance tuple instead of appending one file per
+    // replacement.
     let key = serde_json::to_vec(&json!({
         "visibleScope": result.visible_scope,
         "visibleTreeOid": visible_tree_oid,
+        "diffFrom": result.diff_from,
+        "diffFromTreeOid": result.diff_from_tree_oid,
     }))
     .map_err(|err| format!("failed to serialize same-tree record key: {}", err))?;
     Ok(format!(
