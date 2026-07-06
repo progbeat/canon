@@ -370,6 +370,55 @@ fn cached_record_preserves_response_question_scope_suggestion() {
     let _ = fs::remove_dir_all(root);
 }
 
+#[test] // xpec: DB8
+fn cached_record_uses_stored_oid_prefix_when_git_cannot_abbreviate_diff_from_oid() {
+    let root = git_project("cached-record-fallback-diff-from-abbrev");
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/narrow.rs"), "narrow\n").unwrap();
+    git(&root, &["add", "src/narrow.rs"]);
+
+    let expectation = test_expectation();
+    let q_scope = vec!["src/narrow.rs".to_string()];
+    let checked_tree_oid = TreeSource::Staged.tree_oid_for_prompt_diff(&root).unwrap();
+    let mut record = test_record(&expectation, &q_scope, "yes", None);
+    record.visible_tree_oid = VisibleTreeOidCache::new()
+        .visible_tree_oid(&root, &TreeSource::Staged, &expectation.agent, &q_scope)
+        .unwrap();
+    record.diff_from_tree_oid = Some("not-a-git-object".to_string());
+
+    let mut cache = XpecStateCache::default();
+    cache
+        .write_last_result_for_record(&root, &checked_tree_oid, &expectation, &record)
+        .unwrap();
+
+    let hit = cached_last_result_for_expectation(
+        &root,
+        &TreeSource::Staged,
+        &expectation,
+        &mut cache,
+        &mut VisibleTreeOidCache::new(),
+        CachedLastResultLookup {
+            now: 2,
+            include_same_tree: true,
+            include_cooldown: true,
+        },
+    )
+    .unwrap()
+    .unwrap();
+    let cached_record = check_record_from_cached_result(&root, &expectation, &hit).unwrap();
+
+    assert_eq!(cached_record.diff_from.as_deref(), Some(":checkpoint"));
+    assert_eq!(
+        cached_record.diff_from_tree_oid.as_deref(),
+        Some("not-a-git-object")
+    );
+    assert_eq!(
+        cached_record.diff_from_tree_oid_abbrev.as_deref(),
+        Some("not-a-g")
+    );
+    let _ = fs::remove_dir_all(root);
+}
+
 #[test] // xpec: 8m
 fn last_result_response_preserves_question_scope_suggestion() {
     let root = git_project("last-result-no-suggestion");

@@ -436,7 +436,7 @@ pub(super) fn check_record_from_last_result(
         visible_tree_oid: result.visible_tree_oid.clone().unwrap_or_default(),
         diff_from: result.diff_from.clone(),
         diff_from_tree_oid: result.diff_from_tree_oid.clone(),
-        diff_from_tree_oid_abbrev: diff_from_tree_oid_abbrev(root, result)?,
+        diff_from_tree_oid_abbrev: diff_from_tree_oid_abbrev(root, result),
         id: expectation.id.clone(),
         display_id: expectation.display_id.clone(),
     })
@@ -462,18 +462,21 @@ pub(super) fn pass_record_from_cooldown_result(
         visible_tree_oid: result.visible_tree_oid.clone().unwrap_or_default(),
         diff_from: result.diff_from.clone(),
         diff_from_tree_oid: result.diff_from_tree_oid.clone(),
-        diff_from_tree_oid_abbrev: diff_from_tree_oid_abbrev(root, result)?,
+        diff_from_tree_oid_abbrev: diff_from_tree_oid_abbrev(root, result),
         id: expectation.id.clone(),
         display_id: expectation.display_id.clone(),
     })
 }
 
-fn diff_from_tree_oid_abbrev(root: &Path, result: &LastResult) -> Result<Option<String>, String> {
-    result
-        .diff_from_tree_oid
-        .as_deref()
-        .map(|oid| crate::git::abbreviate_git_oid(root, oid))
-        .transpose()
+fn diff_from_tree_oid_abbrev(root: &Path, result: &LastResult) -> Option<String> {
+    result.diff_from_tree_oid.as_deref().map(|oid| {
+        crate::git::abbreviate_git_oid(root, oid)
+            .unwrap_or_else(|_| fallback_diff_from_tree_oid_abbrev(oid))
+    })
+}
+
+fn fallback_diff_from_tree_oid_abbrev(oid: &str) -> String {
+    oid.chars().take(7).collect()
 }
 
 fn last_result_status_for_record(
