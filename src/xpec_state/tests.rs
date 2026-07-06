@@ -76,7 +76,7 @@ fn last_result_files_use_status_dependent_fields_and_last_json_follows_error() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
+#[test] // xpec: DB8
 fn last_error_is_not_a_cached_result() {
     let root = git_project("last-error-not-cached");
     let expectation = test_expectation();
@@ -106,7 +106,7 @@ fn last_error_is_not_a_cached_result() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
+#[test] // xpec: 8m
 fn last_result_unexpected_answer_uses_fail_status() {
     let root = git_project("last-result-unexpected-answer");
     let expectation = test_expectation();
@@ -127,7 +127,7 @@ fn last_result_unexpected_answer_uses_fail_status() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
+#[test] // xpec: YD
 fn last_pass_q_scope_ignores_fail_and_error_results() {
     let root = git_project("last-pass-q-scope-only");
     let expectation = test_expectation();
@@ -173,7 +173,7 @@ fn last_pass_q_scope_ignores_fail_and_error_results() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
+#[test] // xpec: 6,8m
 fn absent_persistent_history_root_skips_last_result_writes() {
     let expectation = test_expectation();
     let scope = full_scope();
@@ -260,7 +260,7 @@ fn diff_provenance_is_required_only_for_git_backed_interrogation_writes() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
+#[test] // xpec: 8m
 fn last_error_preserves_response_suggestion() {
     let root = git_project("last-error-suggestion-separate");
     let expectation = test_expectation();
@@ -288,7 +288,7 @@ fn last_error_preserves_response_suggestion() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
+#[test] // xpec: 8m,YD
 fn last_pass_stores_applied_scope_and_response_suggestion_separately() {
     let root = git_project("last-pass-suggestion-separate");
     fs::create_dir_all(root.join("src")).unwrap();
@@ -323,7 +323,7 @@ fn last_pass_stores_applied_scope_and_response_suggestion_separately() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
+#[test] // xpec: DB8
 fn cached_record_preserves_response_question_scope_suggestion() {
     let root = git_project("cached-record-suggestion");
     fs::create_dir_all(root.join("src")).unwrap();
@@ -339,6 +339,7 @@ fn cached_record_preserves_response_question_scope_suggestion() {
     record.visible_tree_oid = VisibleTreeOidCache::new()
         .visible_tree_oid(&root, &TreeSource::Staged, &expectation.agent, &q_scope)
         .unwrap();
+    record.diff_from_tree_oid = Some(checked_tree_oid.clone());
     record.question_scope_suggestion = Some(suggestion.clone());
 
     let mut cache = XpecStateCache::default();
@@ -369,7 +370,7 @@ fn cached_record_preserves_response_question_scope_suggestion() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
+#[test] // xpec: 8m
 fn last_result_response_preserves_question_scope_suggestion() {
     let root = git_project("last-result-no-suggestion");
     let expectation = test_expectation();
@@ -389,7 +390,7 @@ fn last_result_response_preserves_question_scope_suggestion() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
+#[test] // xpec: DB8
 fn same_tree_pass_reuses_last_pass_when_only_hidden_files_change() {
     let root = git_project("same-tree-pass-hidden-change");
     fs::create_dir_all(root.join("src")).unwrap();
@@ -453,7 +454,7 @@ fn same_tree_pass_reuses_last_pass_when_only_hidden_files_change() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
+#[test] // xpec: DB8
 fn same_tree_result_does_not_reconstruct_q_scope_from_current_agent_ignore() {
     let root = git_project("same-tree-no-current-ignore-reconstruction");
     fs::create_dir_all(root.join("src")).unwrap();
@@ -498,7 +499,7 @@ fn same_tree_result_does_not_reconstruct_q_scope_from_current_agent_ignore() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
+#[test] // xpec: DB8
 fn same_tree_result_ignores_diff_from_prompt_direction() {
     let root = git_project("same-tree-ignores-diff-from");
     fs::create_dir_all(root.join("src")).unwrap();
@@ -644,7 +645,7 @@ fn same_tree_result_uses_newer_matching_pass() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
+#[test] // xpec: DB8,XH
 fn explicit_diff_from_uses_newer_matching_pass() {
     let root = git_project("explicit-diff-from-newer-pass");
     fs::create_dir_all(root.join("src")).unwrap();
@@ -695,7 +696,7 @@ fn explicit_diff_from_uses_newer_matching_pass() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
+#[test] // xpec: 8m,DB8
 fn new_fail_keeps_last_pass_checkpoint_and_reusable_same_tree_pass() {
     let root = git_project("new-fail-keeps-last-pass");
     fs::create_dir_all(root.join("src")).unwrap();
@@ -760,7 +761,7 @@ fn new_fail_keeps_last_pass_checkpoint_and_reusable_same_tree_pass() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
+#[test] // xpec: DB8
 fn same_tree_result_reuses_replaced_same_status_record() {
     let root = git_project("same-tree-history-pass");
     fs::create_dir_all(root.join("src")).unwrap();
@@ -919,7 +920,7 @@ fn latest_non_pass_timestamp_includes_replaced_fail_records() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
+#[test] // xpec: DB8
 fn git_backed_cooldown_can_reuse_older_pass_when_fail_is_newer() {
     let root = git_project("cooldown-older-pass");
     let mut expectation = test_expectation();
@@ -968,7 +969,7 @@ fn git_backed_cooldown_can_reuse_older_pass_when_fail_is_newer() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
+#[test] // xpec: DB8
 fn git_backed_cooldown_can_reuse_older_fail_when_pass_is_newer() {
     let root = git_project("cooldown-older-fail");
     let mut expectation = test_expectation();
@@ -1017,7 +1018,7 @@ fn git_backed_cooldown_can_reuse_older_fail_when_pass_is_newer() {
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
+#[test] // xpec: DB8
 fn git_backed_cooldown_uses_response_timestamp_when_both_statuses_match() {
     let root = git_project("cooldown-response-timestamp");
     let mut expectation = test_expectation();
