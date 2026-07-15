@@ -88,6 +88,7 @@ pub(crate) fn error_record_from_visible_tree_oid_at(
         timestamp,
         number: expectation.number,
         result: CheckResult::Fail,
+        to: expectation.to,
         question: Some(expectation.question.clone()),
         expected_answer: Some(expectation.expected_answer.clone()),
         observed: INTERNAL_ERROR_UNPARSABLE.to_string(),

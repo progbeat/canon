@@ -1,5 +1,4 @@
 use crate::fs_util::ensure_dir_without_symlinks;
-use crate::git::resolve_git_path;
 use crate::output::write_stdout_line;
 use crate::platform::path_from_git_stdout;
 use crate::project_types::Config;
@@ -47,7 +46,7 @@ impl Config {
     }
 
     pub(crate) fn for_project_thread(root: &Path, thread_id: &str) -> Result<Config, String> {
-        let state_root = resolve_git_path(root, crate::state_paths::CANON_STATE_DIR_GIT_PATH)?;
+        let state_root = crate::state_paths::canon_state_path(root, "")?;
         // Notes are intentionally thread-scoped retained data. Appends under a
         // thread root are small note/index log records, and those logs are
         // threshold-compacted after enough appended bytes accumulate to pay for

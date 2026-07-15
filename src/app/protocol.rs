@@ -400,7 +400,7 @@ mod tests {
         assert!(context_compaction_event(&item_event).is_some());
     }
 
-    // xpec: G6
+    // xpec: qX
     #[test]
     fn dynamic_tool_call_parses_namespaced_tool_request() {
         let call = dynamic_tool_call(&json!({
@@ -423,7 +423,7 @@ mod tests {
         assert_eq!(call.arguments["selectors"], json!(["abc"]));
     }
 
-    // xpec: G6
+    // xpec: qX
     #[test]
     fn dynamic_tool_call_response_uses_app_server_content_items() {
         let response =

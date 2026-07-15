@@ -24,8 +24,8 @@ pub(crate) use config::{
 };
 pub(crate) use core::{
     evaluator_response_output_schema_for_scope, parse_evaluator_response_for_short_id, CheckRecord,
-    CheckRecordOutcome, CheckResult, Cooldown, EvaluatorResponseParseError,
-    EvaluatorResponseSchemaScope, ParsedAnswer, ResolvedExpectation, INTERNAL_ERROR_UNPARSABLE,
+    CheckRecordOutcome, CheckResult, EvaluatorResponseParseError, EvaluatorResponseSchemaScope,
+    ParsedAnswer, ResolvedExpectation, INTERNAL_ERROR_UNPARSABLE,
 };
 pub(crate) use interrogation::{
     write_agent_turn_failure_event, write_agent_turn_missing_usage_event,

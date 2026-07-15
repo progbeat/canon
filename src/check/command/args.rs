@@ -360,7 +360,7 @@ mod tests {
         assert!(err.contains("unexpected argument"));
     }
 
-    #[test] // xpec: HW
+    #[test] // xpec: 8
     fn check_help_excludes_ask_only_options() {
         let mut help = Vec::new();
         check_help_command().write_long_help(&mut help).unwrap();

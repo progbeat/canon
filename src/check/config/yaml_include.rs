@@ -124,17 +124,38 @@ mod tests {
     use std::process;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    // xpec: I8
+    #[test] // xpec: nI,9A
+    fn expectation_sequence_includes_are_flattened() {
+        let root = test_root("expectation-sequence-include");
+        fs::write(
+            root.join("included.yml"),
+            "- q: Included one\n  a: yes\n- q: Included two\n  a: yes\n",
+        )
+        .unwrap();
+
+        let raw = parse_yaml_config_with_includes::<crate::config_types::RawCheckConfig>(
+            &root,
+            Path::new("check.yml"),
+            "presets:\n  default: {}\nexpectations:\n  - !include included.yml\n  - q: Local\n    a: yes\n",
+            CheckConfigSource::InPlace,
+        )
+        .unwrap();
+
+        assert_eq!(raw.expectations.len(), 3);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    // xpec: nI
     #[test]
     fn include_paths_resolve_relative_to_including_file() {
         let path = resolve_include_path(Path::new(".canon/check.yml"), "hooks/on-start.yml", None)
             .unwrap();
 
-        // xpec: I8
+        // xpec: nI
         assert_eq!(path, ".canon/hooks/on-start.yml");
     }
 
-    // xpec: I8
+    // xpec: nI
     #[test]
     fn nested_include_paths_resolve_relative_to_parent_include() {
         let path = resolve_include_path(
@@ -144,15 +165,15 @@ mod tests {
         )
         .unwrap();
 
-        // xpec: I8
+        // xpec: nI
         assert_eq!(path, ".canon/hooks/shared.yml");
     }
 
-    // xpec: I8
+    // xpec: nI
     #[test]
     fn unsafe_include_paths_are_rejected() {
         for spec in ["", ".", "/abs.yml", "../parent.yml", "nested/../parent.yml"] {
-            // xpec: I8
+            // xpec: nI
             assert!(
                 normalize_include_spec(spec).is_err(),
                 "expected unsafe include path to fail: {spec}"
@@ -160,14 +181,14 @@ mod tests {
         }
     }
 
-    // xpec: T
+    // xpec: 9V
     #[test]
     fn invalid_root_config_path_does_not_bypass_root_include_rejection() {
-        // xpec: T
+        // xpec: 9V
         assert!(reject_root_include("check.yml", Path::new("../check.yml")).is_err());
     }
 
-    // xpec: T,I8
+    // xpec: 9V,nI
     #[test]
     fn yaml_include_non_root_cycle_is_rejected_by_resolved_include_ids() {
         let root = test_root("yaml-include-non-root-cycle");
@@ -182,43 +203,11 @@ mod tests {
         )
         .unwrap_err();
 
-        // xpec: T,I8
+        // xpec: 9V,nI
         assert!(
             err.contains("cyclic include detected: child.yml"),
             "unexpected include error: {err}"
         );
-    }
-
-    // xpec: uY
-    #[test]
-    fn hook_case_key_y_stays_text() {
-        let raw: crate::config_types::RawCheckConfig = parse_yaml_config_with_includes(
-            Path::new("."),
-            Path::new("check.yml"),
-            r#"
-version: 1
-presets:
-  default: {}
-hooks:
-  on-start:
-    input: "Continue? "
-    cases:
-      y: !ok
-      _: !block "Stop."
-expectations:
-  - q: "Does hook config parse?"
-    a: "yes"
-"#,
-            crate::check::config::CheckConfigSource::InPlace,
-        )
-        .expect("parse hook config");
-
-        let hooks = raw.hooks.unwrap().resolve().unwrap();
-
-        // xpec: uY
-        assert!(hooks.on_start[0].cases.contains_key("y"));
-        // xpec: uY
-        assert!(!hooks.on_start[0].cases.contains_key("true"));
     }
 
     fn test_root(name: &str) -> PathBuf {

@@ -5,8 +5,7 @@ use crate::config_types::AgentConfig;
 use crate::evaluator::{
     is_model_technical_failure, EvaluatorDynamicToolHandler, EvaluatorError, EvaluatorRunner,
 };
-use crate::git::resolve_git_path;
-use crate::state_paths::CANON_STATE_DIR_GIT_PATH;
+use crate::state_paths::canon_state_path;
 use crate::token_usage_types::{EvaluatorTurnUsage, TokenUsage};
 
 use super::process::AppServerRunner;
@@ -29,7 +28,7 @@ impl LazyAppServerRunner {
         agent: &AgentConfig,
         no_sandbox: bool,
     ) -> Result<LazyAppServerRunner, String> {
-        let app_server_state_root = resolve_git_path(app_server_root, CANON_STATE_DIR_GIT_PATH)?;
+        let app_server_state_root = canon_state_path(app_server_root, "")?;
         Ok(LazyAppServerRunner::with_state_root(
             app_server_root,
             Some(app_server_state_root),

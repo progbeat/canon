@@ -84,9 +84,8 @@ pub(crate) fn query_human_review_reason(result: &QueryResult) -> Option<&'static
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::check::core::Cooldown;
     use crate::check::interrogation::state::{CheckRuntime, CheckTreeContext};
-    use crate::config_types::{AgentConfig, CheckConfig, CheckHooksConfig, DEFAULT_DIFF_FROM};
+    use crate::config_types::{AgentConfig, CheckConfig, DEFAULT_DIFF_FROM};
     use crate::git::{staged_tree_oid, TreeSource};
     use crate::hash::full_scope;
     use crate::staged::StagedWorktreeView;
@@ -102,7 +101,6 @@ mod tests {
         let config = CheckConfig {
             version: 1,
             agent: AgentConfig::implementation_default(),
-            hooks: CheckHooksConfig::default(),
             expectations: Vec::new(),
         };
         let runtime = CheckRuntime::in_place(&root, &config, true);
@@ -110,6 +108,8 @@ mod tests {
             number: 0,
             id: String::new(),
             display_id: "q".to_string(),
+            to: crate::config_types::ExpectationTo::Agent,
+            rank: 0,
             question: "Does ask use a temporary xpec?".to_string(),
             expected_answer: String::new(),
             question_context: String::new(),
@@ -117,10 +117,7 @@ mod tests {
             target: None,
             question_answer_only: true,
             agent: config.agent.clone(),
-            cooldown: Some(Cooldown {
-                pass_seconds: None,
-                fail_seconds: None,
-            }),
+            cooldown: None,
         };
         let enforced_scope = full_scope();
         let request = QueryRequest {
@@ -158,7 +155,6 @@ mod tests {
         let config = CheckConfig {
             version: 1,
             agent: AgentConfig::implementation_default(),
-            hooks: CheckHooksConfig::default(),
             expectations: Vec::new(),
         };
         let tree_source = TreeSource::Staged;
@@ -182,6 +178,8 @@ mod tests {
             number: 0,
             id: String::new(),
             display_id: "q".to_string(),
+            to: crate::config_types::ExpectationTo::Agent,
+            rank: 0,
             question: "Does ask avoid xpec state?".to_string(),
             expected_answer: String::new(),
             question_context: String::new(),

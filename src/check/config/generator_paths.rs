@@ -5,12 +5,12 @@ use std::path::Path;
 
 pub(crate) fn expand_staged_generator_paths_from_listing(
     config_path: &Path,
-    path: &str,
+    glob: &str,
     staged_paths: &[String],
 ) -> Result<Vec<String>, String> {
-    validate_relative_config_path(path, "expectation generator path")?;
+    validate_relative_config_path(glob, "expectation generator glob")?;
     let config_dir = config_path.parent().unwrap_or_else(|| Path::new(""));
-    let joined = normalize_repo_path(&join_repo_path(config_dir, path))?;
+    let joined = normalize_repo_path(&join_repo_path(config_dir, glob))?;
     let generator_pathspec = format!(":(glob){}", joined);
     let generator_scope = std::slice::from_ref(&generator_pathspec);
     let mut files = Vec::new();
@@ -24,14 +24,14 @@ pub(crate) fn expand_staged_generator_paths_from_listing(
     Ok(files)
 }
 
-fn join_repo_path(config_dir: &Path, path: &str) -> String {
+fn join_repo_path(config_dir: &Path, glob: &str) -> String {
     if config_dir.as_os_str().is_empty() {
-        path.to_string()
+        glob.to_string()
     } else {
         format!(
             "{}/{}",
             config_dir.to_string_lossy().trim_end_matches('/'),
-            path
+            glob
         )
     }
 }
@@ -41,7 +41,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn star_generator_path_matches_one_path_segment() {
+    fn star_generator_glob_matches_one_path_segment() {
         let files = expand_staged_generator_paths_from_listing(
             Path::new("check.yml"),
             "specs/*.md",
@@ -58,7 +58,7 @@ mod tests {
     }
 
     #[test]
-    fn double_star_generator_path_matches_nested_path_segments() {
+    fn double_star_generator_glob_matches_nested_path_segments() {
         let files = expand_staged_generator_paths_from_listing(
             Path::new("check.yml"),
             "specs/**.md",
@@ -83,7 +83,7 @@ mod tests {
     }
 
     #[test]
-    fn path_segment_generator_globs_match_like_scope_pathspecs() {
+    fn path_segment_generator_globs_match_scope_pathspecs() {
         let files = expand_staged_generator_paths_from_listing(
             Path::new("check.yml"),
             "specs/*/*.md",

@@ -12,9 +12,8 @@ use crate::logs::rotation::{
     rotate_active_diagnostic_logs, rotate_active_diagnostic_logs_to_fit,
     rotate_diagnostic_logs_with_config,
 };
-use crate::project::git_project_root;
 use crate::repo_inspection::RepoInspectionCache;
-use crate::state_paths::CANON_LOG_DIR_GIT_PATH;
+use crate::state_paths::canon_state_path;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
@@ -57,7 +56,7 @@ impl DiagnosticLogWriter {
     // `check::interrogation::session`, and
     // `check::interrogation::result::records` route check lifecycle, thread
     // lifecycle/restart, agent request/response/failure, token-usage, cache,
-    // record, hook, and query-result events through this writer.
+    // record and query-result events through this writer.
     #[cfg(test)]
     pub(crate) fn create(root: &Path) -> DiagnosticLogResult<DiagnosticLogWriter> {
         let mut cache = RepoInspectionCache::new();
@@ -163,25 +162,10 @@ fn prepare_diagnostic_log_with_config(
 
 fn diagnostic_log_dir(
     root: &Path,
-    cache: &mut RepoInspectionCache,
+    _cache: &mut RepoInspectionCache,
 ) -> DiagnosticLogResult<PathBuf> {
-    // CANON_LOG_DIR_GIT_PATH is `${CANON_STATE_DIR}/logs`; `git_path` resolves it
-    // with `git rev-parse --git-path` so worktrees and nonstandard git-dir
-    // layouts keep logs under Canon's git-owned state directory. In a non-git
-    // in-place root, `${CANON_STATE_DIR}` is the local `canon` state directory.
-    match cache.git_path(root, CANON_LOG_DIR_GIT_PATH) {
-        Ok(log_dir) => Ok(log_dir),
-        Err(message) => {
-            if git_project_root(root).is_err() {
-                Ok(root.join(CANON_LOG_DIR_GIT_PATH))
-            } else {
-                Err(external_log_error(
-                    "resolve diagnostic log directory",
-                    message,
-                ))
-            }
-        }
-    }
+    canon_state_path(root, "logs")
+        .map_err(|message| external_log_error("resolve diagnostic log directory", message))
 }
 
 fn disabled_diagnostic_log(
@@ -189,7 +173,8 @@ fn disabled_diagnostic_log(
     config: DiagnosticLogConfig,
 ) -> DiagnosticLogResult<PreparedDiagnosticLog> {
     debug_assert!(diagnostic_logs_explicitly_disabled(&config));
-    let log_dir = root.join(CANON_LOG_DIR_GIT_PATH);
+    let log_dir = canon_state_path(root, "logs")
+        .map_err(|message| external_log_error("resolve diagnostic log directory", message))?;
     let path = log_dir.join(active_log_file_name());
     Ok(PreparedDiagnosticLog {
         log_dir,
@@ -248,7 +233,7 @@ mod tests {
     use std::process::{self, Command};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test] // xpec: B
+    #[test] // xpec: Ue
     fn enabled_diagnostic_logs_write_under_local_state_dir_outside_git() {
         let root = temp_root("diagnostic-logs-no-git");
         let mut cache = RepoInspectionCache::new();
@@ -271,7 +256,7 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[test] // xpec: fh
+    #[test] // xpec: my
     fn diagnostic_logs_rotate_within_configured_log_dir_size() {
         let root = git_temp_root("diagnostic-logs-rotate-within-configured-size");
         let mut cache = RepoInspectionCache::new();
@@ -304,7 +289,7 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[test] // xpec: fh
+    #[test] // xpec: my
     fn diagnostic_logs_make_room_for_new_event_with_rotation() {
         let root = git_temp_root("diagnostic-logs-make-room-with-rotation");
         let mut cache = RepoInspectionCache::new();

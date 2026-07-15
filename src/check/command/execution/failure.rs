@@ -80,7 +80,6 @@ fn write_empty_check_summary(started: Instant) -> Result<(), CommandError> {
     let report = CheckRunReport {
         records: Vec::new(),
         cached: Vec::new(),
-        blocked_hooks: Vec::new(),
         skipped: 0,
     };
     write_summary_line(&mut io::stdout(), &report, started.elapsed()).map_err(CommandError::from)

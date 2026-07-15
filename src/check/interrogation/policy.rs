@@ -409,7 +409,7 @@ mod tests {
         );
     }
 
-    #[test] // xpec: YD
+    #[test] // xpec: MR
     fn unused_follow_up_q_scope_verification_requires_initial_pass() {
         let pass = test_policy_result(test_record("yes", CheckResult::Pass, None), false);
         let fail = test_policy_result(test_record("no", CheckResult::Fail, None), false);
@@ -430,7 +430,7 @@ mod tests {
         assert!(!unused_follow_up_can_verify_q_scope(&already_followed_up));
     }
 
-    #[test] // xpec: YD
+    #[test] // xpec: MR
     fn narrowed_scope_acceptance_requires_verification_answer() {
         let pass = test_record("yes", CheckResult::Pass, None);
         let fail = test_record("no", CheckResult::Fail, None);
@@ -456,7 +456,6 @@ mod tests {
         let config = CheckConfig {
             version: 1,
             agent: agent.clone(),
-            hooks: Default::default(),
             expectations: Vec::new(),
         };
         let staged_view = StagedWorktreeView::apply_for_tree_source(&root, source.clone()).unwrap();
@@ -484,7 +483,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test] // xpec: YD
+    #[test] // xpec: MR
     fn disjoint_suggestion_path_is_not_verified_for_narrowing() {
         let root = git_project("disjoint-q-scope-suggestion");
         fs::create_dir_all(root.join("src")).unwrap();
@@ -498,7 +497,6 @@ mod tests {
         let config = CheckConfig {
             version: 1,
             agent: agent.clone(),
-            hooks: Default::default(),
             expectations: Vec::new(),
         };
         let staged_view = StagedWorktreeView::apply_for_tree_source(&root, source.clone()).unwrap();
@@ -526,14 +524,13 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test] // xpec: YD
+    #[test] // xpec: MR
     fn no_hide_runtime_never_verifies_q_scope_suggestion() {
         let root = PathBuf::from("/tmp/canon-in-place-policy");
         let agent = AgentConfig::default();
         let config = CheckConfig {
             version: 1,
             agent: agent.clone(),
-            hooks: Default::default(),
             expectations: Vec::new(),
         };
         let runtime = CheckRuntime::in_place(&root, &config, false);
@@ -552,7 +549,7 @@ mod tests {
         assert!(proposed.is_none());
     }
 
-    #[test] // xpec: 8m,et
+    #[test] // xpec: mO,8
     fn git_backed_interrogation_error_record_preserves_diff_provenance() {
         let root = git_project("interrogation-error-diff-provenance");
         fs::write(root.join("subject.txt"), "subject\n").unwrap();
@@ -562,7 +559,6 @@ mod tests {
         let config = CheckConfig {
             version: 1,
             agent: agent.clone(),
-            hooks: Default::default(),
             expectations: Vec::new(),
         };
         let staged_view = StagedWorktreeView::apply_for_tree_source(&root, source.clone()).unwrap();
@@ -655,6 +651,7 @@ mod tests {
             timestamp: "1970-01-01T00:00:00Z".to_string(),
             number: 0,
             result,
+            to: crate::config_types::ExpectationTo::Agent,
             question: Some("question".to_string()),
             expected_answer: Some("yes".to_string()),
             observed: observed.to_string(),
@@ -676,6 +673,8 @@ mod tests {
             number: 0,
             id: "expectation-id".to_string(),
             display_id: "e".to_string(),
+            to: crate::config_types::ExpectationTo::Agent,
+            rank: 0,
             question: "Does this fail technically?".to_string(),
             expected_answer: "yes".to_string(),
             question_context: String::new(),

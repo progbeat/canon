@@ -2,14 +2,12 @@ use super::failure::{
     fail_check_after_start, fail_check_before_selection, finish_check_error_report,
     started_check_output, CheckErrorReportFinish,
 };
-use super::hooks::{run_check_hooks, CheckHookOutcome};
 use super::prepare::{
     prepare_git_backed_check_execution, GitBackedCheckStorage,
     PrepareGitBackedCheckExecutionOptions,
 };
 use super::trailer::{
-    check_command_writes_agent_message, check_report_passed, write_check_trailer,
-    write_check_trailer_with_usage, CompletedCheckRun,
+    check_command_writes_agent_message, check_report_passed, write_check_trailer, CompletedCheckRun,
 };
 mod ask;
 
@@ -17,12 +15,12 @@ pub(crate) use ask::run_ask_command;
 
 use crate::app::LazyAppServerRunner;
 use crate::check::command::args::parse_check_command_args;
-use crate::check::command::output::{write_stdout_record, SharedCheckOutput};
+use crate::check::command::output::SharedCheckOutput;
 use crate::check::command::{finish_check_report, CheckReportFinishContext};
 use crate::check::config::validation::{
     check_config_loads_plugins, validate_in_place_check_config,
 };
-use crate::check::core::{BlockedCheckHook, CheckCommandArgs, CheckRunReport};
+use crate::check::core::CheckCommandArgs;
 use crate::check::interrogation::{state::CheckRuntime, write_check_lifecycle_start_event};
 use crate::check::run::selection::{expectation_identities, resolve_check_options_with_identities};
 use crate::check::{run_check_with_runner_and_caches, CheckRunCaches, CheckRunSideEffects};
@@ -124,42 +122,6 @@ pub(crate) fn run_check_command(
     )?;
     let shared_output = SharedCheckOutput::stdout();
     let mut result_output = shared_output.clone();
-    let on_start_hook = match run_check_hooks(
-        root,
-        &config.hooks.on_start,
-        "on-start",
-        &mut result_output,
-        &mut diagnostic_log,
-    ) {
-        Ok(outcome) => outcome,
-        Err(err) => {
-            return fail_check_after_start(
-                &mut diagnostic_log,
-                false,
-                started_check_output(started),
-                err,
-            )
-        }
-    };
-    if let CheckHookOutcome::Blocked { repair_instruction } = on_start_hook {
-        let completed = blocked_check_run(
-            CheckRunReport {
-                records: Vec::new(),
-                cached: Vec::new(),
-                blocked_hooks: Vec::new(),
-                skipped: config.expectations.len(),
-            },
-            repair_instruction,
-        );
-        return finish_blocked_check(
-            Some(&mut diagnostic_log),
-            &mut result_output,
-            &mut check_caches,
-            None,
-            &completed,
-            started,
-        );
-    }
     let mut execution = match prepare_git_backed_check_execution(
         root,
         &config,
@@ -213,39 +175,6 @@ pub(crate) fn run_check_command(
             interrupted: err.interrupted,
         },
     };
-    if completed.error.is_none() && check_report_passed(&completed.report) {
-        let on_pass_hook = match run_check_hooks(
-            root,
-            &config.hooks.on_pass,
-            "on-pass",
-            &mut result_output,
-            &mut diagnostic_log,
-        ) {
-            Ok(outcome) => outcome,
-            Err(err) => {
-                return finish_check_error_after_trailer(CheckErrorAfterTrailerContext {
-                    diagnostic_log: &mut diagnostic_log,
-                    result_output: &mut result_output,
-                    check_caches: &mut check_caches,
-                    runner: &mut execution.runner,
-                    report: &completed.report,
-                    started,
-                    error: err,
-                })
-            }
-        };
-        if let CheckHookOutcome::Blocked { repair_instruction } = on_pass_hook {
-            let completed = blocked_check_run(completed.report, repair_instruction);
-            return finish_blocked_check(
-                Some(&mut diagnostic_log),
-                &mut result_output,
-                &mut check_caches,
-                Some(&mut execution.runner),
-                &completed,
-                started,
-            );
-        }
-    }
     finish_completed_check(
         Some(&mut diagnostic_log),
         &mut result_output,
@@ -255,19 +184,6 @@ pub(crate) fn run_check_command(
         started,
         write_agent_message,
     )
-}
-
-fn blocked_check_run(mut report: CheckRunReport, repair_instruction: String) -> CompletedCheckRun {
-    // Hook execution stops at the first blocker, so a completed check run can
-    // contain at most one blocked hook outcome.
-    report
-        .blocked_hooks
-        .push(BlockedCheckHook { repair_instruction });
-    CompletedCheckRun {
-        report,
-        error: Some("check hook blocked".to_string()),
-        interrupted: false,
-    }
 }
 
 fn cleanup_cache_dirs(
@@ -303,14 +219,14 @@ fn run_in_place_check_command(
     // In-place delegates stay behind their component boundaries: CLI dispatch
     // supplies `root` and `default_in_place`, argument parsing rejects Git-tree
     // and cache controls, repo inspection reads this directory directly, and
-    // `CheckRuntime::in_place` owns the evaluator view with no persistent xpec
-    // state root. This command path coordinates those interfaces and runs
+    // `CheckRuntime::in_place` owns the evaluator view without Git tree state.
+    // This command path coordinates those interfaces and runs
     // config validation before evaluator work starts.
     let mut repo_cache = RepoInspectionCache::new();
     // In-place uses a fresh in-memory cache bundle only because the shared
-    // execution APIs accept cache handles. It still writes runtime logs when
-    // logging is enabled, but it does not clean persistent cache directories,
-    // and passes an in-place runtime whose lower layers skip xpec reads/writes.
+    // execution APIs accept cache handles. In-place evaluation does not reuse
+    // cached results, but it writes current last results and removes state for
+    // expectations no longer present in the config.
     let mut check_caches = CheckRunCaches::new();
     let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
     // This is the `canon check --in-place` validation boundary. Config load or
@@ -343,6 +259,7 @@ fn run_in_place_check_command(
         );
     }
     let identities = expectation_identities(&config)?;
+    cleanup_cache_dirs(root, &identities, &mut diagnostic_log, started)?;
     let options =
         match resolve_check_options_with_identities(&config, &identities, &command.options) {
             Ok(options) => options,
@@ -367,42 +284,6 @@ fn run_in_place_check_command(
     )?;
     let shared_output = SharedCheckOutput::stdout();
     let mut result_output = shared_output.clone();
-    let on_start_hook = match run_check_hooks(
-        root,
-        &config.hooks.on_start,
-        "on-start",
-        &mut result_output,
-        &mut diagnostic_log,
-    ) {
-        Ok(outcome) => outcome,
-        Err(err) => {
-            return fail_check_after_start(
-                &mut diagnostic_log,
-                false,
-                started_check_output(started),
-                err,
-            )
-        }
-    };
-    if let CheckHookOutcome::Blocked { repair_instruction } = on_start_hook {
-        let completed = blocked_check_run(
-            CheckRunReport {
-                records: Vec::new(),
-                cached: Vec::new(),
-                blocked_hooks: Vec::new(),
-                skipped: config.expectations.len(),
-            },
-            repair_instruction,
-        );
-        return finish_blocked_check(
-            Some(&mut diagnostic_log),
-            &mut result_output,
-            &mut check_caches,
-            None,
-            &completed,
-            started,
-        );
-    }
     let mut runner = LazyAppServerRunner::new_in_place(
         root,
         check_config_loads_plugins(&config),
@@ -438,39 +319,6 @@ fn run_in_place_check_command(
             interrupted: err.interrupted,
         },
     };
-    if completed.error.is_none() && check_report_passed(&completed.report) {
-        let on_pass_hook = match run_check_hooks(
-            root,
-            &config.hooks.on_pass,
-            "on-pass",
-            &mut result_output,
-            &mut diagnostic_log,
-        ) {
-            Ok(outcome) => outcome,
-            Err(err) => {
-                return finish_check_error_after_trailer(CheckErrorAfterTrailerContext {
-                    diagnostic_log: &mut diagnostic_log,
-                    result_output: &mut result_output,
-                    check_caches: &mut check_caches,
-                    runner: &mut runner,
-                    report: &completed.report,
-                    started,
-                    error: err,
-                })
-            }
-        };
-        if let CheckHookOutcome::Blocked { repair_instruction } = on_pass_hook {
-            let completed = blocked_check_run(completed.report, repair_instruction);
-            return finish_blocked_check(
-                Some(&mut diagnostic_log),
-                &mut result_output,
-                &mut check_caches,
-                Some(&mut runner),
-                &completed,
-                started,
-            );
-        }
-    }
     finish_completed_check(
         Some(&mut diagnostic_log),
         &mut result_output,
@@ -480,48 +328,6 @@ fn run_in_place_check_command(
         started,
         false,
     )
-}
-
-struct CheckErrorAfterTrailerContext<'a> {
-    diagnostic_log: &'a mut DiagnosticLogWriter,
-    result_output: &'a mut dyn Write,
-    check_caches: &'a mut CheckRunCaches,
-    runner: &'a mut crate::app::LazyAppServerRunner,
-    report: &'a CheckRunReport,
-    started: Instant,
-    error: String,
-}
-
-fn finish_check_error_after_trailer(
-    context: CheckErrorAfterTrailerContext<'_>,
-) -> Result<(), CommandError> {
-    let CheckErrorAfterTrailerContext {
-        diagnostic_log,
-        result_output,
-        check_caches,
-        runner,
-        report,
-        started,
-        error,
-    } = context;
-    if let Err(err) = write_check_trailer(runner, result_output, report, started) {
-        return finish_check_error_report(CheckErrorReportFinish {
-            diagnostic_log,
-            result_output,
-            check_caches,
-            report,
-            error: err,
-            write_token_usage: false,
-        });
-    }
-    finish_check_error_report(CheckErrorReportFinish {
-        diagnostic_log,
-        result_output,
-        check_caches,
-        report,
-        error,
-        write_token_usage: false,
-    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -580,54 +386,4 @@ fn finish_completed_check(
     } else {
         Err(CommandError::CheckFailed)
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn finish_blocked_check(
-    diagnostic_log: Option<&mut DiagnosticLogWriter>,
-    result_output: &mut dyn Write,
-    check_caches: &mut CheckRunCaches,
-    runner: Option<&mut crate::app::LazyAppServerRunner>,
-    completed: &CompletedCheckRun,
-    started: Instant,
-) -> Result<(), CommandError> {
-    match runner {
-        Some(runner) => write_check_trailer(runner, result_output, &completed.report, started)?,
-        None => write_check_trailer_with_usage(result_output, &completed.report, started, None)?,
-    }
-    write_blocked_repair_instruction(result_output, &completed.report)?;
-    finish_check_report(
-        CheckReportFinishContext {
-            diagnostic_log,
-            result_output,
-            check_caches,
-            write_agent_message: false,
-        },
-        &completed.report,
-        completed.error.as_deref(),
-    )?;
-    Err(CommandError::CheckFailed)
-}
-
-fn write_blocked_repair_instruction(
-    result_output: &mut dyn Write,
-    report: &CheckRunReport,
-) -> Result<(), String> {
-    let Some(blocked) = report.blocked_hooks.first() else {
-        return Ok(());
-    };
-    write_stdout_record(
-        result_output,
-        repair_instruction_line(&blocked.repair_instruction).as_bytes(),
-        "check hook repair instruction",
-    )
-}
-
-fn repair_instruction_line(instruction: &str) -> String {
-    if instruction.ends_with('\n') {
-        return instruction.to_string();
-    }
-    let mut line = instruction.to_string();
-    line.push('\n');
-    line
 }

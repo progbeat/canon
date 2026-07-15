@@ -188,23 +188,23 @@ mod tests {
         }
     }
 
-    // xpec: A8,9Y,83
+    // xpec: NN,d3,rN
     #[test]
     fn runtime_permissions_deny_codex_home_state() {
         let permissions = evaluator_runtime_permissions().unwrap();
 
-        // xpec: A8,9Y,83
+        // xpec: NN,d3,rN
         assert_permission(&permissions, "~/.codex", FILESYSTEM_DENY);
-        // xpec: A8,9Y,83
+        // xpec: NN,d3,rN
         assert_permission(&permissions, "~/.codex/**", FILESYSTEM_DENY);
 
         let mut permissions = BTreeMap::new();
         add_home_runtime_permissions(&mut permissions, Some(OsString::from("/home/canon")))
             .unwrap();
 
-        // xpec: A8,9Y,83
+        // xpec: NN,d3,rN
         assert_permission(&permissions, "/home/canon/.codex", FILESYSTEM_DENY);
-        // xpec: A8,9Y,83
+        // xpec: NN,d3,rN
         assert_permission(&permissions, "/home/canon/.codex/**", FILESYSTEM_DENY);
     }
 
@@ -264,9 +264,7 @@ mod tests {
     #[test]
     fn state_dir_permissions_deny_canon_state_tree() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let state_root =
-            crate::git::resolve_git_path(root, crate::state_paths::CANON_STATE_DIR_GIT_PATH)
-                .unwrap();
+        let state_root = crate::state_paths::canon_state_path(root, "").unwrap();
         let state_root_key = path_to_config_string(&state_root, "test state root").unwrap();
         let permissions = evaluator_resolved_state_dir_permissions(&state_root).unwrap();
 

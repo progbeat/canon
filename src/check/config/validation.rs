@@ -151,6 +151,7 @@ fn expectation_ids(config: &CheckConfig) -> Vec<String> {
         .map(|expectation| {
             expectation_id(
                 &expectation.q,
+                expectation.to.as_str(),
                 &expectation.a,
                 &expectation.question_context,
             )
@@ -396,8 +397,9 @@ mod tests {
         let config = CheckConfig {
             version: 1,
             agent: agent.clone(),
-            hooks: Default::default(),
             expectations: vec![Expectation {
+                to: crate::config_types::ExpectationTo::Agent,
+                rank: 0,
                 q: question.to_string(),
                 a: "Rust".to_string(),
                 question_context: String::new(),
@@ -446,6 +448,8 @@ mod tests {
     fn duplicate_expectation_ids_are_rejected_even_when_targets_differ() {
         let agent = AgentConfig::default();
         let expectation = |target| Expectation {
+            to: crate::config_types::ExpectationTo::Agent,
+            rank: 0,
             q: "Does this behavior work?".to_string(),
             a: "yes".to_string(),
             question_context: String::new(),
@@ -459,7 +463,6 @@ mod tests {
         let config = CheckConfig {
             version: 1,
             agent: agent.clone(),
-            hooks: Default::default(),
             expectations: vec![
                 expectation(None),
                 expectation(Some(ExpectationTarget::Project)),
@@ -473,7 +476,7 @@ mod tests {
     }
 
     #[test]
-    // xpec: 6
+    // xpec: Mx
     fn in_place_rejects_git_backed_only_config_after_expansion() {
         let agent = AgentConfig::default();
         let mut item = expectation(&agent, None);
@@ -484,7 +487,7 @@ mod tests {
         assert!(validate_in_place_check_config(&config_with(&agent, item)).is_err());
 
         let mut item = expectation(&agent, None);
-        item.cooldown = Some(CooldownConfig::Compact("1d".to_string()));
+        item.cooldown = Some(CooldownConfig("1d".to_string()));
         assert!(validate_in_place_check_config(&config_with(&agent, item)).is_err());
 
         let mut check_config = config_with(&agent, expectation(&agent, None));
@@ -507,6 +510,8 @@ mod tests {
 
     fn expectation(agent: &AgentConfig, target: Option<ExpectationTarget>) -> Expectation {
         Expectation {
+            to: crate::config_types::ExpectationTo::Agent,
+            rank: 0,
             q: "Does this behavior work?".to_string(),
             a: "yes".to_string(),
             question_context: String::new(),
@@ -523,7 +528,6 @@ mod tests {
         CheckConfig {
             version: 1,
             agent: agent.clone(),
-            hooks: Default::default(),
             expectations: vec![expectation],
         }
     }

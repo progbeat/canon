@@ -1,5 +1,4 @@
 mod failure;
-mod hooks;
 mod prepare;
 mod query;
 mod run;

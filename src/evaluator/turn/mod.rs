@@ -121,7 +121,7 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    // xpec: 92
+    // xpec: MR
     #[test]
     fn schema_valid_evidence_file_refs_do_not_trigger_repair() {
         let root = temp_root("schema-valid-evidence");
@@ -157,7 +157,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    // xpec: 92
+    // xpec: MR
     #[test]
     fn malformed_response_stays_unparsable_without_repair() {
         let root = temp_root("unparsable");
@@ -202,6 +202,8 @@ mod tests {
             number: 0,
             id: String::new(),
             display_id: "q".to_string(),
+            to: crate::config_types::ExpectationTo::Agent,
+            rank: 0,
             question: "Does ask report an answer?".to_string(),
             expected_answer: String::new(),
             question_context: String::new(),

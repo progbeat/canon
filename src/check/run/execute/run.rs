@@ -1,21 +1,18 @@
 use super::expectation::{run_expectation, ExpectationRunContext};
 use super::report::{check_run_report, skipped_count, CheckRunReportCounts};
 use super::CheckRunSideEffects;
-use crate::check::command::output::write_cached_non_pass_output;
 use crate::check::core::{
     check_run_error, interrupted_check_run_error, CachedExpectation, CheckOptions, CheckRecord,
     CheckRunError, CheckRunReport, ResolvedExpectation,
 };
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::run::selection::{
-    order_by_latest_non_pass, order_in_place_by_absent_non_pass_history,
-    select_git_backed_expectations_after_cache, CachedExpectationHit, CachedNonPassPolicy,
-    GitBackedCacheFilterContext,
+    order_by_latest_fail, order_in_place_by_absent_fail_history,
+    select_git_backed_expectations_after_cache, GitBackedCacheFilterContext,
 };
 use crate::evaluator::EvaluatorRunner;
 use crate::time::unix_timestamp;
 use crate::xpec_state::snapshot_pass_ids;
-use std::path::Path;
 
 // This runtime layer consumes resolved check options and owns cache/evaluator
 // work ordering. Command-line policy such as default-run agent messaging stays
@@ -91,177 +88,68 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             },
             options,
             run_try!(unix_timestamp()),
-            if options.selectors_provided {
-                CachedNonPassPolicy::EvaluateUncachedCandidates
-            } else {
-                CachedNonPassPolicy::EmptySelectionLeavesUncachedPending
-            },
         ));
-        match check_work {
-            crate::check::run::selection::GitBackedCacheFilteredCheckWork::EvaluationAllowed {
-                cached_hits,
-                evaluation_queue,
-            } => {
-                // Cache selection returns cached report work plus the evaluator
-                // queue. Sort both by latest non-pass timestamp so public output
-                // and evaluator work share one priority order.
-                run_try!(order_check_work(
-                    root,
-                    cached_hits,
-                    evaluation_queue,
-                    &mut caches.xpec_state,
-                ))
-            }
-            crate::check::run::selection::GitBackedCacheFilteredCheckWork::DefaultSelectionEmptyWithCachedNonPassReports {
-                cached_hits,
-            } => {
-                // xpec: nT
-                // This is the Selected Expectations `selected = empty` case
-                // for default-mode cached failures. These cached report items
-                // are emitted without evaluator work, so e5's selected
-                // expectation ordering and stop-after-evaluated-non-pass rule
-                // have no evaluator queue to apply to here.
-                cached_hits
-                    .into_iter()
-                    .map(|hit| CheckWorkItem::Cached(Box::new(hit)))
-                    .collect()
-            }
+        for hit in check_work.cached_hits {
+            cached.push(CachedExpectation {
+                expectation: hit.expectation,
+                record: hit.hit.record,
+            });
         }
+        run_try!(order_by_latest_fail(
+            root,
+            check_work.evaluation_queue,
+            &mut caches.xpec_state,
+            |expectation| expectation,
+        ))
     };
-    let mut check_work_queue = check_work_queue.into_iter();
-    while let Some(item) = check_work_queue.next() {
-        match item {
-            CheckWorkItem::Cached(hit) => {
-                write_cached_non_passes(vec![*hit], &mut cached, &mut result_output)
-                    .map_err(|err| current_error!(err))?;
+    for expectation in check_work_queue {
+        let outcome = match run_expectation(
+            &mut ExpectationRunContext {
+                runtime: &runtime,
+                options,
+                runner,
+                diagnostic_log: &mut diagnostic_log,
+                result_output: &mut result_output,
+                live_report_output: &live_report_output,
+                caches,
+                interrogation_run_state: &mut interrogation_run_state,
+            },
+            &expectation,
+        ) {
+            Ok(outcome) => outcome,
+            Err(error) => return Err(current_error!(error)),
+        };
+        let stop_run = outcome.stop_run;
+        let interrupted = outcome.interrupted;
+        // This is the structured per-expectation report for evaluated
+        // work; human stdout/stderr rendering is not the only report.
+        records.push(outcome.record);
+        if stop_run {
+            // This is the shared default-order stop point for both
+            // materialized and in-place runs. In-place mode changes
+            // cache/state usage, not the stop-after-evaluated-fail
+            // rule.
+            let report = current_report(records, cached, total_expectations);
+            if interrupted {
+                // The post-summary agent-message spec is explicitly scoped to
+                // runs without Ctrl-C or other interruption. Resource/control
+                // stop signals finish through the error-report path so no
+                // commit/fix instruction is printed for a partial run.
+                return Err(interrupted_check_run_error(
+                    "check interrupted after the current expectation".to_string(),
+                    report,
+                ));
             }
-            CheckWorkItem::Evaluate(expectation) => {
-                let expectation = *expectation;
-                let outcome = match run_expectation(
-                    &mut ExpectationRunContext {
-                        runtime: &runtime,
-                        options,
-                        runner,
-                        diagnostic_log: &mut diagnostic_log,
-                        result_output: &mut result_output,
-                        live_report_output: &live_report_output,
-                        caches,
-                        interrogation_run_state: &mut interrogation_run_state,
-                    },
-                    &expectation,
-                ) {
-                    Ok(outcome) => outcome,
-                    Err(error) => return Err(current_error!(error)),
-                };
-                let stop_run = outcome.stop_run;
-                let interrupted = outcome.interrupted;
-                // This is the structured per-expectation report for evaluated
-                // work; human stdout/stderr rendering is not the only report.
-                records.push(outcome.record);
-                if stop_run {
-                    // This is the shared default-order stop point for both
-                    // materialized and in-place runs. In-place mode changes
-                    // cache/state usage, not the stop-after-evaluated-non-pass
-                    // rule.
-                    if !interrupted {
-                        write_remaining_cached_non_passes_without_evaluation(
-                            &mut check_work_queue,
-                            &mut cached,
-                            &mut result_output,
-                        )
-                        .map_err(|err| current_error!(err))?;
-                    }
-                    let report = current_report(records, cached, total_expectations);
-                    if interrupted {
-                        // The post-summary agent-message spec is explicitly scoped to
-                        // runs without Ctrl-C or other interruption. Resource/control
-                        // stop signals finish through the error-report path so no
-                        // commit/fix instruction is printed for a partial run.
-                        return Err(interrupted_check_run_error(
-                            "check interrupted after the current expectation".to_string(),
-                            report,
-                        ));
-                    }
-                    return Ok(report);
-                }
-            }
+            return Ok(report);
         }
     }
     Ok(current_report(records, cached, total_expectations))
 }
 
-fn write_remaining_cached_non_passes_without_evaluation(
-    items: &mut impl Iterator<Item = CheckWorkItem>,
-    cached: &mut Vec<CachedExpectation>,
-    result_output: &mut Option<&mut dyn std::io::Write>,
-) -> Result<(), String> {
-    // The order spec stops evaluator work after the first evaluated non-pass.
-    // Remaining cached non-passes are already-known results, so writing their
-    // public blocks does not evaluate another selected expectation.
-    for item in items {
-        if let CheckWorkItem::Cached(hit) = item {
-            write_cached_non_passes(vec![*hit], cached, result_output)?;
-        }
-    }
-    Ok(())
-}
-
-enum CheckWorkItem {
-    Cached(Box<CachedExpectationHit>),
-    Evaluate(Box<ResolvedExpectation>),
-}
-
-fn in_place_check_work_queue(evaluation_queue: Vec<ResolvedExpectation>) -> Vec<CheckWorkItem> {
-    let work = evaluation_queue
-        .into_iter()
-        .map(|expectation| CheckWorkItem::Evaluate(Box::new(expectation)))
-        .collect();
-    order_in_place_by_absent_non_pass_history(work)
-}
-
-fn order_check_work(
-    root: &Path,
-    cached_hits: Vec<CachedExpectationHit>,
+fn in_place_check_work_queue(
     evaluation_queue: Vec<ResolvedExpectation>,
-    xpec_state: &mut crate::xpec_state::XpecStateCache,
-) -> Result<Vec<CheckWorkItem>, String> {
-    let work = cached_hits
-        .into_iter()
-        .map(|hit| CheckWorkItem::Cached(Box::new(hit)))
-        .chain(
-            evaluation_queue
-                .into_iter()
-                .map(|expectation| CheckWorkItem::Evaluate(Box::new(expectation))),
-        )
-        .collect::<Vec<_>>();
-    order_by_latest_non_pass(root, work, xpec_state, |item| match item {
-        CheckWorkItem::Cached(hit) => &hit.expectation,
-        CheckWorkItem::Evaluate(expectation) => expectation,
-    })
-}
-
-fn write_cached_non_passes(
-    cached_hits: Vec<CachedExpectationHit>,
-    cached: &mut Vec<CachedExpectation>,
-    result_output: &mut Option<&mut dyn std::io::Write>,
-) -> Result<(), String> {
-    for CachedExpectationHit { expectation, hit } in cached_hits {
-        let record = hit.record;
-        // Cached passes are counted in the summary only; they are not emitted
-        // as per-expectation stdout result entries and therefore have no
-        // progress timeline. Cached non-passes are failed answers; human-review
-        // records stay uncached so their ERROR blocks come from evaluation in
-        // the current run.
-        let cached_result_prints_short_id = !record.passed();
-        if cached_result_prints_short_id {
-            write_cached_non_pass_output(result_output, &record)?;
-        }
-        cached.push(CachedExpectation {
-            expectation,
-            record,
-        });
-    }
-    Ok(())
+) -> Vec<ResolvedExpectation> {
+    order_in_place_by_absent_fail_history(evaluation_queue, |expectation| expectation)
 }
 
 fn current_report(
@@ -278,7 +166,7 @@ mod tests {
     use super::*;
     use crate::config_types::{AgentConfig, DEFAULT_DIFF_FROM};
 
-    // xpec: e5,6
+    // xpec: Un,Mx
     #[test]
     fn in_place_check_work_queue_uses_in_place_absent_history_epoch_order() {
         let queue = in_place_check_work_queue(vec![
@@ -288,15 +176,10 @@ mod tests {
 
         let ids = queue
             .into_iter()
-            .map(|item| match item {
-                CheckWorkItem::Evaluate(expectation) => expectation.id,
-                CheckWorkItem::Cached(_) => {
-                    panic!("evaluate-only queue must not contain cache hits")
-                }
-            })
+            .map(|expectation| expectation.id)
             .collect::<Vec<_>>();
 
-        // xpec: e5,6
+        // xpec: Un,Mx
         assert_eq!(ids, vec!["first", "second"]);
     }
 
@@ -305,6 +188,8 @@ mod tests {
             number: 1,
             id: id.to_string(),
             display_id: id.to_string(),
+            to: crate::config_types::ExpectationTo::Agent,
+            rank: 0,
             question: "Does it pass?".to_string(),
             expected_answer: "yes".to_string(),
             question_context: String::new(),

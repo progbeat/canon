@@ -10,7 +10,6 @@ pub(super) fn check_run_report(
     CheckRunReport {
         records,
         cached,
-        blocked_hooks: Vec::new(),
         skipped: counts.skipped,
     }
 }

@@ -7,7 +7,7 @@ pub(crate) struct CheckOptions {
     // evaluator queue.
     pub(crate) candidate_expectations: Vec<ResolvedExpectation>,
     pub(crate) selectors_provided: bool,
-    // `--keep-going` continues evaluator work after non-pass results; it does
+    // `--keep-going` continues evaluator work after failed results; it does
     // not bypass default cache-based selection.
     pub(crate) keep_going: bool,
     pub(crate) ignore_cooldown: bool,

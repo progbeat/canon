@@ -9,8 +9,7 @@ pub(crate) use args::{
     resolve_check_options_with_identities,
 };
 pub(crate) use cache_select::{
-    select_git_backed_expectations_after_cache, CachedExpectationHit, CachedNonPassPolicy,
-    GitBackedCacheFilterContext, GitBackedCacheFilteredCheckWork,
+    select_git_backed_expectations_after_cache, GitBackedCacheFilterContext,
 };
 pub(crate) use cooldown::parse_cooldown;
 // Selector parsing and matching, including `not:<ID-PREFIX>` exclusions, lives
@@ -19,4 +18,4 @@ pub(crate) use identity::{
     expectation_identities, minimal_unique_expectation_prefix, select_expectations_with_identities,
     ExpectationIdentity,
 };
-pub(crate) use order::{order_by_latest_non_pass, order_in_place_by_absent_non_pass_history};
+pub(crate) use order::{order_by_latest_fail, order_in_place_by_absent_fail_history};

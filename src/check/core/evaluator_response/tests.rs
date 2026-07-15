@@ -110,7 +110,7 @@ fn evaluator_response_parser_accepts_each_requested_short_id() {
     assert_eq!(responses["b"].answer.as_deref(), Some("no"));
 }
 
-#[test] // xpec: YD
+#[test] // xpec: MR
 fn restricted_evaluator_response_json_schema_matches_interrogation_policy() {
     let schema = evaluator_response_json_schema(EvaluatorResponseSchemaScope::Restricted);
     let result_schema = &schema["additionalProperties"];
@@ -349,7 +349,7 @@ fn evaluator_response_rejects_empty_question_scope_suggestion() {
         .contains("qScopeSuggestion"));
 }
 
-#[test] // xpec: YD
+#[test] // xpec: MR
 fn evaluator_response_rejects_empty_question_scope_suggestion_item() {
     let response = parse_evaluator_response_json(
         r#"{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":[""]}"#,

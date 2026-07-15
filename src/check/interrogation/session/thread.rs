@@ -125,7 +125,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         .thread_sessions_by_prerender_key
         .get(&session_key)
         .cloned()
-        // xpec: G6
+        // xpec: qX
         // A thread that received `canon.show` output for this expectation must
         // not be reused to interrogate that same expectation again.
         .filter(|session_id| {
@@ -387,7 +387,7 @@ fn ask_in_thread<R: EvaluatorRunner>(
             )
         }
     };
-    // xpec: G6
+    // xpec: qX
     // The dynamic tool handler records the expectation IDs actually rendered
     // into `canon.show` output; future reuse lookups reject this session for
     // those expectation IDs.
@@ -457,7 +457,7 @@ fn start_or_reuse_thread_session_after_rendering<R: EvaluatorRunner>(
         .thread_sessions_by_rendered_instructions_key
         .get(&rendered_key)
         .cloned()
-        // xpec: G6
+        // xpec: qX
         // Apply the same dynamic-tool reuse prohibition to the post-render
         // reuse pool as to the pre-render pool.
         .filter(|session_id| {
@@ -883,7 +883,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test] // xpec: XH
+    #[test] // xpec: Ok
     fn checkpoint_diff_base_ignores_non_oid_checkpoint_tree() {
         let root = git_project("checkpoint-revspec");
         let last_pass = last_pass_with_checked_tree_oid("HEAD^{tree}");

@@ -122,6 +122,8 @@ pub(crate) fn selected_expectation_at(
         number: index + 1,
         id: identity.id.clone(),
         display_id: identity.display_id.clone(),
+        to: expectation.to,
+        rank: expectation.rank,
         question: expectation.q.clone(),
         expected_answer: expectation.a.clone(),
         question_context: expectation.question_context.clone(),
@@ -143,7 +145,12 @@ pub(crate) fn expectation_identities(
             let rendered_question = &expectation.q;
             let expected_answer = &expectation.a;
             let resolved_instructions = &expectation.question_context;
-            expectation_id(rendered_question, expected_answer, resolved_instructions)
+            expectation_id(
+                rendered_question,
+                expectation.to.as_str(),
+                expected_answer,
+                resolved_instructions,
+            )
         })
         .collect::<Vec<_>>();
     let mut seen = BTreeSet::new();
@@ -263,7 +270,6 @@ mod tests {
         CheckConfig {
             version: 1,
             agent: AgentConfig::implementation_default(),
-            hooks: Default::default(),
             expectations: vec![
                 expectation("Does alpha pass?"),
                 expectation("Does beta pass?"),
@@ -273,6 +279,8 @@ mod tests {
 
     fn expectation(question: &str) -> Expectation {
         Expectation {
+            to: crate::config_types::ExpectationTo::Agent,
+            rank: 0,
             q: question.to_string(),
             a: "yes".to_string(),
             question_context: String::new(),

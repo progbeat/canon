@@ -1,6 +1,7 @@
 use super::escape::escape_check_output_text;
 use super::shared::{write_stdout_record, SharedCheckOutput};
 use crate::check::core::{CheckRecord, ERROR_SCOPE_TOO_NARROW};
+use crate::config_types::ExpectationTo;
 use crate::evaluator::{EvaluatorProgress, EvaluatorProgressMarker};
 use crate::json_util::compact_json_string_array;
 use std::io::Write;
@@ -305,20 +306,6 @@ pub(crate) fn write_result_output_without_started_report(
     Ok(())
 }
 
-pub(crate) fn write_cached_non_pass_output(
-    result_output: &mut Option<&mut dyn Write>,
-    record: &CheckRecord,
-) -> Result<(), String> {
-    // Cached non-passes are displayed issue reports. They are not evaluated in
-    // this run, so their complete progress timeline is the initial marker.
-    debug_assert!(!record.passed());
-    if let Some(writer) = result_output.as_mut() {
-        let line = render_check_output_record_with_initial_marker_timeline(record);
-        write_stdout_record(*writer, line.as_bytes(), "cached check result")?;
-    }
-    Ok(())
-}
-
 fn render_check_output_record_with_initial_marker_timeline(record: &CheckRecord) -> String {
     let mut output = record.display_id.clone();
     output.push('.');
@@ -331,17 +318,46 @@ pub(super) fn render_check_output_record_status_and_details(record: &CheckRecord
     // response payloads. It renders the final CheckRecord as provided;
     // selected-expectation execution asserts ScopeTooNarrow is never a final
     // check result before this public-output boundary.
-    // xpec: RC
+    // xpec: Hy
     debug_assert_ne!(record.error.as_deref(), Some(ERROR_SCOPE_TOO_NARROW));
+    let expected = record.expected_answer_text().unwrap_or("");
+    let ask_mode = expected.is_empty();
     if record.passed() {
-        return " OK\n".to_string();
+        return (if ask_mode { "\n" } else { " PASS\n" }).to_string();
     }
-    let is_error = record.requires_human_review();
-    let status = if is_error { "ERROR" } else { "FAILED" };
     let mut output = String::new();
-    output.push_str(&format!(" {}\n", status));
-    output.push_str(&escape_check_output_text(record.question_text()));
-    output.push('\n');
+    output.push_str(if ask_mode { "\n" } else { " FAIL\n" });
+    if let Some(error) = record.error.as_deref() {
+        output.push_str("error: ");
+        output.push_str(&escape_check_output_text(error));
+        output.push('\n');
+        return output;
+    }
+    if record.to == ExpectationTo::Caller {
+        output.push_str("expected: ");
+        output.push_str(&escape_check_output_text(
+            record.expected_answer_text().unwrap_or(""),
+        ));
+        output.push('\n');
+        return output;
+    }
+    if record.to == ExpectationTo::Shell {
+        for line in record.evidence.lines() {
+            output.push_str("│ ");
+            output.push_str(line);
+            output.push('\n');
+        }
+        output.push_str(&format!(
+            "Command exited with code {} (expected {}).\n",
+            record.observed,
+            record.expected_answer_text().unwrap_or("")
+        ));
+        return output;
+    }
+    if !ask_mode {
+        output.push_str(&escape_check_output_text(record.question_text()));
+        output.push('\n');
+    }
     // The `Diff-from:` line is part of the failed/error result block only when
     // the record came from a Git-backed interrogation with a resolved diff
     // base. Cached records reconstruct the same in-memory abbreviation before
@@ -350,35 +366,26 @@ pub(super) fn render_check_output_record_status_and_details(record: &CheckRecord
         record.diff_from.as_deref(),
         record.diff_from_tree_oid_abbrev.as_deref(),
     ) {
-        output.push_str("Diff-from: ");
+        output.push_str("diff-from: ");
         output.push_str(&escape_check_output_text(diff_from_tree_oid_abbrev));
         output.push_str(" (");
         output.push_str(&escape_check_output_text(diff_from));
         output.push_str(")\n");
     }
-    if is_error {
-        output.push_str("Error: ");
-        let error = record
-            .human_review_reason()
-            .expect("error records must expose an error value");
-        output.push_str(&escape_check_output_text(error));
-        output.push('\n');
-    } else {
-        output.push_str("Expected: ");
-        output.push_str(&escape_check_output_text(
-            record.expected_answer_text().unwrap_or(""),
-        ));
-        output.push('\n');
-        output.push_str("Observed: ");
-        output.push_str(&escape_check_output_text(&record.observed));
+    if !ask_mode {
+        output.push_str("expected: ");
+        output.push_str(&escape_check_output_text(expected));
         output.push('\n');
     }
-    output.push_str("Evidence: ");
+    output.push_str("observed: ");
+    output.push_str(&escape_check_output_text(&record.observed));
+    output.push('\n');
+    output.push_str("evidence: ");
     output.push_str(&escape_check_output_text(&record.evidence));
     output.push('\n');
-    if !is_error {
+    if ask_mode {
         if let Some(suggestion) = record.question_scope_suggestion.as_deref() {
-            output.push_str("Suggested q-scope: ");
+            output.push_str("q-scope-suggestion: ");
             output.push_str(&compact_json_string_array(suggestion));
             output.push('\n');
         }
@@ -398,7 +405,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
-    #[test] // xpec: Ay,sy
+    #[test] // xpec: LY,Ov
     fn turn_timeout_progress_marker_is_allowed_after_idle() {
         let timeline = test_timeline();
 
@@ -407,7 +414,7 @@ mod tests {
         assert_final_no_progress_turn_timeout_suffix(&timeline, &timeout_error_record()).unwrap();
     }
 
-    #[test] // xpec: Ay,sy
+    #[test] // xpec: LY,Ov
     fn final_turn_timeout_progress_marker_error_keeps_report_path_alive() {
         let timeline = test_timeline();
 
@@ -421,7 +428,7 @@ mod tests {
         );
     }
 
-    #[test] // xpec: sy,Ay
+    #[test] // xpec: Ov,LY
     fn invalid_turn_timeout_timeline_still_writes_final_result() {
         let bytes = Arc::new(Mutex::new(Vec::new()));
         let output = SharedCheckOutput::new(Box::new(CapturedOutput {
@@ -434,8 +441,8 @@ mod tests {
 
         assert!(finished.stdout_completion_failed());
         let output = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
-        assert!(output.contains("j× ERROR\n"));
-        assert!(output.contains("Error: unparsable\n"));
+        assert!(output.contains("j× FAIL\n"));
+        assert!(output.contains("error: unparsable\n"));
     }
 
     struct CapturedOutput {
@@ -465,6 +472,7 @@ mod tests {
             timestamp: "1970-01-01T00:00:00Z".to_string(),
             number: 1,
             result: CheckResult::Fail,
+            to: crate::config_types::ExpectationTo::Agent,
             question: Some("Does it pass?".to_string()),
             expected_answer: Some("yes".to_string()),
             observed: INTERNAL_ERROR_UNPARSABLE.to_string(),

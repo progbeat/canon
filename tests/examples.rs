@@ -31,7 +31,7 @@ fn init_git_repo(repo: &Path) {
         .current_dir(repo)
         .output()
         .unwrap();
-    // xpec: C
+    // xpec: ae
     assert!(
         output.status.success(),
         "{}",
@@ -45,7 +45,7 @@ fn git_path(repo: &Path, path: &str) -> PathBuf {
         .current_dir(repo)
         .output()
         .unwrap();
-    // xpec: C
+    // xpec: ae
     assert!(
         output.status.success(),
         "{}",
@@ -54,7 +54,25 @@ fn git_path(repo: &Path, path: &str) -> PathBuf {
     repo.join(String::from_utf8(output.stdout).unwrap().trim())
 }
 
-// xpec: C
+fn read_only_last_result(xpecs_dir: &Path, file_name: &str) -> serde_json::Value {
+    let mut xpec_dirs = fs::read_dir(xpecs_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_dir())
+        .collect::<Vec<_>>();
+    xpec_dirs.sort();
+    let xpec_dir = match xpec_dirs.as_slice() {
+        [xpec_dir] => xpec_dir,
+        _ => panic!(
+            "expected one persisted xpec directory under {}, found {}",
+            xpecs_dir.display(),
+            xpec_dirs.len()
+        ),
+    };
+    serde_json::from_str(&fs::read_to_string(xpec_dir.join(file_name)).unwrap()).unwrap()
+}
+
+// xpec: ae
 #[test]
 fn init_creates_default_template_and_refuses_overwrite() {
     let repo = temp_repo("canon-init-example");
@@ -92,7 +110,7 @@ fn init_creates_default_template_and_refuses_overwrite() {
     );
 }
 
-// xpec: C
+// xpec: ae
 #[test]
 fn pre_commit_commands_render_documented_messages() {
     let repo = temp_repo("canon-pre-commit-example");
@@ -136,7 +154,7 @@ fn pre_commit_commands_render_documented_messages() {
     );
 }
 
-// xpec: C
+// xpec: ae
 #[test]
 fn pre_commit_install_rejects_existing_default_hook() {
     let repo = temp_repo("canon-pre-commit-existing-example");
@@ -159,28 +177,21 @@ fn pre_commit_install_rejects_existing_default_hook() {
     );
 }
 
-// xpec: uY
+// xpec: ZU
 #[test]
-fn check_on_start_hook_input_mismatch_blocks_without_result() {
-    let repo = temp_repo("canon-check-on-start-hook");
+fn caller_xpec_wrong_answer_fails_with_expected_answer() {
+    let repo = temp_repo("canon-check-caller-xpec");
     init_git_repo(&repo);
     fs::create_dir_all(repo.join(".canon")).unwrap();
     fs::write(
         repo.join(".canon/check.yml"),
         r#"
-version: 1
 presets:
   default: {}
-hooks:
-  on-start:
-    print: "Type pass:"
-    input: " "
-    cases:
-      pass: !ok
-      _: !block "Run the blocker fix."
 expectations:
-  - q: "Does the hook block before evaluator work?"
-    a: "yes"
+  - to: caller
+    q: "Type pass:"
+    a: "pass"
 "#,
     )
     .unwrap();
@@ -189,7 +200,7 @@ expectations:
         .current_dir(&repo)
         .output()
         .unwrap();
-    // xpec: uY
+    // xpec: ZU
     assert!(
         add.status.success(),
         "{}",
@@ -207,50 +218,44 @@ expectations:
     child.stdin.take().unwrap().write_all(b"fail\n").unwrap();
     let output = child.wait_with_output().unwrap();
 
-    let _ = fs::remove_dir_all(&repo);
-
-    // xpec: uY
+    // xpec: ZU
     assert!(!output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    // xpec: HW,uY
-    assert!(stdout.starts_with("Type pass:\n "));
-    // xpec: uY
-    assert!(stdout.contains(" 1 blocked, 1 pending in "));
-    // xpec: uY
-    assert!(stdout.ends_with("Run the blocker fix.\n"));
-    // xpec: uY
-    assert!(!stdout.contains(" OK\n"));
-    // xpec: uY
-    assert!(!stdout.contains(" FAILED\n"));
+    // xpec: ZU
+    assert!(stdout.starts_with("Type pass: "));
+    // xpec: ZU
+    assert!(stdout.contains(". FAIL\nexpected: pass\n"));
+    // xpec: 8
+    assert!(stdout.contains(" 1 failed in "));
     let stderr = String::from_utf8(output.stderr).unwrap();
-    // xpec: HW
+    // xpec: 8
     assert_eq!(
         stderr,
         "Token usage: total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n"
     );
+    let last_fail = read_only_last_result(&repo.join(".git/canon/xpecs"), "last-fail.json");
+    // xpec: mO
+    assert_eq!(last_fail["status"], "fail");
+    // xpec: mO
+    assert!(last_fail.get("checkedTreeOid").is_some());
+    // xpec: mO
+    assert!(last_fail.get("visibleTreeOid").is_none());
+    let _ = fs::remove_dir_all(&repo);
 }
 
-// xpec: uY
+// xpec: ZU
 #[test]
-fn in_place_check_on_start_hook_input_mismatch_blocks_without_result() {
-    let repo = temp_repo("canon-in-place-check-on-start-hook");
+fn in_place_shell_xpec_reports_transcript_and_exit_code() {
+    let repo = temp_repo("canon-in-place-shell-xpec");
     fs::create_dir_all(repo.join(".canon")).unwrap();
     fs::write(
         repo.join(".canon/check.yml"),
         r#"
-version: 1
 presets:
   default: {}
-hooks:
-  on-start:
-    print: "Type pass:"
-    input: " "
-    cases:
-      pass: !ok
-      _: !block "Run the blocker fix."
 expectations:
-  - q: "Does the hook block before evaluator work?"
-    a: "yes"
+  - to: shell
+    q: 'printf "stdout\n"; printf "stderr\n" >&2; printf "after\n"; exit 3'
 "#,
     )
     .unwrap();
@@ -258,53 +263,59 @@ expectations:
     let mut child = canon()
         .args(["check", "--in-place"])
         .current_dir(&repo)
+        .env("CANON_STATE_DIR", repo.join("state"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.take().unwrap().write_all(b"fail\n").unwrap();
+    drop(child.stdin.take());
     let output = child.wait_with_output().unwrap();
 
-    let _ = fs::remove_dir_all(&repo);
-
-    // xpec: uY
+    // xpec: ZU
     assert!(!output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    // xpec: HW,uY
-    assert!(stdout.starts_with("Type pass:\n "));
-    // xpec: uY
-    assert!(stdout.contains(" 1 blocked, 1 pending in "));
-    // xpec: uY
-    assert!(stdout.ends_with("Run the blocker fix.\n"));
-    // xpec: uY
-    assert!(!stdout.contains(" OK\n"));
-    // xpec: uY
-    assert!(!stdout.contains(" FAILED\n"));
+    // xpec: ZU
+    assert!(stdout.contains(
+        ". FAIL\n│ $ printf \"stdout\\n\"; printf \"stderr\\n\" >&2; printf \"after\\n\"; exit 3\n\
+         │ stdout\n│ stderr\n│ after\n"
+    ));
+    // xpec: ZU
+    assert!(stdout.contains("Command exited with code 3 (expected 0).\n"));
+    // xpec: 8
+    assert!(stdout.contains(" 1 failed in "));
     let stderr = String::from_utf8(output.stderr).unwrap();
-    // xpec: HW
+    // xpec: 8
     assert_eq!(
         stderr,
         "Token usage: total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n"
     );
+    let last_fail = read_only_last_result(&repo.join("state/xpecs"), "last-fail.json");
+    // xpec: mO,Mx,Wf
+    assert_eq!(last_fail["status"], "fail");
+    // xpec: mO,Mx
+    assert!(last_fail.get("qScope").is_none());
+    // xpec: mO,Mx
+    assert!(last_fail.get("visibleScope").is_none());
+    // xpec: mO,Mx
+    assert!(last_fail.get("checkedTreeOid").is_none());
+    // xpec: mO,Mx
+    assert!(last_fail.get("visibleTreeOid").is_none());
+    let _ = fs::remove_dir_all(&repo);
 }
 
-// xpec: HW,6,uY
+// xpec: 8,Mx
 #[test]
-fn in_place_prohibited_expectation_fields_fail_before_hooks() {
-    let repo = temp_repo("canon-in-place-invalid-config-before-hooks");
+fn in_place_prohibited_expectation_fields_fail_before_evaluation() {
+    let repo = temp_repo("canon-in-place-invalid-config-before-evaluation");
     fs::create_dir_all(repo.join(".canon")).unwrap();
     fs::write(
         repo.join(".canon/check.yml"),
         r#"
-version: 1
 presets:
   default: {}
-hooks:
-  on-start:
-    print: "This should not print.\n"
 expectations:
-  - q: "Does in-place reject diff-from before hooks?"
+  - q: "Does in-place reject diff-from before evaluation?"
     a: "yes"
     diff-from: :against-tree
 "#,
@@ -323,9 +334,9 @@ expectations:
 
     assert!(!output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    // xpec: HW,6
+    // xpec: 8,Mx
     assert!(stdout.contains(" 0 passed in "));
-    // xpec: HW,6
+    // xpec: 8,Mx
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
         format!(
@@ -334,7 +345,7 @@ expectations:
     );
 }
 
-// xpec: C
+// xpec: ae
 #[test]
 fn gate_rejects_mixed_canon_and_implementation_changes() {
     let repo = temp_repo("canon-gate-example");
@@ -370,7 +381,7 @@ fn gate_rejects_mixed_canon_and_implementation_changes() {
     );
 }
 
-// xpec: C
+// xpec: ae
 #[test]
 fn gate_passes_canon_only_staged_config_deletion() {
     let repo = temp_repo("canon-gate-canon-only-example");
@@ -437,7 +448,7 @@ fn gate_passes_canon_only_staged_config_deletion() {
     assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
 }
 
-// xpec: C
+// xpec: ae
 #[test]
 fn gate_passes_non_canon_staged_change_without_config() {
     let repo = temp_repo("canon-gate-no-config-example");
@@ -467,7 +478,7 @@ fn gate_passes_non_canon_staged_change_without_config() {
     assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
 }
 
-// xpec: C,HW
+// xpec: ae,8
 #[test]
 fn check_without_config_renders_documented_recovery_message() {
     let repo = temp_repo("canon-missing-config-example");

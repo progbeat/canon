@@ -1,8 +1,5 @@
 use super::shared::write_stdout_record;
-use crate::check::core::{
-    for_each_unique_report_record_with_source, report_record_counts_as_error, CheckRecord,
-    CheckRunReport, ReportRecordSource,
-};
+use crate::check::core::{for_each_unique_report_record, CheckRunReport};
 use std::io::Write;
 use std::time::Duration;
 
@@ -12,6 +9,7 @@ const VERIFY_EVIDENCE_MESSAGE: &str =
 const USE_EXPECTATIONS_MESSAGE: &str =
     "❕ Use the matching expectations to avoid regressions while fixing the issues.";
 const FIX_ISSUES_MESSAGE: &str = "▷ Fix the issues and run `canon check` again!";
+const CONTINUE_EVALUATION_MESSAGE: &str = "▷ Run `canon check` to continue evaluation.";
 const THEN_FIX_REMAINING_MESSAGE: &str =
     "▷ Then fix the remaining issues and run `canon check` again!";
 const PASS_IMPROVEMENT_COMMIT_SUFFIX: &str = "Commit the staged changes NOW!";
@@ -26,27 +24,10 @@ pub(crate) fn write_summary_line(
 }
 
 fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -> String {
-    let SummaryOutcomeCounts {
-        blocked,
-        passed,
-        failed,
-        errors,
-    } = summary_outcome_counts(report);
+    let SummaryOutcomeCounts { passed, failed } = summary_outcome_counts(report);
     let mut outcomes = Vec::new();
-    // Blocked hooks are check outcomes even though they are not expectation
-    // records, so they lead the summary independently of record counts.
-    if blocked > 0 {
-        outcomes.push(format!("{} blocked", blocked));
-    }
     if failed > 0 {
         outcomes.push(format!("{} failed", failed));
-    }
-    if errors > 0 {
-        outcomes.push(format!(
-            "{} {}",
-            errors,
-            if errors == 1 { "error" } else { "errors" }
-        ));
     }
     if passed > 0 {
         outcomes.push(format!("{} passed", passed));
@@ -63,46 +44,43 @@ fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -> String {
 
 pub(crate) fn render_check_agent_messages(
     failed: &[String],
-    errors: &[String],
     num_new_passes: usize,
     num_regressions: usize,
     num_pending: usize,
 ) -> Vec<String> {
-    let num_issues = failed.len() + errors.len();
-    if num_regressions > 0 || (num_issues > 0 && num_new_passes == 0) {
-        let mut messages = repair_instruction_messages(failed, errors);
+    if num_regressions > 0 || (!failed.is_empty() && num_new_passes == 0) {
+        let mut messages = repair_instruction_messages(failed);
         messages.push(FIX_ISSUES_MESSAGE.to_string());
         return messages;
     }
-    if num_issues == 0 && num_new_passes == 0 {
-        assert_eq!(num_pending, 0);
+    if failed.is_empty() && num_pending > 0 {
+        return vec![CONTINUE_EVALUATION_MESSAGE.to_string()];
+    }
+    if failed.is_empty() && num_new_passes == 0 {
         return vec![ALL_CHECKS_PASSED_MESSAGE.to_string()];
     }
 
     assert!(num_new_passes > 0);
     let mut messages =
         vec![pass_improvement_notice(num_new_passes).expect("positive new-pass count")];
-    if num_issues > 0 {
-        messages.extend(repair_instruction_messages(failed, errors));
+    if !failed.is_empty() {
+        messages.extend(repair_instruction_messages(failed));
         messages.push(THEN_FIX_REMAINING_MESSAGE.to_string());
-    } else {
-        assert_eq!(num_pending, 0);
     }
     messages
 }
 
-fn repair_instruction_messages(failed: &[String], errors: &[String]) -> Vec<String> {
+fn repair_instruction_messages(failed: &[String]) -> Vec<String> {
     vec![
         VERIFY_EVIDENCE_MESSAGE.to_string(),
-        plan_repair_message(failed, errors),
+        plan_repair_message(failed),
         USE_EXPECTATIONS_MESSAGE.to_string(),
     ]
 }
 
-fn plan_repair_message(failed: &[String], errors: &[String]) -> String {
+fn plan_repair_message(failed: &[String]) -> String {
     let selectors = failed
         .iter()
-        .chain(errors)
         .map(|id| format!("not:{id}"))
         .collect::<Vec<_>>()
         .join(" ");
@@ -123,37 +101,23 @@ fn pass_improvement_notice(count: usize) -> Option<String> {
 }
 
 pub(crate) struct SummaryOutcomeCounts {
-    pub(crate) blocked: usize,
     pub(crate) passed: usize,
     pub(crate) failed: usize,
-    pub(crate) errors: usize,
 }
 
 pub(crate) fn summary_outcome_counts(report: &CheckRunReport) -> SummaryOutcomeCounts {
     let mut counts = SummaryOutcomeCounts {
-        blocked: report.blocked_hooks.len(),
         passed: 0,
         failed: 0,
-        errors: 0,
     };
-    for_each_unique_report_record_with_source(&report.records, &report.cached, |source, record| {
-        add_summary_record(&mut counts, source, record);
+    for_each_unique_report_record(&report.records, &report.cached, |record| {
+        if record.passed() {
+            counts.passed += 1;
+        } else {
+            counts.failed += 1;
+        }
     });
     counts
-}
-
-fn add_summary_record(
-    counts: &mut SummaryOutcomeCounts,
-    source: ReportRecordSource,
-    record: &CheckRecord,
-) {
-    if record.passed() {
-        counts.passed += 1;
-    } else if report_record_counts_as_error(source, record) {
-        counts.errors += 1;
-    } else {
-        counts.failed += 1;
-    }
 }
 
 fn pad_summary_line(inner: &str) -> String {
@@ -163,26 +127,4 @@ fn pad_summary_line(inner: &str) -> String {
     let left = padding / 2;
     let right = padding - left;
     format!("{}{}{}", "=".repeat(left), inner, "=".repeat(right))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::check::core::BlockedCheckHook;
-
-    #[test] // xpec: HW
-    fn summary_includes_blocked_before_pending() {
-        let report = CheckRunReport {
-            records: Vec::new(),
-            cached: Vec::new(),
-            blocked_hooks: vec![BlockedCheckHook {
-                repair_instruction: "repair".to_string(),
-            }],
-            skipped: 1,
-        };
-
-        let rendered = render_check_summary(&report, Duration::from_millis(500));
-
-        assert!(rendered.contains(" 1 blocked, 1 pending in 0.50s "));
-    }
 }

@@ -5,7 +5,8 @@ use crate::check::command::output::{
 };
 use crate::check::core::errors::error_record_from_visible_tree_oid;
 use crate::check::core::{
-    CheckOptions, CheckRecord, InterrogationAnswer, ResolvedExpectation, ERROR_SCOPE_TOO_NARROW,
+    CheckOptions, CheckRecord, CheckRecordOutcome, CheckResult, InterrogationAnswer,
+    ResolvedExpectation, ERROR_SCOPE_TOO_NARROW,
 };
 use crate::check::interrogation::policy::{
     git_backed_interrogation_diff_provenance, initial_q_scope_for_fresh_interrogation,
@@ -19,13 +20,15 @@ use crate::check::interrogation::state::{
     should_retry_full_scope_after_error, CheckRuntime, InterrogationRunState,
 };
 use crate::check::interrogation::{write_expectation_result_event, InterrogationRequestKind};
+use crate::config_types::ExpectationTo;
 use crate::evaluator::EvaluatorProgress;
 use crate::evaluator::EvaluatorRunner;
 use crate::hash::full_scope;
 use crate::logs::DiagnosticLogWriter;
 use crate::platform::check_interrupted;
 use crate::scope::scope_is_within;
-use std::io::Write;
+use std::io::{BufRead, Write};
+use std::process::{Command, Stdio};
 
 pub(super) struct ExpectationRunContext<'a, 'out, 'log, R: EvaluatorRunner> {
     pub(super) runtime: &'a CheckRuntime<'a>,
@@ -88,6 +91,17 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
     expectation: &ResolvedExpectation,
 ) -> Result<ExpectationRunOutcome, String> {
+    // xpec: ZU
+    assert!(
+        matches!(
+            expectation.to,
+            ExpectationTo::Agent | ExpectationTo::Caller | ExpectationTo::Shell
+        ),
+        "xpec evaluator type must exist for every xpec.to value"
+    );
+    if expectation.to != ExpectationTo::Agent {
+        return run_direct_expectation(context, expectation);
+    }
     // Cache hits are resolved before this function is called. This path only
     // handles expectations that still need evaluator work, so every report
     // prefix started here belongs to an evaluated expectation and is followed
@@ -229,7 +243,7 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     let run_stop_signal_hit =
         break_after_tokens_hit || context_compaction_hit || stop_after_current_expectation;
     let interrupted = run_stop_signal_hit || interrogation_interrupted;
-    // Default check order stops after the first evaluated non-pass. Evaluator
+    // Default check order stops after the first evaluated fail. Evaluator
     // stop signals are resource/control limits, so they stop after the current
     // result even when the result itself passed.
     let stop_run = run_stop_signal_hit
@@ -242,6 +256,149 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         stop_run,
         interrupted,
     })
+}
+
+fn run_direct_expectation<R: EvaluatorRunner>(
+    context: &mut ExpectationRunContext<'_, '_, '_, R>,
+    expectation: &ResolvedExpectation,
+) -> Result<ExpectationRunOutcome, String> {
+    let scope = full_scope();
+    let visible_tree_oid = context.runtime.visible_tree_oid(
+        &mut context.caches.visible_tree_oid,
+        &expectation.agent,
+        &scope,
+    )?;
+    let started_report = if expectation.to == ExpectationTo::Shell {
+        context
+            .live_report_output
+            .as_ref()
+            .map(|output| start_live_expectation_report(None, output, expectation))
+            .transpose()?
+    } else {
+        None
+    };
+    let response = match expectation.to {
+        ExpectationTo::Caller => evaluate_caller(context.result_output, expectation),
+        ExpectationTo::Shell => evaluate_shell(context.runtime.root, expectation),
+        ExpectationTo::Agent => unreachable!("agent xpecs use interrogation"),
+    };
+    let (observed, evidence, error) = match response {
+        Ok((answer, evidence)) => (answer, evidence, None),
+        Err(error) => (String::new(), String::new(), Some(error)),
+    };
+    let result = CheckResult::from_expected_answer(&expectation.expected_answer, &observed);
+    let record = CheckRecord::current_from_expectation(
+        expectation,
+        CheckRecordOutcome {
+            result,
+            observed,
+            error,
+            evidence,
+            scope,
+            question_scope_suggestion: None,
+            visible_tree_oid,
+            diff_from: None,
+            diff_from_tree_oid: None,
+            diff_from_tree_oid_abbrev: None,
+        },
+    )?;
+    // xpec: ZU
+    assert!(
+        matches!(record.result, CheckResult::Pass | CheckResult::Fail),
+        "a direct xpec with an expected answer must finish as PASS or FAIL"
+    );
+    // xpec: ZU
+    assert!(
+        record.error.is_none() || record.result == CheckResult::Fail,
+        "an xpec response error must produce FAIL"
+    );
+    if let Some(started_report) = started_report {
+        started_report.finish_public_output_before_structured_report(&record);
+    } else {
+        write_result_output_without_started_report(context.result_output, &record)?;
+    }
+    record_finished_expectation(
+        context,
+        expectation,
+        &record,
+        FinishedRecordSource::DirectEvaluation,
+    )?;
+    Ok(ExpectationRunOutcome {
+        stop_run: !context.options.keep_going && !record.passed(),
+        record,
+        interrupted: false,
+    })
+}
+
+fn evaluate_caller(
+    result_output: &mut Option<&mut dyn Write>,
+    expectation: &ResolvedExpectation,
+) -> Result<(String, String), String> {
+    if let Some(output) = result_output.as_mut() {
+        let prompt = format!(
+            "{} ",
+            crate::check::command::output::escape_check_output_text(&expectation.question)
+        );
+        crate::check::command::output::write_stdout_record(
+            *output,
+            prompt.as_bytes(),
+            "caller xpec prompt",
+        )?;
+    }
+    let stdin = std::io::stdin();
+    let mut input = stdin.lock();
+    let mut answer = String::new();
+    input
+        .read_line(&mut answer)
+        .map_err(|error| format!("failed to read caller answer: {error}"))?;
+    trim_line_ending(&mut answer);
+    Ok((answer, String::new()))
+}
+
+fn evaluate_shell(
+    root: &std::path::Path,
+    expectation: &ResolvedExpectation,
+) -> Result<(String, String), String> {
+    let mut command = shell_command(&expectation.question);
+    let output = command
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("failed to run shell xpec: {error}"))?;
+    let code = output
+        .status
+        .code()
+        .ok_or_else(|| "shell xpec terminated without an exit code".to_string())?;
+    let mut transcript = format!("$ {}\n", expectation.question);
+    transcript.push_str(&String::from_utf8_lossy(&output.stdout));
+    transcript.push_str(&String::from_utf8_lossy(&output.stderr));
+    Ok((code.to_string(), transcript))
+}
+
+#[cfg(unix)]
+fn shell_command(question: &str) -> Command {
+    let mut command = Command::new("/bin/sh");
+    // The wrapper gives the command one shared stdout/stderr stream, preserving
+    // the transcript order produced by the command while keeping the question
+    // itself a separate argument with no quoting reconstruction.
+    command.args(["-c", "exec /bin/sh -c \"$1\" 2>&1", "canon-shell", question]);
+    command
+}
+
+#[cfg(windows)]
+fn shell_command(question: &str) -> Command {
+    let mut command = Command::new("cmd.exe");
+    command.args(["/D", "/S", "/C", question]);
+    command
+}
+
+fn trim_line_ending(line: &mut String) {
+    if line.ends_with('\n') {
+        line.pop();
+        if line.ends_with('\r') {
+            line.pop();
+        }
+    }
 }
 
 fn record_finished_expectation<R: EvaluatorRunner>(
@@ -291,7 +448,7 @@ fn record_finished_expectation<R: EvaluatorRunner>(
                     &record_for_state,
                 )?;
         }
-        FinishedRecordSource::NonInterrogationError => {
+        FinishedRecordSource::DirectEvaluation => {
             context
                 .caches
                 .xpec_state
@@ -307,7 +464,7 @@ fn record_finished_expectation<R: EvaluatorRunner>(
 }
 
 fn assert_final_check_result_has_no_scope_too_narrow(record: &CheckRecord) {
-    // xpec: RC
+    // xpec: Hy
     assert_ne!(
         record.error.as_deref(),
         Some(ERROR_SCOPE_TOO_NARROW),
@@ -334,7 +491,7 @@ enum FinishedRecordSource {
     // context for the normalized error response.
     InterrogationAttemptError,
     // The error happened before evaluator prompt rendering was attempted.
-    NonInterrogationError,
+    DirectEvaluation,
 }
 
 fn run_started_temporary_expectation_interrogation<R: EvaluatorRunner>(
@@ -545,7 +702,7 @@ fn q_scope_verification_result_becomes_final(narrowed: &CheckRecord) -> bool {
         // The verification result is not final here: it only proves that the
         // proposed narrowed q-scope is too narrow, so the initial answer remains
         // the final evaluator response for the expectation.
-        // xpec: YD,RC
+        // xpec: MR,Hy
         assert!(
             !q_scope_verification_result_is_accepted(narrowed),
             "ScopeTooNarrow q-scope verification must not become a user-visible final check result"
@@ -561,7 +718,7 @@ fn q_scope_verification_result_is_accepted(narrowed: &CheckRecord) -> bool {
 
 fn temporary_q_scope_verification_answer_becomes_final(narrowed: &InterrogationAnswer) -> bool {
     if narrowed.answer.error.as_deref() == Some(ERROR_SCOPE_TOO_NARROW) {
-        // xpec: YD
+        // xpec: MR
         assert!(
             !temporary_q_scope_verification_answer_is_accepted(narrowed),
             "ScopeTooNarrow q-scope verification must not become a user-visible final query result"
@@ -664,7 +821,7 @@ fn finish_unstarted_expectation_with_error_record_for_visible_tree_oid<R: Evalua
         context,
         expectation,
         record,
-        FinishedRecordSource::NonInterrogationError,
+        FinishedRecordSource::DirectEvaluation,
     )
 }
 
@@ -722,21 +879,21 @@ mod tests {
     };
     use crate::hash::full_scope;
 
-    #[test] // xpec: YD,RC
+    #[test] // xpec: MR,Hy
     fn q_scope_verification_scope_too_narrow_rejects_scope_without_replacing_initial_result() {
         let narrowed = test_record(CheckResult::Fail, Some(ERROR_SCOPE_TOO_NARROW));
 
         assert!(!q_scope_verification_result_becomes_final(&narrowed));
     }
 
-    #[test] // xpec: YD
+    #[test] // xpec: MR
     fn q_scope_verification_invalid_question_replaces_initial_result() {
         let narrowed = test_record(CheckResult::Fail, Some(ERROR_INVALID_QUESTION));
 
         assert!(q_scope_verification_result_becomes_final(&narrowed));
     }
 
-    #[test] // xpec: YD
+    #[test] // xpec: MR
     fn q_scope_verification_answer_result_becomes_final() {
         let fail = test_record(CheckResult::Fail, None);
         let pass = test_record(CheckResult::Pass, None);
@@ -745,7 +902,7 @@ mod tests {
         assert!(q_scope_verification_result_becomes_final(&pass));
     }
 
-    #[test] // xpec: YD
+    #[test] // xpec: MR
     fn temporary_verification_answer_becomes_final_even_when_observed_changes() {
         let changed = test_answer("no", None);
 
@@ -754,7 +911,7 @@ mod tests {
         ));
     }
 
-    #[test] // xpec: YD,RC
+    #[test] // xpec: MR,Hy
     fn temporary_scope_too_narrow_verification_does_not_become_final() {
         let narrowed = test_answer("yes", Some(ERROR_SCOPE_TOO_NARROW));
 
@@ -776,6 +933,7 @@ mod tests {
             timestamp: crate::time::format_record_timestamp(0),
             number: 1,
             result,
+            to: crate::config_types::ExpectationTo::Agent,
             question: Some("Does it pass?".to_string()),
             expected_answer: Some("yes".to_string()),
             observed: observed.to_string(),

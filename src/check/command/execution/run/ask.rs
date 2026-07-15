@@ -3,7 +3,7 @@ use crate::check::command::args::parse_ask_command_args;
 use crate::check::core::AskCommandArgs;
 use crate::check::CheckRunCaches;
 use crate::cli::{AskFailure, CommandError};
-use crate::config_types::{AgentConfig, CheckConfig, CheckHooksConfig};
+use crate::config_types::{AgentConfig, CheckConfig};
 use crate::git::TreeSource;
 use crate::logs::DiagnosticLogWriter;
 use crate::platform::{install_check_signal_handlers, reset_check_interrupted};
@@ -22,7 +22,7 @@ pub(crate) fn run_ask_command(
     if command.in_place {
         return run_in_place_ask_command(root, &command);
     }
-    // xpec: 5
+    // xpec: f
     // "canon ask always asks" starts after parse/tree/log setup accepts the
     // invocation. These resolves validate the optional Git context for a
     // git-backed ask; they are not cache/config shortcuts. Once the command
@@ -60,7 +60,7 @@ fn run_in_place_ask_command(root: &Path, command: &AskCommandArgs) -> Result<(),
     let mut repo_cache = RepoInspectionCache::new();
     let mut check_caches = CheckRunCaches::new();
     let diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
-    // xpec: 5
+    // xpec: f
     // In-place ask has no Git-tree preparation. The check config is optional
     // agent context only; load errors fall back to the implementation default
     // agent instead of preventing the temporary ask xpec.
@@ -84,7 +84,7 @@ fn run_in_place_ask_command(root: &Path, command: &AskCommandArgs) -> Result<(),
 
 fn ask_query_config_from_optional_check_config(config: Result<CheckConfig, String>) -> CheckConfig {
     // `canon ask` always asks the evaluator. A loaded check config is only an
-    // optional source of resolved agent settings; check expectations and hooks
+    // optional source of resolved agent settings; check expectations
     // are discarded before query.rs builds the single temporary ask xpec.
     config
         .map(ask_query_config_from_check_config)
@@ -99,7 +99,6 @@ fn ask_query_config_with_agent(agent: AgentConfig) -> CheckConfig {
     CheckConfig {
         version: 1,
         agent,
-        hooks: CheckHooksConfig::default(),
         expectations: Vec::new(),
     }
 }
@@ -114,7 +113,7 @@ fn run_ask_query(
     check_caches: &mut CheckRunCaches,
 ) -> Result<(), CommandError> {
     // Ask receives an ask-only `CheckConfig`: agent settings may come from the
-    // expanded check config, but configured expectations/hooks are not selected.
+    // expanded check config, but configured expectations are not selected.
     // A prepared ask means parse/tree/log setup has accepted the invocation.
     // After that point there is no cache or last-result shortcut, and the
     // query path always sends an evaluator turn.
@@ -153,9 +152,9 @@ fn ask_failure_for_query_error(err: &CheckQueryError) -> AskFailure {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config_types::{CheckHookConfig, Expectation};
+    use crate::config_types::Expectation;
 
-    #[test] // xpec: 5,HW
+    #[test] // xpec: f,8
     fn ask_query_error_uses_typed_sentinel_command_error() {
         let result =
             ask_query_command_result(Err(CheckQueryError::Evaluator("query failed".to_string())));
@@ -167,31 +166,22 @@ mod tests {
         );
     }
 
-    #[test] // xpec: 5
+    #[test] // xpec: f
     fn ask_config_load_error_still_builds_temporary_query_config() {
         let config =
             ask_query_config_from_optional_check_config(Err("config unavailable".to_string()));
 
         assert!(config.expectations.is_empty());
-        assert!(config.hooks.on_start.is_empty());
-        assert!(config.hooks.on_pass.is_empty());
     }
 
-    #[test] // xpec: 5
-    fn ask_query_config_discards_loaded_check_expectations_and_hooks() {
+    #[test] // xpec: f
+    fn ask_query_config_discards_loaded_check_expectations() {
         let config = ask_query_config_from_optional_check_config(Ok(CheckConfig {
             version: 1,
             agent: AgentConfig::implementation_default(),
-            hooks: CheckHooksConfig {
-                on_start: vec![CheckHookConfig {
-                    print: Some("check-only hook".to_string()),
-                    input: None,
-                    exec: None,
-                    cases: Default::default(),
-                }],
-                on_pass: Vec::new(),
-            },
             expectations: vec![Expectation {
+                to: crate::config_types::ExpectationTo::Agent,
+                rank: 0,
                 q: "Does ask ignore configured check expectations?".to_string(),
                 a: "yes".to_string(),
                 question_context: String::new(),
@@ -205,7 +195,5 @@ mod tests {
         }));
 
         assert!(config.expectations.is_empty());
-        assert!(config.hooks.on_start.is_empty());
-        assert!(config.hooks.on_pass.is_empty());
     }
 }

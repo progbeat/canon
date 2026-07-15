@@ -87,7 +87,7 @@ mod tests {
         }
     }
 
-    // xpec: 1h
+    // xpec: j
     #[test]
     fn check_output_helpers_flush_eligible_stdout_fragments() {
         let events = Arc::new(Mutex::new(Vec::new()));

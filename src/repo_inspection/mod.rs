@@ -7,15 +7,12 @@ use crate::check::{
 };
 use crate::config_types::{CheckConfig, RawExpectationItem};
 use crate::fs_util::reject_symlink;
-use crate::git::{
-    read_git_blobs, resolve_git_path, staged_tracked_files, StagedTrackedFile, TreeSource,
-};
+use crate::git::{read_git_blobs, staged_tracked_files, StagedTrackedFile, TreeSource};
 use crate::platform::git_path_bytes;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-type GitPathCacheKey = (PathBuf, String);
 type GeneratorPathsCacheKey = (PathBuf, PathBuf, String, String);
 type InPlaceFileContentCacheKey = (PathBuf, PathBuf);
 type StagedFileContentCacheKey = (PathBuf, PathBuf);
@@ -26,7 +23,6 @@ type StagedBlobContents = BTreeMap<Vec<u8>, Vec<u8>>;
 
 #[derive(Default)]
 pub(crate) struct RepoInspectionCache {
-    git_paths: BTreeMap<GitPathCacheKey, Result<PathBuf, String>>,
     generator_paths: BTreeMap<GeneratorPathsCacheKey, Result<Vec<String>, String>>,
     // Per-file decoded content is derived from the root-level staged blob
     // batch below; cache misses here do not spawn additional git processes.
@@ -48,28 +44,18 @@ impl RepoInspectionCache {
         RepoInspectionCache::default()
     }
 
-    pub(crate) fn git_path(&mut self, root: &Path, path: &str) -> Result<PathBuf, String> {
-        let key = (root.to_path_buf(), path.to_string());
-        if let Some(cached) = self.git_paths.get(&key) {
-            return cached.clone();
-        }
-        let resolved = resolve_git_path(root, path);
-        self.git_paths.insert(key, resolved.clone());
-        resolved
-    }
-
     pub(crate) fn generator_paths(
         &mut self,
         root: &Path,
         config_path: &Path,
-        path: &str,
+        glob: &str,
         source: &CheckConfigSource,
     ) -> Result<Vec<String>, String> {
         let source_key = source.cache_key();
         let key = (
             root.to_path_buf(),
             config_path.to_path_buf(),
-            path.to_string(),
+            glob.to_string(),
             source_key,
         );
         if let Some(cached) = self.generator_paths.get(&key) {
@@ -77,13 +63,13 @@ impl RepoInspectionCache {
         }
         let expanded = match source {
             CheckConfigSource::Tree(TreeSource::Staged) => {
-                self.expand_staged_generator_paths(root, config_path, path)
+                self.expand_staged_generator_paths(root, config_path, glob)
             }
             CheckConfigSource::Tree(source) => {
-                self.expand_tree_generator_paths(root, config_path, path, source)
+                self.expand_tree_generator_paths(root, config_path, glob, source)
             }
             CheckConfigSource::InPlace => {
-                self.expand_in_place_generator_paths(root, config_path, path)
+                self.expand_in_place_generator_paths(root, config_path, glob)
             }
         };
         self.generator_paths.insert(key, expanded.clone());
@@ -109,14 +95,14 @@ impl RepoInspectionCache {
         &mut self,
         root: &Path,
         config_path: &Path,
-        path: &str,
+        glob: &str,
     ) -> Result<Vec<String>, String> {
         let staged_paths = self
             .staged_files(root)?
             .into_iter()
             .filter_map(|file| String::from_utf8(file.path).ok())
             .collect::<Vec<_>>();
-        expand_staged_generator_paths_from_listing(config_path, path, &staged_paths)
+        expand_staged_generator_paths_from_listing(config_path, glob, &staged_paths)
     }
 
     fn staged_file_content_from_batch(
@@ -180,7 +166,7 @@ impl RepoInspectionCache {
         &mut self,
         root: &Path,
         config_path: &Path,
-        path: &str,
+        glob: &str,
         source: &TreeSource,
     ) -> Result<Vec<String>, String> {
         let tree_paths = self
@@ -189,17 +175,17 @@ impl RepoInspectionCache {
             .filter(|file| file.is_blob_file_entry())
             .filter_map(|file| String::from_utf8(file.path).ok())
             .collect::<Vec<_>>();
-        expand_staged_generator_paths_from_listing(config_path, path, &tree_paths)
+        expand_staged_generator_paths_from_listing(config_path, glob, &tree_paths)
     }
 
     fn expand_in_place_generator_paths(
         &mut self,
         root: &Path,
         config_path: &Path,
-        path: &str,
+        glob: &str,
     ) -> Result<Vec<String>, String> {
         let files = self.in_place_files(root)?;
-        expand_staged_generator_paths_from_listing(config_path, path, &files)
+        expand_staged_generator_paths_from_listing(config_path, glob, &files)
     }
 
     fn tree_file_content_from_batch(

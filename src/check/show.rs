@@ -1,7 +1,7 @@
 use crate::check::command::output::{escape_check_output_text, write_stdout_record};
 use crate::check::interrogation::policy::initial_q_scope_for_fresh_interrogation;
 use crate::check::run::selection::{
-    expectation_identities, order_by_latest_non_pass, order_in_place_by_absent_non_pass_history,
+    expectation_identities, order_by_latest_fail, order_in_place_by_absent_fail_history,
     select_expectations_with_identities,
 };
 use crate::check::CHECK_PATH;
@@ -111,7 +111,7 @@ fn select_show_expectations_for_current_run(
     // `not:<ID-PREFIX>` exclusions before pathspec filtering.
     let mut selected =
         select_expectations_with_identities(request.config, &identities, request.selectors)?;
-    // xpec: G6
+    // xpec: qX
     // Dynamic `canon.show` supplies the current expectation here, so this
     // exclusion is applied after explicit selectors and before pathspec
     // filtering; even a direct selector cannot return the current xpec.
@@ -134,11 +134,11 @@ fn select_show_expectations_for_current_run(
     };
     Ok(match request.tree_source {
         Some(_) => {
-            order_by_latest_non_pass(request.root, filtered, request.xpec_state, |expectation| {
+            order_by_latest_fail(request.root, filtered, request.xpec_state, |expectation| {
                 expectation
             })?
         }
-        None => order_in_place_by_absent_non_pass_history(filtered),
+        None => order_in_place_by_absent_fail_history(filtered, |expectation| expectation),
     })
 }
 
@@ -329,6 +329,8 @@ mod tests {
             number: 1,
             id: "11111111111111111111".to_string(),
             display_id: "1".to_string(),
+            to: crate::config_types::ExpectationTo::Agent,
+            rank: 0,
             question: "Line one\nLine two".to_string(),
             expected_answer: "yes\tplease".to_string(),
             question_context: String::new(),
@@ -363,7 +365,7 @@ expectations:
         )
         .unwrap();
         git(&root, &["add", ".canon/check.yml"]);
-        let alpha_id = crate::hash::expectation_id("Does alpha pass?", "yes", "");
+        let alpha_id = crate::hash::expectation_id("Does alpha pass?", "agent", "yes", "");
         let selector = format!("not:{}", alpha_id);
 
         let mut output = Vec::new();
@@ -410,7 +412,7 @@ expectations:
         assert!(!output.contains("Does ignored source matter?"));
     }
 
-    #[test] // xpec: G6
+    #[test] // xpec: qX
     fn current_run_show_excludes_current_expectation_even_when_explicitly_selected() {
         let root = git_project("canon-show-excludes-current");
         fs::create_dir_all(root.join(".canon")).unwrap();
@@ -428,7 +430,7 @@ expectations:
         )
         .unwrap();
         git(&root, &["add", ".canon/check.yml"]);
-        let alpha_id = crate::hash::expectation_id("Does alpha pass?", "yes", "");
+        let alpha_id = crate::hash::expectation_id("Does alpha pass?", "agent", "yes", "");
         let selector = OsString::from(alpha_id.clone());
         let tree_source = TreeSource::Staged;
         let mut repo_cache = RepoInspectionCache::new();

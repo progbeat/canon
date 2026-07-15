@@ -7,6 +7,8 @@ use crate::config_types::{
     DEFAULT_DIFF_FROM,
 };
 use crate::repo_inspection::RepoInspectionCache;
+use minijinja::Environment;
+use serde_json::json;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -44,7 +46,6 @@ pub(crate) fn expand_raw_check_config_with_options(
     let RawCheckConfig {
         version,
         presets,
-        hooks,
         agent,
         expectations: raw_expectations,
     } = raw;
@@ -53,10 +54,6 @@ pub(crate) fn expand_raw_check_config_with_options(
     // agent/expectation fields and no preset map to inspect later.
     let raw_presets = raw_presets_from_config(presets, agent)?;
     let resolved_presets = resolve_presets(raw_presets)?;
-    let hooks = hooks
-        .map(crate::config_types::RawCheckHooksConfig::resolve)
-        .transpose()?
-        .unwrap_or_default();
     let default_agent_preset = options.default_agent_preset.unwrap_or("default");
     let default_agent = resolved_presets
         .get(default_agent_preset)
@@ -77,7 +74,6 @@ pub(crate) fn expand_raw_check_config_with_options(
     Ok(CheckConfig {
         version,
         agent: default_agent,
-        hooks,
         expectations,
     })
 }
@@ -113,6 +109,8 @@ impl RawExpectationExpansion<'_> {
                         diff_from,
                         target,
                         cooldown,
+                        to,
+                        rank,
                         settings,
                     } = common;
                     let question_context = resolved_question_context(question_context);
@@ -125,8 +123,10 @@ impl RawExpectationExpansion<'_> {
                         .map_err(|err| format!("expectation {} target: {}", item_number, err))?;
                     let agent = self.resolve_expectation_agent(&settings)?;
                     self.expectations.push(Expectation {
+                        to: to.unwrap_or_default(),
                         q: item.q,
                         a: item.a,
+                        rank: rank.unwrap_or_default(),
                         question_context,
                         diff_from,
                         diff_from_configured,
@@ -137,9 +137,9 @@ impl RawExpectationExpansion<'_> {
                     })
                 }
                 RawExpectationItem::Generator(item) => {
-                    // Generator items are the `path` + `q_template` + `a`
+                    // Generator items are the `glob` + `q_template` + `a`
                     // expectation form from the Expectations spec.
-                    self.expand_path_generator(config_path, index, item)?
+                    self.expand_glob_generator(config_path, index, item)?
                 }
                 RawExpectationItem::Include(item) => {
                     self.expand_include(config_path, index, item)?
@@ -150,15 +150,14 @@ impl RawExpectationExpansion<'_> {
         Ok(())
     }
 
-    fn expand_path_generator(
+    fn expand_glob_generator(
         &mut self,
         config_path: &Path,
         index: usize,
         item: RawGeneratorExpectation,
     ) -> Result<(), String> {
         let item_number = index + 1;
-        let files = self.expand_paths(config_path, &item.path, item_number, "path")?;
-        let uses_content = item.q.q_template.contains("{{content}}");
+        let files = self.expand_globs(config_path, &item.glob, item_number, "glob")?;
         let common = self.resolve_raw_expectation_common(item.common)?;
         let target = resolve_expectation_target(common.target.clone())
             .map_err(|err| format!("expectation {} target: {}", item_number, err))?;
@@ -166,15 +165,31 @@ impl RawExpectationExpansion<'_> {
         // it to a tree in `resolve_diff_from` using the active check runtime.
         let diff_from_configured = common.diff_from.is_some();
         for file in files {
-            let content = if uses_content {
-                self.read_expanded_file(&file)?
-            } else {
-                String::new()
-            };
-            let rendered_item_q = item.q.q_template.replace("{{content}}", &content);
+            let content = self.read_expanded_file(&file)?;
+            let mut environment = Environment::new();
+            environment.set_keep_trailing_newline(true);
+            let readable_path = file.clone();
+            environment.add_function("read", move |requested: String| {
+                if requested == readable_path {
+                    Ok(content.clone())
+                } else {
+                    Err(minijinja::Error::new(
+                        minijinja::ErrorKind::InvalidOperation,
+                        format!("q_template may read only its current path: {requested}"),
+                    ))
+                }
+            });
+            let template = environment
+                .template_from_str(&item.q.q_template)
+                .map_err(|err| format!("expectation {} q_template: {}", item_number, err))?;
+            let rendered_item_q = template
+                .render(json!({ "path": file }))
+                .map_err(|err| format!("expectation {} q_template: {}", item_number, err))?;
             self.expectations.push(Expectation {
+                to: common.to.unwrap_or_default(),
                 q: rendered_item_q,
                 a: item.a.clone(),
+                rank: common.rank.unwrap_or_default(),
                 question_context: resolved_question_context(common.question_context.clone()),
                 diff_from: resolved_expectation_diff_from(common.diff_from.clone()),
                 diff_from_configured,
@@ -194,7 +209,7 @@ impl RawExpectationExpansion<'_> {
         item: RawIncludeExpectation,
     ) -> Result<(), String> {
         let item_number = index + 1;
-        let files = self.expand_paths(config_path, &item.include, item_number, "include")?;
+        let files = self.expand_globs(config_path, &item.include, item_number, "include")?;
         for file in files {
             if self.include_stack.contains(&file) {
                 return Err(format!("recursive expectation include: {}", file));
@@ -221,10 +236,10 @@ impl RawExpectationExpansion<'_> {
         Ok(())
     }
 
-    fn expand_paths(
+    fn expand_globs(
         &mut self,
         config_path: &Path,
-        path: &str,
+        glob: &str,
         item_number: usize,
         label: &str,
     ) -> Result<Vec<String>, String> {
@@ -235,7 +250,7 @@ impl RawExpectationExpansion<'_> {
             )
         })?;
         let files = match self.cache.as_deref_mut() {
-            Some(cache) => cache.generator_paths(root, config_path, path, &self.source)?,
+            Some(cache) => cache.generator_paths(root, config_path, glob, &self.source)?,
             None => return Err("tree config expansion requires RepoInspectionCache".to_string()),
         };
         Ok(files)
@@ -360,6 +375,12 @@ pub(super) fn merge_raw_expectation_common_defaults(
     if common.cooldown.is_none() {
         common.cooldown = defaults.cooldown.clone();
     }
+    if common.to.is_none() {
+        common.to = defaults.to;
+    }
+    if common.rank.is_none() {
+        common.rank = defaults.rank;
+    }
     if common.settings.models.is_none() {
         common.settings.models = defaults.settings.models.clone();
     }
@@ -427,8 +448,8 @@ fn merge_raw_expectation_generator_shape_defaults(
     if fields.q_template.is_none() {
         fields.q_template = defaults.q_template.clone();
     }
-    if fields.path.is_none() {
-        fields.path = defaults.path.clone();
+    if fields.glob.is_none() {
+        fields.glob = defaults.glob.clone();
     }
 }
 
@@ -451,12 +472,12 @@ fn apply_raw_expansion_item_preset_defaults(
 
 fn raw_expectation_fields_from_preset(preset: &ResolvedPresetConfig) -> RawExpectationFields {
     RawExpectationFields {
-        // Preset `q` is the explicit-form question default. A path generator's
+        // Preset `q` is the explicit-form question default. A glob generator's
         // generated q is resolved from the item/preset `q_template`.
         explicit_q: preset.q.clone(),
         q_template: preset.q_template.clone(),
         a: preset.a.clone(),
-        path: preset.path.clone(),
+        glob: preset.glob.clone(),
         include: preset.include.clone(),
         common: preset.common.clone(),
     }

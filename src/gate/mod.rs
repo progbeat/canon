@@ -280,8 +280,18 @@ fn gate_cache_result_for_tree_at(
     };
     match hit.map(|hit| hit.status) {
         Some(CachedResultStatus::Pass) => Ok(GateCacheResult::Pass),
-        Some(CachedResultStatus::Fail) => Ok(GateCacheResult::Fail),
-        None => Ok(GateCacheResult::Missing),
+        None => {
+            let tree_oid = source.tree_oid_for_prompt_diff(root)?;
+            let failed_on_tree = xpec_state
+                .read_last_fail(root, expectation)?
+                .and_then(|result| result.checked_tree_oid)
+                .is_some_and(|checked_tree_oid| checked_tree_oid == tree_oid);
+            Ok(if failed_on_tree {
+                GateCacheResult::Fail
+            } else {
+                GateCacheResult::Missing
+            })
+        }
     }
 }
 

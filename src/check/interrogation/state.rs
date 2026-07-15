@@ -230,11 +230,7 @@ impl<'a> CheckRuntime<'a> {
             CheckRuntimeMode::Materialized {
                 persistent_history, ..
             } => persistent_history.then_some(self.root),
-            // In-place mode has no Git-backed persistent check-state target:
-            // persisted xpec last-result history is absent, so the Last
-            // Results files have no XPECS_DIR to read or update for this
-            // runtime.
-            CheckRuntimeMode::InPlace => None,
+            CheckRuntimeMode::InPlace => Some(self.root),
         }
     }
 
@@ -368,7 +364,7 @@ pub(crate) struct InterrogationRunState {
     pub(crate) session_instructions: BTreeMap<String, String>,
     pub(crate) session_roots_by_id: BTreeMap<String, PathBuf>,
     pub(crate) session_answered_short_ids: BTreeMap<String, BTreeSet<String>>,
-    // xpec: G6
+    // xpec: qX
     // Per-session memory of expectation IDs whose `canon.show` output reached
     // that evaluator thread; thread reuse filters consult this before reusing
     // the session for any of those expectations.
@@ -490,7 +486,7 @@ impl InterrogationRunState {
 mod tests {
     use super::*;
 
-    #[test] // xpec: G6
+    #[test] // xpec: qX
     fn session_dynamic_show_expectation_ids_are_session_scoped() {
         let mut state = InterrogationRunState::new(true).unwrap();
         state.record_session_dynamic_show_expectation_ids(
@@ -600,14 +596,13 @@ mod tests {
         let config = CheckConfig {
             version: 1,
             agent: AgentConfig::default(),
-            hooks: Default::default(),
             expectations: Vec::new(),
         };
         let runtime = CheckRuntime::in_place(&root, &config, false);
         let requested_scope = vec!["src".to_string()];
 
         assert!(runtime.tree_source().is_none());
-        assert!(runtime.persistent_check_state_root().is_none());
+        assert_eq!(runtime.persistent_check_state_root(), Some(root.as_path()));
         assert_eq!(runtime.checked_tree_oid(), IN_PLACE_VISIBLE_TREE_OID);
         assert_eq!(runtime.against_tree_oid(), IN_PLACE_VISIBLE_TREE_OID);
         assert_eq!(
@@ -661,7 +656,6 @@ mod tests {
         let config = CheckConfig {
             version: 1,
             agent: AgentConfig::default(),
-            hooks: Default::default(),
             expectations: Vec::new(),
         };
         let source = TreeSource::Staged;
@@ -693,7 +687,6 @@ mod tests {
         let config = CheckConfig {
             version: 1,
             agent: AgentConfig::default(),
-            hooks: Default::default(),
             expectations: Vec::new(),
         };
         let runtime = CheckRuntime::in_place(&root, &config, false);

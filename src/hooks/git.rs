@@ -3,7 +3,6 @@ use super::{
     DEFAULT_GIT_PRE_COMMIT_HOOK_PATH, DEFAULT_PRE_COMMIT_GIT_PATH, GIT_HOOKS_PATH,
     GIT_WORKTREE_REQUIRED_FOR_HOOK_INSTALL, PRE_COMMIT_HOOK_PATH,
 };
-use crate::git::resolve_git_path;
 use crate::platform;
 use crate::project::command_output_trimmed;
 use std::path::{Component, Path, PathBuf};
@@ -174,22 +173,13 @@ impl HookInstallPreflight {
 }
 
 fn canon_git_hooks_path(root: &Path, is_git_worktree: bool) -> Result<PathBuf, String> {
-    canon_state_git_path(root, is_git_worktree, GIT_HOOKS_PATH)
+    let _ = is_git_worktree;
+    crate::state_paths::canon_state_path(root, GIT_HOOKS_PATH)
 }
 
 fn canon_pre_commit_hook_path(root: &Path, is_git_worktree: bool) -> Result<PathBuf, String> {
-    canon_state_git_path(root, is_git_worktree, PRE_COMMIT_HOOK_PATH)
-}
-
-fn canon_state_git_path(
-    root: &Path,
-    is_git_worktree: bool,
-    git_path: &str,
-) -> Result<PathBuf, String> {
-    if is_git_worktree {
-        return resolve_git_path(root, git_path);
-    }
-    Ok(root.join(".git").join(git_path))
+    let _ = is_git_worktree;
+    crate::state_paths::canon_state_path(root, PRE_COMMIT_HOOK_PATH)
 }
 
 fn default_git_pre_commit_hook_path(root: &Path, is_git_worktree: bool) -> Result<PathBuf, String> {

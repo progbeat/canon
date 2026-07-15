@@ -301,6 +301,8 @@ fn temporary_query_expectation(question: &str, agent: &AgentConfig) -> ResolvedE
         number: 0,
         id: String::new(),
         display_id: "q".to_string(),
+        to: crate::config_types::ExpectationTo::Agent,
+        rank: 0,
         question: question.to_string(),
         expected_answer: String::new(),
         question_context: String::new(),
@@ -328,7 +330,7 @@ mod tests {
         assert!(expectation.id.is_empty());
     }
 
-    #[test] // xpec: 5
+    #[test] // xpec: f
     fn query_failure_answer_reports_runtime_error_as_error_text() {
         let answer = query_failure_answer("transport failed");
 

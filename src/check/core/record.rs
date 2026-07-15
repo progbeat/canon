@@ -1,5 +1,6 @@
 use super::answer::{default_check_result, CheckResult};
 use super::expectation::ResolvedExpectation;
+use crate::config_types::ExpectationTo;
 use crate::time::{format_record_timestamp, unix_timestamp};
 use serde::Deserialize;
 
@@ -20,6 +21,8 @@ pub(crate) struct CheckRecord {
     pub(crate) number: usize,
     #[serde(default = "default_check_result")]
     pub(crate) result: CheckResult,
+    #[serde(default, skip)]
+    pub(crate) to: ExpectationTo,
     #[serde(default)]
     #[serde(alias = "prompt")]
     pub(crate) question: Option<String>,
@@ -94,6 +97,7 @@ impl CheckRecord {
             display_id: expectation.display_id.clone(),
             number: expectation.number,
             result: outcome.result,
+            to: expectation.to,
             question: Some(expectation.question.clone()),
             expected_answer: Some(expectation.expected_answer.clone()),
             observed: outcome.observed,

@@ -22,7 +22,7 @@ mod usage;
 pub(crate) use escape::escape_check_output_text;
 pub(crate) use query::finish_query_output;
 pub(crate) use record::{
-    start_expectation_report_output, start_query_report_output, write_cached_non_pass_output,
+    start_expectation_report_output, start_query_report_output,
     write_result_output_without_started_report, StartedExpectationReportOutput,
 };
 pub(crate) use shared::{write_stdout_record, SharedCheckOutput};
@@ -36,12 +36,11 @@ mod tests {
     use super::{
         finish_query_output, render_check_agent_messages, render_token_usage_summary,
         start_expectation_report_output, start_query_report_output, summary_outcome_counts,
-        write_cached_non_pass_output, write_result_output_without_started_report,
-        write_summary_line, SharedCheckOutput,
+        write_result_output_without_started_report, write_summary_line, SharedCheckOutput,
     };
     use crate::check::core::{
-        BlockedCheckHook, CachedExpectation, CheckRecord, CheckResult, CheckRunReport,
-        ParsedAnswer, ERROR_INVALID_QUESTION,
+        CachedExpectation, CheckRecord, CheckResult, CheckRunReport, ParsedAnswer,
+        ERROR_INVALID_QUESTION,
     };
     use crate::check::ResolvedExpectation;
     use crate::config_types::AgentConfig;
@@ -74,26 +73,14 @@ mod tests {
         write_result_output_without_started_report(&mut result_output, &passing_record()).unwrap();
 
         let rendered = String::from_utf8(bytes).unwrap();
-        assert_result_entry(&rendered, "OK");
+        assert_result_entry(&rendered, "PASS");
     }
 
-    #[test] // xpec: HW
-    fn cached_non_pass_output_matches_documented_record_shape() {
-        let mut failed_bytes = Vec::new();
-        let mut failed_output = Some(&mut failed_bytes as &mut dyn Write);
-
-        write_cached_non_pass_output(&mut failed_output, &failed_record()).unwrap();
-
-        let failed_rendered = String::from_utf8(failed_bytes).unwrap();
-        assert_result_entry(&failed_rendered, "FAILED");
-    }
-
-    #[test] // xpec: HW
+    #[test] // xpec: 8
     fn summary_and_token_usage_output_match_documented_lines() {
         let report = CheckRunReport {
             records: vec![passing_record()],
             cached: Vec::new(),
-            blocked_hooks: Vec::new(),
             skipped: 2,
         };
         let mut summary_bytes = Vec::new();
@@ -118,33 +105,11 @@ mod tests {
         );
     }
 
-    #[test] // xpec: HW
-    fn summary_orders_blocked_before_other_outcomes() {
-        let report = CheckRunReport {
-            records: vec![
-                failed_record_with_id("11111111111111111111", "j"),
-                passing_record_with_id("22222222222222222222", "k"),
-            ],
-            cached: Vec::new(),
-            blocked_hooks: vec![BlockedCheckHook {
-                repair_instruction: "repair".to_string(),
-            }],
-            skipped: 3,
-        };
-        let mut summary_bytes = Vec::new();
-
-        write_summary_line(&mut summary_bytes, &report, Duration::from_millis(500)).unwrap();
-
-        let summary = String::from_utf8(summary_bytes).unwrap();
-        assert!(summary.contains(" 1 blocked, 1 failed, 1 passed, 3 pending in 0.50s "));
-    }
-
-    #[test] // xpec: et
+    #[test] // xpec: 8,ZU
     fn failed_result_output_matches_documented_detail_lines() {
         let mut bytes = Vec::new();
         let mut result_output = Some(&mut bytes as &mut dyn Write);
         let mut record = failed_record();
-        record.question_scope_suggestion = Some(vec!["src/check".to_string()]);
         record.diff_from = Some(":against-tree".to_string());
         record.diff_from_tree_oid = Some("1234567890abcdef1234567890abcdef12345678".to_string());
         record.diff_from_tree_oid_abbrev = Some("1234567".to_string());
@@ -152,16 +117,15 @@ mod tests {
         write_result_output_without_started_report(&mut result_output, &record).unwrap();
 
         let rendered = String::from_utf8(bytes).unwrap();
-        assert_result_entry(&rendered, "FAILED");
+        assert_result_entry(&rendered, "FAIL");
         assert!(rendered.contains("Does it pass?\n"));
-        assert!(rendered.contains("Diff-from: 1234567 (:against-tree)\n"));
-        assert!(rendered.contains("Expected: yes\n"));
-        assert!(rendered.contains("Observed: no\n"));
-        assert!(rendered.contains("Evidence: test evidence\n"));
-        assert!(rendered.contains("Suggested q-scope: [\"src/check\"]\n"));
+        assert!(rendered.contains("diff-from: 1234567 (:against-tree)\n"));
+        assert!(rendered.contains("expected: yes\n"));
+        assert!(rendered.contains("observed: no\n"));
+        assert!(rendered.contains("evidence: test evidence\n"));
     }
 
-    #[test] // xpec: et
+    #[test] // xpec: 8
     fn error_result_output_matches_documented_detail_lines() {
         let mut bytes = Vec::new();
         let mut result_output = Some(&mut bytes as &mut dyn Write);
@@ -174,14 +138,11 @@ mod tests {
         write_result_output_without_started_report(&mut result_output, &record).unwrap();
 
         let rendered = String::from_utf8(bytes).unwrap();
-        assert_result_entry(&rendered, "ERROR");
-        assert!(rendered.contains("Does it pass?\n"));
-        assert!(rendered.contains("Diff-from: abcdef1 (:checkpoint)\n"));
-        assert!(rendered.contains("Error: InvalidQuestion\n"));
-        assert!(rendered.contains("Evidence: test evidence\n"));
-        assert!(!rendered.contains("Expected:"));
-        assert!(!rendered.contains("Observed:"));
-        assert!(!rendered.contains("Suggested q-scope:"));
+        assert_result_entry(&rendered, "FAIL");
+        assert!(rendered.contains("error: InvalidQuestion\n"));
+        assert!(!rendered.contains("expected:"));
+        assert!(!rendered.contains("observed:"));
+        assert!(!rendered.contains("evidence:"));
     }
 
     #[test]
@@ -196,7 +157,7 @@ mod tests {
         assert!(!finished.stdout_completion_failed());
 
         let completed = captured_string(&bytes);
-        assert_result_entry(&completed, "OK");
+        assert_result_entry(&completed, "PASS");
     }
 
     #[test]
@@ -213,7 +174,7 @@ mod tests {
         assert!(!finished.stdout_completion_failed());
     }
 
-    #[test] // xpec: 5
+    #[test] // xpec: f
     fn query_output_starts_with_progress_timeline_line() {
         let bytes = Arc::new(Mutex::new(Vec::new()));
         let output = SharedCheckOutput::new(Box::new(CapturedOutput {
@@ -230,30 +191,30 @@ mod tests {
 
         assert_eq!(
             captured_string(&bytes),
-            ".\nObserved: yes\nEvidence: test evidence\nSuggested q-scope: [\"src/check\"]\n"
+            ".\nobserved: yes\nevidence: test evidence\nq-scope-suggestion: [\"src/check\"]\n"
         );
     }
 
     #[test]
     fn agent_messages_cover_documented_actions() {
         assert!(has_action(
-            &render_check_agent_messages(&issues(&["a"]), &[], 0, 0, 0),
+            &render_check_agent_messages(&issues(&["a"]), 0, 0, 0),
             "Fix the issues"
         ));
         assert!(has_action(
-            &render_check_agent_messages(&[], &[], 0, 0, 0),
+            &render_check_agent_messages(&[], 0, 0, 0),
             "All checks passed"
         ));
         assert!(has_action(
-            &render_check_agent_messages(&[], &[], 1, 0, 0),
+            &render_check_agent_messages(&[], 1, 0, 0),
             "Commit the staged changes"
         ));
         assert!(has_action(
-            &render_check_agent_messages(&issues(&["a"]), &[], 2, 0, 1),
+            &render_check_agent_messages(&issues(&["a"]), 2, 0, 1),
             "Then fix the remaining issues"
         ));
         assert!(!has_action(
-            &render_check_agent_messages(&issues(&["a"]), &[], 1, 1, 0),
+            &render_check_agent_messages(&issues(&["a"]), 1, 1, 0),
             "Commit the staged changes"
         ));
     }
@@ -312,6 +273,8 @@ mod tests {
                 number: record.number,
                 id: record.id.clone(),
                 display_id: record.display_id.clone(),
+                to: crate::config_types::ExpectationTo::Agent,
+                rank: 0,
                 question: record.question_text().to_string(),
                 expected_answer: record.expected_answer_text().unwrap_or("yes").to_string(),
                 question_context: String::new(),
@@ -340,6 +303,7 @@ mod tests {
             timestamp: "1970-01-01T00:00:00Z".to_string(),
             number: 1,
             result,
+            to: crate::config_types::ExpectationTo::Agent,
             question: Some("Does it pass?".to_string()),
             expected_answer: Some("yes".to_string()),
             observed: observed.to_string(),

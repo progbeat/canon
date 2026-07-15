@@ -1,9 +1,7 @@
 mod fs;
 mod git;
 
-// This module manages Git pre-commit hook installation only. Configured
-// `canon check` lifecycle hooks are parsed into `CheckConfig.hooks` and
-// executed from `src/check/command/execution/hooks.rs`.
+// This module manages Git pre-commit hook installation only.
 use self::fs::make_executable;
 use self::git::{
     configure_git_hooks_path, git_hooks_path_matches, has_canon_git_hooks_path,
@@ -17,14 +15,12 @@ use std::ffi::OsString;
 use std::path::Path;
 
 // User-facing output names the repository's pre-commit hook role at Git's
-// default hook path. The managed script is stored under Canon's git-path state
+// default hook path. The managed script is stored under Canon's state
 // directory, and `core.hooksPath` points Git at that resolved hook directory.
 pub(super) const DEFAULT_GIT_PRE_COMMIT_HOOK_PATH: &str = ".git/hooks/pre-commit";
 pub(super) const DEFAULT_PRE_COMMIT_GIT_PATH: &str = "hooks/pre-commit";
-// `${CANON_STATE_DIR}/hooks`, resolved through `git rev-parse --git-path`.
-pub(super) const GIT_HOOKS_PATH: &str = "canon/hooks";
-// `${CANON_STATE_DIR}/hooks/pre-commit`, resolved through `git rev-parse --git-path`.
-pub(super) const PRE_COMMIT_HOOK_PATH: &str = "canon/hooks/pre-commit";
+pub(super) const GIT_HOOKS_PATH: &str = "hooks";
+pub(super) const PRE_COMMIT_HOOK_PATH: &str = "hooks/pre-commit";
 const DEFAULT_PRE_COMMIT_HOOK: &str = include_str!("../../resources/git-hooks/pre-commit");
 const PRE_COMMIT_HOOK_MANUAL_ADVICE: &str =
     "Can't safely install pre-commit hook.\n▷ Add `canon gate` manually to the existing pre-commit setup or ask a human to handle it.";

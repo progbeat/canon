@@ -69,8 +69,10 @@ fn raw_preset_from_legacy_agent(agent: RawLegacyAgentConfig) -> RawPresetConfig 
         q: None,
         q_template: None,
         a: None,
-        path: None,
+        glob: None,
         include: None,
+        to: None,
+        rank: None,
         question_context: None,
         diff_from: None,
         target: None,
@@ -120,8 +122,8 @@ fn apply_raw_preset(preset: &mut ResolvedPresetConfig, raw: &RawPresetConfig) {
     if let Some(a) = &raw.a {
         preset.a = Some(a.clone());
     }
-    if let Some(path) = &raw.path {
-        preset.path = Some(path.clone());
+    if let Some(glob) = &raw.glob {
+        preset.glob = Some(glob.clone());
     }
     if let Some(include) = &raw.include {
         preset.include = Some(include.clone());
@@ -138,6 +140,12 @@ fn apply_raw_preset(preset: &mut ResolvedPresetConfig, raw: &RawPresetConfig) {
     }
     if let Some(cooldown) = &raw.cooldown {
         common.cooldown = Some(cooldown.clone());
+    }
+    if let Some(to) = raw.to {
+        common.to = Some(to);
+    }
+    if let Some(rank) = raw.rank {
+        common.rank = Some(rank);
     }
     if let Some(models) = &raw.models {
         common.settings.models = Some(models.clone());
