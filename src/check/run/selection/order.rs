@@ -69,7 +69,7 @@ struct OrderedByLatestFail<T> {
 mod tests {
     use super::order_by_latest_fail_with;
 
-    #[test] // xpec: Un
+    #[test] // xpec: cv
     fn rank_precedes_latest_fail_and_ties_remain_stable() {
         let items = vec![
             ("rank-zero-old", 0, 1),

@@ -91,7 +91,7 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
     expectation: &ResolvedExpectation,
 ) -> Result<ExpectationRunOutcome, String> {
-    // xpec: ZU
+    // xpec: 8s
     assert!(
         matches!(
             expectation.to,
@@ -302,12 +302,12 @@ fn run_direct_expectation<R: EvaluatorRunner>(
             diff_from_tree_oid_abbrev: None,
         },
     )?;
-    // xpec: ZU
+    // xpec: 8s
     assert!(
         matches!(record.result, CheckResult::Pass | CheckResult::Fail),
         "a direct xpec with an expected answer must finish as PASS or FAIL"
     );
-    // xpec: ZU
+    // xpec: 8s
     assert!(
         record.error.is_none() || record.result == CheckResult::Fail,
         "an xpec response error must produce FAIL"
@@ -464,7 +464,7 @@ fn record_finished_expectation<R: EvaluatorRunner>(
 }
 
 fn assert_final_check_result_has_no_scope_too_narrow(record: &CheckRecord) {
-    // xpec: Hy
+    // xpec: nO
     assert_ne!(
         record.error.as_deref(),
         Some(ERROR_SCOPE_TOO_NARROW),
@@ -702,7 +702,7 @@ fn q_scope_verification_result_becomes_final(narrowed: &CheckRecord) -> bool {
         // The verification result is not final here: it only proves that the
         // proposed narrowed q-scope is too narrow, so the initial answer remains
         // the final evaluator response for the expectation.
-        // xpec: MR,Hy
+        // xpec: mh,nO
         assert!(
             !q_scope_verification_result_is_accepted(narrowed),
             "ScopeTooNarrow q-scope verification must not become a user-visible final check result"
@@ -718,7 +718,7 @@ fn q_scope_verification_result_is_accepted(narrowed: &CheckRecord) -> bool {
 
 fn temporary_q_scope_verification_answer_becomes_final(narrowed: &InterrogationAnswer) -> bool {
     if narrowed.answer.error.as_deref() == Some(ERROR_SCOPE_TOO_NARROW) {
-        // xpec: MR
+        // xpec: mh
         assert!(
             !temporary_q_scope_verification_answer_is_accepted(narrowed),
             "ScopeTooNarrow q-scope verification must not become a user-visible final query result"
@@ -879,21 +879,21 @@ mod tests {
     };
     use crate::hash::full_scope;
 
-    #[test] // xpec: MR,Hy
+    #[test] // xpec: mh,nO
     fn q_scope_verification_scope_too_narrow_rejects_scope_without_replacing_initial_result() {
         let narrowed = test_record(CheckResult::Fail, Some(ERROR_SCOPE_TOO_NARROW));
 
         assert!(!q_scope_verification_result_becomes_final(&narrowed));
     }
 
-    #[test] // xpec: MR
+    #[test] // xpec: mh
     fn q_scope_verification_invalid_question_replaces_initial_result() {
         let narrowed = test_record(CheckResult::Fail, Some(ERROR_INVALID_QUESTION));
 
         assert!(q_scope_verification_result_becomes_final(&narrowed));
     }
 
-    #[test] // xpec: MR
+    #[test] // xpec: mh
     fn q_scope_verification_answer_result_becomes_final() {
         let fail = test_record(CheckResult::Fail, None);
         let pass = test_record(CheckResult::Pass, None);
@@ -902,7 +902,7 @@ mod tests {
         assert!(q_scope_verification_result_becomes_final(&pass));
     }
 
-    #[test] // xpec: MR
+    #[test] // xpec: mh
     fn temporary_verification_answer_becomes_final_even_when_observed_changes() {
         let changed = test_answer("no", None);
 
@@ -911,7 +911,7 @@ mod tests {
         ));
     }
 
-    #[test] // xpec: MR,Hy
+    #[test] // xpec: mh,nO
     fn temporary_scope_too_narrow_verification_does_not_become_final() {
         let narrowed = test_answer("yes", Some(ERROR_SCOPE_TOO_NARROW));
 

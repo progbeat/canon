@@ -19,7 +19,12 @@ pub(crate) fn expectation_id(
     let context_hash = hash_60(question_context.as_bytes());
     let mut input = Vec::new();
     push_expectation_id_frame(&mut input, "question", question.as_bytes());
-    push_expectation_id_frame(&mut input, "to", to.as_bytes());
+    // Preserve the established IDs (and their cached results) for the default
+    // agent addressee. Non-default addressees add a discriminator so otherwise
+    // identical agent, caller, and shell xpecs still have distinct IDs.
+    if to != "agent" {
+        push_expectation_id_frame(&mut input, "to", to.as_bytes());
+    }
     push_expectation_id_frame(&mut input, "expectedAnswer", expected_answer.as_bytes());
     push_expectation_id_frame(&mut input, "instructionsHash", context_hash.as_bytes());
     expectation_id_base62_20(&input)
@@ -77,7 +82,7 @@ fn encode_base62_20(mut value: u128) -> String {
 mod tests {
     use super::expectation_id;
 
-    #[test] // xpec: Wf
+    #[test] // xpec: eP
     fn expectation_id_changes_when_expected_answer_changes() {
         let yes = expectation_id("Does it pass?", "agent", "yes", "");
         let no = expectation_id("Does it pass?", "agent", "no", "");
@@ -85,11 +90,20 @@ mod tests {
         assert_ne!(yes, no);
     }
 
-    #[test] // xpec: Wf
+    #[test] // xpec: eP
     fn expectation_id_changes_when_addressee_changes() {
         let agent = expectation_id("Does it pass?", "agent", "yes", "");
         let caller = expectation_id("Does it pass?", "caller", "yes", "");
 
-        assert_ne!(agent, caller);
+        assert_ne!(agent, caller, "the xpec ID must distinguish addressees");
+    }
+
+    #[test] // xpec: AB,eP
+    fn default_agent_id_preserves_existing_references() {
+        assert_eq!(
+            expectation_id("2+2=?", "agent", "4", ""),
+            "3nSMjraHbFW7BMLJ4AcO",
+            "the default-agent xpec ID must preserve existing canon references"
+        );
     }
 }

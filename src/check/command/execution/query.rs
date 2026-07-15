@@ -330,7 +330,7 @@ mod tests {
         assert!(expectation.id.is_empty());
     }
 
-    #[test] // xpec: f
+    #[test] // xpec: 0N
     fn query_failure_answer_reports_runtime_error_as_error_text() {
         let answer = query_failure_answer("transport failed");
 

@@ -76,7 +76,7 @@ mod tests {
         assert_result_entry(&rendered, "PASS");
     }
 
-    #[test] // xpec: 8
+    #[test] // xpec: AL
     fn summary_and_token_usage_output_match_documented_lines() {
         let report = CheckRunReport {
             records: vec![passing_record()],
@@ -105,7 +105,7 @@ mod tests {
         );
     }
 
-    #[test] // xpec: 8,ZU
+    #[test] // xpec: AL,8s
     fn failed_result_output_matches_documented_detail_lines() {
         let mut bytes = Vec::new();
         let mut result_output = Some(&mut bytes as &mut dyn Write);
@@ -125,7 +125,7 @@ mod tests {
         assert!(rendered.contains("evidence: test evidence\n"));
     }
 
-    #[test] // xpec: 8
+    #[test] // xpec: AL
     fn error_result_output_matches_documented_detail_lines() {
         let mut bytes = Vec::new();
         let mut result_output = Some(&mut bytes as &mut dyn Write);
@@ -174,7 +174,7 @@ mod tests {
         assert!(!finished.stdout_completion_failed());
     }
 
-    #[test] // xpec: f
+    #[test] // xpec: 0N
     fn query_output_starts_with_progress_timeline_line() {
         let bytes = Arc::new(Mutex::new(Vec::new()));
         let output = SharedCheckOutput::new(Box::new(CapturedOutput {

@@ -476,7 +476,7 @@ mod tests {
     }
 
     #[test]
-    // xpec: Mx
+    // xpec: Df
     fn in_place_rejects_git_backed_only_config_after_expansion() {
         let agent = AgentConfig::default();
         let mut item = expectation(&agent, None);

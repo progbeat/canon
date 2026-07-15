@@ -31,7 +31,7 @@ fn init_git_repo(repo: &Path) {
         .current_dir(repo)
         .output()
         .unwrap();
-    // xpec: ae
+    // xpec: C
     assert!(
         output.status.success(),
         "{}",
@@ -45,7 +45,7 @@ fn git_path(repo: &Path, path: &str) -> PathBuf {
         .current_dir(repo)
         .output()
         .unwrap();
-    // xpec: ae
+    // xpec: C
     assert!(
         output.status.success(),
         "{}",
@@ -72,7 +72,7 @@ fn read_only_last_result(xpecs_dir: &Path, file_name: &str) -> serde_json::Value
     serde_json::from_str(&fs::read_to_string(xpec_dir.join(file_name)).unwrap()).unwrap()
 }
 
-// xpec: ae
+// xpec: C
 #[test]
 fn init_creates_default_template_and_refuses_overwrite() {
     let repo = temp_repo("canon-init-example");
@@ -110,7 +110,7 @@ fn init_creates_default_template_and_refuses_overwrite() {
     );
 }
 
-// xpec: ae
+// xpec: C
 #[test]
 fn pre_commit_commands_render_documented_messages() {
     let repo = temp_repo("canon-pre-commit-example");
@@ -154,7 +154,7 @@ fn pre_commit_commands_render_documented_messages() {
     );
 }
 
-// xpec: ae
+// xpec: C
 #[test]
 fn pre_commit_install_rejects_existing_default_hook() {
     let repo = temp_repo("canon-pre-commit-existing-example");
@@ -177,7 +177,7 @@ fn pre_commit_install_rejects_existing_default_hook() {
     );
 }
 
-// xpec: ZU
+// xpec: 8s
 #[test]
 fn caller_xpec_wrong_answer_fails_with_expected_answer() {
     let repo = temp_repo("canon-check-caller-xpec");
@@ -200,7 +200,7 @@ expectations:
         .current_dir(&repo)
         .output()
         .unwrap();
-    // xpec: ZU
+    // xpec: 8s
     assert!(
         add.status.success(),
         "{}",
@@ -218,32 +218,32 @@ expectations:
     child.stdin.take().unwrap().write_all(b"fail\n").unwrap();
     let output = child.wait_with_output().unwrap();
 
-    // xpec: ZU
+    // xpec: 8s
     assert!(!output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    // xpec: ZU
+    // xpec: 8s
     assert!(stdout.starts_with("Type pass: "));
-    // xpec: ZU
+    // xpec: 8s
     assert!(stdout.contains(". FAIL\nexpected: pass\n"));
-    // xpec: 8
+    // xpec: AL
     assert!(stdout.contains(" 1 failed in "));
     let stderr = String::from_utf8(output.stderr).unwrap();
-    // xpec: 8
+    // xpec: AL
     assert_eq!(
         stderr,
         "Token usage: total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n"
     );
     let last_fail = read_only_last_result(&repo.join(".git/canon/xpecs"), "last-fail.json");
-    // xpec: mO
+    // xpec: nv
     assert_eq!(last_fail["status"], "fail");
-    // xpec: mO
+    // xpec: nv
     assert!(last_fail.get("checkedTreeOid").is_some());
-    // xpec: mO
+    // xpec: nv
     assert!(last_fail.get("visibleTreeOid").is_none());
     let _ = fs::remove_dir_all(&repo);
 }
 
-// xpec: ZU
+// xpec: 8s
 #[test]
 fn in_place_shell_xpec_reports_transcript_and_exit_code() {
     let repo = temp_repo("canon-in-place-shell-xpec");
@@ -272,39 +272,39 @@ expectations:
     drop(child.stdin.take());
     let output = child.wait_with_output().unwrap();
 
-    // xpec: ZU
+    // xpec: 8s
     assert!(!output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    // xpec: ZU
+    // xpec: 8s
     assert!(stdout.contains(
         ". FAIL\n│ $ printf \"stdout\\n\"; printf \"stderr\\n\" >&2; printf \"after\\n\"; exit 3\n\
          │ stdout\n│ stderr\n│ after\n"
     ));
-    // xpec: ZU
+    // xpec: 8s
     assert!(stdout.contains("Command exited with code 3 (expected 0).\n"));
-    // xpec: 8
+    // xpec: AL
     assert!(stdout.contains(" 1 failed in "));
     let stderr = String::from_utf8(output.stderr).unwrap();
-    // xpec: 8
+    // xpec: AL
     assert_eq!(
         stderr,
         "Token usage: total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n"
     );
     let last_fail = read_only_last_result(&repo.join("state/xpecs"), "last-fail.json");
-    // xpec: mO,Mx,Wf
+    // xpec: nv,Df,eP
     assert_eq!(last_fail["status"], "fail");
-    // xpec: mO,Mx
+    // xpec: nv,Df
     assert!(last_fail.get("qScope").is_none());
-    // xpec: mO,Mx
+    // xpec: nv,Df
     assert!(last_fail.get("visibleScope").is_none());
-    // xpec: mO,Mx
+    // xpec: nv,Df
     assert!(last_fail.get("checkedTreeOid").is_none());
-    // xpec: mO,Mx
+    // xpec: nv,Df
     assert!(last_fail.get("visibleTreeOid").is_none());
     let _ = fs::remove_dir_all(&repo);
 }
 
-// xpec: 8,Mx
+// xpec: AL,Df
 #[test]
 fn in_place_prohibited_expectation_fields_fail_before_evaluation() {
     let repo = temp_repo("canon-in-place-invalid-config-before-evaluation");
@@ -334,9 +334,9 @@ expectations:
 
     assert!(!output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    // xpec: 8,Mx
+    // xpec: AL,Df
     assert!(stdout.contains(" 0 passed in "));
-    // xpec: 8,Mx
+    // xpec: AL,Df
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
         format!(
@@ -345,7 +345,7 @@ expectations:
     );
 }
 
-// xpec: ae
+// xpec: C
 #[test]
 fn gate_rejects_mixed_canon_and_implementation_changes() {
     let repo = temp_repo("canon-gate-example");
@@ -381,7 +381,7 @@ fn gate_rejects_mixed_canon_and_implementation_changes() {
     );
 }
 
-// xpec: ae
+// xpec: C
 #[test]
 fn gate_passes_canon_only_staged_config_deletion() {
     let repo = temp_repo("canon-gate-canon-only-example");
@@ -448,7 +448,7 @@ fn gate_passes_canon_only_staged_config_deletion() {
     assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
 }
 
-// xpec: ae
+// xpec: C
 #[test]
 fn gate_passes_non_canon_staged_change_without_config() {
     let repo = temp_repo("canon-gate-no-config-example");
@@ -478,7 +478,7 @@ fn gate_passes_non_canon_staged_change_without_config() {
     assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
 }
 
-// xpec: ae,8
+// xpec: C,AL
 #[test]
 fn check_without_config_renders_documented_recovery_message() {
     let repo = temp_repo("canon-missing-config-example");

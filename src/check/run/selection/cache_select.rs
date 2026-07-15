@@ -93,7 +93,7 @@ mod tests {
     use std::process::{self, Command};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test] // xpec: CQ,Du
+    #[test] // xpec: jz,E
     fn default_runs_reuse_cached_results() {
         let root = git_project("default-reuses-cache");
         fs::create_dir_all(root.join("src")).unwrap();
@@ -122,7 +122,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test] // xpec: Du
+    #[test] // xpec: E
     fn selector_mode_forces_evaluation_despite_cached_results() {
         let root = git_project("selector-cache-continues");
         fs::create_dir_all(root.join("src")).unwrap();
@@ -159,7 +159,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test] // xpec: Du
+    #[test] // xpec: E
     fn default_fail_history_leaves_candidates_selected() {
         let root = git_project("default-fail-history-does-not-cache");
         fs::create_dir_all(root.join("src")).unwrap();

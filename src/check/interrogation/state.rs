@@ -364,7 +364,7 @@ pub(crate) struct InterrogationRunState {
     pub(crate) session_instructions: BTreeMap<String, String>,
     pub(crate) session_roots_by_id: BTreeMap<String, PathBuf>,
     pub(crate) session_answered_short_ids: BTreeMap<String, BTreeSet<String>>,
-    // xpec: qX
+    // xpec: F
     // Per-session memory of expectation IDs whose `canon.show` output reached
     // that evaluator thread; thread reuse filters consult this before reusing
     // the session for any of those expectations.
@@ -486,7 +486,7 @@ impl InterrogationRunState {
 mod tests {
     use super::*;
 
-    #[test] // xpec: qX
+    #[test] // xpec: F
     fn session_dynamic_show_expectation_ids_are_session_scoped() {
         let mut state = InterrogationRunState::new(true).unwrap();
         state.record_session_dynamic_show_expectation_ids(

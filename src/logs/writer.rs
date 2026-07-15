@@ -233,7 +233,7 @@ mod tests {
     use std::process::{self, Command};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test] // xpec: Ue
+    #[test] // xpec: B
     fn enabled_diagnostic_logs_write_under_local_state_dir_outside_git() {
         let root = temp_root("diagnostic-logs-no-git");
         let mut cache = RepoInspectionCache::new();
@@ -256,7 +256,7 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[test] // xpec: my
+    #[test] // xpec: fh
     fn diagnostic_logs_rotate_within_configured_log_dir_size() {
         let root = git_temp_root("diagnostic-logs-rotate-within-configured-size");
         let mut cache = RepoInspectionCache::new();
@@ -289,7 +289,7 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[test] // xpec: my
+    #[test] // xpec: fh
     fn diagnostic_logs_make_room_for_new_event_with_rotation() {
         let root = git_temp_root("diagnostic-logs-make-room-with-rotation");
         let mut cache = RepoInspectionCache::new();

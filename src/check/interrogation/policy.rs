@@ -409,7 +409,7 @@ mod tests {
         );
     }
 
-    #[test] // xpec: MR
+    #[test] // xpec: mh
     fn unused_follow_up_q_scope_verification_requires_initial_pass() {
         let pass = test_policy_result(test_record("yes", CheckResult::Pass, None), false);
         let fail = test_policy_result(test_record("no", CheckResult::Fail, None), false);
@@ -430,7 +430,7 @@ mod tests {
         assert!(!unused_follow_up_can_verify_q_scope(&already_followed_up));
     }
 
-    #[test] // xpec: MR
+    #[test] // xpec: mh
     fn narrowed_scope_acceptance_requires_verification_answer() {
         let pass = test_record("yes", CheckResult::Pass, None);
         let fail = test_record("no", CheckResult::Fail, None);
@@ -483,7 +483,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test] // xpec: MR
+    #[test] // xpec: mh
     fn disjoint_suggestion_path_is_not_verified_for_narrowing() {
         let root = git_project("disjoint-q-scope-suggestion");
         fs::create_dir_all(root.join("src")).unwrap();
@@ -524,7 +524,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test] // xpec: MR
+    #[test] // xpec: mh
     fn no_hide_runtime_never_verifies_q_scope_suggestion() {
         let root = PathBuf::from("/tmp/canon-in-place-policy");
         let agent = AgentConfig::default();
@@ -549,7 +549,7 @@ mod tests {
         assert!(proposed.is_none());
     }
 
-    #[test] // xpec: mO,8
+    #[test] // xpec: nv,AL
     fn git_backed_interrogation_error_record_preserves_diff_provenance() {
         let root = git_project("interrogation-error-diff-provenance");
         fs::write(root.join("subject.txt"), "subject\n").unwrap();

@@ -128,7 +128,7 @@ mod tests {
         assert_eq!(rendered, "Error: ordinary failure\n");
     }
 
-    #[test] // xpec: f
+    #[test] // xpec: 0N
     fn ask_failed_has_no_extra_public_diagnostic() {
         assert!(!super::command_error_has_public_diagnostic(
             &CommandError::AskFailed(super::AskFailure::Query)

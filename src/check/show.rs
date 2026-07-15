@@ -111,7 +111,7 @@ fn select_show_expectations_for_current_run(
     // `not:<ID-PREFIX>` exclusions before pathspec filtering.
     let mut selected =
         select_expectations_with_identities(request.config, &identities, request.selectors)?;
-    // xpec: qX
+    // xpec: F
     // Dynamic `canon.show` supplies the current expectation here, so this
     // exclusion is applied after explicit selectors and before pathspec
     // filtering; even a direct selector cannot return the current xpec.
@@ -412,7 +412,7 @@ expectations:
         assert!(!output.contains("Does ignored source matter?"));
     }
 
-    #[test] // xpec: qX
+    #[test] // xpec: F
     fn current_run_show_excludes_current_expectation_even_when_explicitly_selected() {
         let root = git_project("canon-show-excludes-current");
         fs::create_dir_all(root.join(".canon")).unwrap();

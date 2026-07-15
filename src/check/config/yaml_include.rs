@@ -124,7 +124,7 @@ mod tests {
     use std::process;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test] // xpec: nI,9A
+    #[test] // xpec: I8,vc
     fn expectation_sequence_includes_are_flattened() {
         let root = test_root("expectation-sequence-include");
         fs::write(
@@ -145,17 +145,17 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    // xpec: nI
+    // xpec: I8
     #[test]
     fn include_paths_resolve_relative_to_including_file() {
         let path = resolve_include_path(Path::new(".canon/check.yml"), "hooks/on-start.yml", None)
             .unwrap();
 
-        // xpec: nI
+        // xpec: I8
         assert_eq!(path, ".canon/hooks/on-start.yml");
     }
 
-    // xpec: nI
+    // xpec: I8
     #[test]
     fn nested_include_paths_resolve_relative_to_parent_include() {
         let path = resolve_include_path(
@@ -165,15 +165,15 @@ mod tests {
         )
         .unwrap();
 
-        // xpec: nI
+        // xpec: I8
         assert_eq!(path, ".canon/hooks/shared.yml");
     }
 
-    // xpec: nI
+    // xpec: I8
     #[test]
     fn unsafe_include_paths_are_rejected() {
         for spec in ["", ".", "/abs.yml", "../parent.yml", "nested/../parent.yml"] {
-            // xpec: nI
+            // xpec: I8
             assert!(
                 normalize_include_spec(spec).is_err(),
                 "expected unsafe include path to fail: {spec}"
@@ -181,14 +181,14 @@ mod tests {
         }
     }
 
-    // xpec: 9V
+    // xpec: T
     #[test]
     fn invalid_root_config_path_does_not_bypass_root_include_rejection() {
-        // xpec: 9V
+        // xpec: T
         assert!(reject_root_include("check.yml", Path::new("../check.yml")).is_err());
     }
 
-    // xpec: 9V,nI
+    // xpec: T,I8
     #[test]
     fn yaml_include_non_root_cycle_is_rejected_by_resolved_include_ids() {
         let root = test_root("yaml-include-non-root-cycle");
@@ -203,7 +203,7 @@ mod tests {
         )
         .unwrap_err();
 
-        // xpec: 9V,nI
+        // xpec: T,I8
         assert!(
             err.contains("cyclic include detected: child.yml"),
             "unexpected include error: {err}"

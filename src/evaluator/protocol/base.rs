@@ -26,7 +26,7 @@ pub(crate) fn evaluator_base_instructions(
         }))
         .map(|rendered| rendered.trim().to_string())
         .map_err(|err| format!("failed to render evaluator base instructions: {}", err))?;
-    // xpec: 1
+    // xpec: Uy
     assert!(
         rendered.len() <= MAX_EVALUATOR_BASE_INSTRUCTIONS_LEN,
         "evaluator base instructions rendered length {} exceeds {}",
@@ -46,7 +46,7 @@ mod tests {
         evaluator_base_instructions, BaseInstructionsContext, MAX_EVALUATOR_BASE_INSTRUCTIONS_LEN,
     };
 
-    // xpec: MR,ak,au
+    // xpec: mh,Wg,Nb
     #[test]
     fn full_scope_base_instructions_do_not_mention_scope_too_narrow() {
         let rendered = evaluator_base_instructions(BaseInstructionsContext {
@@ -55,48 +55,48 @@ mod tests {
         })
         .unwrap();
 
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(!rendered.contains("ScopeTooNarrow"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("InvalidQuestion"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("substantive answer"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("Question text may itself define the specification"));
-        // xpec: qX
+        // xpec: F
         assert!(rendered.contains("available dynamic tool output"));
-        // xpec: qX
+        // xpec: F
         assert!(rendered.contains("cite dynamic tool output by tool name"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("do not require a separate policy file"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("`qScopeSuggestion` covers the question's search domain"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("`-` lines are removed/absent, never existing code"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("visible read/search cannot find a diff-mentioned symbol"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("transcript paths, numstat/change lists"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("numstat/change lists, deleted-file diffs"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered
             .contains("not the diff, changed-file lists, or absence of relevant changed files"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("visible file conflict, the visible file wins"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("not active instructions or complete behavior evidence"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("Configured ignore exclusions do not make the view incomplete"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("unless the question requires an ignored path"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("as narrow as possible while still enough"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("not `InvalidQuestion` reasons"));
     }
 
-    // xpec: MR,ak,au
+    // xpec: mh,Wg,Nb
     #[test]
     fn restricted_scope_base_instructions_allow_scope_too_narrow() {
         let rendered = evaluator_base_instructions(BaseInstructionsContext {
@@ -105,53 +105,53 @@ mod tests {
         })
         .unwrap();
 
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("ScopeTooNarrow"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("InvalidQuestion"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("substantive answer"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("qScopeSuggestion"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("needed project path is absent"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("Restricted-scope only"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("choose `qScopeSuggestion` from the question's search domain"));
-        // xpec: MR,oa
+        // xpec: mh,vD
         assert!(rendered.contains("chosen search domain is not contained"));
-        // xpec: MR,oa
+        // xpec: mh,vD
         assert!(rendered.contains("do not answer project-wide absence/avoid questions"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(!rendered.contains("Before answering, determine"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("question's search domain"));
-        // xpec: oa
+        // xpec: vD
         assert!(rendered.contains("named spec/command/format compliance questions may narrow"));
-        // xpec: oa
+        // xpec: vD
         assert!(rendered.contains("project-wide quality/safety/dead-code"));
-        // xpec: oa
+        // xpec: vD
         assert!(rendered.contains("project-wide \"find any\" or \"avoid any\" questions"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("change-set"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("direct evidence, examples, and counterexamples"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("paths that could contain direct evidence or counterexamples"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("Concrete behavior or named spec/command/format compliance"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("transcript relevance hints are not q-scope hiding"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("Configured ignore exclusions and transcript relevance hints"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("verify with `rg --files` or direct read/search"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("not `InvalidQuestion` reasons"));
     }
 
-    // xpec: MR,ak,au
+    // xpec: mh,Wg,Nb
     #[test]
     fn git_diff_context_is_not_the_visible_tree() {
         let rendered = evaluator_base_instructions(BaseInstructionsContext {
@@ -160,17 +160,17 @@ mod tests {
         })
         .unwrap();
 
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(
             rendered.contains("diff transcript/full-output files are navigation, never evidence")
         );
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("Missing diff excerpts are not missing visibility"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("read/search visible files"));
     }
 
-    // xpec: MR,ak,au
+    // xpec: mh,Wg,Nb
     #[test]
     fn in_place_base_instructions_do_not_use_git_diff_or_q_scope() {
         let rendered = evaluator_base_instructions(BaseInstructionsContext {
@@ -179,17 +179,17 @@ mod tests {
         })
         .unwrap();
 
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(!rendered.contains("Use the Git diff"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(!rendered.contains("qScopeSuggestion"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(!rendered.contains("sandbox transcript"));
-        // xpec: MR,ak,au
+        // xpec: mh,Wg,Nb
         assert!(rendered.contains("The checked directory is the visible project."));
     }
 
-    // xpec: 1
+    // xpec: Uy
     #[test]
     fn base_instructions_render_within_length_limit() {
         for context in [
@@ -211,7 +211,7 @@ mod tests {
             },
         ] {
             let rendered = evaluator_base_instructions(context).unwrap();
-            // xpec: 1
+            // xpec: Uy
             assert!(rendered.len() <= MAX_EVALUATOR_BASE_INSTRUCTIONS_LEN);
         }
     }

@@ -92,7 +92,7 @@ mod tests {
         ));
     }
 
-    // xpec: 9V
+    // xpec: T
     #[test]
     fn check_report_passed_rejects_pending_expectations() {
         let report = CheckRunReport {
@@ -101,7 +101,7 @@ mod tests {
             skipped: 1,
         };
 
-        // xpec: 9V
+        // xpec: T
         assert!(!check_report_passed(&report));
     }
 

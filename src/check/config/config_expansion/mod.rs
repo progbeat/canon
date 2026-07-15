@@ -20,7 +20,7 @@ mod tests {
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test] // xpec: 9A,ia,Un,ZU
+    #[test] // xpec: vc,WH,cv,8s
     fn current_fields_resolve_scalar_values_addressee_and_rank() {
         let raw: RawCheckConfig = serde_saphyr::from_str(
             r#"
@@ -236,7 +236,7 @@ expectations:
         let _ = fs::remove_dir_all(root);
     }
 
-    // xpec: ia,9A
+    // xpec: WH,vc
     #[test]
     fn include_generator_defaults_do_not_reclassify_explicit_child_items() {
         let root = test_root("include-explicit-child-form");
@@ -497,7 +497,7 @@ expectations:
         );
     }
 
-    // xpec: ia
+    // xpec: WH
 
     #[test]
     fn preset_supplies_expectation_field_defaults() {
@@ -540,7 +540,7 @@ expectations:
         assert_eq!(expectation.agent.thinking, "high");
     }
 
-    // xpec: ia,9A
+    // xpec: WH,vc
     #[test]
     fn preset_supplies_generator_field_defaults() {
         let root = test_root("preset-generator-field-defaults");
@@ -584,7 +584,7 @@ expectations:
         let _ = fs::remove_dir_all(root);
     }
 
-    // xpec: ia,9A
+    // xpec: WH,vc
     #[test]
     fn glob_generator_q_template_takes_item_precedence_over_preset_q() {
         let root = test_root("preset-generator-q-template-precedence");
@@ -622,7 +622,7 @@ expectations:
         let _ = fs::remove_dir_all(root);
     }
 
-    // xpec: 9A
+    // xpec: vc
     #[test]
     fn explicit_item_with_generator_shape_extra_fields_stays_explicit() {
         let raw: RawCheckConfig = serde_saphyr::from_str(

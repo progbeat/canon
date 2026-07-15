@@ -84,7 +84,7 @@ mod tests {
         }
     }
 
-    // xpec: j
+    // xpec: 1h
     #[test]
     fn general_output_helpers_flush_eligible_stream_fragments() {
         let mut writer = RecordingWriter { events: Vec::new() };

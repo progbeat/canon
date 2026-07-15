@@ -22,7 +22,7 @@ pub(crate) fn run_ask_command(
     if command.in_place {
         return run_in_place_ask_command(root, &command);
     }
-    // xpec: f
+    // xpec: 0N
     // "canon ask always asks" starts after parse/tree/log setup accepts the
     // invocation. These resolves validate the optional Git context for a
     // git-backed ask; they are not cache/config shortcuts. Once the command
@@ -60,7 +60,7 @@ fn run_in_place_ask_command(root: &Path, command: &AskCommandArgs) -> Result<(),
     let mut repo_cache = RepoInspectionCache::new();
     let mut check_caches = CheckRunCaches::new();
     let diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
-    // xpec: f
+    // xpec: 0N
     // In-place ask has no Git-tree preparation. The check config is optional
     // agent context only; load errors fall back to the implementation default
     // agent instead of preventing the temporary ask xpec.
@@ -154,7 +154,7 @@ mod tests {
     use super::*;
     use crate::config_types::Expectation;
 
-    #[test] // xpec: f,8
+    #[test] // xpec: 0N,AL
     fn ask_query_error_uses_typed_sentinel_command_error() {
         let result =
             ask_query_command_result(Err(CheckQueryError::Evaluator("query failed".to_string())));
@@ -166,7 +166,7 @@ mod tests {
         );
     }
 
-    #[test] // xpec: f
+    #[test] // xpec: 0N
     fn ask_config_load_error_still_builds_temporary_query_config() {
         let config =
             ask_query_config_from_optional_check_config(Err("config unavailable".to_string()));
@@ -174,7 +174,7 @@ mod tests {
         assert!(config.expectations.is_empty());
     }
 
-    #[test] // xpec: f
+    #[test] // xpec: 0N
     fn ask_query_config_discards_loaded_check_expectations() {
         let config = ask_query_config_from_optional_check_config(Ok(CheckConfig {
             version: 1,

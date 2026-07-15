@@ -121,7 +121,7 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    // xpec: MR
+    // xpec: mh
     #[test]
     fn schema_valid_evidence_file_refs_do_not_trigger_repair() {
         let root = temp_root("schema-valid-evidence");
@@ -157,7 +157,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    // xpec: MR
+    // xpec: mh
     #[test]
     fn malformed_response_stays_unparsable_without_repair() {
         let root = temp_root("unparsable");

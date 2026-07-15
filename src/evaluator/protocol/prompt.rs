@@ -998,7 +998,7 @@ mod tests {
         path
     }
 
-    #[test] // xpec: hV
+    #[test] // xpec: 2
     fn target_diff_prompt_hint_uses_full_q_scope_suggestion() {
         let last_pass = LastResult {
             response_timestamp: "1970-01-01T00:00:01Z".to_string(),
@@ -1047,7 +1047,7 @@ mod tests {
         let _ = fs::remove_dir_all(output_dir);
     }
 
-    #[test] // xpec: hV
+    #[test] // xpec: 2
     fn target_diff_prompt_uses_expected_answer_when_diff_from_is_not_checkpoint() {
         let last_pass = LastResult {
             response_timestamp: "1970-01-01T00:00:01Z".to_string(),
@@ -1089,7 +1089,7 @@ mod tests {
         let _ = fs::remove_dir_all(output_dir);
     }
 
-    #[test] // xpec: hV
+    #[test] // xpec: 2
     fn in_place_turn_prompt_omits_target_diff_hint() {
         let last_pass = LastResult {
             response_timestamp: "1970-01-01T00:00:01Z".to_string(),

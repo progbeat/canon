@@ -166,7 +166,7 @@ mod tests {
     use super::*;
     use crate::config_types::{AgentConfig, DEFAULT_DIFF_FROM};
 
-    // xpec: Un,Mx
+    // xpec: cv,Df
     #[test]
     fn in_place_check_work_queue_uses_in_place_absent_history_epoch_order() {
         let queue = in_place_check_work_queue(vec![
@@ -179,7 +179,7 @@ mod tests {
             .map(|expectation| expectation.id)
             .collect::<Vec<_>>();
 
-        // xpec: Un,Mx
+        // xpec: cv,Df
         assert_eq!(ids, vec!["first", "second"]);
     }
 

@@ -318,7 +318,7 @@ pub(super) fn render_check_output_record_status_and_details(record: &CheckRecord
     // response payloads. It renders the final CheckRecord as provided;
     // selected-expectation execution asserts ScopeTooNarrow is never a final
     // check result before this public-output boundary.
-    // xpec: Hy
+    // xpec: nO
     debug_assert_ne!(record.error.as_deref(), Some(ERROR_SCOPE_TOO_NARROW));
     let expected = record.expected_answer_text().unwrap_or("");
     let ask_mode = expected.is_empty();
@@ -405,7 +405,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Instant;
 
-    #[test] // xpec: LY,Ov
+    #[test] // xpec: Od,sy
     fn turn_timeout_progress_marker_is_allowed_after_idle() {
         let timeline = test_timeline();
 
@@ -414,7 +414,7 @@ mod tests {
         assert_final_no_progress_turn_timeout_suffix(&timeline, &timeout_error_record()).unwrap();
     }
 
-    #[test] // xpec: LY,Ov
+    #[test] // xpec: Od,sy
     fn final_turn_timeout_progress_marker_error_keeps_report_path_alive() {
         let timeline = test_timeline();
 
@@ -428,7 +428,7 @@ mod tests {
         );
     }
 
-    #[test] // xpec: Ov,LY
+    #[test] // xpec: sy,Od
     fn invalid_turn_timeout_timeline_still_writes_final_result() {
         let bytes = Arc::new(Mutex::new(Vec::new()));
         let output = SharedCheckOutput::new(Box::new(CapturedOutput {

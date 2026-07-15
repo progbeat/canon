@@ -87,7 +87,7 @@ mod tests {
     }
 
     #[test]
-    // xpec: Ue
+    // xpec: B
     fn runtime_log_common_fields_are_single_line_labels() {
         let level_error = render_runtime_log_event("warn\nnext", "check.start", &[]).unwrap_err();
         let event_error = render_runtime_log_event("warn", "check.start\rnext", &[]).unwrap_err();

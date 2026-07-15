@@ -98,7 +98,7 @@ impl CanonShowDynamicToolHandler<'_, '_> {
             tree_source: self.runtime.tree_source(),
             selectors: &selectors,
             pathspecs: &arguments.pathspecs,
-            // xpec: qX
+            // xpec: F
             // `canon.show` acts as if `not:<current expectation>` was added
             // after the evaluator-supplied selectors.
             excluded_expectation_id: self.current_expectation_id,
