@@ -30,13 +30,13 @@
 - q: "For expectations with the same `diff-from` whose `target` is `project` or `diff`, can the `target` value affect anything except rendered evaluator prompt template content?"
   a: no
 
-- q: "Is the q-scope verification follow-up the only `canon check` decision logic that may depend on a `qScopeSuggestion` from an evaluator response?"
+- q: "Is the q-scope verification follow-up turn the only `canon check` decision logic that may depend on a `qScopeSuggestion` from an evaluation response?"
   a: yes
 
-- q: "Can `canon check` make a non-initial evaluator request whose request kind has no dedicated progress timeline marker symbol?"
+- q: "Can `canon check` make a non-initial turn whose kind has no dedicated progress timeline marker symbol?"
   a: no
 
-- q: 'Does `canon check` assert `progress_timeline[-2:] == "~×"` when a started expectation report finishes because of an evaluator no-progress turn timeout?'
+- q: 'Does `canon check` assert `progress_timeline[-2:] == "~×"` when a started xpec evaluation finishes because of a no-progress turn timeout?'
   a: yes
 
 - q: "Does `canon check` assert that user-visible final results never have `error: \"ScopeTooNarrow\"`?"

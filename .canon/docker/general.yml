@@ -4,12 +4,16 @@
     - CANON_SANDBOX_DIR=/scratch/sandbox
     - CODEX_HOME=/scratch/codex-home
   a: "yes"
+  preset: docker
 
 - q: "Does the Docker entrypoint leave Canon-owned command and argument validation to be handled by the `canon` binary?"
   a: "yes"
+  preset: docker
 
 - q: "Does the Docker entrypoint force `canon check` invocations to run with `--no-sandbox` while forwarding all user-supplied arguments after `check` unchanged?"
   a: "yes"
+  preset: docker
 
 - q: "Does the Docker entrypoint override Git object database environment variables?"
   a: "no"
+  preset: docker

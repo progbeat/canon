@@ -1,78 +1,60 @@
-version: 1
-
-presets:
-  default: &default_preset
-    models: ["gpt-5.4-mini", "gpt-5.3-codex-spark"]
-    thinking: medium  # minimal | low | medium | high | xhigh
-    ignore:
-      - ".canon/**"  # prevents evaluator agents from reading expected answers and avoids reevaluating full-scope expectations when canon changes
-      - ".github/**"
-      - "docker/**"
-      - "docs/ai/**"
-      - "skills/**"
-      - ".dockerignore"
-      - "AGENTS.md"
-      - "Cargo.lock"
-      - "Dockerfile"
-      - "LICENSE"
-  smart:
-    <<: *default_preset
-    models: ["gpt-5.5"]
-    thinking: xhigh
-  spark:
-    <<: *default_preset
-    models: ["gpt-5.3-codex-spark"]
-    thinking: high
-  docker:
-    <<: *default_preset
-    ignore:  # overrides default_preset.ignore
-      - ".canon/**"
-      - ".github/**"
-      - "docs/ai/**"
-      - "skills/**"
-      - "src/**"
-      - "AGENTS.md"
-      - "Cargo.lock"
-      - "LICENSE"
-  pr-review:
-    <<: *default_preset
-    target: diff
-    diff-from: master
-    models: ["gpt-5.5"]
-    ignore:
-      - "docs/ai/**"
-      - "skills/**"
-      - "AGENTS.md"
-      - "Cargo.lock"
-      - "LICENSE"
-
-hooks:
-  on-start: !include hooks/on-start.yml
-  on-pass: !include hooks/on-pass.yml
+presets: !include presets.yml
 
 expectations:
-  - include: expects/*.yml
+  # on-start checks
+  - to: caller
+    q: |-
+      Run the checks:
+      ```
+      cargo fmt --check
+      cargo clippy --all-targets -- -D warnings
+      cargo test
+      ```
+      Consider `cargo build --release` or `cargo audit --deny warnings` when relevant.
+      Have the checks passed? [y/N]
+    a: y
+    rank: -10
+
+  # on-pass checks
+  - to: shell
+    q: ".canon/scripts/check-q-scope"
+    rank: +10
+
+  - !include expects/canon-gate.yml
+  - !include expects/efficiency.yml
+  - !include expects/init-and-hooks.yml
+  - !include expects/interrogation.yml
+  - !include expects/isolation.yml
+  - !include expects/project-quality.yml
+  - !include expects/sanity-checks.yml
 
   # Glossary
-  - path: "glossary.md"
+  - glob: "glossary.md"
     q_template: |
-      {{content}}
+      {{ read(path) }}
       ---
       Is the implementation consistent with this glossary definition?
     a: "yes"
     target: diff
 
   # Specs
-  - path: "specs/**.md"
+  - glob: "specs/**.md"
     q_template: |
-      {{content}}
+      {{ read(path) }}
       ---
       Does the implementation fully satisfy this specification?
     a: "yes"
 
+  - glob: "specs/**.py"
+    q_template: |
+      --- # {{ path }}
+      {{ read(path) }}
+      ---
+      Does the implementation produce the observable behavior and side effects specified by this pseudocode and preserve every assertion in it as an explicit assertion, regardless of its internal structure or control flow?
+    a: "yes"
+
   # Docker
-  - include: "docker/*.yml"
-    preset: docker
+  - !include docker/general.yml
 
   # Documentation
   - q: "Can you find any inconsistencies between `docs/GLOSSARY.md` and the codebase?"
@@ -98,13 +80,10 @@ expectations:
   - q: "Does every `canon` command flush stdout and stderr incrementally once output becomes eligible to be emitted, without holding it until unrelated later work or command completion?"
     a: "yes"
 
-  - q: "Does generator path `specs/**.md` match Markdown files in nested `specs/` subdirectories?"
-    a: "yes"
-
   - q: "Does canon validate each expectation's expected answer using the `answer` pattern defined by the interrogation response schema?"
     a: "yes"
 
-  - q: "Can you find any check execution path after raw config expansion that looks up a named preset or copies fields from a preset instead of consuming the already-resolved fields of the question or expectation being evaluated?"
+  - q: "Can you find any check execution path after raw config expansion that looks up a named preset or copies fields from a preset instead of consuming the already-resolved fields of the xpec being evaluated?"
     a: "no"
 
   # Features

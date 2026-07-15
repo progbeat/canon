@@ -1,5 +1,3 @@
-version: 1
-
 presets:
   default: &default_preset
     models: ["gpt-5.4-mini", "gpt-5.3-codex-spark"]
@@ -13,12 +11,12 @@ presets:
     thinking: xhigh
 
 expectations:
-  # - include: expects/*.yml
+  # - !include expects/project-quality.yml
 
   # Expectations from specs:
-  # - path: "specs/*.md"
+  # - glob: "specs/*.md"
   #   q_template: |
-  #     {{content}}
+  #     {{ read(path) }}
   #     ---
   #     Does the implementation fully satisfy this specification?
   #   a: "yes"
@@ -60,16 +58,16 @@ expectations:
   - q: "Can you find any avoidable violations of commonly accepted idiomatic practices that materially reduce this project's maintainability, correctness, readability, type safety, or future extensibility, excluding purely stylistic alternatives unless they create a concrete demonstrated risk?"
     a: "no"
     target: diff
-    cooldown: {pass: 20m, fail: 20m}
+    cooldown: 20m
 
   - q: "Can you find any high-confidence, practically exploitable security vulnerability?"
     a: "no"
     target: diff
     thinking: high
-    cooldown: {pass: 20m, fail: 20m}
+    cooldown: 20m
 
   - q: "Can you find a critical high-confidence bug with a concrete failing scenario?"
     a: "no"
     preset: smart
     target: diff
-    cooldown: {pass: 20m, fail: 20m}
+    cooldown: 20m

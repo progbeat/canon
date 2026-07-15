@@ -1,15 +1,13 @@
 # Interrogation Policy
 
-**interrogation** is a `canon check` evaluator turn for one expectation question.
+Each turn's task input is rendered from the turn prompt template.
 
-Each evaluator task input is rendered from the turn prompt template.
+Each turn must return a single JSON object accepted by the selected JSON Schema; the schema sent to the evaluator transport may differ from the selected schema only to fit transport support, must enforce each selected-schema restriction directly or through an equivalent supported form when possible, and leaves only the remaining restrictions to be enforced after parsing.
 
-An evaluator response must be a single JSON object accepted by the selected JSON Schema; the schema sent to the evaluator transport may differ from the selected schema only to fit transport support, must enforce each selected-schema restriction directly or through an equivalent supported form when possible, and leaves only the remaining restrictions to be enforced after parsing.
-
-An interrogation is **restricted-scope** when its q-scope is not full project scope.
+A turn is **restricted-scope** when its q-scope is not full project scope.
 For this policy, **full project scope** means the q-scope `["."]` before configured ignore exclusions are applied to form the visible scope.
 
-A restricted-scope interrogation uses this base response schema:
+A restricted-scope turn uses this response schema:
 
 ```json
 {
@@ -41,42 +39,42 @@ A restricted-scope interrogation uses this base response schema:
         }
       }
     },
-    "required": ["evidence", "qScopeSuggestion"],
+    "required": ["qScopeSuggestion"],
     "oneOf": [
-      {"required": ["answer"], "not": { "required": ["error"] }},
-      {"required": ["error"], "not": { "required": ["answer"] }}
+      {"required": ["answer", "evidence"], "not": { "required": ["error"] }},
+      {"required": ["error"], "not": { "anyOf": [{"required": ["answer"]}, {"required": ["evidence"]}] }}
     ],
     "additionalProperties": false
   }
 }
 ```
 
-An evaluator response must contain each unanswered interrogation requested by that evaluator turn as a property named by that interrogation's short ID; the property's value is the interrogation result.
+The object returned by a turn must contain each unanswered interrogation requested by that turn as a property named by that interrogation's short ID; the property's value is that interrogation's evaluation response.
 
-A **short-ID response error** is an evaluator response that violates that requirement, or returns a short ID that was already answered on the same evaluator thread.
-If a short-ID response error occurs after the evaluator thread has already produced a valid response, `canon check` discards that evaluator thread and retries the interrogation on a fresh evaluator thread.
-If a short-ID response error occurs on the evaluator thread's first evaluator turn, `canon check` reports an error for that interrogation without a fresh-thread retry.
+A **short-ID mismatch** occurs when a turn violates that requirement or returns a short ID that was already answered on the same evaluator thread.
+If a short-ID mismatch occurs after the evaluator thread has already produced a valid turn, that evaluator thread is discarded and the interrogation is retried on a fresh evaluator thread.
+If a short-ID mismatch occurs on the evaluator thread's first turn, the interrogation produces an evaluation response with `error` without a fresh-thread retry.
 
-When an interrogation has full project scope, its response schema omits `ScopeTooNarrow` from `error.enum`.
+When a turn has full project scope, its schema omits `ScopeTooNarrow` from `error.enum`.
 
-When a check mode never hides files from evaluator interrogations, response schemas omit `qScopeSuggestion`, and `canon check` does not perform follow-up interrogations.
+When an evaluation never hides files from evaluator turns, the schemas omit `qScopeSuggestion`, and the interrogation does not perform follow-up turns.
 
-A fresh interrogation uses the `qScope` from the expectation's `last-pass.json`, or full project scope if no last pass result with `qScope` exists.
+An interrogation's initial turn uses the `qScope` from the xpec's `last-pass.json`, or full project scope if no last pass result with `qScope` exists.
 
-A **follow-up interrogation** is an additional interrogation required by this policy for the same expectation after the initial interrogation receives an evaluator response.
+A **follow-up turn** is an additional turn required by this policy after the initial turn produces that interrogation's evaluation response.
 
-For one expectation, `canon check` performs at most one follow-up interrogation.
+An interrogation has at most one follow-up turn.
 
-When a restricted-scope initial interrogation returns `error: "ScopeTooNarrow"`, the follow-up interrogation retries with full project scope, where `ScopeTooNarrow` is disabled.
+When a restricted-scope initial turn returns `error: "ScopeTooNarrow"`, the follow-up turn retries with full project scope, where `ScopeTooNarrow` is disabled.
 
-When the final evaluator response has `error`, human review is required.
+When the final evaluation response has `error`, human review is required.
 
-When the initial interrogation produces a passing answer, the follow-up interrogation verifies the suggested q-scope only when the visible tree induced by that suggestion contains at least 25% fewer files than the current visible tree.
+When the initial turn produces a passing answer, the follow-up turn verifies the suggested q-scope only when the visible tree induced by that suggestion contains at least 25% fewer files than the current visible tree.
 The narrowed scope is accepted only when that verification returns an answer.
 
-If the evaluator returns an invalid `qScopeSuggestion`, `canon check` does not attempt narrowing from it.
+An invalid `qScopeSuggestion` returned by the evaluator agent is not used for narrowing.
 
-The expectation's `models` setting configures evaluator models in retry order.
-`canon check` starts with the first model and tries later models in order only after technical evaluator failures.
+The xpec's `models` setting configures evaluator models in fallback order.
+A later model may be tried only after a technical evaluator failure and any applicable retries of the current model.
 
-The expectation's `thinking` setting configures evaluator thinking effort and is applied to each evaluator interrogation.
+The xpec's `thinking` setting configures evaluator thinking effort and is applied to each turn.

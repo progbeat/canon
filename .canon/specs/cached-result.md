@@ -1,18 +1,14 @@
 # Cached Result
 
-A **same-tree matching record** for an expectation is a `pass` or `fail` record whose `visibleTreeOid` is equal to the scoped tree OID of that record's `visibleScope` in the checked tree.
+A **same-tree result** for an expectation exists when the expectation's last pass result has a stored `visibleTreeOid` equal to the scoped tree OID of that result's `visibleScope` in the checked tree.
+The same-tree result is that last pass result.
 
-A **same-tree result** for an expectation exists when at least one same-tree matching record exists.
-The same-tree result is the result of the same-tree matching record with the latest `responseTimestamp`.
-
-A **cooldown result** for an expectation exists when at least one of the following is true:
-
-- the expectation has a `pass` cooldown duration, and the last pass record's `responseTimestamp` is younger than that duration;
-- the expectation has a `fail` cooldown duration, and the last fail record's `responseTimestamp` is younger than that duration.
+A **cooldown result** for an expectation exists when the expectation has a cooldown duration and the last pass result's `responseTimestamp` is younger than that duration.
 
 The cooldown result is `pass`.
 
 A **cached result** for an expectation and Git state is the expectation's **same-tree result**, if one exists. Otherwise, it is the expectation's **cooldown result**, if one exists.
+Every cached result is `pass`.
 
 If neither exists, the expectation has no **cached result**.
 
@@ -29,4 +25,4 @@ expectations:
 
 `cooldown` is optional and intended only for project quality or other expensive expectations where frequent re-proving is not necessary.
 
-`cooldown` may be a compact duration or a mapping with `pass` or `fail` durations. A compact duration is equivalent to `pass: <duration>`. Cooldown durations use compact positive duration syntax with exactly one integer and one unit. Supported units are `s`, `m`, `h`, `d`, and `w`, for seconds, minutes, hours, days, and weeks. Examples include `30m`, `4h`, `3d`, `2w`, and `cooldown: { fail: 21h, pass: 7d }`.
+`cooldown` uses compact positive duration syntax with exactly one integer and one unit. Supported units are `s`, `m`, `h`, `d`, and `w`, for seconds, minutes, hours, days, and weeks. Examples include `30m`, `4h`, `3d`, and `2w`.

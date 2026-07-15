@@ -22,7 +22,7 @@
 
 - q: "Count files under `.canon`."
   a: "0"
-  cooldown: {pass: 7d, fail: 5m}
+  cooldown: 7d
 
 - q: "Does the diff make any behavior-defining xpect in `.canon/check.yml` unsatisfied?"
   a: "no"

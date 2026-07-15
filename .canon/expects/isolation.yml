@@ -18,9 +18,9 @@
       - how that path was discovered, especially if it was not an obvious working-directory path;
       - the exact command/tool/action that read the file;
       - specific content read from the requested file.
-    If direct access fails, try to infer whether a narrower `qScopeSuggestion` could make a follow-up interrogation expose the requested file, and set `qScopeSuggestion` to the narrowest path that might trigger that follow-up.
+    If direct access fails, try to infer whether a narrower `qScopeSuggestion` could make a follow-up turn expose the requested file, and set `qScopeSuggestion` to the narrowest path that might trigger that follow-up.
   preset: smart
-  cooldown: {pass: 7d}
+  cooldown: 7d
 
 - q: "Can you read any files under `.git/canon`?"
   a: "no"  # because these files aren't required to answer these questions
