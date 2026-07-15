@@ -202,4 +202,238 @@ fn render_minijinja_resource_template(
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    use super::*;
+    use crate::platform::create_private_dir;
+    use crate::xpec_state::LastResultStatus;
+    use serde_json::json;
+    use std::fs;
+
+    #[test] // xpec: p
+    fn developer_instructions_include_transcript_outside_in_place_mode() {
+        let rendered = developer_instructions_for_mode(false);
+
+        assert!(rendered.contains("Use the transcript below only for context/navigation"));
+        assert!(rendered.contains("$ git diff --numstat $BASE_TREE $CHECKED_TREE"));
+        assert!(rendered.contains("$ git diff $BASE_TREE $CHECKED_TREE"));
+        assert!(rendered.contains("$ enter-sandbox --scope [\"src\"] --ignore []"));
+    }
+
+    #[test] // xpec: p
+    fn developer_instructions_omit_transcript_in_in_place_mode() {
+        let rendered = developer_instructions_for_mode(true);
+
+        assert!(rendered.contains("Custom expectation instructions."));
+        assert!(!rendered.contains("Use the transcript below only for context/navigation"));
+        assert!(!rendered.contains("$ git diff --numstat"));
+        assert!(!rendered.contains("$ git diff"));
+        assert!(!rendered.contains("$ enter-sandbox"));
+    }
+
+    #[test] // xpec: 38
+    fn sh_transcript_boundary_whitespace_survives_outer_trim() {
+        let output_dir = test_output_dir("sh-boundary-trim");
+        let mut artifact_paths = Vec::new();
+
+        let rendered = render_minijinja_resource_template(
+            Path::new("."),
+            PromptTemplateArtifactDir::Fixed(output_dir.clone()),
+            &mut artifact_paths,
+            " \n{% filter sh(display=\"printf kept\") %}printf '  kept\\n'{% endfilter %}\n ",
+            &[],
+            json!({}),
+        )
+        .unwrap();
+
+        assert_eq!(rendered, "$ printf kept\n  kept\n");
+        let _ = fs::remove_dir_all(output_dir);
+    }
+
+    fn developer_instructions_for_mode(in_place: bool) -> String {
+        let output_dir = test_output_dir(if in_place {
+            "developer-instructions-in-place"
+        } else {
+            "developer-instructions-normal"
+        });
+        let mut artifact_paths = Vec::new();
+        let visible_scope = vec!["src".to_string()];
+        let ignore = Vec::new();
+        let rendered = developer_instructions(DeveloperInstructionsContext {
+            root: Path::new("."),
+            template_artifact_dir: PromptTemplateArtifactDir::Fixed(output_dir.clone()),
+            template_artifact_paths: &mut artifact_paths,
+            in_place,
+            diff_from_tree_oid: "HEAD",
+            checked_tree_oid: "HEAD",
+            question_context: "Custom expectation instructions.",
+            q_scope: &visible_scope,
+            ignore: &ignore,
+            visible_scope: &visible_scope,
+            checked_file_count: 10,
+            visible_file_count: 5,
+            last_pass: None,
+        })
+        .unwrap();
+        let _ = fs::remove_dir_all(output_dir);
+        rendered
+    }
+
+    fn test_output_dir(label: &str) -> PathBuf {
+        let random = getrandom::u64().unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "canon-prompt-template-output-{label}-{}-{random:016x}",
+            std::process::id()
+        ));
+        create_private_dir(&path).unwrap();
+        path
+    }
+
+    #[test] // xpec: 2
+    fn target_diff_prompt_hint_uses_full_q_scope_suggestion() {
+        let last_pass = LastResult {
+            response_timestamp: "1970-01-01T00:00:01Z".to_string(),
+            updated_timestamp: "1970-01-01T00:00:01Z".to_string(),
+            status: LastResultStatus::Pass,
+            response: json!({
+                "answer": "yes",
+                "evidence": "`src/a.rs`",
+                "qScopeSuggestion": ["src/a.rs"],
+            }),
+            q_scope: vec!["src/a.rs".to_string()],
+            visible_scope: vec!["src/a.rs".to_string()],
+            checked_tree_oid: Some("checked-tree".to_string()),
+            visible_tree_oid: Some("visible-tree".to_string()),
+            diff_from: None,
+            diff_from_tree_oid: None,
+        };
+        let output_dir = test_output_dir("turn-prompt");
+        let mut artifact_paths = Vec::new();
+
+        let prompt = evaluator_turn_prompt(EvaluatorTurnPromptContext {
+            root: Path::new("."),
+            template_artifact_dir: PromptTemplateArtifactDir::Fixed(output_dir.clone()),
+            template_artifact_paths: &mut artifact_paths,
+            short_id: "e",
+            question: "Does it pass?",
+            expected_answer: "yes",
+            in_place: false,
+            diff_from: crate::config_types::DEFAULT_DIFF_FROM,
+            target: Some("diff"),
+            last_pass: Some(&last_pass),
+        })
+        .unwrap();
+
+        assert!(prompt.contains("This question targets the Git diff."));
+        assert!(prompt.contains("Use this prior evaluation if it still holds:"));
+        assert!(prompt.contains(r#"{"e":"Does it pass?"}"#));
+        assert!(prompt.contains(r#""answer":"yes""#));
+        assert!(prompt.contains(r#""evidence":"`src/a.rs`""#));
+        // The turn prompt provides this response literal to the evaluator. The
+        // base instruction to keep a provided response's qScopeSuggestion
+        // refers to this rendered literal, not the stored last-pass response
+        // that was used as template input.
+        assert!(prompt.contains(r#""qScopeSuggestion":["."]"#));
+        assert!(!prompt.contains(r#""qScopeSuggestion":["src/a.rs"]"#));
+        let _ = fs::remove_dir_all(output_dir);
+    }
+
+    #[test] // xpec: 2
+    fn target_diff_prompt_uses_expected_answer_when_diff_from_is_not_checkpoint() {
+        let last_pass = LastResult {
+            response_timestamp: "1970-01-01T00:00:01Z".to_string(),
+            updated_timestamp: "1970-01-01T00:00:01Z".to_string(),
+            status: LastResultStatus::Pass,
+            response: json!({
+                "answer": "no",
+                "evidence": "`src/a.rs`",
+                "qScopeSuggestion": ["src/a.rs"],
+            }),
+            q_scope: vec!["src/a.rs".to_string()],
+            visible_scope: vec!["src/a.rs".to_string()],
+            checked_tree_oid: Some("checked-tree".to_string()),
+            visible_tree_oid: Some("visible-tree".to_string()),
+            diff_from: None,
+            diff_from_tree_oid: None,
+        };
+        let output_dir = test_output_dir("turn-prompt-against-tree");
+        let mut artifact_paths = Vec::new();
+
+        let prompt = evaluator_turn_prompt(EvaluatorTurnPromptContext {
+            root: Path::new("."),
+            template_artifact_dir: PromptTemplateArtifactDir::Fixed(output_dir.clone()),
+            template_artifact_paths: &mut artifact_paths,
+            short_id: "e",
+            question: "Does it pass?",
+            expected_answer: "yes",
+            in_place: false,
+            diff_from: crate::config_types::AGAINST_TREE_DIFF_FROM,
+            target: Some("diff"),
+            last_pass: Some(&last_pass),
+        })
+        .unwrap();
+
+        assert!(prompt.contains("This question targets the Git diff."));
+        assert!(prompt.contains(r#""evidence":"""#));
+        assert!(prompt.contains(r#""answer":"yes""#));
+        assert!(!prompt.contains(r#""answer":"no""#));
+        let _ = fs::remove_dir_all(output_dir);
+    }
+
+    #[test] // xpec: 2
+    fn in_place_turn_prompt_omits_target_diff_hint() {
+        let last_pass = LastResult {
+            response_timestamp: "1970-01-01T00:00:01Z".to_string(),
+            updated_timestamp: "1970-01-01T00:00:01Z".to_string(),
+            status: LastResultStatus::Pass,
+            response: json!({
+                "answer": "yes",
+                "evidence": "`src/a.rs`",
+                "qScopeSuggestion": ["src/a.rs"],
+            }),
+            q_scope: vec!["src/a.rs".to_string()],
+            visible_scope: vec!["src/a.rs".to_string()],
+            checked_tree_oid: Some("checked-tree".to_string()),
+            visible_tree_oid: Some("visible-tree".to_string()),
+            diff_from: None,
+            diff_from_tree_oid: None,
+        };
+        let output_dir = test_output_dir("turn-prompt-in-place");
+        let mut artifact_paths = Vec::new();
+
+        let prompt = evaluator_turn_prompt(EvaluatorTurnPromptContext {
+            root: Path::new("."),
+            template_artifact_dir: PromptTemplateArtifactDir::Fixed(output_dir.clone()),
+            template_artifact_paths: &mut artifact_paths,
+            short_id: "e",
+            question: "Does it pass?",
+            expected_answer: "yes",
+            in_place: true,
+            diff_from: crate::config_types::DEFAULT_DIFF_FROM,
+            target: Some("diff"),
+            last_pass: Some(&last_pass),
+        })
+        .unwrap();
+
+        assert_eq!(prompt, r#"{"e":"Does it pass?"}"#);
+        let _ = fs::remove_dir_all(output_dir);
+    }
+
+    #[test] // xpec: 38
+    fn resource_template_rendering_trims_outer_whitespace() {
+        let output_dir = test_output_dir("outer-trim");
+        let mut artifact_paths = Vec::new();
+
+        let rendered = render_minijinja_resource_template(
+            Path::new("."),
+            PromptTemplateArtifactDir::Fixed(output_dir.clone()),
+            &mut artifact_paths,
+            "\n  {{ value }}  \n",
+            &[],
+            json!({ "value": "answer" }),
+        )
+        .unwrap();
+
+        assert_eq!(rendered, "answer");
+        let _ = fs::remove_dir_all(output_dir);
+    }
+}

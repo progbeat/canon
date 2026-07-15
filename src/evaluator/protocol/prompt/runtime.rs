@@ -503,3 +503,275 @@ fn template_artifact_open_options() -> fs::OpenOptions {
 fn template_error(message: String) -> Error {
     Error::new(ErrorKind::InvalidOperation, message)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::platform::create_private_dir;
+
+    #[test] // xpec: 38
+    fn template_command_output_truncates_large_output() {
+        let output = (0..6000)
+            .map(|index| format!("line {index}\n"))
+            .collect::<String>();
+        let output_dir = test_output_dir("truncate");
+        let artifact_paths = Mutex::new(Vec::new());
+        let rendered = truncated_template_command_output(
+            output.as_bytes(),
+            &PromptTemplateArtifactDir::Fixed(output_dir.clone()),
+            &artifact_paths,
+        )
+        .unwrap();
+
+        assert!(rendered.contains("[truncated: showing first "));
+        assert!(rendered.contains("; full output: "));
+        assert!(!rendered.contains("[begin untrusted command output"));
+        assert!(!rendered.contains("[end untrusted command output"));
+        assert_eq!(artifact_paths.lock().unwrap().len(), 1);
+        let _ = fs::remove_dir_all(output_dir);
+    }
+
+    #[test] // xpec: 38,d
+    fn template_command_output_file_is_content_addressed_and_deduplicated() {
+        let output = (0..1200)
+            .map(|index| format!("line {index}\n"))
+            .collect::<String>();
+        let output_dir = test_output_dir("dedupe");
+        let artifact_paths = Mutex::new(Vec::new());
+
+        let first = truncated_template_command_output(
+            output.as_bytes(),
+            &PromptTemplateArtifactDir::Fixed(output_dir.clone()),
+            &artifact_paths,
+        )
+        .unwrap();
+        let second = truncated_template_command_output(
+            output.as_bytes(),
+            &PromptTemplateArtifactDir::Fixed(output_dir.clone()),
+            &artifact_paths,
+        )
+        .unwrap();
+        let first_path = PathBuf::from(full_output_path_from_rendered(&first));
+        let second_path = PathBuf::from(full_output_path_from_rendered(&second));
+
+        assert_eq!(first_path, second_path);
+        assert_eq!(
+            artifact_paths.lock().unwrap().as_slice(),
+            &[first_path.clone(), first_path.clone()]
+        );
+        assert!(first_path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("canon-template-output-sha256-"));
+        assert_eq!(fs::read(&first_path).unwrap(), output.as_bytes());
+        let _ = fs::remove_dir_all(output_dir);
+    }
+
+    #[test] // xpec: 38,M
+    fn prompt_template_output_dir_allocations_are_fresh() {
+        let first = allocate_prompt_template_artifact_dir().unwrap();
+        let second = allocate_prompt_template_artifact_dir().unwrap();
+
+        assert_ne!(first.path(), second.path());
+        assert!(first.path().is_dir());
+        assert!(second.path().is_dir());
+        for path in [first.path(), second.path()] {
+            assert!(path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(PROMPT_TEMPLATE_ARTIFACT_DIR_PREFIX));
+        }
+    }
+
+    #[test] // xpec: M
+    fn prompt_template_output_dir_does_not_reuse_fixed_temp_path() {
+        let fixed = std::env::temp_dir().join(PROMPT_TEMPLATE_ARTIFACT_DIR_PREFIX);
+
+        let output = allocate_prompt_template_artifact_dir().unwrap();
+
+        assert_ne!(output.path(), fixed);
+        assert!(output.path().is_dir());
+    }
+
+    #[test] // xpec: M
+    fn prompt_template_output_dir_prefers_memory_backed_parent() {
+        let memory_backed_parent = test_output_dir("memory-backed-parent");
+        let fallback_parent = test_output_dir("fallback-parent");
+        let memory_backed_candidates = vec![memory_backed_parent.clone()];
+        let fallback_candidates = vec![fallback_parent.clone()];
+
+        let output = allocate_prompt_template_artifact_dir_from_candidates(
+            &memory_backed_candidates,
+            &fallback_candidates,
+        )
+        .unwrap();
+        let output_path = output.path().to_path_buf();
+
+        assert!(output_path.starts_with(&memory_backed_parent));
+        assert!(!output_path.starts_with(&fallback_parent));
+        drop(output);
+        let _ = fs::remove_dir_all(memory_backed_parent);
+        let _ = fs::remove_dir_all(fallback_parent);
+    }
+
+    #[test] // xpec: M
+    fn prompt_template_output_dir_falls_back_when_memory_backed_parent_is_unavailable() {
+        let missing_parent = std::env::temp_dir().join(format!(
+            "canon-missing-memory-backed-parent-{}",
+            std::process::id()
+        ));
+        let fallback_parent = test_output_dir("fallback-parent");
+        let memory_backed_candidates = vec![missing_parent];
+        let fallback_candidates = vec![fallback_parent.clone()];
+
+        let output = allocate_prompt_template_artifact_dir_from_candidates(
+            &memory_backed_candidates,
+            &fallback_candidates,
+        )
+        .unwrap();
+        let output_path = output.path().to_path_buf();
+
+        assert!(output_path.starts_with(&fallback_parent));
+        drop(output);
+        let _ = fs::remove_dir_all(fallback_parent);
+    }
+
+    #[test] // xpec: 38,d
+    fn prompt_template_output_dir_cache_reuses_artifact_dir() {
+        let first;
+        {
+            let cache = PromptTemplateOutputDirCache::new();
+
+            first = cache.path_for_prompt_artifacts().unwrap();
+            let second = cache.path_for_prompt_artifacts().unwrap();
+
+            assert_eq!(first, second);
+            assert!(first.is_dir());
+        }
+        assert!(!first.exists());
+    }
+
+    #[test] // xpec: 38
+    fn prompt_template_output_dir_caches_use_distinct_artifact_dirs() {
+        let first;
+        let second;
+        {
+            let first_cache = PromptTemplateOutputDirCache::new();
+            let second_cache = PromptTemplateOutputDirCache::new();
+
+            first = first_cache.path_for_prompt_artifacts().unwrap();
+            second = second_cache.path_for_prompt_artifacts().unwrap();
+
+            assert_ne!(first, second);
+            assert!(first.is_dir());
+            assert!(second.is_dir());
+        }
+        assert!(!first.exists());
+        assert!(!second.exists());
+    }
+
+    #[test] // xpec: 38
+    fn template_command_stdout_path_is_deterministic_within_run_output_dir() {
+        let output_dir = test_output_dir("same-run-content-addressed");
+        let stdout = b"same complete stdout";
+
+        let first = template_command_stdout_artifact_path(&output_dir, stdout);
+        let second = template_command_stdout_artifact_path(&output_dir, stdout);
+
+        assert_eq!(first, second);
+        assert_eq!(first.parent(), Some(output_dir.as_path()));
+        assert!(first
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("canon-template-output-sha256-"));
+        let _ = fs::remove_dir_all(output_dir);
+    }
+
+    #[test] // xpec: 38
+    fn template_command_output_file_preserves_raw_stdout_bytes() {
+        // The saved file is raw command stdout. The full rendered prompt string
+        // is trimmed separately after all `sh` filters return.
+        let mut output = (0..1200)
+            .flat_map(|index| format!("line {index}\n").into_bytes())
+            .collect::<Vec<_>>();
+        output.extend_from_slice(&[0xff, 0xfe, b'\n']);
+        let output_dir = test_output_dir("raw-bytes");
+        let artifact_paths = Mutex::new(Vec::new());
+
+        let rendered = truncated_template_command_output(
+            &output,
+            &PromptTemplateArtifactDir::Fixed(output_dir.clone()),
+            &artifact_paths,
+        )
+        .unwrap();
+        let path = full_output_path_from_rendered(&rendered);
+        let saved = fs::read(path).unwrap();
+
+        assert_eq!(saved, output);
+        assert_eq!(
+            artifact_paths.lock().unwrap().as_slice(),
+            &[PathBuf::from(path)]
+        );
+        let saved_path = Path::new(path);
+        assert_eq!(saved_path.parent(), Some(output_dir.as_path()));
+        let _ = fs::remove_dir_all(output_dir);
+    }
+
+    fn full_output_path_from_rendered(rendered: &str) -> &str {
+        rendered
+            .lines()
+            .find(|line| line.starts_with("[truncated: "))
+            .unwrap()
+            .strip_suffix(']')
+            .unwrap()
+            .rsplit_once("full output: ")
+            .unwrap()
+            .1
+    }
+
+    fn test_output_dir(label: &str) -> PathBuf {
+        let random = getrandom::u64().unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "canon-prompt-template-output-{label}-{}-{random:016x}",
+            std::process::id()
+        ));
+        create_private_dir(&path).unwrap();
+        path
+    }
+
+    #[test] // xpec: 38
+    fn outer_trim_preserves_shell_transcript_edges() {
+        let markers = test_markers();
+        let transcript = "$ cmd\n  output  \n";
+        let rendered = format!("\n  {}  \n", markers.wrap_transcript(transcript));
+
+        let trimmed = trim_rendered_prompt_template_output(&rendered, &markers);
+
+        assert_eq!(trimmed, transcript);
+    }
+
+    #[test] // xpec: 38
+    fn shell_transcript_markers_are_preserved_inside_transcript_text() {
+        let markers = test_markers();
+        let transcript = format!(
+            "$ cmd\n{}{}{}\n",
+            markers.start, markers.end, markers.escape
+        );
+        let rendered = markers.wrap_transcript(&transcript);
+
+        let trimmed = trim_rendered_prompt_template_output(&rendered, &markers);
+
+        assert_eq!(trimmed, transcript);
+    }
+
+    fn test_markers() -> ShTranscriptMarkers {
+        ShTranscriptMarkers {
+            start: "<start>".to_string(),
+            end: "<end>".to_string(),
+            escape: "<escape>".to_string(),
+        }
+    }
+}

@@ -142,11 +142,6 @@ impl EvaluatorResponseParseError {
     pub(crate) fn is_short_id_response_error(&self) -> bool {
         matches!(self, EvaluatorResponseParseError::ShortIdResponse(_))
     }
-
-    #[cfg(test)]
-    fn contains(&self, value: &str) -> bool {
-        self.to_string().contains(value)
-    }
 }
 
 impl std::fmt::Display for EvaluatorResponseParseError {
@@ -159,7 +154,7 @@ impl std::fmt::Display for EvaluatorResponseParseError {
 }
 
 #[cfg(test)]
-fn evaluator_response_json_schema(schema_scope: EvaluatorResponseSchemaScope) -> Value {
+pub(crate) fn evaluator_response_json_schema(schema_scope: EvaluatorResponseSchemaScope) -> Value {
     json!({
         "type": "object",
         "propertyNames": {
@@ -223,7 +218,7 @@ pub(crate) fn evaluator_response_output_schema_for_scope(
     evaluator_response_output_schema_for_requested_short_ids(schema_scope, &[short_id])
 }
 
-fn evaluator_response_output_schema_for_requested_short_ids(
+pub(crate) fn evaluator_response_output_schema_for_requested_short_ids(
     schema_scope: EvaluatorResponseSchemaScope,
     short_ids: &[&str],
 ) -> Value {
@@ -301,7 +296,7 @@ fn evaluator_response_output_branch_schema(
 }
 
 #[cfg(test)]
-fn evaluator_response_output_schema_for_schema_scope(
+pub(crate) fn evaluator_response_output_schema_for_schema_scope(
     schema_scope: EvaluatorResponseSchemaScope,
 ) -> Value {
     evaluator_response_output_schema_for_scope(schema_scope, "q")
@@ -415,7 +410,7 @@ pub(crate) fn parse_evaluator_response_json(
         .expect("requested short ID was checked above"))
 }
 
-fn parse_evaluator_response_json_for_requested_short_ids(
+pub(crate) fn parse_evaluator_response_json_for_requested_short_ids(
     text: &str,
     requested_short_ids: &[&str],
     answered_short_ids: &[String],

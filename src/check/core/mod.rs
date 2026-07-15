@@ -9,6 +9,12 @@ mod run_report;
 
 pub(crate) use answer::CheckResult;
 pub(crate) use errors::INTERNAL_ERROR_UNPARSABLE;
+#[cfg(test)]
+pub(crate) use evaluator_response::{
+    evaluator_response_json_schema, evaluator_response_output_schema_for_requested_short_ids,
+    evaluator_response_output_schema_for_schema_scope, parse_evaluator_response_json,
+    parse_evaluator_response_json_for_requested_short_ids, EvaluatorResponseJson,
+};
 pub(crate) use evaluator_response::{
     evaluator_response_output_schema_for_scope, matches_answer_pattern,
     parse_evaluator_response_for_short_id, EvaluatorResponseParseError,

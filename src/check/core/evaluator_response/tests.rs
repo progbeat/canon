@@ -1,35 +1,33 @@
-use super::{
-    evaluator_response_json_schema, evaluator_response_output_schema_for_schema_scope,
-    EvaluatorResponseJson, EvaluatorResponseParseError, EvaluatorResponseSchemaScope,
-    ANSWER_PATTERN, ERROR_INVALID_QUESTION, ERROR_SCOPE_TOO_NARROW,
+use crate::check::core::{
+    evaluator_response_json_schema, evaluator_response_output_schema_for_requested_short_ids,
+    evaluator_response_output_schema_for_schema_scope, parse_evaluator_response_for_short_id,
+    parse_evaluator_response_json as parse_response_json_for_short_id,
+    parse_evaluator_response_json_for_requested_short_ids, EvaluatorResponseJson,
+    EvaluatorResponseParseError, EvaluatorResponseSchemaScope, ParsedAnswer, ANSWER_PATTERN,
+    ERROR_INVALID_QUESTION, ERROR_SCOPE_TOO_NARROW,
 };
 use serde_json::json;
 
 fn parse_evaluator_response(
     result_json: &str,
     schema_scope: EvaluatorResponseSchemaScope,
-) -> Result<super::ParsedAnswer, EvaluatorResponseParseError> {
-    super::parse_evaluator_response_for_short_id(
-        &keyed_response(result_json),
-        schema_scope,
-        "q",
-        &[],
-    )
+) -> Result<ParsedAnswer, EvaluatorResponseParseError> {
+    parse_evaluator_response_for_short_id(&keyed_response(result_json), schema_scope, "q", &[])
 }
 
 fn parse_evaluator_response_json(
     result_json: &str,
 ) -> Result<EvaluatorResponseJson, EvaluatorResponseParseError> {
-    super::parse_evaluator_response_json(&keyed_response(result_json), "q", &[])
+    parse_response_json_for_short_id(&keyed_response(result_json), "q", &[])
 }
 
 fn keyed_response(result_json: &str) -> String {
     format!(r#"{{"q":{}}}"#, result_json)
 }
 
-#[test]
+#[test] // xpec: mh
 fn evaluator_response_requires_the_requested_short_id() {
-    let error = super::parse_evaluator_response_for_short_id(
+    let error = parse_evaluator_response_for_short_id(
         &keyed_response(r#"{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":["."]}"#),
         EvaluatorResponseSchemaScope::Restricted,
         "other",
@@ -41,12 +39,12 @@ fn evaluator_response_requires_the_requested_short_id() {
         error,
         EvaluatorResponseParseError::ShortIdResponse(_)
     ));
-    assert!(error.contains("other"));
+    assert!(error.to_string().contains("other"));
 }
 
-#[test]
+#[test] // xpec: mh
 fn evaluator_response_rejects_already_answered_short_id() {
-    let error = super::parse_evaluator_response_for_short_id(
+    let error = parse_evaluator_response_for_short_id(
         &keyed_response(r#"{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":["."]}"#),
         EvaluatorResponseSchemaScope::Restricted,
         "q",
@@ -58,12 +56,12 @@ fn evaluator_response_rejects_already_answered_short_id() {
         error,
         EvaluatorResponseParseError::ShortIdResponse(_)
     ));
-    assert!(error.contains("already answered"));
+    assert!(error.to_string().contains("already answered"));
 }
 
-#[test]
+#[test] // xpec: mh
 fn evaluator_response_rejects_unrequested_short_id() {
-    let error = super::parse_evaluator_response_for_short_id(
+    let error = parse_evaluator_response_for_short_id(
         r#"{
             "q":{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":["."]},
             "other":{"answer":"yes","evidence":"`src/lib.rs`","qScopeSuggestion":["."]}
@@ -78,12 +76,12 @@ fn evaluator_response_rejects_unrequested_short_id() {
         error,
         EvaluatorResponseParseError::ShortIdResponse(_)
     ));
-    assert!(error.contains("unrequested short ID `other`"));
+    assert!(error.to_string().contains("unrequested short ID `other`"));
 }
 
-#[test]
+#[test] // xpec: mh
 fn evaluator_response_output_schema_supports_each_requested_short_id() {
-    let schema = super::evaluator_response_output_schema_for_requested_short_ids(
+    let schema = evaluator_response_output_schema_for_requested_short_ids(
         EvaluatorResponseSchemaScope::Restricted,
         &["a", "b"],
     );
@@ -94,9 +92,9 @@ fn evaluator_response_output_schema_supports_each_requested_short_id() {
     assert_eq!(schema["additionalProperties"], json!(false));
 }
 
-#[test]
+#[test] // xpec: mh
 fn evaluator_response_parser_accepts_each_requested_short_id() {
-    let responses = super::parse_evaluator_response_json_for_requested_short_ids(
+    let responses = parse_evaluator_response_json_for_requested_short_ids(
         r#"{
             "a":{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":["."]},
             "b":{"answer":"no","evidence":"`src/lib.rs`","qScopeSuggestion":["."]}
@@ -145,7 +143,7 @@ fn restricted_evaluator_response_json_schema_matches_interrogation_policy() {
     assert_eq!(result_schema["additionalProperties"], json!(false));
 }
 
-#[test]
+#[test] // xpec: mh
 fn full_project_evaluator_response_json_schema_disables_scope_too_narrow() {
     let schema = evaluator_response_json_schema(EvaluatorResponseSchemaScope::FullProject);
     let result_schema = &schema["additionalProperties"];
@@ -163,7 +161,7 @@ fn full_project_evaluator_response_json_schema_disables_scope_too_narrow() {
     );
 }
 
-#[test]
+#[test] // xpec: mh
 fn without_question_scope_suggestion_evaluator_response_json_schema_omits_question_scope_suggestion(
 ) {
     let schema = evaluator_response_json_schema(
@@ -181,7 +179,7 @@ fn without_question_scope_suggestion_evaluator_response_json_schema_omits_questi
     );
 }
 
-#[test]
+#[test] // xpec: mh
 fn restricted_evaluator_response_output_schema_matches_interrogation_policy() {
     let schema =
         evaluator_response_output_schema_for_schema_scope(EvaluatorResponseSchemaScope::Restricted);
@@ -208,7 +206,7 @@ fn restricted_evaluator_response_output_schema_matches_interrogation_policy() {
     assert!(error_branch["properties"].get("answer").is_none());
 }
 
-#[test]
+#[test] // xpec: mh
 fn full_project_evaluator_response_output_schema_disables_scope_too_narrow() {
     let schema = evaluator_response_output_schema_for_schema_scope(
         EvaluatorResponseSchemaScope::FullProject,
@@ -232,7 +230,7 @@ fn full_project_evaluator_response_output_schema_disables_scope_too_narrow() {
     );
 }
 
-#[test]
+#[test] // xpec: mh
 fn without_question_scope_suggestion_evaluator_response_output_schema_omits_question_scope_suggestion(
 ) {
     let schema = evaluator_response_output_schema_for_schema_scope(
@@ -255,7 +253,7 @@ fn without_question_scope_suggestion_evaluator_response_output_schema_omits_ques
     assert!(error_branch["properties"].get("qScopeSuggestion").is_none());
 }
 
-#[test]
+#[test] // xpec: mh
 fn full_project_evaluator_response_rejects_scope_too_narrow() {
     let error = parse_evaluator_response(
         r#"{"error":"ScopeTooNarrow","evidence":"scope"}"#,
@@ -263,10 +261,10 @@ fn full_project_evaluator_response_rejects_scope_too_narrow() {
     )
     .unwrap_err();
 
-    assert!(error.contains("ScopeTooNarrow"));
+    assert!(error.to_string().contains("ScopeTooNarrow"));
 }
 
-#[test]
+#[test] // xpec: mh
 fn restricted_evaluator_response_requires_question_scope_suggestion() {
     let response =
         parse_evaluator_response_json(r#"{"answer":"yes","evidence":"`src/main.rs`"}"#).unwrap();
@@ -274,10 +272,10 @@ fn restricted_evaluator_response_requires_question_scope_suggestion() {
         .validate_schema(EvaluatorResponseSchemaScope::Restricted)
         .unwrap_err();
 
-    assert!(error.contains("qScopeSuggestion"));
+    assert!(error.to_string().contains("qScopeSuggestion"));
 }
 
-#[test]
+#[test] // xpec: mh
 fn full_project_evaluator_response_requires_question_scope_suggestion() {
     let response =
         parse_evaluator_response_json(r#"{"answer":"yes","evidence":"`src/main.rs`"}"#).unwrap();
@@ -285,10 +283,10 @@ fn full_project_evaluator_response_requires_question_scope_suggestion() {
         .validate_schema(EvaluatorResponseSchemaScope::FullProject)
         .unwrap_err();
 
-    assert!(error.contains("qScopeSuggestion"));
+    assert!(error.to_string().contains("qScopeSuggestion"));
 }
 
-#[test]
+#[test] // xpec: mh
 fn evaluator_response_rejects_null_fields() {
     let error = parse_evaluator_response(
         r#"{"answer":"yes","error":null,"evidence":"`src/main.rs`","qScopeSuggestion":null}"#,
@@ -296,10 +294,10 @@ fn evaluator_response_rejects_null_fields() {
     )
     .unwrap_err();
 
-    assert!(error.contains("must not be null"));
+    assert!(error.to_string().contains("must not be null"));
 }
 
-#[test]
+#[test] // xpec: mh
 fn without_question_scope_suggestion_evaluator_response_omits_question_scope_suggestion() {
     let response = parse_evaluator_response(
         r#"{"answer":"yes","evidence":"`src/main.rs`"}"#,
@@ -311,7 +309,7 @@ fn without_question_scope_suggestion_evaluator_response_omits_question_scope_sug
     assert_eq!(response.question_scope_suggestion, None);
 }
 
-#[test]
+#[test] // xpec: mh
 fn full_project_evaluator_response_accepts_question_scope_suggestion() {
     let response = parse_evaluator_response(
         r#"{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":["src/main.rs"]}"#,
@@ -325,7 +323,7 @@ fn full_project_evaluator_response_accepts_question_scope_suggestion() {
     );
 }
 
-#[test]
+#[test] // xpec: mh
 fn without_question_scope_suggestion_evaluator_response_rejects_question_scope_suggestion() {
     let error = parse_evaluator_response(
         r#"{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":["."]}"#,
@@ -333,10 +331,10 @@ fn without_question_scope_suggestion_evaluator_response_rejects_question_scope_s
     )
     .unwrap_err();
 
-    assert!(error.contains("qScopeSuggestion"));
+    assert!(error.to_string().contains("qScopeSuggestion"));
 }
 
-#[test]
+#[test] // xpec: mh
 fn evaluator_response_rejects_empty_question_scope_suggestion() {
     let response = parse_evaluator_response_json(
         r#"{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":[]}"#,
@@ -362,7 +360,7 @@ fn evaluator_response_rejects_empty_question_scope_suggestion_item() {
         .contains("non-empty"));
 }
 
-#[test]
+#[test] // xpec: mh
 fn evaluator_response_accepts_required_question_scope_suggestion() {
     let response = parse_evaluator_response_json(
         r#"{"answer":"yes","evidence":"`src/main.rs`","qScopeSuggestion":["src/main.rs"]}"#,
@@ -378,7 +376,7 @@ fn evaluator_response_accepts_required_question_scope_suggestion() {
     );
 }
 
-#[test]
+#[test] // xpec: mh
 fn evaluator_response_schema_allows_non_crlf_question_scope_chars() {
     let response = parse_evaluator_response_json(
         "{\"answer\":\"yes\",\"evidence\":\"`src/main.rs`\",\"qScopeSuggestion\":[\"src/main.rs\\u0008\"]}",
@@ -390,7 +388,7 @@ fn evaluator_response_schema_allows_non_crlf_question_scope_chars() {
         .unwrap();
 }
 
-#[test]
+#[test] // xpec: mh
 fn evaluator_response_schema_rejects_answers_outside_answer_pattern() {
     for invalid_answer in ["Rust", "yes\t", "yes\n", "yes\u{2028}still", ""] {
         let response = EvaluatorResponseJson {
@@ -407,7 +405,7 @@ fn evaluator_response_schema_rejects_answers_outside_answer_pattern() {
     }
 }
 
-#[test]
+#[test] // xpec: mh
 fn evaluator_response_schema_rejects_non_canonical_error_token() {
     let response = EvaluatorResponseJson {
         answer: None,
@@ -422,7 +420,7 @@ fn evaluator_response_schema_rejects_non_canonical_error_token() {
         .contains("unsupported evaluator error"));
 }
 
-#[test]
+#[test] // xpec: mh
 fn evaluator_response_schema_rejects_crlf_in_single_line_fields() {
     let answer = parse_evaluator_response_json(
         "{\"answer\":\"yes\\n\",\"evidence\":\"`src/main.rs`\",\"qScopeSuggestion\":[\"src/main.rs\"]}",
@@ -443,7 +441,7 @@ fn evaluator_response_schema_rejects_crlf_in_single_line_fields() {
         .contains("qScopeSuggestion"));
 }
 
-#[test]
+#[test] // xpec: mh
 fn evaluator_response_schema_rejects_only_crlf_q_scope_line_breaks() {
     let schema_valid_unicode_separator = EvaluatorResponseJson {
         answer: Some("yes".to_string()),

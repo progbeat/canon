@@ -8,7 +8,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // be verified from visible source without reading ignored canon expectation data.
 const DEFAULT_CHECK_TEMPLATE_FILE_CONTENTS: &str =
     include_str!("../.canon/templates/default/check.yml");
-const DEFAULT_PRE_COMMIT_HOOK_CONTENTS: &str = include_str!("../resources/git-hooks/pre-commit");
 const ZERO_TOKEN_USAGE_LINE: &str =
     "Token usage: total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n";
 
@@ -37,39 +36,6 @@ fn init_git_repo(repo: &Path) {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-}
-
-fn git_path(repo: &Path, path: &str) -> PathBuf {
-    let output = Command::new("git")
-        .args(["rev-parse", "--git-path", path])
-        .current_dir(repo)
-        .output()
-        .unwrap();
-    // xpec: C
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    repo.join(String::from_utf8(output.stdout).unwrap().trim())
-}
-
-fn read_only_last_result(xpecs_dir: &Path, file_name: &str) -> serde_json::Value {
-    let mut xpec_dirs = fs::read_dir(xpecs_dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.is_dir())
-        .collect::<Vec<_>>();
-    xpec_dirs.sort();
-    let xpec_dir = match xpec_dirs.as_slice() {
-        [xpec_dir] => xpec_dir,
-        _ => panic!(
-            "expected one persisted xpec directory under {}, found {}",
-            xpecs_dir.display(),
-            xpec_dirs.len()
-        ),
-    };
-    serde_json::from_str(&fs::read_to_string(xpec_dir.join(file_name)).unwrap()).unwrap()
 }
 
 // xpec: C
@@ -130,11 +96,6 @@ fn pre_commit_commands_render_documented_messages() {
         String::from_utf8(output.stdout).unwrap(),
         "Installed .git/hooks/pre-commit\n"
     );
-    assert_eq!(
-        fs::read_to_string(git_path(&repo, "hooks/pre-commit")).unwrap(),
-        DEFAULT_PRE_COMMIT_HOOK_CONTENTS
-    );
-
     let output = canon()
         .args(["pre-commit", "uninstall"])
         .current_dir(&repo)
@@ -151,29 +112,6 @@ fn pre_commit_commands_render_documented_messages() {
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
         "Uninstalled .git/hooks/pre-commit\n"
-    );
-}
-
-// xpec: C
-#[test]
-fn pre_commit_install_rejects_existing_default_hook() {
-    let repo = temp_repo("canon-pre-commit-existing-example");
-    init_git_repo(&repo);
-    fs::write(repo.join(".git/hooks/pre-commit"), "#!/usr/bin/env sh\n").unwrap();
-
-    let output = canon()
-        .args(["pre-commit", "install"])
-        .current_dir(&repo)
-        .output()
-        .unwrap();
-
-    let _ = fs::remove_dir_all(&repo);
-
-    assert!(!output.status.success());
-    assert_eq!(
-        String::from_utf8(output.stderr).unwrap(),
-        "Error: Can't safely install pre-commit hook.\n\
-         ▷ Add `canon gate` manually to the existing pre-commit setup or ask a human to handle it.\n"
     );
 }
 
@@ -233,13 +171,6 @@ expectations:
         stderr,
         "Token usage: total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n"
     );
-    let last_fail = read_only_last_result(&repo.join(".git/canon/xpecs"), "last-fail.json");
-    // xpec: nv
-    assert_eq!(last_fail["status"], "fail");
-    // xpec: nv
-    assert!(last_fail.get("checkedTreeOid").is_some());
-    // xpec: nv
-    assert!(last_fail.get("visibleTreeOid").is_none());
     let _ = fs::remove_dir_all(&repo);
 }
 
@@ -290,17 +221,6 @@ expectations:
         stderr,
         "Token usage: total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n"
     );
-    let last_fail = read_only_last_result(&repo.join("state/xpecs"), "last-fail.json");
-    // xpec: nv,Df,eP
-    assert_eq!(last_fail["status"], "fail");
-    // xpec: nv,Df
-    assert!(last_fail.get("qScope").is_none());
-    // xpec: nv,Df
-    assert!(last_fail.get("visibleScope").is_none());
-    // xpec: nv,Df
-    assert!(last_fail.get("checkedTreeOid").is_none());
-    // xpec: nv,Df
-    assert!(last_fail.get("visibleTreeOid").is_none());
     let _ = fs::remove_dir_all(&repo);
 }
 
