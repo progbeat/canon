@@ -111,12 +111,12 @@ where
     with_current_dir(root, render).map_err(template_error)?
 }
 
-pub(crate) struct PromptTemplateOutputDirCache {
+pub(super) struct PromptTemplateOutputDirCache {
     dir: OnceLock<PromptTemplateOutputDir>,
 }
 
 #[derive(Clone)]
-pub(crate) enum PromptTemplateArtifactDir {
+pub(super) enum PromptTemplateArtifactDir {
     Lazy(Arc<PromptTemplateOutputDirCache>),
     #[cfg(test)]
     Fixed(PathBuf),
@@ -133,13 +133,13 @@ impl PromptTemplateArtifactDir {
 }
 
 impl PromptTemplateOutputDirCache {
-    pub(crate) fn new() -> PromptTemplateOutputDirCache {
+    pub(super) fn new() -> PromptTemplateOutputDirCache {
         PromptTemplateOutputDirCache {
             dir: OnceLock::new(),
         }
     }
 
-    pub(crate) fn path_for_prompt_artifacts(&self) -> Result<PathBuf, String> {
+    pub(super) fn path_for_prompt_artifacts(&self) -> Result<PathBuf, String> {
         if let Some(dir) = self.dir.get() {
             return Ok(dir.path().to_path_buf());
         }

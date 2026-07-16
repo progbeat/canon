@@ -41,24 +41,34 @@ pub(crate) struct StartedExpectationReportOutput {
 }
 
 pub(crate) struct FinishedExpectationReportOutput {
-    stdout_completion_failed: bool,
+    short_id_was_printed: bool,
+    result_was_printed: bool,
+    needs_stderr_completion_notice: bool,
 }
 
 impl FinishedExpectationReportOutput {
-    fn completed_report() -> FinishedExpectationReportOutput {
+    fn new(
+        short_id_was_printed: bool,
+        result_was_printed: bool,
+        needs_stderr_completion_notice: bool,
+    ) -> FinishedExpectationReportOutput {
         FinishedExpectationReportOutput {
-            stdout_completion_failed: false,
+            short_id_was_printed,
+            result_was_printed,
+            needs_stderr_completion_notice,
         }
     }
 
-    fn with_stdout_completion_failed() -> FinishedExpectationReportOutput {
-        FinishedExpectationReportOutput {
-            stdout_completion_failed: true,
-        }
+    pub(crate) fn short_id_was_printed(&self) -> bool {
+        self.short_id_was_printed
     }
 
-    pub(crate) fn stdout_completion_failed(&self) -> bool {
-        self.stdout_completion_failed
+    pub(crate) fn anything_was_reported(&self) -> bool {
+        self.short_id_was_printed || self.result_was_printed
+    }
+
+    pub(crate) fn needs_stderr_completion_notice(&self) -> bool {
+        self.needs_stderr_completion_notice
     }
 }
 
@@ -163,13 +173,13 @@ impl StartedExpectationReportOutput {
         } else {
             render_check_output_record_with_initial_marker_timeline(record)
         };
-        if write_stdout_record(&mut output, result_suffix.as_bytes(), "check result").is_err() {
-            return FinishedExpectationReportOutput::with_stdout_completion_failed();
-        }
-        if completion_problem {
-            return FinishedExpectationReportOutput::with_stdout_completion_failed();
-        }
-        FinishedExpectationReportOutput::completed_report()
+        let result_was_printed =
+            write_stdout_record(&mut output, result_suffix.as_bytes(), "check result").is_ok();
+        FinishedExpectationReportOutput::new(
+            self.prefix_completed,
+            result_was_printed,
+            completion_problem || !result_was_printed,
+        )
     }
 
     pub(crate) fn finish_with_query_output(mut self, query_output: &str) -> Result<(), String> {
@@ -439,10 +449,28 @@ mod tests {
 
         let finished = report.finish_with_record(&timeout_error_record());
 
-        assert!(finished.stdout_completion_failed());
+        assert!(finished.needs_stderr_completion_notice());
+        assert!(finished.anything_was_reported());
         let output = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
         assert!(output.contains("j× FAIL\n"));
         assert!(output.contains("error: unparsable\n"));
+    }
+
+    #[test] // xpec: sy
+    fn printed_short_id_remains_report_when_stdout_completion_fails() {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let output = SharedCheckOutput::new(Box::new(FailAfterFirstFlushOutput {
+            bytes: bytes.clone(),
+            first_flush_completed: false,
+        }));
+        let report = start_expectation_report_output(output, "j");
+
+        let finished = report.finish_with_record(&timeout_error_record());
+
+        assert!(finished.short_id_was_printed());
+        assert!(finished.anything_was_reported());
+        assert!(finished.needs_stderr_completion_notice());
+        assert_eq!(*bytes.lock().unwrap(), b"j");
     }
 
     struct CapturedOutput {
@@ -456,6 +484,26 @@ mod tests {
         }
 
         fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct FailAfterFirstFlushOutput {
+        bytes: Arc<Mutex<Vec<u8>>>,
+        first_flush_completed: bool,
+    }
+
+    impl Write for FailAfterFirstFlushOutput {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if self.first_flush_completed {
+                return Err(io::Error::other("stdout unavailable after short ID"));
+            }
+            self.bytes.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.first_flush_completed = true;
             Ok(())
         }
     }

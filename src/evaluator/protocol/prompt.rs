@@ -2,9 +2,9 @@ mod runtime;
 
 use runtime::{
     json_filter, render_with_repository_cwd, shell_args_filter, shell_quote_filter,
-    shell_transcript_filter, trim_rendered_prompt_template_output, ShTranscriptMarkers,
+    shell_transcript_filter, trim_rendered_prompt_template_output, PromptTemplateArtifactDir,
+    PromptTemplateOutputDirCache, ShTranscriptMarkers,
 };
-pub(crate) use runtime::{PromptTemplateArtifactDir, PromptTemplateOutputDirCache};
 
 use crate::xpec_state::LastResult;
 use minijinja::value::Kwargs;
@@ -22,8 +22,6 @@ const EVALUATOR_TURN_PROMPT_TEMPLATE: &str =
 
 pub(crate) struct DeveloperInstructionsContext<'a> {
     pub(crate) root: &'a Path,
-    pub(crate) template_artifact_dir: PromptTemplateArtifactDir,
-    pub(crate) template_artifact_paths: &'a mut Vec<PathBuf>,
     pub(crate) in_place: bool,
     pub(crate) diff_from_tree_oid: &'a str,
     pub(crate) checked_tree_oid: &'a str,
@@ -37,7 +35,69 @@ pub(crate) struct DeveloperInstructionsContext<'a> {
     pub(crate) last_pass: Option<&'a LastResult>,
 }
 
-pub(crate) fn developer_instructions(
+pub(crate) struct EvaluatorTurnPromptContext<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) short_id: &'a str,
+    pub(crate) question: &'a str,
+    pub(crate) expected_answer: &'a str,
+    pub(crate) in_place: bool,
+    pub(crate) diff_from: &'a str,
+    pub(crate) target: Option<&'a str>,
+    pub(crate) last_pass: Option<&'a LastResult>,
+}
+
+pub(crate) struct RenderedPrompt {
+    pub(crate) text: String,
+    pub(crate) artifact_paths: Vec<PathBuf>,
+}
+
+pub(crate) struct PromptRenderer {
+    output_dir_cache: Arc<PromptTemplateOutputDirCache>,
+}
+
+impl PromptRenderer {
+    pub(crate) fn new() -> PromptRenderer {
+        PromptRenderer {
+            output_dir_cache: Arc::new(PromptTemplateOutputDirCache::new()),
+        }
+    }
+
+    pub(crate) fn developer_instructions(
+        &self,
+        context: DeveloperInstructionsContext<'_>,
+    ) -> Result<RenderedPrompt, String> {
+        let mut artifact_paths = Vec::new();
+        let text = render_developer_instructions(
+            PromptTemplateArtifactDir::Lazy(Arc::clone(&self.output_dir_cache)),
+            &mut artifact_paths,
+            context,
+        )?;
+        Ok(RenderedPrompt {
+            text,
+            artifact_paths,
+        })
+    }
+
+    pub(crate) fn evaluator_turn_prompt(
+        &self,
+        context: EvaluatorTurnPromptContext<'_>,
+    ) -> Result<RenderedPrompt, String> {
+        let mut artifact_paths = Vec::new();
+        let text = render_evaluator_turn_prompt(
+            PromptTemplateArtifactDir::Lazy(Arc::clone(&self.output_dir_cache)),
+            &mut artifact_paths,
+            context,
+        )?;
+        Ok(RenderedPrompt {
+            text,
+            artifact_paths,
+        })
+    }
+}
+
+fn render_developer_instructions(
+    template_artifact_dir: PromptTemplateArtifactDir,
+    template_artifact_paths: &mut Vec<PathBuf>,
     context: DeveloperInstructionsContext<'_>,
 ) -> Result<String, String> {
     // This count is reporting-only prompt data. File visibility has already
@@ -55,8 +115,8 @@ pub(crate) fn developer_instructions(
     // repeating noisy scope arguments.
     render_minijinja_resource_template(
         context.root,
-        context.template_artifact_dir,
-        context.template_artifact_paths,
+        template_artifact_dir,
+        template_artifact_paths,
         DEVELOPER_INSTRUCTIONS_TEMPLATE,
         &[
             ("BASE_TREE", context.diff_from_tree_oid),
@@ -79,20 +139,9 @@ pub(crate) fn developer_instructions(
     )
 }
 
-pub(crate) struct EvaluatorTurnPromptContext<'a> {
-    pub(crate) root: &'a Path,
-    pub(crate) template_artifact_dir: PromptTemplateArtifactDir,
-    pub(crate) template_artifact_paths: &'a mut Vec<PathBuf>,
-    pub(crate) short_id: &'a str,
-    pub(crate) question: &'a str,
-    pub(crate) expected_answer: &'a str,
-    pub(crate) in_place: bool,
-    pub(crate) diff_from: &'a str,
-    pub(crate) target: Option<&'a str>,
-    pub(crate) last_pass: Option<&'a LastResult>,
-}
-
-pub(crate) fn evaluator_turn_prompt(
+fn render_evaluator_turn_prompt(
+    template_artifact_dir: PromptTemplateArtifactDir,
+    template_artifact_paths: &mut Vec<PathBuf>,
     context: EvaluatorTurnPromptContext<'_>,
 ) -> Result<String, String> {
     let (diff_from, target, last_pass) = if context.in_place {
@@ -119,8 +168,8 @@ pub(crate) fn evaluator_turn_prompt(
     );
     render_minijinja_resource_template(
         context.root,
-        context.template_artifact_dir,
-        context.template_artifact_paths,
+        template_artifact_dir,
+        template_artifact_paths,
         EVALUATOR_TURN_PROMPT_TEMPLATE,
         &[],
         json!({
@@ -258,21 +307,23 @@ mod tests {
         let mut artifact_paths = Vec::new();
         let visible_scope = vec!["src".to_string()];
         let ignore = Vec::new();
-        let rendered = developer_instructions(DeveloperInstructionsContext {
-            root: Path::new("."),
-            template_artifact_dir: PromptTemplateArtifactDir::Fixed(output_dir.clone()),
-            template_artifact_paths: &mut artifact_paths,
-            in_place,
-            diff_from_tree_oid: "HEAD",
-            checked_tree_oid: "HEAD",
-            question_context: "Custom expectation instructions.",
-            q_scope: &visible_scope,
-            ignore: &ignore,
-            visible_scope: &visible_scope,
-            checked_file_count: 10,
-            visible_file_count: 5,
-            last_pass: None,
-        })
+        let rendered = render_developer_instructions(
+            PromptTemplateArtifactDir::Fixed(output_dir.clone()),
+            &mut artifact_paths,
+            DeveloperInstructionsContext {
+                root: Path::new("."),
+                in_place,
+                diff_from_tree_oid: "HEAD",
+                checked_tree_oid: "HEAD",
+                question_context: "Custom expectation instructions.",
+                q_scope: &visible_scope,
+                ignore: &ignore,
+                visible_scope: &visible_scope,
+                checked_file_count: 10,
+                visible_file_count: 5,
+                last_pass: None,
+            },
+        )
         .unwrap();
         let _ = fs::remove_dir_all(output_dir);
         rendered
@@ -309,18 +360,20 @@ mod tests {
         let output_dir = test_output_dir("turn-prompt");
         let mut artifact_paths = Vec::new();
 
-        let prompt = evaluator_turn_prompt(EvaluatorTurnPromptContext {
-            root: Path::new("."),
-            template_artifact_dir: PromptTemplateArtifactDir::Fixed(output_dir.clone()),
-            template_artifact_paths: &mut artifact_paths,
-            short_id: "e",
-            question: "Does it pass?",
-            expected_answer: "yes",
-            in_place: false,
-            diff_from: crate::config_types::DEFAULT_DIFF_FROM,
-            target: Some("diff"),
-            last_pass: Some(&last_pass),
-        })
+        let prompt = render_evaluator_turn_prompt(
+            PromptTemplateArtifactDir::Fixed(output_dir.clone()),
+            &mut artifact_paths,
+            EvaluatorTurnPromptContext {
+                root: Path::new("."),
+                short_id: "e",
+                question: "Does it pass?",
+                expected_answer: "yes",
+                in_place: false,
+                diff_from: crate::config_types::DEFAULT_DIFF_FROM,
+                target: Some("diff"),
+                last_pass: Some(&last_pass),
+            },
+        )
         .unwrap();
 
         assert!(prompt.contains("This question targets the Git diff."));
@@ -358,18 +411,20 @@ mod tests {
         let output_dir = test_output_dir("turn-prompt-against-tree");
         let mut artifact_paths = Vec::new();
 
-        let prompt = evaluator_turn_prompt(EvaluatorTurnPromptContext {
-            root: Path::new("."),
-            template_artifact_dir: PromptTemplateArtifactDir::Fixed(output_dir.clone()),
-            template_artifact_paths: &mut artifact_paths,
-            short_id: "e",
-            question: "Does it pass?",
-            expected_answer: "yes",
-            in_place: false,
-            diff_from: crate::config_types::AGAINST_TREE_DIFF_FROM,
-            target: Some("diff"),
-            last_pass: Some(&last_pass),
-        })
+        let prompt = render_evaluator_turn_prompt(
+            PromptTemplateArtifactDir::Fixed(output_dir.clone()),
+            &mut artifact_paths,
+            EvaluatorTurnPromptContext {
+                root: Path::new("."),
+                short_id: "e",
+                question: "Does it pass?",
+                expected_answer: "yes",
+                in_place: false,
+                diff_from: crate::config_types::AGAINST_TREE_DIFF_FROM,
+                target: Some("diff"),
+                last_pass: Some(&last_pass),
+            },
+        )
         .unwrap();
 
         assert!(prompt.contains("This question targets the Git diff."));
@@ -400,18 +455,20 @@ mod tests {
         let output_dir = test_output_dir("turn-prompt-in-place");
         let mut artifact_paths = Vec::new();
 
-        let prompt = evaluator_turn_prompt(EvaluatorTurnPromptContext {
-            root: Path::new("."),
-            template_artifact_dir: PromptTemplateArtifactDir::Fixed(output_dir.clone()),
-            template_artifact_paths: &mut artifact_paths,
-            short_id: "e",
-            question: "Does it pass?",
-            expected_answer: "yes",
-            in_place: true,
-            diff_from: crate::config_types::DEFAULT_DIFF_FROM,
-            target: Some("diff"),
-            last_pass: Some(&last_pass),
-        })
+        let prompt = render_evaluator_turn_prompt(
+            PromptTemplateArtifactDir::Fixed(output_dir.clone()),
+            &mut artifact_paths,
+            EvaluatorTurnPromptContext {
+                root: Path::new("."),
+                short_id: "e",
+                question: "Does it pass?",
+                expected_answer: "yes",
+                in_place: true,
+                diff_from: crate::config_types::DEFAULT_DIFF_FROM,
+                target: Some("diff"),
+                last_pass: Some(&last_pass),
+            },
+        )
         .unwrap();
 
         assert_eq!(prompt, r#"{"e":"Does it pass?"}"#);

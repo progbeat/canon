@@ -5,6 +5,7 @@ mod expectation;
 mod progress;
 mod report;
 mod run;
+mod shell;
 
 use crate::git::VisibleTreeOidCache;
 use crate::logs::DiagnosticLogWriter;

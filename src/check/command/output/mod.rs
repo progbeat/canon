@@ -145,7 +145,7 @@ mod tests {
         assert!(!rendered.contains("evidence:"));
     }
 
-    #[test]
+    #[test] // xpec: AL
     fn live_report_result_output_matches_documented_record_shape() {
         let bytes = Arc::new(Mutex::new(Vec::new()));
         let output = SharedCheckOutput::new(Box::new(CapturedOutput {
@@ -154,13 +154,13 @@ mod tests {
 
         let report = start_expectation_report_output(output, "j");
         let finished = report.finish_with_record(&passing_record());
-        assert!(!finished.stdout_completion_failed());
+        assert!(!finished.needs_stderr_completion_notice());
 
         let completed = captured_string(&bytes);
         assert_result_entry(&completed, "PASS");
     }
 
-    #[test]
+    #[test] // xpec: sy,1h
     fn live_report_flushes_short_id_before_first_progress_marker() {
         let bytes = Arc::new(Mutex::new(Vec::new()));
         let output = SharedCheckOutput::new(Box::new(CapturedOutput {
@@ -171,7 +171,7 @@ mod tests {
 
         assert_eq!(captured_string(&bytes), "j");
         let finished = report.finish_with_record(&passing_record());
-        assert!(!finished.stdout_completion_failed());
+        assert!(!finished.needs_stderr_completion_notice());
     }
 
     #[test] // xpec: 0N

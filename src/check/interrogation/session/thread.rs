@@ -14,12 +14,12 @@ use crate::check::interrogation::{
 use crate::check::{evaluator_response_output_schema_for_scope, EvaluatorResponseSchemaScope};
 use crate::config_types::{AgentConfig, AGAINST_TREE_DIFF_FROM, DEFAULT_DIFF_FROM};
 use crate::evaluator::{
-    ask_once as ask_evaluator_once, developer_instructions, effective_thinking,
-    evaluator_base_instructions, evaluator_turn_prompt, is_context_window_failure,
-    q_scope_is_full_project, session_failure_invalidates_thread, write_thread_lifecycle_event,
-    write_thread_restart_event, BaseInstructionsContext, DeveloperInstructionsContext,
-    EvaluatorError, EvaluatorRunner, EvaluatorTurnContext, EvaluatorTurnPromptContext,
-    ParsedTurnResponse, PromptTemplateArtifactDir, ThreadLifecycleLog, ThreadReuseLogContext,
+    ask_once as ask_evaluator_once, effective_thinking, evaluator_base_instructions,
+    is_context_window_failure, q_scope_is_full_project, session_failure_invalidates_thread,
+    write_thread_lifecycle_event, write_thread_restart_event, BaseInstructionsContext,
+    DeveloperInstructionsContext, EvaluatorError, EvaluatorRunner, EvaluatorTurnContext,
+    EvaluatorTurnPromptContext, ParsedTurnResponse, PromptRenderer, RenderedPrompt,
+    ThreadLifecycleLog, ThreadReuseLogContext,
 };
 use crate::logs::DiagnosticLogWriter;
 use crate::scope::{effective_ignore_patterns, sanitize_scope};
@@ -41,7 +41,7 @@ pub(crate) struct ThreadTurnRequest<'a> {
     pub(crate) question_context: &'a str,
     pub(crate) diff_from_tree_oid: &'a str,
     pub(crate) prompt: &'a str,
-    pub(crate) template_artifact_dir: PromptTemplateArtifactDir,
+    pub(crate) prompt_renderer: Arc<PromptRenderer>,
     pub(crate) template_artifact_paths: &'a [PathBuf],
     pub(crate) last_pass: Option<&'a LastResult>,
     pub(crate) progress: Option<&'a crate::evaluator::EvaluatorProgress>,
@@ -423,23 +423,25 @@ fn start_or_reuse_thread_session_after_rendering<R: EvaluatorRunner>(
     // Render the developer-instructions resource template. `question_context`
     // is the value for that template's `xpec.instructions` input slot,
     // not a second prompt or instruction template.
+    let rendered_developer_instructions: RenderedPrompt = request
+        .prompt_renderer
+        .developer_instructions(DeveloperInstructionsContext {
+            root: runtime.root,
+            in_place: runtime.is_in_place(),
+            diff_from_tree_oid: request.diff_from_tree_oid,
+            checked_tree_oid: runtime.checked_tree_oid(),
+            question_context: request.question_context,
+            q_scope: request.enforced_scope,
+            ignore: &ignore,
+            visible_scope: &visible_scope,
+            checked_file_count: runtime.checked_file_count(),
+            visible_file_count,
+            last_pass: request.last_pass,
+        })
+        .map_err(EvaluatorError::message)?;
     let mut template_artifact_paths = request.template_artifact_paths.to_vec();
-    let developer_instructions = developer_instructions(DeveloperInstructionsContext {
-        root: runtime.root,
-        template_artifact_dir: request.template_artifact_dir.clone(),
-        template_artifact_paths: &mut template_artifact_paths,
-        in_place: runtime.is_in_place(),
-        diff_from_tree_oid: request.diff_from_tree_oid,
-        checked_tree_oid: runtime.checked_tree_oid(),
-        question_context: request.question_context,
-        q_scope: request.enforced_scope,
-        ignore: &ignore,
-        visible_scope: &visible_scope,
-        checked_file_count: runtime.checked_file_count(),
-        visible_file_count,
-        last_pass: request.last_pass,
-    })
-    .map_err(EvaluatorError::message)?;
+    template_artifact_paths.extend(rendered_developer_instructions.artifact_paths);
+    let developer_instructions = rendered_developer_instructions.text;
     let base_instructions = evaluator_base_instructions(BaseInstructionsContext {
         in_place: runtime.is_in_place(),
         full_scope: q_scope_is_full_project(request.enforced_scope),
@@ -718,22 +720,21 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
     progress: Option<&crate::evaluator::EvaluatorProgress>,
 ) -> Result<InterrogationAnswer, EvaluatorError> {
     let diff_from = resolve_diff_from(runtime, expectation, last_pass)?;
-    let template_artifact_dir =
-        PromptTemplateArtifactDir::Lazy(Arc::clone(&state.prompt_template_output_dir_cache));
-    let mut template_artifact_paths = Vec::new();
-    let prompt = evaluator_turn_prompt(EvaluatorTurnPromptContext {
-        root: runtime.root,
-        template_artifact_dir: template_artifact_dir.clone(),
-        template_artifact_paths: &mut template_artifact_paths,
-        short_id: &expectation.display_id,
-        question: &expectation.question,
-        expected_answer: &expectation.expected_answer,
-        in_place: runtime.is_in_place(),
-        diff_from: &expectation.diff_from,
-        target: expectation.target.as_ref().map(|target| target.as_str()),
-        last_pass: diff_from.last_pass,
-    })
-    .map_err(EvaluatorError::message)?;
+    let prompt_renderer = Arc::clone(&state.prompt_renderer);
+    let rendered_prompt: RenderedPrompt = prompt_renderer
+        .evaluator_turn_prompt(EvaluatorTurnPromptContext {
+            root: runtime.root,
+            short_id: &expectation.display_id,
+            question: &expectation.question,
+            expected_answer: &expectation.expected_answer,
+            in_place: runtime.is_in_place(),
+            diff_from: &expectation.diff_from,
+            target: expectation.target.as_ref().map(|target| target.as_str()),
+            last_pass: diff_from.last_pass,
+        })
+        .map_err(EvaluatorError::message)?;
+    let prompt = rendered_prompt.text;
+    let template_artifact_paths = rendered_prompt.artifact_paths;
     let thinking = effective_thinking(&expectation.agent, expectation);
     let response = ask_with_reused_thread(
         runtime,
@@ -756,7 +757,7 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
             question_context: &expectation.question_context,
             diff_from_tree_oid: &diff_from.tree_oid,
             prompt: &prompt,
-            template_artifact_dir,
+            prompt_renderer,
             template_artifact_paths: &template_artifact_paths,
             last_pass: diff_from.last_pass,
             progress,

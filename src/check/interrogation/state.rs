@@ -1,8 +1,7 @@
 use crate::check::core::ERROR_SCOPE_TOO_NARROW;
 use crate::config_types::{AgentConfig, CheckConfig};
 use crate::evaluator::{
-    app_server_model_key, evaluator_models, EvaluatorResponseParseCache,
-    PromptTemplateOutputDirCache,
+    app_server_model_key, evaluator_models, EvaluatorResponseParseCache, PromptRenderer,
 };
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::hash::full_scope;
@@ -371,7 +370,7 @@ pub(crate) struct InterrogationRunState {
     pub(crate) session_dynamic_show_expectation_ids: BTreeMap<String, BTreeSet<String>>,
     pub(crate) visible_tree_oid_cache: VisibleTreeOidCache,
     pub(crate) parse_cache: EvaluatorResponseParseCache,
-    pub(crate) prompt_template_output_dir_cache: Arc<PromptTemplateOutputDirCache>,
+    pub(crate) prompt_renderer: Arc<PromptRenderer>,
     isolation_policy: Option<NaiveIsolationPolicy>,
 }
 
@@ -393,7 +392,7 @@ impl InterrogationRunState {
             session_dynamic_show_expectation_ids: BTreeMap::new(),
             visible_tree_oid_cache: VisibleTreeOidCache::new(),
             parse_cache: EvaluatorResponseParseCache::new(),
-            prompt_template_output_dir_cache: Arc::new(PromptTemplateOutputDirCache::new()),
+            prompt_renderer: Arc::new(PromptRenderer::new()),
             isolation_policy,
         })
     }

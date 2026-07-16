@@ -28,7 +28,7 @@ use crate::logs::DiagnosticLogWriter;
 use crate::platform::check_interrupted;
 use crate::scope::scope_is_within;
 use std::io::{BufRead, Write};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 pub(super) struct ExpectationRunContext<'a, 'out, 'log, R: EvaluatorRunner> {
     pub(super) runtime: &'a CheckRuntime<'a>,
@@ -359,7 +359,7 @@ fn evaluate_shell(
     root: &std::path::Path,
     expectation: &ResolvedExpectation,
 ) -> Result<(String, String), String> {
-    let mut command = shell_command(&expectation.question);
+    let mut command = super::shell::command(&expectation.question);
     let output = command
         .current_dir(root)
         .stdin(Stdio::null())
@@ -373,23 +373,6 @@ fn evaluate_shell(
     transcript.push_str(&String::from_utf8_lossy(&output.stdout));
     transcript.push_str(&String::from_utf8_lossy(&output.stderr));
     Ok((code.to_string(), transcript))
-}
-
-#[cfg(unix)]
-fn shell_command(question: &str) -> Command {
-    let mut command = Command::new("/bin/sh");
-    // The wrapper gives the command one shared stdout/stderr stream, preserving
-    // the transcript order produced by the command while keeping the question
-    // itself a separate argument with no quoting reconstruction.
-    command.args(["-c", "exec /bin/sh -c \"$1\" 2>&1", "canon-shell", question]);
-    command
-}
-
-#[cfg(windows)]
-fn shell_command(question: &str) -> Command {
-    let mut command = Command::new("cmd.exe");
-    command.args(["/D", "/S", "/C", question]);
-    command
 }
 
 fn trim_line_ending(line: &mut String) {

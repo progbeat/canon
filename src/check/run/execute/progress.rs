@@ -33,9 +33,17 @@ impl LiveExpectationReport {
 
     pub(super) fn finish_public_output_before_structured_report(self, record: &CheckRecord) {
         let finished = self.output.finish_with_record(record);
-        if finished.stdout_completion_failed() {
-            // If stdout accepted the short-ID prefix but cannot receive the
-            // completed result, stderr gets an emergency public-output notice.
+        // xpec: sy
+        assert!(
+            !finished.short_id_was_printed() || finished.anything_was_reported(),
+            "a printed expectation short ID must itself remain a public report"
+        );
+        if finished.needs_stderr_completion_notice() {
+            // If stdout cannot receive the completed result, stderr gets an
+            // emergency completion notice. When stdout already accepted the
+            // short ID, that prefix remains visible as the started public
+            // report even if this best-effort notice also encounters an I/O
+            // failure.
             // The notice does not own reporting: the CheckRecord still flows to
             // the structured report after this function returns.
             let _ = write_stderr_line(&emergency_completion_notice_line(record));
