@@ -95,7 +95,6 @@ fn in_place_unsupported_fields(
     [
         (expectation.diff_from_configured, "diff-from"),
         (expectation.target.is_some(), "target"),
-        (expectation.cooldown.is_some(), "cooldown"),
         (
             !config_agent.ignore.is_empty() || !expectation.agent.ignore.is_empty(),
             "ignore",
@@ -486,10 +485,6 @@ mod tests {
         let item = expectation(&agent, Some(ExpectationTarget::Diff));
         assert!(validate_in_place_check_config(&config_with(&agent, item)).is_err());
 
-        let mut item = expectation(&agent, None);
-        item.cooldown = Some(CooldownConfig("1d".to_string()));
-        assert!(validate_in_place_check_config(&config_with(&agent, item)).is_err());
-
         let mut check_config = config_with(&agent, expectation(&agent, None));
         check_config.agent.ignore = vec!["target".to_string()];
         assert!(validate_in_place_check_config(&check_config).is_err());
@@ -497,6 +492,15 @@ mod tests {
         let mut item = expectation(&agent, None);
         item.agent.ignore = vec!["target".to_string()];
         assert!(validate_in_place_check_config(&config_with(&agent, item)).is_err());
+    }
+
+    #[test] // xpec: jz
+    fn in_place_accepts_cooldown_after_expansion() {
+        let agent = AgentConfig::default();
+        let mut item = expectation(&agent, None);
+        item.cooldown = Some(CooldownConfig("1d".to_string()));
+
+        assert!(validate_in_place_check_config(&config_with(&agent, item)).is_ok());
     }
 
     #[test]
