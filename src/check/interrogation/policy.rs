@@ -310,10 +310,10 @@ pub(crate) fn question_scope_suggestion_scope_for_independent_verification(
     if !scope_is_within(&suggested_scope, current_scope) {
         return Ok(None);
     }
-    if runtime
-        .visible_tree_oid(visible_tree_oid_cache, agent, &suggested_scope)
-        .is_err()
-    {
+    if !matches!(
+        runtime.visible_tree_oid_if_scope_present(visible_tree_oid_cache, agent, &suggested_scope),
+        Ok(Some(_))
+    ) {
         return Ok(None);
     }
     let current_count = runtime.visible_file_count(visible_tree_oid_cache, agent, current_scope)?;

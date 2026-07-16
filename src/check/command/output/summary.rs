@@ -79,13 +79,15 @@ fn repair_instruction_messages(failed: &[String]) -> Vec<String> {
 }
 
 fn plan_repair_message(failed: &[String]) -> String {
+    // [AL] Mirror `_repair_instructions` literally: render one `not:<short ID>`
+    // selector for every failed xpec, with no placeholder selectors.
     let selectors = failed
         .iter()
         .map(|id| format!("not:{id}"))
         .collect::<Vec<_>>()
         .join(" ");
     format!(
-        "❕ Plan the repair, then run `canon show {selectors} [not:<ALREADY_IN_CONTEXT_EXPECTATION>]... -- <PATHSPEC>...` for the planned edit paths to identify expectations that may be affected."
+        "❕ Plan the repair, then run `canon show {selectors} -- <PATHSPEC>...` for the planned edit paths to identify expectations that may be affected."
     )
 }
 

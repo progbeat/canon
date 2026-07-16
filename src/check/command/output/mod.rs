@@ -65,7 +65,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[test] // xpec: AL
     fn non_live_report_result_output_matches_documented_record_shape() {
         let mut bytes = Vec::new();
         let mut result_output = Some(&mut bytes as &mut dyn Write);
@@ -193,12 +193,14 @@ mod tests {
         );
     }
 
-    #[test]
+    #[test] // xpec: AL
     fn agent_messages_cover_documented_actions() {
-        assert!(has_action(
-            &render_check_agent_messages(&issues(&["a"]), 0, 0, 0),
-            "Fix the issues"
-        ));
+        let repair_messages = render_check_agent_messages(&issues(&["a", "b"]), 0, 0, 0);
+        assert!(has_action(&repair_messages, "Fix the issues"));
+        assert_eq!(
+            repair_messages[1],
+            "❕ Plan the repair, then run `canon show not:a not:b -- <PATHSPEC>...` for the planned edit paths to identify expectations that may be affected."
+        );
         assert!(has_action(
             &render_check_agent_messages(&[], 0, 0, 0),
             "All checks passed"

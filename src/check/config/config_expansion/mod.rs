@@ -11,7 +11,7 @@ mod tests {
         expand_raw_check_config_with_options, expansion::expand_raw_check_config,
         CheckConfigExpansionOptions, CheckConfigSource,
     };
-    use crate::config_types::{CooldownConfig, ExpectationTarget, ExpectationTo, RawCheckConfig};
+    use crate::config_types::{Cooldown, ExpectationTarget, ExpectationTo, RawCheckConfig};
     use crate::git::TreeSource;
     use crate::repo_inspection::RepoInspectionCache;
     use std::fs;
@@ -121,7 +121,7 @@ expectations:
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test]
+    #[test] // xpec: 1r,jz
     fn include_cooldown_is_inherited_without_overriding_child_cooldown() {
         let root = test_root("include-cooldown-inheritance");
         git(&root, &["init"]);
@@ -163,11 +163,15 @@ expectations:
         assert_eq!(config.expectations.len(), 2);
         assert_eq!(
             config.expectations[0].cooldown,
-            Some(CooldownConfig("7d".to_string()))
+            Some(Cooldown {
+                seconds: 7 * 24 * 60 * 60
+            })
         );
         assert_eq!(
             config.expectations[1].cooldown,
-            Some(CooldownConfig("1d".to_string()))
+            Some(Cooldown {
+                seconds: 24 * 60 * 60
+            })
         );
         let _ = fs::remove_dir_all(root);
     }
@@ -383,10 +387,13 @@ expectations:
         )
         .expect("expand config");
 
-        assert_eq!(config.expectations[0].diff_from, ":against-tree");
-        assert_eq!(config.expectations[1].diff_from, "HEAD~1");
-        assert!(config.expectations[0].diff_from_configured);
-        assert!(config.expectations[1].diff_from_configured);
+        assert_eq!(
+            config.expectations[0].diff_from.as_deref(),
+            Some(":against-tree")
+        );
+        assert_eq!(config.expectations[1].diff_from.as_deref(), Some("HEAD~1"));
+        assert!(config.expectations[0].diff_from.is_some());
+        assert!(config.expectations[1].diff_from.is_some());
         let _ = fs::remove_dir_all(root);
     }
 
@@ -486,6 +493,7 @@ expectations:
             CheckConfigSource::Tree(TreeSource::Staged),
             CheckConfigExpansionOptions {
                 default_agent_preset: Some("smart"),
+                ask_question: None,
             },
         )
         .expect("expand config");
@@ -495,6 +503,53 @@ expectations:
             config.expectations[0].agent.models,
             vec!["default-model".to_string()]
         );
+    }
+
+    #[test] // xpec: 0N,nK,WH
+    fn ask_question_uses_selected_preset_defaults_and_explicit_ask_fields() {
+        let raw: RawCheckConfig = serde_saphyr::from_str(
+            r#"
+presets:
+  default: {}
+  smart:
+    q: "Preset question"
+    a: "yes"
+    to: caller
+    rank: 9
+    instructions: "Use selected preset context."
+    diff-from: HEAD~1
+    target: diff
+    models: ["smart-model"]
+expectations:
+  - q: "Configured check expectation"
+    a: "no"
+"#,
+        )
+        .expect("parse raw check config");
+
+        let config = expand_raw_check_config_with_options(
+            None,
+            Path::new("check.yml"),
+            raw,
+            None,
+            CheckConfigSource::Tree(TreeSource::Staged),
+            CheckConfigExpansionOptions {
+                default_agent_preset: Some("smart"),
+                ask_question: Some("Does preset ask work?"),
+            },
+        )
+        .expect("expand ask config");
+
+        assert_eq!(config.expectations.len(), 1);
+        let expectation = &config.expectations[0];
+        assert_eq!(expectation.q, "Does preset ask work?");
+        assert!(expectation.a.is_empty());
+        assert_eq!(expectation.to, ExpectationTo::Agent);
+        assert_eq!(expectation.rank, 9);
+        assert_eq!(expectation.question_context, "Use selected preset context.");
+        assert_eq!(expectation.diff_from.as_deref(), Some("HEAD~1"));
+        assert_eq!(expectation.target, Some(ExpectationTarget::Diff));
+        assert_eq!(expectation.agent.models, vec!["smart-model".to_string()]);
     }
 
     // xpec: WH
@@ -533,9 +588,15 @@ expectations:
         assert_eq!(expectation.q, "Does the preset supply defaults?");
         assert_eq!(expectation.a, "yes");
         assert_eq!(expectation.question_context, "Use the preset instructions.");
-        assert_eq!(expectation.diff_from, "master");
+        assert_eq!(expectation.diff_from.as_deref(), Some("master"));
         assert_eq!(expectation.target, Some(ExpectationTarget::Diff));
-        assert_eq!(expectation.cooldown, Some(CooldownConfig("7d".to_string())));
+        // xpec: 1r,jz
+        assert_eq!(
+            expectation.cooldown,
+            Some(Cooldown {
+                seconds: 7 * 24 * 60 * 60
+            })
+        );
         assert_eq!(expectation.agent.models, vec!["preset-model".to_string()]);
         assert_eq!(expectation.agent.thinking, "high");
     }
@@ -789,7 +850,7 @@ expectations:
         let expectation = &config.expectations[0];
         assert!(!expectation.question_answer_only);
         assert_eq!(expectation.question_context, "Use the preset instructions.");
-        assert_eq!(expectation.diff_from, "master");
+        assert_eq!(expectation.diff_from.as_deref(), Some("master"));
         assert_eq!(expectation.target, Some(ExpectationTarget::Diff));
         assert_eq!(expectation.agent.thinking, "high");
     }
@@ -831,8 +892,14 @@ expectations:
         assert_eq!(expectation.q, "Does the item win?");
         assert_eq!(expectation.a, "yes");
         assert_eq!(expectation.question_context, " Item instructions. ");
-        assert_eq!(expectation.diff_from, " HEAD~1 ");
-        assert_eq!(expectation.cooldown, Some(CooldownConfig("1d".to_string())));
+        assert_eq!(expectation.diff_from.as_deref(), Some(" HEAD~1 "));
+        // xpec: 1r,jz
+        assert_eq!(
+            expectation.cooldown,
+            Some(Cooldown {
+                seconds: 24 * 60 * 60
+            })
+        );
         assert_eq!(expectation.agent.thinking, "high");
     }
 

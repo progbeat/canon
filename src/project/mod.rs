@@ -50,7 +50,8 @@ impl Config {
         // Notes are intentionally thread-scoped retained data. Appends under a
         // thread root are small note/index log records, and those logs are
         // threshold-compacted after enough appended bytes accumulate to pay for
-        // the rewrite amortized. The practical state bound is therefore
+        // each rewrite. Across N appended bytes, the notes component therefore
+        // writes O(N) bytes. The practical state bound is
         // conditional on a bounded retained set of thread roots and note keys;
         // automatic cleanup must not delete those user-retained notes.
         Ok(Config {

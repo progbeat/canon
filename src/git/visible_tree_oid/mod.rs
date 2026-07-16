@@ -11,7 +11,8 @@ mod scope_entries;
 pub(crate) use hash::git_object_oid_has_known_shape;
 use hash::{git_object_hash_algorithm, scope_entry_is_tree, GitObjectHashAlgorithm};
 use scope_entries::{
-    visible_scope_entries_from_files, visible_tree_oid_from_files_if_scope_present,
+    visible_scope_entries_from_files, visible_tree_oid_from_files,
+    visible_tree_oid_from_files_if_scope_present,
 };
 
 // This module implements only the `visibleTreeOid` fingerprint. Persistent
@@ -33,6 +34,7 @@ macro_rules! cached_clone {
 
 #[derive(Default)]
 pub(crate) struct VisibleTreeOidCache {
+    required_visible_tree_oids: BTreeMap<SourceScopeCacheKey, String>,
     visible_tree_oids: BTreeMap<SourceScopeCacheKey, Option<String>>,
     visible_scope_entries: BTreeMap<SourceScopeCacheKey, Vec<String>>,
     tree_source_files: BTreeMap<SourceFilesCacheKey, Result<Vec<StagedTrackedFile>, String>>,
@@ -57,8 +59,13 @@ impl VisibleTreeOidCache {
         agent: &AgentConfig,
         scope: &[String],
     ) -> Result<String, String> {
-        self.visible_tree_oid_for_reuse(root, source, agent, scope)?
-            .ok_or("failed to hash tree scope".to_string())
+        let visible_scope_pathspec = visible_scope(agent, scope)?;
+        self.required_visible_tree_oid_for_source_visible_scope(
+            root,
+            source,
+            agent,
+            visible_scope_pathspec,
+        )
     }
 
     pub(crate) fn visible_tree_oid_for_reuse(
@@ -150,6 +157,33 @@ impl VisibleTreeOidCache {
             {
                 let files = self.files_for_source(root, source)?;
                 visible_tree_oid_from_files_if_scope_present(
+                    &files,
+                    &visible_scope_pathspec,
+                    self.object_hash_algorithm(root)?,
+                )?
+            },
+            |value| Ok(value)
+        )
+    }
+
+    fn required_visible_tree_oid_for_source_visible_scope(
+        &mut self,
+        root: &Path,
+        source: &TreeSource,
+        agent: &AgentConfig,
+        visible_scope_pathspec: Vec<String>,
+    ) -> Result<String, String> {
+        cached_clone!(
+            self.required_visible_tree_oids,
+            source_scope_cache_key(root, source, agent, &visible_scope_pathspec)?,
+            |value| Ok(value),
+            {
+                // An active interrogation applies its complete visible
+                // pathspec to the current tree. A persisted q-scope can retain
+                // a path that was renamed; the remaining include terms still
+                // select their ordinary Git-pathspec union.
+                let files = self.files_for_source(root, source)?;
+                visible_tree_oid_from_files(
                     &files,
                     &visible_scope_pathspec,
                     self.object_hash_algorithm(root)?,
@@ -263,6 +297,7 @@ fn source_scope_cache_key(
 
 #[cfg(test)]
 mod tests {
+    use super::scope_entries::visible_tree_oid_from_files;
     use super::{GitObjectHashAlgorithm, StagedTrackedFile, VisibleTreeOidReuseResolver};
 
     #[test]
@@ -313,6 +348,25 @@ mod tests {
             .visible_tree_oid_for_visible_scope_pathspec(&[".".to_string()])
             .unwrap()
             .is_some());
+    }
+
+    #[test] // xpec: A8
+    fn required_visible_scope_hash_accepts_a_stale_term_when_another_term_matches() {
+        let files = vec![StagedTrackedFile {
+            path: b"src/check/config/validation.rs".to_vec(),
+            mode: "100644".to_string(),
+            object_id: "0123456789012345678901234567890123456789".to_string(),
+        }];
+
+        assert!(visible_tree_oid_from_files(
+            &files,
+            &[
+                "src/check/config/validation.rs".to_string(),
+                "src/check/run/selection/cooldown.rs".to_string(),
+            ],
+            GitObjectHashAlgorithm::Sha1,
+        )
+        .is_ok());
     }
 
     fn resolver_with_files(files: Vec<StagedTrackedFile>) -> VisibleTreeOidReuseResolver {

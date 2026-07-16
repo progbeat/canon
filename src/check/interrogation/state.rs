@@ -278,6 +278,20 @@ impl<'a> CheckRuntime<'a> {
         }
     }
 
+    pub(crate) fn visible_tree_oid_if_scope_present(
+        &self,
+        cache: &mut VisibleTreeOidCache,
+        agent: &AgentConfig,
+        scope: &[String],
+    ) -> Result<Option<String>, String> {
+        match &self.mode {
+            CheckRuntimeMode::Materialized { tree_source, .. } => {
+                cache.visible_tree_oid_for_reuse(self.root, tree_source, agent, scope)
+            }
+            CheckRuntimeMode::InPlace => Ok(Some(IN_PLACE_VISIBLE_TREE_OID.to_string())),
+        }
+    }
+
     pub(crate) fn visible_file_count(
         &self,
         cache: &mut VisibleTreeOidCache,

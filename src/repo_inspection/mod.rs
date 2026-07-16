@@ -17,7 +17,14 @@ type GeneratorPathsCacheKey = (PathBuf, PathBuf, String, String);
 type InPlaceFileContentCacheKey = (PathBuf, PathBuf);
 type StagedFileContentCacheKey = (PathBuf, PathBuf);
 type TreeFileContentCacheKey = (PathBuf, String, PathBuf);
-type CheckConfigCacheKey = (PathBuf, PathBuf, String, String, Option<String>);
+type CheckConfigCacheKey = (
+    PathBuf,
+    PathBuf,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+);
 type IncludedExpectationsCacheKey = (PathBuf, String, String, String);
 type StagedBlobContents = BTreeMap<Vec<u8>, Vec<u8>>;
 
@@ -317,6 +324,34 @@ impl RepoInspectionCache {
         source: &TreeSource,
         default_agent_preset: Option<&str>,
     ) -> Result<CheckConfig, String> {
+        self.load_tree_check_config(root, config_path, source, default_agent_preset, None)
+    }
+
+    pub(crate) fn load_ask_config(
+        &mut self,
+        root: &Path,
+        config_path: &Path,
+        source: &TreeSource,
+        default_agent_preset: Option<&str>,
+        question: &str,
+    ) -> Result<CheckConfig, String> {
+        self.load_tree_check_config(
+            root,
+            config_path,
+            source,
+            default_agent_preset,
+            Some(question),
+        )
+    }
+
+    fn load_tree_check_config(
+        &mut self,
+        root: &Path,
+        config_path: &Path,
+        source: &TreeSource,
+        default_agent_preset: Option<&str>,
+        ask_question: Option<&str>,
+    ) -> Result<CheckConfig, String> {
         let content = self.tree_file_content(root, source, config_path)?;
         let key = (
             root.to_path_buf(),
@@ -324,6 +359,7 @@ impl RepoInspectionCache {
             content.clone(),
             source.cache_key(),
             default_agent_preset.map(str::to_string),
+            ask_question.map(str::to_string),
         );
         if let Some(cached) = self.check_configs.get(&key) {
             return cached.clone();
@@ -335,6 +371,7 @@ impl RepoInspectionCache {
             self,
             source.clone(),
             default_agent_preset,
+            ask_question,
         );
         self.check_configs.insert(key, parsed.clone());
         parsed
@@ -346,6 +383,26 @@ impl RepoInspectionCache {
         config_path: &Path,
         default_agent_preset: Option<&str>,
     ) -> Result<CheckConfig, String> {
+        self.load_in_place_check_config(root, config_path, default_agent_preset, None)
+    }
+
+    pub(crate) fn load_in_place_ask_config(
+        &mut self,
+        root: &Path,
+        config_path: &Path,
+        default_agent_preset: Option<&str>,
+        question: &str,
+    ) -> Result<CheckConfig, String> {
+        self.load_in_place_check_config(root, config_path, default_agent_preset, Some(question))
+    }
+
+    fn load_in_place_check_config(
+        &mut self,
+        root: &Path,
+        config_path: &Path,
+        default_agent_preset: Option<&str>,
+        ask_question: Option<&str>,
+    ) -> Result<CheckConfig, String> {
         let source = CheckConfigSource::InPlace;
         let content = self.in_place_file_content(root, config_path)?;
         let key = (
@@ -354,6 +411,7 @@ impl RepoInspectionCache {
             content.clone(),
             source.cache_key(),
             default_agent_preset.map(str::to_string),
+            ask_question.map(str::to_string),
         );
         if let Some(cached) = self.check_configs.get(&key) {
             return cached.clone();
@@ -365,6 +423,7 @@ impl RepoInspectionCache {
             self,
             source,
             default_agent_preset,
+            ask_question,
         );
         self.check_configs.insert(key, parsed.clone());
         parsed
@@ -412,6 +471,12 @@ fn collect_in_place_files(root: &Path, dir: &Path, files: &mut Vec<String>) -> R
         fs::read_dir(dir).map_err(|err| format!("failed to read {}: {}", dir.display(), err))?
     {
         let entry = entry.map_err(|err| format!("failed to read {}: {}", dir.display(), err))?;
+        // [Df] In-place inspects filesystem project contents without consuming
+        // Git repository metadata. `.gitignore` and other ordinary project
+        // files remain visible; only metadata entries named `.git` are skipped.
+        if entry.file_name() == ".git" {
+            continue;
+        }
         let path = entry.path();
         let file_type = entry
             .file_type()
@@ -486,6 +551,25 @@ mod tests {
 
         assert_eq!(files, vec!["specs/link.md", "specs/real.md"]);
         let _ = fs::remove_file(outside);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test] // xpec: Df
+    fn in_place_file_listing_ignores_git_metadata_only() {
+        let root = test_root("in-place-file-listing-ignores-git-metadata");
+        fs::create_dir_all(root.join(".git/objects")).unwrap();
+        fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        fs::write(root.join(".gitignore"), "target/\n").unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let files = in_place_file_listing(&root).unwrap();
+
+        assert_eq!(
+            files,
+            vec![".gitignore", "src/main.rs"],
+            "in-place listing must ignore Git metadata without hiding project files"
+        );
         let _ = fs::remove_dir_all(root);
     }
 

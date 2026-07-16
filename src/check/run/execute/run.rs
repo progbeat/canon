@@ -2,13 +2,13 @@ use super::expectation::{run_expectation, ExpectationRunContext};
 use super::report::{check_run_report, skipped_count, CheckRunReportCounts};
 use super::CheckRunSideEffects;
 use crate::check::core::{
-    check_run_error, interrupted_check_run_error, CachedExpectation, CheckOptions, CheckRecord,
-    CheckRunError, CheckRunReport, ResolvedExpectation,
+    check_run_error, CachedExpectation, CheckOptions, CheckRecord, CheckRunError, CheckRunReport,
+    ResolvedExpectation,
 };
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::run::selection::{
-    order_by_latest_fail, order_in_place_by_absent_fail_history,
-    select_git_backed_expectations_after_cache, GitBackedCacheFilterContext,
+    order_in_place_by_absent_fail_history, select_and_order_git_backed_expectations,
+    GitBackedCacheFilterContext,
 };
 use crate::evaluator::EvaluatorRunner;
 use crate::time::unix_timestamp;
@@ -74,11 +74,10 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         let source = runtime
             .tree_source()
             .ok_or_else(|| current_error!("missing Git tree source".to_string()))?;
-        // Explicit selectors are still routed through this component, but the
-        // cache selector returns before any cache lookup when
-        // `selectors_provided` is true. That keeps forced selections in the
-        // evaluator queue even if reusable cached results exist.
-        let check_work = run_try!(select_git_backed_expectations_after_cache(
+        // Git-backed selection owns both cache filtering and final evaluation
+        // ordering. Explicit selectors skip cache lookup but are still sorted
+        // by rank and latest fail before this function receives the queue.
+        let check_work = run_try!(select_and_order_git_backed_expectations(
             GitBackedCacheFilterContext {
                 root,
                 source,
@@ -95,12 +94,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                 record: hit.hit.record,
             });
         }
-        run_try!(order_by_latest_fail(
-            root,
-            check_work.evaluation_queue,
-            &mut caches.xpec_state,
-            |expectation| expectation,
-        ))
+        check_work.evaluation_queue
     };
     for expectation in check_work_queue {
         let outcome = match run_expectation(
@@ -131,11 +125,10 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             // rule.
             let report = current_report(records, cached, total_expectations);
             if interrupted {
-                // The post-summary agent-message spec is explicitly scoped to
-                // runs without Ctrl-C or other interruption. Resource/control
-                // stop signals finish through the error-report path so no
-                // commit/fix instruction is printed for a partial run.
-                return Err(interrupted_check_run_error(
+                // The interruption still finishes through the normal partial
+                // report path. Default-source runs emit the feedback required
+                // by AL after the summary, including pending expectations.
+                return Err(check_run_error(
                     "check interrupted after the current expectation".to_string(),
                     report,
                 ));

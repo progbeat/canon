@@ -3,7 +3,7 @@ use crate::check::command::args::parse_ask_command_args;
 use crate::check::core::AskCommandArgs;
 use crate::check::CheckRunCaches;
 use crate::cli::{AskFailure, CommandError};
-use crate::config_types::{AgentConfig, CheckConfig};
+use crate::config_types::{AgentConfig, CheckConfig, Expectation, ExpectationTo};
 use crate::git::TreeSource;
 use crate::logs::DiagnosticLogWriter;
 use crate::platform::{install_check_signal_handlers, reset_check_interrupted};
@@ -26,8 +26,10 @@ pub(crate) fn run_ask_command(
     // "canon ask always asks" starts after parse/tree/log setup accepts the
     // invocation. These resolves validate the optional Git context for a
     // git-backed ask; they are not cache/config shortcuts. Once the command
-    // context is valid, config loading falls back and `run_ask_query` always
-    // builds the temporary ask xpec before reaching the evaluator boundary.
+    // context is valid, optional config loading falls back and `run_ask_query`
+    // always receives one temporary ask xpec before reaching the evaluator
+    // boundary. An explicit preset makes config loading part of the command's
+    // selected behavior, so its error is returned instead of being ignored.
     let checked_tree = TreeSource::resolve(root, &command.tree, "--tree")?;
     let against_tree = TreeSource::resolve_default_against_tree(
         root,
@@ -37,14 +39,17 @@ pub(crate) fn run_ask_command(
     let mut repo_cache = RepoInspectionCache::new();
     let diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
     let mut check_caches = CheckRunCaches::new();
-    let config = ask_query_config_from_optional_check_config(
-        repo_cache.load_check_config_with_default_agent_preset(
+    let config = ask_query_config(
+        repo_cache.load_ask_config(
             root,
             &command.config_path,
             &checked_tree,
             command.default_agent_preset.as_deref(),
+            &command.question,
         ),
-    );
+        command.default_agent_preset.is_some(),
+        &command.question,
+    )?;
     run_ask_query(
         root,
         &command,
@@ -61,16 +66,19 @@ fn run_in_place_ask_command(root: &Path, command: &AskCommandArgs) -> Result<(),
     let mut check_caches = CheckRunCaches::new();
     let diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
     // xpec: 0N
-    // In-place ask has no Git-tree preparation. The check config is optional
-    // agent context only; load errors fall back to the implementation default
-    // agent instead of preventing the temporary ask xpec.
-    let config = ask_query_config_from_optional_check_config(
-        repo_cache.load_in_place_check_config_with_default_agent_preset(
+    // In-place ask has no Git-tree preparation. Its selected preset is resolved
+    // into the temporary xpec; optional config load errors fall back to
+    // implementation defaults instead of preventing that xpec.
+    let config = ask_query_config(
+        repo_cache.load_in_place_ask_config(
             root,
             &command.config_path,
             command.default_agent_preset.as_deref(),
+            &command.question,
         ),
-    );
+        command.default_agent_preset.is_some(),
+        &command.question,
+    )?;
     run_ask_query(
         root,
         command,
@@ -82,24 +90,41 @@ fn run_in_place_ask_command(root: &Path, command: &AskCommandArgs) -> Result<(),
     )
 }
 
-fn ask_query_config_from_optional_check_config(config: Result<CheckConfig, String>) -> CheckConfig {
-    // `canon ask` always asks the evaluator. A loaded check config is only an
-    // optional source of resolved agent settings; check expectations
-    // are discarded before query.rs builds the single temporary ask xpec.
-    config
-        .map(ask_query_config_from_check_config)
-        .unwrap_or_else(|_| ask_query_config_with_agent(AgentConfig::implementation_default()))
+fn ask_query_config(
+    config: Result<CheckConfig, String>,
+    preset_explicit: bool,
+    question: &str,
+) -> Result<CheckConfig, String> {
+    // `load_ask_config` has already replaced configured check expectations
+    // with the one resolved temporary ask xpec. An explicit preset must resolve
+    // successfully; an unavailable optional config falls back to the same xpec
+    // shape with implementation defaults.
+    match config {
+        Ok(config) => Ok(config),
+        Err(err) if preset_explicit => Err(err),
+        Err(_) => Ok(ask_query_config_with_agent(
+            question,
+            AgentConfig::implementation_default(),
+        )),
+    }
 }
 
-fn ask_query_config_from_check_config(config: CheckConfig) -> CheckConfig {
-    ask_query_config_with_agent(config.agent)
-}
-
-fn ask_query_config_with_agent(agent: AgentConfig) -> CheckConfig {
+fn ask_query_config_with_agent(question: &str, agent: AgentConfig) -> CheckConfig {
     CheckConfig {
         version: 1,
-        agent,
-        expectations: Vec::new(),
+        agent: agent.clone(),
+        expectations: vec![Expectation {
+            to: ExpectationTo::Agent,
+            q: question.to_string(),
+            a: String::new(),
+            rank: 0,
+            question_context: String::new(),
+            diff_from: None,
+            target: None,
+            question_answer_only: true,
+            agent,
+            cooldown: None,
+        }],
     }
 }
 
@@ -112,15 +137,15 @@ fn run_ask_query(
     diagnostic_log: Option<DiagnosticLogWriter>,
     check_caches: &mut CheckRunCaches,
 ) -> Result<(), CommandError> {
-    // Ask receives an ask-only `CheckConfig`: agent settings may come from the
-    // expanded check config, but configured expectations are not selected.
+    // Ask receives an ask-only `CheckConfig`: its one temporary xpec carries
+    // resolved preset defaults, while configured check expectations are not
+    // selected.
     // A prepared ask means parse/tree/log setup has accepted the invocation.
     // After that point there is no cache or last-result shortcut, and the
     // query path always sends an evaluator turn.
     let result = run_check_query_command(CheckQueryCommand {
         root,
         config,
-        question: &command.question,
         query_scope: &command.query_scope,
         query_scope_provided: command.query_scope_provided,
         tree_source,
@@ -168,32 +193,58 @@ mod tests {
 
     #[test] // xpec: 0N
     fn ask_config_load_error_still_builds_temporary_query_config() {
-        let config =
-            ask_query_config_from_optional_check_config(Err("config unavailable".to_string()));
+        let config = ask_query_config(
+            Err("config unavailable".to_string()),
+            false,
+            "Does fallback ask work?",
+        )
+        .expect("optional config errors fall back");
 
-        assert!(config.expectations.is_empty());
+        assert_eq!(config.expectations.len(), 1);
+        assert_eq!(config.expectations[0].q, "Does fallback ask work?");
+        assert!(config.expectations[0].a.is_empty());
     }
 
-    #[test] // xpec: 0N
-    fn ask_query_config_discards_loaded_check_expectations() {
-        let config = ask_query_config_from_optional_check_config(Ok(CheckConfig {
-            version: 1,
-            agent: AgentConfig::implementation_default(),
-            expectations: vec![Expectation {
-                to: crate::config_types::ExpectationTo::Agent,
-                rank: 0,
-                q: "Does ask ignore configured check expectations?".to_string(),
-                a: "yes".to_string(),
-                question_context: String::new(),
-                diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
-                diff_from_configured: true,
-                target: None,
-                question_answer_only: false,
-                agent: AgentConfig::implementation_default(),
-                cooldown: None,
-            }],
-        }));
+    #[test] // xpec: nK
+    fn explicit_preset_config_error_is_returned() {
+        let error = ask_query_config(
+            Err("unknown preset: smart".to_string()),
+            true,
+            "Does preset ask work?",
+        )
+        .expect_err("explicit preset errors must not fall back");
 
-        assert!(config.expectations.is_empty());
+        assert_eq!(error, "unknown preset: smart");
+    }
+
+    #[test] // xpec: 0N,nK,WH
+    fn ask_query_config_keeps_resolved_temporary_expectation() {
+        let config = ask_query_config(
+            Ok(CheckConfig {
+                version: 1,
+                agent: AgentConfig::implementation_default(),
+                expectations: vec![Expectation {
+                    to: crate::config_types::ExpectationTo::Agent,
+                    rank: 0,
+                    q: "Does preset ask work?".to_string(),
+                    a: String::new(),
+                    question_context: "Use preset context.".to_string(),
+                    diff_from: None,
+                    target: None,
+                    question_answer_only: false,
+                    agent: AgentConfig::implementation_default(),
+                    cooldown: None,
+                }],
+            }),
+            false,
+            "Does preset ask work?",
+        )
+        .expect("loaded config resolves");
+
+        assert_eq!(config.expectations.len(), 1);
+        assert_eq!(
+            config.expectations[0].question_context,
+            "Use preset context."
+        );
     }
 }

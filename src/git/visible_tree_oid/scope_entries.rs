@@ -28,8 +28,16 @@ pub(super) fn visible_tree_oid_from_files_if_scope_present(
     if !visible_scope_include_terms_are_present_in_checked_tree(files, scope)? {
         return Ok(None);
     }
+    visible_tree_oid_from_files(files, scope, object_hash_algorithm).map(Some)
+}
+
+pub(super) fn visible_tree_oid_from_files(
+    files: &[StagedTrackedFile],
+    scope: &[String],
+    object_hash_algorithm: GitObjectHashAlgorithm,
+) -> Result<String, String> {
     let entries = visible_scope_entries_from_files(files, scope)?;
-    visible_tree_oid_from_entries(&entries, object_hash_algorithm).map(Some)
+    visible_tree_oid_from_entries(&entries, object_hash_algorithm)
 }
 
 pub(super) fn visible_scope_include_terms_are_present_in_checked_tree(

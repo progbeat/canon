@@ -1,3 +1,4 @@
+use super::order::order_by_latest_fail;
 use crate::check::core::{CheckOptions, ResolvedExpectation};
 use crate::check::run::cache::{
     cached_result_for_expectation, write_cache_hit, CachedResultLookup, CheckCacheHit,
@@ -25,57 +26,61 @@ pub(crate) struct GitBackedCacheFilterContext<'a, 'log> {
     pub(crate) diagnostic_log: &'a mut Option<&'log mut DiagnosticLogWriter>,
 }
 
-// Git-backed cache filtering applies the selected-expectation policy before
-// evaluation starts. Explicit selections are forced; otherwise only collected
-// expectations without a reusable pass result are selected.
+// Git-backed selection applies the cache policy and then the evaluation order
+// before evaluation starts. Explicit selections are forced but still ordered;
+// otherwise only collected expectations without a reusable pass result are
+// selected and ordered.
 //
-// This layer only partitions work by cache availability and selectedness. The
-// Cache selection reads existing xpec state and may emit bounded runtime-log
-// events through the supplied writer, but it does not create a persistent
-// state family of its own.
+// Selection reads existing xpec state and may emit bounded runtime-log events
+// through the supplied writer, but it does not create a persistent state family
+// of its own.
 //
 // This function receives command-independent `CheckOptions`; CLI/trailer policy
 // stays in the command layer before and after this selection step.
-pub(crate) fn select_git_backed_expectations_after_cache(
+pub(crate) fn select_and_order_git_backed_expectations(
     context: GitBackedCacheFilterContext<'_, '_>,
     options: &CheckOptions,
     now: u64,
 ) -> Result<GitBackedCacheFilteredCheckWork, String> {
-    if options.selectors_provided {
+    let (evaluation_queue, cached_hits) = if options.selectors_provided {
         // Explicit expectation selectors are forced selections. Do not inspect
         // cached results here: a cache hit must not move an explicit candidate
         // out of the evaluator queue.
-        return Ok(GitBackedCacheFilteredCheckWork {
-            evaluation_queue: options.candidate_expectations.clone(),
-            cached_hits: Vec::new(),
-        });
-    }
-
-    let mut evaluation_queue = Vec::new();
-    let mut cached_hits = Vec::new();
-    for expectation in options.candidate_expectations.clone() {
-        match cached_result_for_expectation(
-            context.root,
-            context.source,
-            &expectation.agent,
-            &expectation,
-            &mut *context.xpec_state,
-            &mut *context.visible_tree_oid_cache,
-            CachedResultLookup {
-                now,
-                include_same_tree: true,
-                include_cooldown: !options.ignore_cooldown,
-            },
-        )? {
-            Some(hit) => {
-                if let Some(writer) = context.diagnostic_log.as_deref_mut() {
-                    write_cache_hit(writer, &hit)?;
+        (options.candidate_expectations.clone(), Vec::new())
+    } else {
+        let mut evaluation_queue = Vec::new();
+        let mut cached_hits = Vec::new();
+        for expectation in options.candidate_expectations.clone() {
+            match cached_result_for_expectation(
+                context.root,
+                context.source,
+                &expectation.agent,
+                &expectation,
+                &mut *context.xpec_state,
+                &mut *context.visible_tree_oid_cache,
+                CachedResultLookup {
+                    now,
+                    include_same_tree: true,
+                    include_cooldown: !options.ignore_cooldown,
+                },
+            )? {
+                Some(hit) => {
+                    if let Some(writer) = context.diagnostic_log.as_deref_mut() {
+                        write_cache_hit(writer, &hit)?;
+                    }
+                    cached_hits.push(CachedExpectationHit { expectation, hit });
                 }
-                cached_hits.push(CachedExpectationHit { expectation, hit });
+                None => evaluation_queue.push(expectation),
             }
-            None => evaluation_queue.push(expectation),
         }
-    }
+        (evaluation_queue, cached_hits)
+    };
+    let evaluation_queue = order_by_latest_fail(
+        context.root,
+        evaluation_queue,
+        &mut *context.xpec_state,
+        |expectation| expectation,
+    )?;
     Ok(GitBackedCacheFilteredCheckWork {
         evaluation_queue,
         cached_hits,
@@ -85,8 +90,8 @@ pub(crate) fn select_git_backed_expectations_after_cache(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::check::core::{CheckRecord, CheckResult, Cooldown};
-    use crate::config_types::{AgentConfig, ExpectationTarget};
+    use crate::check::core::{CheckRecord, CheckResult};
+    use crate::config_types::{AgentConfig, Cooldown, ExpectationTarget};
     use crate::hash::full_scope;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -122,7 +127,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test] // xpec: E
+    #[test] // xpec: E,cv
     fn selector_mode_forces_evaluation_despite_cached_results() {
         let root = git_project("selector-cache-continues");
         fs::create_dir_all(root.join("src")).unwrap();
@@ -149,7 +154,7 @@ mod tests {
         let work = cache_filtered_work_with_mode(
             &root,
             &source,
-            vec![cached_expectation, uncached_expectation],
+            vec![uncached_expectation, cached_expectation],
             true,
         );
         assert!(work.cached_hits.is_empty());
@@ -211,7 +216,7 @@ mod tests {
         let mut xpec_state = XpecStateCache::default();
         let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
         let mut diagnostic_log = None;
-        select_git_backed_expectations_after_cache(
+        select_and_order_git_backed_expectations(
             GitBackedCacheFilterContext {
                 root,
                 source,

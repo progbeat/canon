@@ -72,7 +72,6 @@ pub(crate) struct CheckRunError {
     pub(crate) error: String,
     // Runtime errors carry the complete report available at the error boundary.
     pub(crate) report: Box<CheckRunReport>,
-    pub(crate) interrupted: bool,
 }
 
 // `check::run` uses this constructor to attach the partial report to every
@@ -81,14 +80,5 @@ pub(crate) fn check_run_error(error: String, report: CheckRunReport) -> CheckRun
     CheckRunError {
         error,
         report: Box::new(report),
-        interrupted: false,
-    }
-}
-
-pub(crate) fn interrupted_check_run_error(error: String, report: CheckRunReport) -> CheckRunError {
-    CheckRunError {
-        error,
-        report: Box::new(report),
-        interrupted: true,
     }
 }

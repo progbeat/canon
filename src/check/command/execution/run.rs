@@ -1,13 +1,15 @@
 use super::failure::{
-    fail_check_after_start, fail_check_before_selection, finish_check_error_report,
-    started_check_output, CheckErrorReportFinish,
+    collected_check_output, fail_check_after_start, fail_check_before_selection,
+    finish_check_error_report, requested_check_output, started_check_output,
+    write_check_failure_trailer, CheckErrorReportFinish, CheckFailureOutput,
 };
 use super::prepare::{
     prepare_git_backed_check_execution, GitBackedCheckStorage,
     PrepareGitBackedCheckExecutionOptions,
 };
 use super::trailer::{
-    check_command_writes_agent_message, check_report_passed, write_check_trailer, CompletedCheckRun,
+    check_command_writes_agent_message, check_config_path_is_default, check_report_passed,
+    write_check_trailer, CompletedCheckRun,
 };
 mod ask;
 
@@ -17,15 +19,16 @@ use crate::app::LazyAppServerRunner;
 use crate::check::command::args::parse_check_command_args;
 use crate::check::command::output::SharedCheckOutput;
 use crate::check::command::{finish_check_report, CheckReportFinishContext};
-use crate::check::config::validation::{
-    check_config_loads_plugins, validate_in_place_check_config,
-};
+use crate::check::config::in_place::validate_in_place_check_config;
+use crate::check::config::validation::check_config_loads_plugins;
 use crate::check::core::CheckCommandArgs;
 use crate::check::interrogation::{state::CheckRuntime, write_check_lifecycle_start_event};
 use crate::check::run::selection::{expectation_identities, resolve_check_options_with_identities};
-use crate::check::{run_check_with_runner_and_caches, CheckRunCaches, CheckRunSideEffects};
+use crate::check::{
+    run_check_with_runner_and_caches, CheckRunCaches, CheckRunSideEffects, CHECK_PATH,
+};
 use crate::cli::CommandError;
-use crate::git::TreeSource;
+use crate::git::{TreeSource, DEFAULT_AGAINST_TREE_ARG, STAGED_TREE_ARG};
 use crate::logs::{write_cache_cleanup_event, DiagnosticLogWriter};
 use crate::platform::{install_check_signal_handlers, reset_check_interrupted};
 use crate::repo_inspection::RepoInspectionCache;
@@ -46,6 +49,100 @@ pub(crate) fn run_check_command(
     default_in_place: bool,
 ) -> Result<(), CommandError> {
     let started = Instant::now();
+    let mut trailer_attempted = false;
+    let mut failure_output = requested_check_output(
+        started,
+        raw_check_args_request_default_sources(args, default_in_place),
+    );
+    let result = run_check_command_after_start(
+        root,
+        args,
+        default_in_place,
+        started,
+        &mut trailer_attempted,
+        &mut failure_output,
+    );
+    if result.is_err() && !trailer_attempted {
+        // This outer boundary is the `finally` path for failures that occur
+        // before config selection or diagnostic logging can own the trailer.
+        if failure_output.needs_pending_collection() {
+            failure_output = collect_default_pending_failure_output(root, failure_output);
+        }
+        write_check_failure_trailer(failure_output)?;
+    }
+    result
+}
+
+fn collect_default_pending_failure_output(
+    root: &Path,
+    output: CheckFailureOutput,
+) -> CheckFailureOutput {
+    let mut repo_cache = RepoInspectionCache::new();
+    let Ok(config) = repo_cache.load_check_config(root, Path::new(CHECK_PATH), &TreeSource::Staged)
+    else {
+        return output;
+    };
+    let Ok(identities) = expectation_identities(&config) else {
+        return output;
+    };
+    output.with_pending(identities.len())
+}
+
+fn raw_check_args_request_default_sources(args: &[OsString], default_in_place: bool) -> bool {
+    if default_in_place {
+        return false;
+    }
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        let Some(arg) = arg.to_str() else {
+            continue;
+        };
+        if arg == "--" {
+            break;
+        }
+        if arg == "--in-place" {
+            return false;
+        }
+        let default_value = match arg {
+            "-c" | "--config" => {
+                let Some(value) = args.next() else {
+                    return false;
+                };
+                check_config_path_is_default(Path::new(value))
+            }
+            "--tree" => matches!(
+                args.next().and_then(|value| value.to_str()),
+                Some(STAGED_TREE_ARG)
+            ),
+            "--against-tree" => matches!(
+                args.next().and_then(|value| value.to_str()),
+                Some(DEFAULT_AGAINST_TREE_ARG)
+            ),
+            _ => match arg.split_once('=') {
+                Some(("--config" | "-c", value)) => check_config_path_is_default(Path::new(value)),
+                Some(("--tree", value)) => value == STAGED_TREE_ARG,
+                Some(("--against-tree", value)) => value == DEFAULT_AGAINST_TREE_ARG,
+                _ if arg.starts_with("-c") && arg.len() > 2 => {
+                    check_config_path_is_default(Path::new(&arg[2..]))
+                }
+                _ => continue,
+            },
+        };
+        if !default_value {
+            return false;
+        }
+    }
+    true
+}
+
+fn run_check_command_after_start(
+    root: &Path,
+    args: &[OsString],
+    default_in_place: bool,
+    started: Instant,
+    trailer_attempted: &mut bool,
+    failure_output: &mut CheckFailureOutput,
+) -> Result<(), CommandError> {
     install_check_signal_handlers().map_err(CommandError::from)?;
     reset_check_interrupted();
     let command = parse_check_command_args(args, default_in_place)?;
@@ -53,7 +150,13 @@ pub(crate) fn run_check_command(
         // In-place exits before the Git-backed check path below. That path may
         // read or clean persistent xpec state; in-place may write runtime logs
         // only.
-        return run_in_place_check_command(root, &command, started);
+        return run_in_place_check_command(
+            root,
+            &command,
+            started,
+            trailer_attempted,
+            failure_output,
+        );
     }
     let checked_tree = TreeSource::resolve(root, &command.tree, "--tree")?;
     let against_tree = TreeSource::resolve_default_against_tree(
@@ -81,6 +184,7 @@ pub(crate) fn run_check_command(
                 &mut diagnostic_log,
                 None,
                 false,
+                trailer_attempted,
                 started_check_output(started),
                 err,
             );
@@ -93,11 +197,13 @@ pub(crate) fn run_check_command(
                 &mut diagnostic_log,
                 None,
                 false,
+                trailer_attempted,
                 started_check_output(started),
                 err,
             )
         }
     };
+    *failure_output = collected_check_output(started, identities.len(), write_agent_message);
     let options =
         match resolve_check_options_with_identities(&config, &identities, &command.options) {
             Ok(options) => options,
@@ -106,7 +212,8 @@ pub(crate) fn run_check_command(
                     &mut diagnostic_log,
                     None,
                     false,
-                    started_check_output(started),
+                    trailer_attempted,
+                    *failure_output,
                     err,
                 )
             }
@@ -138,12 +245,19 @@ pub(crate) fn run_check_command(
             return fail_check_after_start(
                 &mut diagnostic_log,
                 false,
-                started_check_output(started),
+                trailer_attempted,
+                *failure_output,
                 err,
             )
         }
     };
-    cleanup_cache_dirs(root, &identities, &mut diagnostic_log, started)?;
+    cleanup_cache_dirs(
+        root,
+        &identities,
+        &mut diagnostic_log,
+        trailer_attempted,
+        *failure_output,
+    )?;
     let runtime = CheckRuntime::materialized(
         root,
         &execution.staged_view,
@@ -167,14 +281,13 @@ pub(crate) fn run_check_command(
         Ok(report) => CompletedCheckRun {
             report,
             error: None,
-            interrupted: false,
         },
         Err(err) => CompletedCheckRun {
             report: *err.report,
             error: Some(err.error),
-            interrupted: err.interrupted,
         },
     };
+    *trailer_attempted = true;
     finish_completed_check(
         Some(&mut diagnostic_log),
         &mut result_output,
@@ -190,7 +303,8 @@ fn cleanup_cache_dirs(
     root: &Path,
     identities: &[crate::check::ExpectationIdentity],
     diagnostic_log: &mut DiagnosticLogWriter,
-    started: Instant,
+    trailer_attempted: &mut bool,
+    failure_output: CheckFailureOutput,
 ) -> Result<(), CommandError> {
     let xpecs_dir = XpecStateCache::default()
         .xpecs_dir(root)
@@ -202,7 +316,8 @@ fn cleanup_cache_dirs(
             return fail_check_after_start(
                 diagnostic_log,
                 false,
-                started_check_output(started),
+                trailer_attempted,
+                failure_output,
                 err,
             )
         }
@@ -215,6 +330,8 @@ fn run_in_place_check_command(
     root: &Path,
     command: &CheckCommandArgs,
     started: Instant,
+    trailer_attempted: &mut bool,
+    failure_output: &mut CheckFailureOutput,
 ) -> Result<(), CommandError> {
     // In-place delegates stay behind their component boundaries: CLI dispatch
     // supplies `root` and `default_in_place`, argument parsing rejects Git-tree
@@ -244,22 +361,45 @@ fn run_in_place_check_command(
                 &mut diagnostic_log,
                 None,
                 false,
+                trailer_attempted,
                 started_check_output(started),
                 err,
             )
         }
     };
+    let identities = match expectation_identities(&config) {
+        Ok(identities) => identities,
+        Err(err) => {
+            return fail_check_before_selection(
+                &mut diagnostic_log,
+                None,
+                false,
+                trailer_attempted,
+                started_check_output(started),
+                err,
+            )
+        }
+    };
+    *failure_output = collected_check_output(started, identities.len(), false);
+    // [Df] Reject config-wide mode-invalid fields before applying selectors;
+    // explicit selection cannot make configured Git-backed behavior valid.
     if let Err(err) = validate_in_place_check_config(&config) {
         return fail_check_before_selection(
             &mut diagnostic_log,
             None,
             false,
-            started_check_output(started),
+            trailer_attempted,
+            *failure_output,
             err,
         );
     }
-    let identities = expectation_identities(&config)?;
-    cleanup_cache_dirs(root, &identities, &mut diagnostic_log, started)?;
+    cleanup_cache_dirs(
+        root,
+        &identities,
+        &mut diagnostic_log,
+        trailer_attempted,
+        *failure_output,
+    )?;
     let options =
         match resolve_check_options_with_identities(&config, &identities, &command.options) {
             Ok(options) => options,
@@ -268,7 +408,8 @@ fn run_in_place_check_command(
                     &mut diagnostic_log,
                     None,
                     false,
-                    started_check_output(started),
+                    trailer_attempted,
+                    *failure_output,
                     err,
                 )
             }
@@ -311,14 +452,13 @@ fn run_in_place_check_command(
         Ok(report) => CompletedCheckRun {
             report,
             error: None,
-            interrupted: false,
         },
         Err(err) => CompletedCheckRun {
             report: *err.report,
             error: Some(err.error),
-            interrupted: err.interrupted,
         },
     };
+    *trailer_attempted = true;
     finish_completed_check(
         Some(&mut diagnostic_log),
         &mut result_output,
@@ -340,20 +480,6 @@ fn finish_completed_check(
     started: Instant,
     write_agent_message: bool,
 ) -> Result<(), CommandError> {
-    if let Err(err) = result_output.flush() {
-        let err = format!("failed to flush check result to stdout: {}", err);
-        let Some(diagnostic_log) = diagnostic_log.as_deref_mut() else {
-            return Err(CommandError::from(err));
-        };
-        return finish_check_error_report(CheckErrorReportFinish {
-            diagnostic_log,
-            result_output,
-            check_caches,
-            report: &completed.report,
-            error: err,
-            write_token_usage: true,
-        });
-    }
     if let Err(err) = write_check_trailer(runner, result_output, &completed.report, started) {
         let Some(diagnostic_log) = diagnostic_log.as_deref_mut() else {
             return Err(CommandError::from(err));
@@ -373,10 +499,10 @@ fn finish_completed_check(
             diagnostic_log,
             result_output,
             check_caches,
-            // Agent messages are specified for completed default runs. A
-            // resource/control interruption can leave pending expectations
-            // after a visible result, so it is reported without an instruction.
-            write_agent_message: write_agent_message && !completed.interrupted,
+            // [AL] This is post-summary feedback, not a success-only message.
+            // The `finally` contract emits it for interrupted default-source
+            // runs too; report counts select the pending or repair wording.
+            write_agent_message,
         },
         &completed.report,
         completed_error.as_deref(),

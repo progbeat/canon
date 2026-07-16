@@ -1,5 +1,6 @@
 use super::presets::{apply_expectation_settings, raw_presets_from_config, resolve_presets};
 use super::source::CheckConfigSource;
+use crate::check::config::validation::parse_cooldown_config;
 use crate::config_types::{
     AgentConfig, CheckConfig, Expectation, ExpectationTarget, RawCheckConfig,
     RawExpectationCommonConfig, RawExpectationFields, RawExpectationItem, RawExpectationItemForm,
@@ -33,6 +34,7 @@ pub(crate) fn expand_raw_check_config(
 #[derive(Default)]
 pub(crate) struct CheckConfigExpansionOptions<'a> {
     pub(crate) default_agent_preset: Option<&'a str>,
+    pub(crate) ask_question: Option<&'a str>,
 }
 
 pub(crate) fn expand_raw_check_config_with_options(
@@ -47,7 +49,7 @@ pub(crate) fn expand_raw_check_config_with_options(
         version,
         presets,
         agent,
-        expectations: raw_expectations,
+        expectations: configured_expectations,
     } = raw;
     // Raw expansion is the only layer that consumes preset names. Command
     // execution receives the returned `CheckConfig`, which carries resolved
@@ -59,6 +61,14 @@ pub(crate) fn expand_raw_check_config_with_options(
         .get(default_agent_preset)
         .map(ResolvedPresetConfig::agent_config)
         .ok_or_else(|| format!("unknown preset: {}", default_agent_preset))?;
+    // `canon ask` supplies one synthetic explicit item so ordinary preset
+    // resolution applies every selected field default at this boundary. Its
+    // command-owned to/q/a fields remain higher precedence than the preset,
+    // and configured check expectations never enter the ask config.
+    let raw_expectations = match options.ask_question {
+        Some(question) => vec![raw_ask_expectation(question, default_agent_preset)],
+        None => configured_expectations,
+    };
     let expectations = {
         let mut expansion = RawExpectationExpansion {
             root,
@@ -75,6 +85,24 @@ pub(crate) fn expand_raw_check_config_with_options(
         version,
         agent: default_agent,
         expectations,
+    })
+}
+
+fn raw_ask_expectation(question: &str, preset: &str) -> RawExpectationItem {
+    RawExpectationItem::Unresolved(RawExpectationFields {
+        explicit_q: Some(question.to_string()),
+        q_template: None,
+        a: Some(String::new()),
+        glob: None,
+        include: None,
+        common: RawExpectationCommonConfig {
+            to: Some(crate::config_types::ExpectationTo::Agent),
+            settings: RawExpectationSettings {
+                preset: Some(preset.to_string()),
+                ..RawExpectationSettings::default()
+            },
+            ..RawExpectationCommonConfig::default()
+        },
     })
 }
 
@@ -114,13 +142,16 @@ impl RawExpectationExpansion<'_> {
                         settings,
                     } = common;
                     let question_context = resolved_question_context(question_context);
-                    // Keep the literal `diff-from` selection here. Prompt rendering
-                    // resolves it to a tree in `resolve_diff_from`, where the check
-                    // runtime can validate checkpoint trees and resolve custom tree-ishs.
-                    let diff_from_configured = diff_from.is_some();
-                    let diff_from = resolved_expectation_diff_from(diff_from);
+                    // Preserve configured presence as the canonical `Option`.
+                    // Selection applies the implementation default before the
+                    // evaluator path resolves the literal value to a Git tree.
                     let target = resolve_expectation_target(target)
                         .map_err(|err| format!("expectation {} target: {}", item_number, err))?;
+                    let cooldown = cooldown
+                        .as_ref()
+                        .map(parse_cooldown_config)
+                        .transpose()
+                        .map_err(|err| format!("expectation {} cooldown: {}", item_number, err))?;
                     let agent = self.resolve_expectation_agent(&settings)?;
                     self.expectations.push(Expectation {
                         to: to.unwrap_or_default(),
@@ -129,7 +160,6 @@ impl RawExpectationExpansion<'_> {
                         rank: rank.unwrap_or_default(),
                         question_context,
                         diff_from,
-                        diff_from_configured,
                         target,
                         question_answer_only,
                         agent,
@@ -161,9 +191,14 @@ impl RawExpectationExpansion<'_> {
         let common = self.resolve_raw_expectation_common(item.common)?;
         let target = resolve_expectation_target(common.target.clone())
             .map_err(|err| format!("expectation {} target: {}", item_number, err))?;
-        // Keep the literal `diff-from` selection here. Prompt rendering resolves
-        // it to a tree in `resolve_diff_from` using the active check runtime.
-        let diff_from_configured = common.diff_from.is_some();
+        let cooldown = common
+            .cooldown
+            .as_ref()
+            .map(parse_cooldown_config)
+            .transpose()
+            .map_err(|err| format!("expectation {} cooldown: {}", item_number, err))?;
+        // Keep configured presence and the literal selection together until
+        // selection applies the implementation default.
         for file in files {
             let content = self.read_expanded_file(&file)?;
             let mut environment = Environment::new();
@@ -191,12 +226,11 @@ impl RawExpectationExpansion<'_> {
                 a: item.a.clone(),
                 rank: common.rank.unwrap_or_default(),
                 question_context: resolved_question_context(common.question_context.clone()),
-                diff_from: resolved_expectation_diff_from(common.diff_from.clone()),
-                diff_from_configured,
+                diff_from: common.diff_from.clone(),
                 target: target.clone(),
                 question_answer_only: false,
                 agent: self.resolve_expectation_agent(&common.settings)?,
-                cooldown: common.cooldown.clone(),
+                cooldown,
             });
         }
         Ok(())

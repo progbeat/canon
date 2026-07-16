@@ -6,7 +6,7 @@ use crate::check::command::{
     collect_check_token_usage, prepare_git_backed_check_execution, print_token_usage_summary,
     GitBackedCheckStorage, PrepareGitBackedCheckExecutionOptions,
 };
-use crate::check::config::validation::validate_in_place_global_config;
+use crate::check::config::in_place::validate_in_place_check_config;
 use crate::check::core::ParsedAnswer;
 use crate::check::interrogation::query::{
     query_human_review_reason, run_query_with_runner, QueryExpectationContext, QueryRequest,
@@ -16,7 +16,7 @@ use crate::check::interrogation::{
     write_query_lifecycle_finish_event, write_query_lifecycle_start_event,
 };
 use crate::check::{CheckRunCaches, ResolvedExpectation};
-use crate::config_types::{AgentConfig, CheckConfig, DEFAULT_DIFF_FROM};
+use crate::config_types::{CheckConfig, Expectation, DEFAULT_DIFF_FROM};
 use crate::evaluator::EvaluatorRunner;
 use crate::git::TreeSource;
 use crate::logs::DiagnosticLogWriter;
@@ -26,7 +26,6 @@ use std::path::Path;
 pub(crate) struct CheckQueryCommand<'a> {
     pub(crate) root: &'a Path,
     pub(crate) config: &'a CheckConfig,
-    pub(crate) question: &'a str,
     pub(crate) query_scope: &'a [String],
     pub(crate) query_scope_provided: bool,
     pub(crate) tree_source: Option<&'a TreeSource>,
@@ -72,7 +71,6 @@ pub(crate) fn run_check_query_command(
     let CheckQueryCommand {
         root,
         config,
-        question,
         query_scope,
         query_scope_provided,
         tree_source,
@@ -89,7 +87,6 @@ pub(crate) fn run_check_query_command(
     let result = run_started_check_query_command(StartedCheckQueryCommand {
         root,
         config,
-        question,
         query_scope,
         query_scope_provided,
         tree_source,
@@ -110,7 +107,6 @@ pub(crate) fn run_check_query_command(
 struct StartedCheckQueryCommand<'a, 'b> {
     root: &'a Path,
     config: &'a CheckConfig,
-    question: &'a str,
     query_scope: &'a [String],
     query_scope_provided: bool,
     tree_source: Option<&'a TreeSource>,
@@ -127,7 +123,6 @@ fn run_started_check_query_command(
     let StartedCheckQueryCommand {
         root,
         config,
-        question,
         query_scope,
         query_scope_provided,
         tree_source,
@@ -180,7 +175,6 @@ fn run_started_check_query_command(
             runtime,
             runner,
             config,
-            question,
             query_scope_provided,
             &mut enforced_scope,
             &mut diagnostic_log,
@@ -192,7 +186,6 @@ fn run_started_check_query_command(
         runtime,
         runner,
         config,
-        question,
         query_scope_provided,
         &mut enforced_scope,
         &mut diagnostic_log,
@@ -206,23 +199,26 @@ fn run_prepared_query(
     runtime: CheckRuntime<'_>,
     runner: &mut LazyAppServerRunner,
     config: &CheckConfig,
-    question: &str,
     _query_scope_provided: bool,
     enforced_scope: &mut Vec<String>,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     check_caches: &mut CheckRunCaches,
 ) -> Result<(), CheckQueryError> {
-    // `config` is the ask-only config assembled by run.rs: command `--preset`
-    // can only choose the default agent during raw expansion, and configured
-    // check expectations/hooks are not part of this query. In-place query
-    // validation therefore covers the global agent settings used below.
+    // The ask-only config contains exactly one temporary xpec whose explicit
+    // to/q/a fields and selected preset defaults were resolved together during
+    // raw expansion. Configured check expectations are not part of this query.
     if runtime.is_in_place() {
-        validate_in_place_global_config(&config.agent)?;
+        validate_in_place_check_config(config)?;
         *enforced_scope = runtime
             .fresh_scope_without_persistent_history()
             .expect("in-place query has no persistent q-scope");
     }
-    let temporary_expectation = temporary_query_expectation(question, &config.agent);
+    let [configured_temporary_expectation] = config.expectations.as_slice() else {
+        return Err("ask config must contain exactly one temporary expectation"
+            .to_string()
+            .into());
+    };
+    let temporary_expectation = temporary_query_expectation(configured_temporary_expectation);
     let expectation = QueryExpectationContext {
         expectation: &temporary_expectation,
     };
@@ -238,7 +234,7 @@ fn run_prepared_query(
     let result = run_query_with_runner(
         &runtime,
         QueryRequest {
-            question,
+            question: &temporary_expectation.question,
             enforced_scope,
             expectation,
             progress: Some(&progress),
@@ -296,38 +292,56 @@ fn query_enforced_scope(query_scope: &[String]) -> Result<Vec<String>, String> {
     sanitize_scope(query_scope).map_err(|err| format!("--scope: {}", err))
 }
 
-fn temporary_query_expectation(question: &str, agent: &AgentConfig) -> ResolvedExpectation {
+fn temporary_query_expectation(expectation: &Expectation) -> ResolvedExpectation {
     ResolvedExpectation {
         number: 0,
         id: String::new(),
         display_id: "q".to_string(),
-        to: crate::config_types::ExpectationTo::Agent,
-        rank: 0,
-        question: question.to_string(),
-        expected_answer: String::new(),
-        question_context: String::new(),
-        diff_from: DEFAULT_DIFF_FROM.to_string(),
-        target: None,
-        question_answer_only: true,
-        agent: agent.clone(),
-        cooldown: None,
+        to: expectation.to,
+        rank: expectation.rank,
+        question: expectation.q.clone(),
+        expected_answer: expectation.a.clone(),
+        question_context: expectation.question_context.clone(),
+        diff_from: expectation
+            .diff_from
+            .clone()
+            .unwrap_or_else(|| DEFAULT_DIFF_FROM.to_string()),
+        target: expectation.target.clone(),
+        question_answer_only: expectation.question_answer_only,
+        agent: expectation.agent.clone(),
+        cooldown: expectation.cooldown,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config_types::AgentConfig;
+    use crate::config_types::{AgentConfig, ExpectationTarget, ExpectationTo};
 
-    #[test]
+    #[test] // xpec: 0N,nK,WH
     fn temporary_query_expectation_has_empty_expected_answer() {
         let agent = AgentConfig::implementation_default();
-        let expectation = temporary_query_expectation("Does ask work?", &agent);
+        let configured = Expectation {
+            to: ExpectationTo::Agent,
+            rank: 4,
+            q: "Does ask work?".to_string(),
+            a: String::new(),
+            question_context: "Use selected preset context.".to_string(),
+            diff_from: Some("HEAD~1".to_string()),
+            target: Some(ExpectationTarget::Diff),
+            question_answer_only: false,
+            agent,
+            cooldown: None,
+        };
+        let expectation = temporary_query_expectation(&configured);
 
         assert_eq!(expectation.question, "Does ask work?");
         assert_eq!(expectation.expected_answer, "");
         assert_eq!(expectation.display_id, "q");
         assert!(expectation.id.is_empty());
+        assert_eq!(expectation.question_context, "Use selected preset context.");
+        assert_eq!(expectation.diff_from, "HEAD~1");
+        assert_eq!(expectation.target, Some(ExpectationTarget::Diff));
     }
 
     #[test] // xpec: 0N

@@ -254,7 +254,7 @@ fn render_minijinja_resource_template(
 mod tests {
     use super::*;
     use crate::platform::create_private_dir;
-    use crate::xpec_state::LastResultStatus;
+    use crate::xpec_state::{LastResultResponse, LastResultStatus};
     use serde_json::json;
     use std::fs;
 
@@ -345,11 +345,11 @@ mod tests {
             response_timestamp: "1970-01-01T00:00:01Z".to_string(),
             updated_timestamp: "1970-01-01T00:00:01Z".to_string(),
             status: LastResultStatus::Pass,
-            response: json!({
-                "answer": "yes",
-                "evidence": "`src/a.rs`",
-                "qScopeSuggestion": ["src/a.rs"],
-            }),
+            response: LastResultResponse::answered(
+                "yes",
+                "`src/a.rs`",
+                Some(vec!["src/a.rs".to_string()]),
+            ),
             q_scope: vec!["src/a.rs".to_string()],
             visible_scope: vec!["src/a.rs".to_string()],
             checked_tree_oid: Some("checked-tree".to_string()),
@@ -396,11 +396,11 @@ mod tests {
             response_timestamp: "1970-01-01T00:00:01Z".to_string(),
             updated_timestamp: "1970-01-01T00:00:01Z".to_string(),
             status: LastResultStatus::Pass,
-            response: json!({
-                "answer": "no",
-                "evidence": "`src/a.rs`",
-                "qScopeSuggestion": ["src/a.rs"],
-            }),
+            response: LastResultResponse::answered(
+                "no",
+                "`src/a.rs`",
+                Some(vec!["src/a.rs".to_string()]),
+            ),
             q_scope: vec!["src/a.rs".to_string()],
             visible_scope: vec!["src/a.rs".to_string()],
             checked_tree_oid: Some("checked-tree".to_string()),
@@ -440,11 +440,11 @@ mod tests {
             response_timestamp: "1970-01-01T00:00:01Z".to_string(),
             updated_timestamp: "1970-01-01T00:00:01Z".to_string(),
             status: LastResultStatus::Pass,
-            response: json!({
-                "answer": "yes",
-                "evidence": "`src/a.rs`",
-                "qScopeSuggestion": ["src/a.rs"],
-            }),
+            response: LastResultResponse::answered(
+                "yes",
+                "`src/a.rs`",
+                Some(vec!["src/a.rs".to_string()]),
+            ),
             q_scope: vec!["src/a.rs".to_string()],
             visible_scope: vec!["src/a.rs".to_string()],
             checked_tree_oid: Some("checked-tree".to_string()),

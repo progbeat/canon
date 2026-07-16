@@ -1,4 +1,4 @@
-use crate::config_types::{AgentConfig, ExpectationTarget, ExpectationTo};
+use crate::config_types::{AgentConfig, Cooldown, ExpectationTarget, ExpectationTo};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedExpectation {
@@ -18,9 +18,4 @@ pub(crate) struct ResolvedExpectation {
     pub(crate) question_answer_only: bool,
     pub(crate) agent: AgentConfig,
     pub(crate) cooldown: Option<Cooldown>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Cooldown {
-    pub(crate) seconds: u64,
 }

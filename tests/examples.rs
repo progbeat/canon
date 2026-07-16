@@ -38,6 +38,20 @@ fn init_git_repo(repo: &Path) {
     );
 }
 
+fn write_staged_shell_check_config(repo: &Path) {
+    fs::create_dir_all(repo.join(".canon")).unwrap();
+    fs::write(
+        repo.join(".canon/check.yml"),
+        "presets:\n  default: {}\nexpectations:\n  - to: shell\n    q: \"true\"\n",
+    )
+    .unwrap();
+    Command::new("git")
+        .args(["add", ".canon/check.yml"])
+        .current_dir(repo)
+        .output()
+        .unwrap();
+}
+
 // xpec: C
 #[test]
 fn init_creates_default_template_and_refuses_overwrite() {
@@ -174,6 +188,53 @@ expectations:
     let _ = fs::remove_dir_all(&repo);
 }
 
+// xpec: jz
+#[test]
+fn git_backed_check_accepts_optional_cooldown_field() {
+    let repo = temp_repo("canon-check-cooldown-field");
+    init_git_repo(&repo);
+    fs::create_dir_all(repo.join(".canon")).unwrap();
+    fs::write(
+        repo.join(".canon/check.yml"),
+        r#"
+presets:
+  default: {}
+expectations:
+  - to: shell
+    q: "true"
+    cooldown: 1h
+"#,
+    )
+    .unwrap();
+    let add = Command::new("git")
+        .args(["add", ".canon/check.yml"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+    assert!(
+        add.status.success(),
+        "{}",
+        String::from_utf8_lossy(&add.stderr)
+    );
+
+    let output = canon().arg("check").current_dir(&repo).output().unwrap();
+
+    let _ = fs::remove_dir_all(&repo);
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8(output.stdout)
+        .unwrap()
+        .contains(" 1 passed in "));
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        ZERO_TOKEN_USAGE_LINE
+    );
+}
+
 // xpec: 8s
 #[test]
 fn in_place_shell_xpec_reports_transcript_and_exit_code() {
@@ -244,7 +305,9 @@ expectations:
 
     let output = canon()
         // This public command path covers the `canon check --in-place` output
-        // and token-usage contract for invalid in-place config.
+        // and token-usage contract for invalid in-place config. In-place is
+        // explicitly outside default-source feedback eligibility, so the
+        // self-contained validation error is the only post-summary message.
         .args(["check", "--in-place", "unknown-selector"])
         .current_dir(&repo)
         .output()
@@ -254,15 +317,72 @@ expectations:
 
     assert!(!output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
     // xpec: AL,Df
-    assert!(stdout.contains(" 0 passed in "));
+    assert!(stdout.contains(" 1 pending in "), "{stdout}\n{stderr}");
     // xpec: AL,Df
     assert_eq!(
-        String::from_utf8(output.stderr).unwrap(),
+        stderr,
         format!(
-            "{ZERO_TOKEN_USAGE_LINE}Error: expectation 1 has Git-backed-only config: diff-from\n"
+            "{ZERO_TOKEN_USAGE_LINE}Error: expectation 1 is invalid in in-place mode: \
+             `diff-from` requires Git tree state\n"
         )
     );
+}
+
+// xpec: AL
+#[test]
+fn invalid_check_arguments_still_emit_the_check_trailer() {
+    let repo = temp_repo("canon-invalid-check-argument-trailer");
+    init_git_repo(&repo);
+    write_staged_shell_check_config(&repo);
+    let output = canon()
+        .args([
+            "check",
+            "--config",
+            "./.canon/check.yml",
+            "--tree",
+            ":staged",
+            "--against-tree",
+            "HEAD",
+            "--unknown-check-option",
+        ])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_dir_all(&repo);
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(" 1 pending in "));
+    assert!(stdout.contains("▷ Run `canon check` to continue evaluation.\n"));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.starts_with(ZERO_TOKEN_USAGE_LINE));
+    assert!(stderr.contains("unexpected argument"));
+}
+
+// xpec: AL,K
+#[test]
+fn collected_check_failure_reports_pending_feedback() {
+    let repo = temp_repo("canon-collected-check-failure");
+    init_git_repo(&repo);
+    write_staged_shell_check_config(&repo);
+    let output = canon()
+        .args(["check", "unknown-selector"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_dir_all(&repo);
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stdout.contains(" 1 pending in "), "{stdout}\n{stderr}");
+    assert!(stdout.contains("▷ Run `canon check` to continue evaluation.\n"));
+    assert!(stderr.starts_with(ZERO_TOKEN_USAGE_LINE));
+    assert!(stderr.contains("expectation"), "{stderr}");
 }
 
 // xpec: C
@@ -410,7 +530,8 @@ fn check_without_config_renders_documented_recovery_message() {
 
     assert!(!output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains(" 0 passed in "));
+    assert!(stdout.contains(" 0 passed in "), "{stdout}");
+    assert!(!stdout.contains("All checks passed"));
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(
         stderr.ends_with(

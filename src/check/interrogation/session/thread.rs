@@ -851,8 +851,7 @@ fn explicit_diff_base_tree_oid(root: &Path, tree: &str) -> Result<String, Evalua
 #[cfg(test)]
 mod tests {
     use super::checkpoint_diff_base;
-    use crate::xpec_state::{LastResult, LastResultStatus};
-    use serde_json::json;
+    use crate::xpec_state::{LastResult, LastResultResponse, LastResultStatus};
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::{self, Command};
@@ -901,11 +900,11 @@ mod tests {
             response_timestamp: "1970-01-01T00:00:00Z".to_string(),
             updated_timestamp: "1970-01-01T00:00:00Z".to_string(),
             status: LastResultStatus::Pass,
-            response: json!({
-                "answer": "yes",
-                "evidence": "`src/main.rs`",
-                "qScopeSuggestion": ["."]
-            }),
+            response: LastResultResponse::answered(
+                "yes",
+                "`src/main.rs`",
+                Some(vec![".".to_string()]),
+            ),
             q_scope: vec![".".to_string()],
             visible_scope: vec![".".to_string()],
             checked_tree_oid: Some(checked_tree_oid.to_string()),

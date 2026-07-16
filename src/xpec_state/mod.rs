@@ -9,6 +9,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 pub(crate) use cleanup::{active_expectation_ids_from_identities, cleanup_stale_xpec_dirs};
+#[cfg(test)]
+pub(crate) use last_result::LastResultResponse;
 use last_result::{check_record_from_last_result, pass_record_from_cooldown_result};
 pub(crate) use last_result::{LastResult, LastResultStatus};
 

@@ -1,5 +1,6 @@
 pub(super) mod config_expansion;
 pub(super) mod generator_paths;
+pub(super) mod in_place;
 mod load;
 pub(super) mod validation;
 pub(crate) mod yaml_include;

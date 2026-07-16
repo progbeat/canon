@@ -1,6 +1,5 @@
-use super::cooldown::parse_cooldown;
 use crate::check::core::ResolvedExpectation;
-use crate::config_types::CheckConfig;
+use crate::config_types::{CheckConfig, DEFAULT_DIFF_FROM};
 use crate::hash::expectation_id;
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -113,11 +112,6 @@ pub(crate) fn selected_expectation_at(
         .expectations
         .get(index)
         .ok_or_else(|| "expectation identity count mismatch".to_string())?;
-    let cooldown = expectation
-        .cooldown
-        .as_ref()
-        .map(parse_cooldown)
-        .transpose()?;
     Ok(ResolvedExpectation {
         number: index + 1,
         id: identity.id.clone(),
@@ -127,11 +121,16 @@ pub(crate) fn selected_expectation_at(
         question: expectation.q.clone(),
         expected_answer: expectation.a.clone(),
         question_context: expectation.question_context.clone(),
-        diff_from: expectation.diff_from.clone(),
+        // [1r] Apply the implementation default once when the configured
+        // optional value becomes an evaluation-ready xpec.
+        diff_from: expectation
+            .diff_from
+            .clone()
+            .unwrap_or_else(|| DEFAULT_DIFF_FROM.to_string()),
         target: expectation.target.clone(),
         question_answer_only: expectation.question_answer_only,
         agent: expectation.agent.clone(),
-        cooldown,
+        cooldown: expectation.cooldown,
     })
 }
 
@@ -284,8 +283,7 @@ mod tests {
             q: question.to_string(),
             a: "yes".to_string(),
             question_context: String::new(),
-            diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
-            diff_from_configured: false,
+            diff_from: None,
             target: None,
             question_answer_only: true,
             agent: AgentConfig::implementation_default(),

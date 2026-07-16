@@ -1,6 +1,5 @@
 mod args;
 mod cache_select;
-mod cooldown;
 mod identity;
 mod order;
 
@@ -9,9 +8,8 @@ pub(crate) use args::{
     resolve_check_options_with_identities,
 };
 pub(crate) use cache_select::{
-    select_git_backed_expectations_after_cache, GitBackedCacheFilterContext,
+    select_and_order_git_backed_expectations, GitBackedCacheFilterContext,
 };
-pub(crate) use cooldown::parse_cooldown;
 // Selector parsing and matching, including `not:<ID-PREFIX>` exclusions, lives
 // in `identity`.
 pub(crate) use identity::{

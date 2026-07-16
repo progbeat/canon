@@ -253,32 +253,22 @@ pub(crate) fn default_thinking() -> String {
 pub(crate) const DEFAULT_DIFF_FROM: &str = ":checkpoint";
 pub(crate) const AGAINST_TREE_DIFF_FROM: &str = ":against-tree";
 
-#[derive(Debug, Deserialize, Clone)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 pub(crate) struct Expectation {
-    #[serde(default)]
     pub(crate) to: ExpectationTo,
     pub(crate) q: String,
     pub(crate) a: String,
-    #[serde(default)]
     pub(crate) rank: i64,
     // Human-authored expectation context data from check config, like `q` and
     // `a`. Despite the config key name, this is not an implementation-owned
     // evaluator-agent prompt or policy source; only the resource template in
     // `resources/prompts/` decides how to embed it.
-    #[serde(rename = "instructions")]
     pub(crate) question_context: String,
-    pub(crate) diff_from: String,
-    #[serde(default)]
-    pub(crate) diff_from_configured: bool,
-    #[serde(default)]
+    pub(crate) diff_from: Option<String>,
     pub(crate) target: Option<ExpectationTarget>,
-    #[serde(default)]
     pub(crate) question_answer_only: bool,
-    #[serde(default, skip)]
     pub(crate) agent: AgentConfig,
-    #[serde(default)]
-    pub(crate) cooldown: Option<CooldownConfig>,
+    pub(crate) cooldown: Option<Cooldown>,
 }
 
 #[derive(Debug, Deserialize, Clone, Copy, Default, PartialEq, Eq)]
@@ -331,6 +321,11 @@ impl std::str::FromStr for ExpectationTarget {
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 #[serde(transparent)]
 pub(crate) struct CooldownConfig(pub(crate) String);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Cooldown {
+    pub(crate) seconds: u64,
+}
 
 #[derive(Debug, Clone)]
 pub(crate) enum RawExpectationItem {

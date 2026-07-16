@@ -4,7 +4,6 @@ use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::scope::visible_scope;
 use crate::time::{format_record_timestamp, parse_record_timestamp, unix_timestamp};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -58,7 +57,7 @@ pub(crate) struct LastResult {
     #[serde(rename = "updatedTimestamp")]
     pub(crate) updated_timestamp: String,
     pub(crate) status: LastResultStatus,
-    pub(crate) response: Value,
+    pub(crate) response: LastResultResponse,
     #[serde(rename = "qScope", default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) q_scope: Vec<String>,
     #[serde(
@@ -89,32 +88,89 @@ pub(crate) struct LastResult {
     pub(crate) diff_from_tree_oid: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct LastResultResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    answer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    evidence: Option<String>,
+    #[serde(
+        rename = "qScopeSuggestion",
+        default,
+        deserialize_with = "deserialize_present_question_scope_suggestion",
+        skip_serializing_if = "Option::is_none"
+    )]
+    question_scope_suggestion: Option<Vec<String>>,
+}
+
+fn deserialize_present_question_scope_suggestion<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Vec::<String>::deserialize(deserializer).map(Some)
+}
+
+impl LastResultResponse {
+    pub(crate) fn answered(
+        answer: impl Into<String>,
+        evidence: impl Into<String>,
+        question_scope_suggestion: Option<Vec<String>>,
+    ) -> Self {
+        Self {
+            answer: Some(answer.into()),
+            error: None,
+            evidence: Some(evidence.into()),
+            question_scope_suggestion,
+        }
+    }
+
+    fn from_record(record: &CheckRecord) -> Self {
+        let question_scope_suggestion = record.question_scope_suggestion.clone();
+        if let Some(suggestion) = question_scope_suggestion.as_deref() {
+            // xpec: mh
+            assert!(
+                !suggestion.is_empty(),
+                "qScopeSuggestion must be non-empty when present"
+            );
+        }
+        if let Some(error) = record.error.clone() {
+            Self {
+                answer: None,
+                error: Some(error),
+                evidence: None,
+                question_scope_suggestion,
+            }
+        } else {
+            Self::answered(
+                record.observed.clone(),
+                record.evidence.clone(),
+                question_scope_suggestion,
+            )
+        }
+    }
+}
+
 impl LastResult {
     pub(crate) fn answer(&self) -> Option<&str> {
-        self.response.get("answer").and_then(Value::as_str)
+        self.response.answer.as_deref()
     }
 
     fn error(&self) -> Option<&str> {
-        self.response.get("error").and_then(Value::as_str)
+        self.response.error.as_deref()
     }
 
     fn evidence(&self) -> String {
-        self.response
-            .get("evidence")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string()
+        self.response.evidence.as_deref().unwrap_or("").to_string()
     }
 
     fn question_scope_suggestion(&self) -> Option<Vec<String>> {
         // Last-result `response` is the normalized evaluator response; the
         // applied q-scope is stored separately in `qScope`.
-        self.response
-            .get("qScopeSuggestion")?
-            .as_array()?
-            .iter()
-            .map(|value| value.as_str().map(str::to_string))
-            .collect()
+        self.response.question_scope_suggestion.clone()
     }
 }
 
@@ -230,11 +286,19 @@ impl XpecStateCache {
         let visible_scope = git_backed
             .then(|| visible_scope(&expectation.agent, &q_scope))
             .transpose()?;
+        // [Df] In-place results have no Git diff context. Enforce that at the
+        // persistence boundary even though current in-place runtimes expose no
+        // persistent state root, so no future caller can leak a tree OID.
+        let (diff_from, diff_from_tree_oid) = if git_backed {
+            (record.diff_from.clone(), record.diff_from_tree_oid.clone())
+        } else {
+            (None, None)
+        };
         let result = LastResult {
             response_timestamp: record.timestamp.clone(),
             updated_timestamp: now,
             status,
-            response: normalized_response_from_record(record),
+            response: LastResultResponse::from_record(record),
             q_scope: if git_backed {
                 q_scope.clone()
             } else {
@@ -253,8 +317,8 @@ impl XpecStateCache {
                     )
                 })
                 .transpose()?,
-            diff_from: record.diff_from.clone(),
-            diff_from_tree_oid: record.diff_from_tree_oid.clone(),
+            diff_from,
+            diff_from_tree_oid,
         };
         self.write_last_result(root, expectation, &result)?;
         Ok(result)
@@ -287,6 +351,9 @@ impl XpecStateCache {
         // Last-result files are whole-record snapshots. Refreshing a result
         // writes one complete newly persisted status record plus the `last.json`
         // alias below; it never rewrites an accumulated log or state prefix.
+        // For serialized snapshot payloads totaling N bytes, the primary files
+        // total N and the alias adds at most one copy of each payload, so this
+        // path writes at most 2N bytes.
         write_temp_file_then_replace(&temp_path, &path, |file| {
             serde_json::to_writer(&mut *file, result)
                 .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
@@ -431,26 +498,6 @@ fn last_result_status_for_record(
     }
 }
 
-fn normalized_response_from_record(record: &CheckRecord) -> Value {
-    let mut response = serde_json::Map::new();
-    if let Some(error) = record.error.as_deref() {
-        response.insert("error".to_string(), json!(error));
-    } else {
-        response.insert("answer".to_string(), json!(record.observed));
-    }
-    if record.error.is_none() {
-        response.insert("evidence".to_string(), json!(record.evidence));
-    }
-    if let Some(suggestion) = record.question_scope_suggestion.as_deref() {
-        assert!(
-            !suggestion.is_empty(),
-            "qScopeSuggestion must be non-empty when present"
-        );
-        response.insert("qScopeSuggestion".to_string(), json!(suggestion));
-    }
-    Value::Object(response)
-}
-
 fn visible_tree_oid_for_persisted_scope(
     root: &Path,
     checked_tree_oid: &str,
@@ -515,7 +562,7 @@ fn validate_last_result(
             "qScope and visibleScope are required exactly for Git-backed results".to_string(),
         );
     }
-    if let Some(suggestion) = result.response.get("qScopeSuggestion") {
+    if let Some(suggestion) = result.response.question_scope_suggestion.as_deref() {
         validate_response_question_scope_suggestion(suggestion)?;
     }
     // Reads of existing state and generic last-result writes can observe
@@ -553,17 +600,11 @@ fn validate_last_result(
     Ok(())
 }
 
-fn validate_response_question_scope_suggestion(value: &Value) -> Result<(), String> {
-    let Some(items) = value.as_array() else {
-        return Err("response qScopeSuggestion must be an array".to_string());
-    };
+fn validate_response_question_scope_suggestion(items: &[String]) -> Result<(), String> {
     if items.is_empty() {
         return Err("response qScopeSuggestion must be non-empty".to_string());
     }
-    for item in items {
-        let Some(path) = item.as_str() else {
-            return Err("response qScopeSuggestion items must be strings".to_string());
-        };
+    for path in items {
         if path.is_empty() || path.contains(['\r', '\n']) {
             return Err(
                 "response qScopeSuggestion items must be non-empty single-line strings".to_string(),
