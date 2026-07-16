@@ -23,11 +23,15 @@ CHECKS = [
         "rule": "full",
     },
     {
-        "id": "e5bgmTJWbLFTcR8RISXA",
+        "id": "VLtTPgNcIrNquj2OpGLK",
+        "rule": "full",
+    },
+    {
+        "id": "cvMX224reCAL9ipNigdb",
         "rule": "narrow",
     },
     {
-        "id": "DB8x9qSECSlqTgWEq2EB",
+        "id": "6pqWrteDuExU3QO6o3f3",
         "rule": "narrow",
     },
     {
@@ -35,7 +39,7 @@ CHECKS = [
         "rule": "narrow",
     },
     {
-        "id": "nTZhaOs4Sq6iqCiPSTNI",
+        "id": "EAMKen2yA0oTphtkgLfH",
         "rule": "narrow",
     },
 ]
