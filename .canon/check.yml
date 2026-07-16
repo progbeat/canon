@@ -3,13 +3,13 @@ presets: !include presets.yml
 expectations:
   # on-start checks
   - to: caller
-    q: Did you stage all the changes you intended to evaluate? [y/N]
+    q: "Did you stage all the changes you intended to evaluate? [y/n]"
     a: y
     rank: -10
     cooldown: 1h
 
   - to: caller
-    q: Did any of your actions deviate from `AGENTS.md` in a way that remains unaddressed? [n/Y]
+    q: "Re-read `AGENTS.md` and check your actions against each applicable instruction. Are any violations still unaddressed? [y/n]"
     a: n
     rank: -10
     cooldown: 30m
@@ -23,7 +23,7 @@ expectations:
       cargo test
       ```
       Consider `cargo build --release` or `cargo audit --deny warnings` when relevant.
-      Have the checks passed? [y/N]
+      Have the checks passed? [y/n]
     a: y
     rank: -10
     cooldown: 20m
