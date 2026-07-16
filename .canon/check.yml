@@ -1,6 +1,6 @@
 presets: !include presets.yml
 
-expectations:
+xpecs:
   # on-start checks
   - to: caller
     q: "Did you stage all the changes you intended to evaluate? [y/n]"
@@ -9,8 +9,8 @@ expectations:
     cooldown: 1h
 
   - to: caller
-    q: "Re-read `AGENTS.md` and check your actions against each applicable instruction. Are any violations still unaddressed? [y/n]"
-    a: n
+    q: "Do you acknowledge that, if a subsequent review finds that you disregarded instructions in `AGENTS.md` or feedback from `canon check`, your changes will be reverted and you will have to start over? [y/n]"
+    a: y
     rank: -10
     cooldown: 30m
 
@@ -42,29 +42,32 @@ expectations:
   - !include expects/sanity-checks.yml
 
   # Glossary
-  - glob: "glossary.md"
-    q_template: |
-      {{ read(path) }}
-      ---
-      Is the implementation consistent with this glossary definition?
-    a: "yes"
-    target: diff
+  - !foreach
+    - path: "glossary.md"
+    - q: |
+        {{ read(path) }}
+        ---
+        Is the implementation consistent with this glossary definition?
+      a: "yes"
+      target: diff
 
   # Specs
-  - glob: "specs/**.md"
-    q_template: |
-      {{ read(path) }}
-      ---
-      Does the implementation fully satisfy this specification?
-    a: "yes"
+  - !foreach
+    - path: "specs/**.md"
+    - q: |
+        {{ read(path) }}
+        ---
+        Does the implementation fully satisfy this specification?
+      a: "yes"
 
-  - glob: "specs/**.py"
-    q_template: |
-      --- # {{ path }}
-      {{ read(path) }}
-      ---
-      Does the implementation produce the observable behavior and side effects specified by this pseudocode and preserve every assertion in it as an explicit assertion, regardless of its internal structure or control flow?
-    a: "yes"
+  - !foreach
+    - path: "specs/**.py"
+    - q: |
+        --- # {{ path }}
+        {{ read(path) }}
+        ---
+        Does the implementation produce the observable behavior and side effects specified by this pseudocode and preserve every assertion in it as an explicit assertion, regardless of its internal structure or control flow?
+      a: "yes"
 
   # Docker
   - !include docker/general.yml

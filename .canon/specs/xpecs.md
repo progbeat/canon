@@ -1,6 +1,9 @@
-# Expectations
+# Xpecs
 
-The `expectations` may contain expectation items and generator items.
+A check config contains exactly one of `xpecs` or its alias `expectations`.
+
+The value is a sequence of expectation items or nested sequences. Nested
+sequences recursively contribute their expectation items in place.
 
 An expectation item's `q` is always a string.
 Its `to` is `agent`, `caller`, or `shell`, and defaults to `agent`:
@@ -25,18 +28,5 @@ For `to: shell`, an absent or empty `a` resolves to `"0"`.
 Resolved expected answers and answers in evaluation responses are strings, even when their source values are integers or other non-string scalar types.
 
 For `to: shell`, Unix-like platforms use `/bin/sh -c`, and Windows uses `cmd.exe /D /S /C`.
-
-A generator item contains `glob` and `q_template`:
-
-```yaml
-- glob: "specs/**.md"
-  q_template: |
-    {{ read(path) }}
-    ---
-    Is this specification implemented?
-  a: "yes"
-```
-
-For every file matched by `glob`, `q_template` renders the `q` value with `path` in context and explicit file reads through `read(path)`.
 
 Expectation items may include other fields not described here.

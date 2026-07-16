@@ -17,7 +17,7 @@ If neither exists, the expectation has no **cached result**.
 An expectation item may include an optional `cooldown` field:
 
 ```yaml
-expectations:
+xpecs:
   - q: "Can you find any serious code quality issues that can be easily fixed?"
     a: "no"
     cooldown: 7d

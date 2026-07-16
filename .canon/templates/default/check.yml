@@ -14,12 +14,13 @@ expectations:
   # - !include expects/project-quality.yml
 
   # Expectations from specs:
-  # - glob: "specs/*.md"
-  #   q_template: |
-  #     {{ read(path) }}
-  #     ---
-  #     Does the implementation fully satisfy this specification?
-  #   a: "yes"
+  # - !foreach
+  #   - path: "specs/*.md"
+  #   - q: |
+  #       {{ read(path) }}
+  #       ---
+  #       Does the implementation fully satisfy this specification?
+  #     a: "yes"
 
   # Project quality
   - q: "Can you find any unnecessary copy-pasted code outside tests?"
