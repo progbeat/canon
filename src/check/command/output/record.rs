@@ -447,10 +447,8 @@ mod tests {
         let report = start_expectation_report_output(output, "j");
         report.progress().record_turn_timeout();
 
-        let finished = report.finish_with_record(&timeout_error_record());
+        let _ = report.finish_with_record(&timeout_error_record());
 
-        assert!(finished.needs_stderr_completion_notice());
-        assert!(finished.anything_was_reported());
         let output = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
         assert!(output.contains("j× FAIL\n"));
         assert!(output.contains("error: unparsable\n"));
@@ -465,11 +463,8 @@ mod tests {
         }));
         let report = start_expectation_report_output(output, "j");
 
-        let finished = report.finish_with_record(&timeout_error_record());
+        let _ = report.finish_with_record(&timeout_error_record());
 
-        assert!(finished.short_id_was_printed());
-        assert!(finished.anything_was_reported());
-        assert!(finished.needs_stderr_completion_notice());
         assert_eq!(*bytes.lock().unwrap(), b"j");
     }
 

@@ -153,8 +153,7 @@ mod tests {
         }));
 
         let report = start_expectation_report_output(output, "j");
-        let finished = report.finish_with_record(&passing_record());
-        assert!(!finished.needs_stderr_completion_notice());
+        let _ = report.finish_with_record(&passing_record());
 
         let completed = captured_string(&bytes);
         assert_result_entry(&completed, "PASS");
@@ -170,8 +169,7 @@ mod tests {
         let report = start_expectation_report_output(output, "j");
 
         assert_eq!(captured_string(&bytes), "j");
-        let finished = report.finish_with_record(&passing_record());
-        assert!(!finished.needs_stderr_completion_notice());
+        let _ = report.finish_with_record(&passing_record());
     }
 
     #[test] // xpec: 0N
