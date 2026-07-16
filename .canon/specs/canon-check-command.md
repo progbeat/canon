@@ -44,6 +44,7 @@ def canon_check():
         ... # do everything needed to prepare for evaluation
         for xpec in check_order_policy(selected_expectations):
             evaluation = evaluate(xpec)
+            ...
             if evaluation["status"] == FAIL and not keep_going:
                 break
     finally:
@@ -95,7 +96,7 @@ def _repair_instructions(failed):
 The check run emits exactly one token usage line to stderr:
 
 ```
-Token usage: total=<n> input=<n> (+ <n> cached) output=<n> (reasoning <n>)
+token-usage: ref-cost=<n>$ total=<n> input=<n> (+ <n> cached) output=<n> (reasoning <n>)
 ```
 
 If token usage data is unavailable, every numeric field is `0`.

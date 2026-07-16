@@ -51,7 +51,7 @@ class _Evaluator:
         self.timeline.on_symbol(lambda c: print(c, end=''))
 
     def on_status(self):
-        print('' if self.ask_mode else (' ' + self.status))
+        print('' if self.ask_mode else (' ' + _STATUS_TO_STR[self.status]))
 
 
 class _CallerEvaluator(_Evaluator):
@@ -62,7 +62,7 @@ class _CallerEvaluator(_Evaluator):
         pass
 
     def on_status(self):
-        print(self.xpec.shortID + str(self.timeline), self.status)
+        print(self.xpec.shortID + str(self.timeline), _STATUS_TO_STR[self.status])
 
     def on_wrong_answer(self):
         print('expected:', self.expected)
@@ -103,3 +103,6 @@ class _ShellEvaluator(_Evaluator):
         for line in self.response.evidence.splitlines():
             print('│', line)
         print(f'Command exited with code {self.response.answer} (expected {self.expected}).')
+
+
+_STATUS_TO_STR = {PASS: 'OK', FAIL: 'FAIL'}

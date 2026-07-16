@@ -3,6 +3,16 @@ presets: !include presets.yml
 expectations:
   # on-start checks
   - to: caller
+    q: Did you stage all the changes you intended to evaluate? [y/N]
+    a: y
+    cooldown: 1h
+
+  - to: caller
+    q: Did any of your actions deviate from `AGENTS.md` in a way that remains unaddressed? [n/Y]
+    a: n
+    cooldown: 30m
+
+  - to: caller
     q: |-
       Run the checks:
       ```
@@ -14,6 +24,7 @@ expectations:
       Have the checks passed? [y/N]
     a: y
     rank: -10
+    cooldown: 20m
 
   # on-pass checks
   - to: shell
