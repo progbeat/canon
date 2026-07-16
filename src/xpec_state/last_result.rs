@@ -286,9 +286,9 @@ impl XpecStateCache {
         let visible_scope = git_backed
             .then(|| visible_scope(&expectation.agent, &q_scope))
             .transpose()?;
-        // [Df] In-place results have no Git diff context. Enforce that at the
-        // persistence boundary even though current in-place runtimes expose no
-        // persistent state root, so no future caller can leak a tree OID.
+        // [Df] In-place results persist pass/fail history but have no Git diff
+        // context. Enforce that at the persistence boundary so their
+        // status-specific files cannot leak tree OIDs.
         let (diff_from, diff_from_tree_oid) = if git_backed {
             (record.diff_from.clone(), record.diff_from_tree_oid.clone())
         } else {

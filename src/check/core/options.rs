@@ -10,14 +10,12 @@ pub(crate) struct CheckOptions {
     // `--keep-going` continues evaluator work after failed results; it does
     // not bypass default cache-based selection.
     pub(crate) keep_going: bool,
-    pub(crate) ignore_cooldown: bool,
     pub(crate) break_after_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RawCheckOptions {
     pub(crate) keep_going: bool,
-    pub(crate) ignore_cooldown: bool,
     pub(crate) break_after_tokens: Option<u64>,
     pub(crate) selectors: Vec<OsString>,
 }

@@ -16,4 +16,4 @@ pub(crate) use identity::{
     expectation_identities, minimal_unique_expectation_prefix, select_expectations_with_identities,
     ExpectationIdentity,
 };
-pub(crate) use order::{order_by_latest_fail, order_in_place_by_absent_fail_history};
+pub(crate) use order::order_selected_by_rank_and_latest_fail;

@@ -399,12 +399,18 @@ mod tests {
         AgentConfig, CheckConfig, Cooldown, CooldownConfig, Expectation, ExpectationTarget,
     };
 
-    #[test] // xpec: jz
+    #[test] // xpec: 6
     fn cooldown_config_accepts_compact_positive_duration() {
         assert_eq!(
             parse_cooldown_config(&CooldownConfig("30m".to_string())).unwrap(),
             Cooldown { seconds: 30 * 60 }
         );
+    }
+
+    #[test] // xpec: 6
+    fn cooldown_config_rejects_mapping_and_fail_specific_forms() {
+        assert!(serde_saphyr::from_str::<CooldownConfig>("fail: 1h").is_err());
+        assert!(serde_saphyr::from_str::<CooldownConfig>("pass: 7d").is_err());
     }
 
     #[test]
@@ -504,7 +510,7 @@ mod tests {
         assert!(error.starts_with("duplicate expectation ID: "), "{error}");
     }
 
-    #[test] // xpec: jz
+    #[test] // xpec: 6
     fn git_backed_config_accepts_canonical_cooldown() {
         let agent = AgentConfig::default();
         let mut item = expectation(&agent, None);

@@ -23,7 +23,7 @@ pub(crate) struct RawCheckConfig {
     pub(crate) presets: Option<BTreeMap<String, RawPresetConfig>>,
     #[serde(default)]
     pub(crate) agent: Option<RawLegacyAgentConfig>,
-    #[serde(deserialize_with = "deserialize_expectation_items")]
+    #[serde(alias = "xpecs", deserialize_with = "deserialize_expectation_items")]
     pub(crate) expectations: Vec<RawExpectationItem>,
 }
 
@@ -143,18 +143,11 @@ impl Default for AgentConfig {
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct RawPresetConfig {
     #[serde(default, deserialize_with = "deserialize_optional_scalar_string")]
     pub(crate) q: Option<String>,
-    #[serde(default)]
-    pub(crate) q_template: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_scalar_string")]
     pub(crate) a: Option<String>,
-    #[serde(default)]
-    pub(crate) glob: Option<String>,
-    #[serde(default)]
-    pub(crate) include: Option<String>,
     #[serde(default)]
     pub(crate) to: Option<ExpectationTo>,
     #[serde(default)]
@@ -188,10 +181,7 @@ pub(crate) struct RawPresetConfig {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ResolvedPresetConfig {
     pub(crate) q: Option<String>,
-    pub(crate) q_template: Option<String>,
     pub(crate) a: Option<String>,
-    pub(crate) glob: Option<String>,
-    pub(crate) include: Option<String>,
     pub(crate) common: RawExpectationCommonConfig,
 }
 
@@ -258,6 +248,7 @@ pub(crate) struct Expectation {
     pub(crate) to: ExpectationTo,
     pub(crate) q: String,
     pub(crate) a: String,
+    // [cv] Canon check orders ascending by rank; omitted config resolves to 0.
     pub(crate) rank: i64,
     // Human-authored expectation context data from check config, like `q` and
     // `a`. Despite the config key name, this is not an implementation-owned
@@ -331,22 +322,38 @@ pub(crate) struct Cooldown {
 pub(crate) enum RawExpectationItem {
     Unresolved(RawExpectationFields),
     Explicit(RawExplicitExpectation),
-    // The Expectations spec calls both `include` and `glob`/`q_template`/`a`
-    // forms generator items. Internally they stay split so config expansion can
-    // route include recursion separately from per-file question generation.
-    Generator(RawGeneratorExpectation),
-    Include(RawIncludeExpectation),
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RawGitBackedExpectationConfig {
+    // These YAML fields are valid only when the xpec is evaluated against Git
+    // state. Keeping them grouped prevents mode-independent config code from
+    // accidentally treating cache/diff policy as universally available.
+    pub(crate) diff_from: Option<String>,
+    pub(crate) target: Option<String>,
+    // [jz] Cooldown config belongs to Git-backed xpec state.
+    pub(crate) cooldown: Option<CooldownConfig>,
+}
+
+impl RawGitBackedExpectationConfig {
+    pub(crate) fn configured_field_names(&self) -> Vec<&'static str> {
+        [
+            (self.diff_from.is_some(), "diff-from"),
+            (self.target.is_some(), "target"),
+            (self.cooldown.is_some(), "cooldown"),
+        ]
+        .into_iter()
+        .filter_map(|(configured, name)| configured.then_some(name))
+        .collect()
+    }
 }
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RawExpectationCommonConfig {
-    // Raw config data shared by presets, explicit expectations, generated
-    // expectations, and includes. It is not an implementation-owned evaluator
-    // prompt or policy source.
+    // Raw config data shared by presets and expectation items. It is not an
+    // implementation-owned evaluator prompt or policy source.
     pub(crate) question_context: Option<String>,
-    pub(crate) diff_from: Option<String>,
-    pub(crate) target: Option<String>,
-    pub(crate) cooldown: Option<CooldownConfig>,
+    pub(crate) git_backed: RawGitBackedExpectationConfig,
     pub(crate) to: Option<ExpectationTo>,
     pub(crate) rank: Option<i64>,
     pub(crate) settings: RawExpectationSettings,
@@ -360,88 +367,18 @@ pub(crate) struct RawExplicitExpectation {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct RawGeneratorExpectation {
-    pub(crate) q: RawGeneratedExpectationQuestion,
-    pub(crate) glob: String,
-    pub(crate) a: String,
-    pub(crate) common: RawExpectationCommonConfig,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RawGeneratedExpectationQuestion {
-    // `q_template` is external configuration data for generated expectation
-    // questions. Rendering it produces the generated expectation item's `q`,
-    // which has item-level precedence over an explicit-form `q` preset default.
-    pub(crate) q_template: String,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RawIncludeExpectation {
-    pub(crate) include: String,
-    pub(crate) generated_item_defaults: RawExpectationFields,
-}
-
-#[derive(Debug, Clone)]
 pub(crate) struct RawExpectationFields {
-    // YAML `q` is the explicit-expectation question field. Glob generators do
-    // not use this spelling for their item-level q; they render `q_template`.
     pub(crate) explicit_q: Option<String>,
-    // In the glob-generator form, `q_template` is the item-level source for the
-    // generated expectation's q.
-    pub(crate) q_template: Option<String>,
     pub(crate) a: Option<String>,
-    pub(crate) glob: Option<String>,
-    pub(crate) include: Option<String>,
     pub(crate) common: RawExpectationCommonConfig,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum RawExpectationItemForm {
-    Explicit,
-    Generator,
-    Include,
-}
-
-impl RawExpectationItemForm {
-    pub(crate) fn from_shape_fields(
-        has_q: bool,
-        has_q_template: bool,
-        has_glob: bool,
-        has_include: bool,
-    ) -> Option<Self> {
-        if has_include {
-            return Some(Self::Include);
-        }
-        if has_q {
-            return Some(Self::Explicit);
-        }
-        if has_glob || has_q_template {
-            return Some(Self::Generator);
-        }
-        None
-    }
-}
-
-impl RawExpectationFields {
-    pub(crate) fn declared_item_form(&self) -> Option<RawExpectationItemForm> {
-        RawExpectationItemForm::from_shape_fields(
-            self.explicit_q.is_some(),
-            self.q_template.is_some(),
-            self.glob.is_some(),
-            self.include.is_some(),
-        )
-    }
 }
 
 #[derive(Debug, Deserialize)]
-// Expectation items intentionally omit `deny_unknown_fields`: the expectations
-// spec allows extra fields so external IDs or annotations can stay in check files
-// without affecting canon's explicit/generator/include expansion.
+// Expectation items intentionally omit `deny_unknown_fields`: the xpecs spec
+// allows extra fields so external IDs or annotations can stay in check files.
 struct RawExpectationFieldValues {
     #[serde(default, deserialize_with = "deserialize_optional_scalar_string")]
     q: Option<String>,
-    #[serde(default)]
-    q_template: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_scalar_string")]
     a: Option<String>,
     #[serde(default)]
@@ -454,10 +391,6 @@ struct RawExpectationFieldValues {
     diff_from: Option<String>,
     #[serde(default)]
     target: Option<String>,
-    #[serde(default)]
-    glob: Option<String>,
-    #[serde(default)]
-    include: Option<String>,
     #[serde(default)]
     to: Option<ExpectationTo>,
     #[serde(default)]
@@ -480,13 +413,10 @@ impl From<RawExpectationFieldValues> for RawExpectationFields {
     fn from(fields: RawExpectationFieldValues) -> RawExpectationFields {
         let RawExpectationFieldValues {
             q,
-            q_template,
             a,
             question_context,
             diff_from,
             target,
-            glob,
-            include,
             to,
             rank,
             cooldown,
@@ -498,15 +428,14 @@ impl From<RawExpectationFieldValues> for RawExpectationFields {
         } = fields;
         RawExpectationFields {
             explicit_q: q,
-            q_template,
             a,
-            glob,
-            include,
             common: RawExpectationCommonConfig {
                 question_context,
-                diff_from,
-                target,
-                cooldown,
+                git_backed: RawGitBackedExpectationConfig {
+                    diff_from,
+                    target,
+                    cooldown,
+                },
                 to,
                 rank,
                 settings: RawExpectationSettings {
@@ -532,67 +461,13 @@ impl<'de> Deserialize<'de> for RawExpectationItem {
 }
 
 impl RawExpectationItem {
-    pub(crate) fn include_from_fields(
-        fields: RawExpectationFields,
-    ) -> Result<RawExpectationItem, &'static str> {
-        let RawExpectationFields {
-            explicit_q,
-            q_template,
-            a,
-            glob,
-            include,
-            common,
-        } = fields;
-        match include {
-            Some(include) => Ok(RawExpectationItem::Include(RawIncludeExpectation {
-                include,
-                generated_item_defaults: RawExpectationFields {
-                    explicit_q,
-                    q_template,
-                    a,
-                    glob,
-                    include: None,
-                    common,
-                },
-            })),
-            None => Err("missing required field after default resolution: include"),
-        }
-    }
-
-    pub(crate) fn generator_from_fields(
-        fields: RawExpectationFields,
-    ) -> Result<RawExpectationItem, &'static str> {
-        let RawExpectationFields {
-            q_template,
-            a,
-            glob,
-            common,
-            ..
-        } = fields;
-        let a = resolve_expected_answer(common.to.unwrap_or_default(), a)?;
-        match (q_template, glob) {
-            (Some(q_template), Some(glob)) => {
-                Ok(RawExpectationItem::Generator(RawGeneratorExpectation {
-                    q: RawGeneratedExpectationQuestion { q_template },
-                    glob,
-                    a,
-                    common,
-                }))
-            }
-            (Some(_), None) => Err("missing required field after default resolution: glob"),
-            (None, Some(_)) => Err("missing required field after default resolution: q_template"),
-            _ => Err("invalid expectation item"),
-        }
-    }
-
-    pub(crate) fn explicit_from_fields(
+    pub(crate) fn from_resolved_fields(
         fields: RawExpectationFields,
     ) -> Result<RawExpectationItem, &'static str> {
         let RawExpectationFields {
             explicit_q,
             a,
             common,
-            ..
         } = fields;
         let a = resolve_expected_answer(common.to.unwrap_or_default(), a)?;
         match explicit_q {
@@ -601,66 +476,7 @@ impl RawExpectationItem {
                 a,
                 common,
             })),
-            _ => Err("invalid expectation item"),
-        }
-    }
-
-    pub(crate) fn from_resolved_fields(
-        fields: RawExpectationFields,
-    ) -> Result<RawExpectationItem, &'static str> {
-        let RawExpectationFields {
-            explicit_q,
-            q_template,
-            a,
-            glob,
-            include,
-            common,
-        } = fields;
-        // Field resolution has already applied item values, selected preset
-        // values, and real implementation defaults. Required shape fields have
-        // no synthetic defaults: inventing an `include`, `q`+`a`, or
-        // `glob`+`q_template`+`a` would change the expectation form instead of
-        // resolving it, so absence after resolution is a config error.
-        if let Some(include) = include {
-            return Ok(RawExpectationItem::Include(RawIncludeExpectation {
-                include,
-                generated_item_defaults: RawExpectationFields {
-                    explicit_q,
-                    q_template,
-                    a,
-                    glob,
-                    include: None,
-                    common,
-                },
-            }));
-        }
-        let a = resolve_expected_answer(common.to.unwrap_or_default(), a)?;
-        match (explicit_q, q_template, glob) {
-            (_, Some(q_template), Some(glob)) => {
-                Ok(RawExpectationItem::Generator(RawGeneratorExpectation {
-                    q: RawGeneratedExpectationQuestion { q_template },
-                    glob,
-                    a,
-                    common,
-                }))
-            }
-            (Some(q), _, _) => Ok(RawExpectationItem::Explicit(RawExplicitExpectation {
-                q,
-                a,
-                common,
-            })),
-            fields => match fields {
-                (None, Some(_), None) => {
-                    Err("missing required field after default resolution: glob")
-                }
-                (None, None, Some(_)) => {
-                    Err("missing required field after default resolution: q_template")
-                }
-                (None, None, None) => Err(
-                    "missing required field after default resolution: q, q_template, or include",
-                ),
-                _ => Err("invalid expectation item"),
-            },
+            None => Err("missing required field after default resolution: q"),
         }
     }
 }

@@ -65,7 +65,7 @@ mod tests {
         }
     }
 
-    #[test] // xpec: AL
+    #[test] // xpec: nF
     fn non_live_report_result_output_matches_documented_record_shape() {
         let mut bytes = Vec::new();
         let mut result_output = Some(&mut bytes as &mut dyn Write);
@@ -76,7 +76,7 @@ mod tests {
         assert_result_entry(&rendered, "PASS");
     }
 
-    #[test] // xpec: AL
+    #[test] // xpec: v1,Z8
     fn summary_and_token_usage_output_match_documented_lines() {
         let report = CheckRunReport {
             records: vec![passing_record()],
@@ -101,11 +101,11 @@ mod tests {
         };
         assert_eq!(
             render_token_usage_summary(usage),
-            "Token usage: total=9 input=4 (+ 3 cached) output=2 (reasoning 1)"
+            "token-usage: ref-cost=0.0000243$ total=9 input=4 (+ 3 cached) output=2 (reasoning 1)"
         );
     }
 
-    #[test] // xpec: AL,8s
+    #[test] // xpec: nF
     fn failed_result_output_matches_documented_detail_lines() {
         let mut bytes = Vec::new();
         let mut result_output = Some(&mut bytes as &mut dyn Write);
@@ -125,7 +125,7 @@ mod tests {
         assert!(rendered.contains("evidence: test evidence\n"));
     }
 
-    #[test] // xpec: AL
+    #[test] // xpec: nF
     fn error_result_output_matches_documented_detail_lines() {
         let mut bytes = Vec::new();
         let mut result_output = Some(&mut bytes as &mut dyn Write);
@@ -145,7 +145,7 @@ mod tests {
         assert!(!rendered.contains("evidence:"));
     }
 
-    #[test] // xpec: AL
+    #[test] // xpec: nF
     fn live_report_result_output_matches_documented_record_shape() {
         let bytes = Arc::new(Mutex::new(Vec::new()));
         let output = SharedCheckOutput::new(Box::new(CapturedOutput {
@@ -193,7 +193,7 @@ mod tests {
         );
     }
 
-    #[test] // xpec: AL
+    #[test] // xpec: v1
     fn agent_messages_cover_documented_actions() {
         let repair_messages = render_check_agent_messages(&issues(&["a", "b"]), 0, 0, 0);
         assert!(has_action(&repair_messages, "Fix the issues"));

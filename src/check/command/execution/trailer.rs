@@ -69,7 +69,7 @@ mod tests {
     use crate::check::core::RawCheckOptions;
     use std::path::PathBuf;
 
-    #[test] // xpec: AL
+    #[test] // xpec: v1
     fn agent_message_allows_normalized_default_config_path() {
         let command = command_with_config_path("./.canon/check.yml");
 
@@ -80,7 +80,7 @@ mod tests {
         ));
     }
 
-    #[test] // xpec: AL
+    #[test] // xpec: v1
     fn agent_message_rejects_non_default_config_path() {
         let command = command_with_config_path(".canon/other.yml");
 
@@ -91,7 +91,7 @@ mod tests {
         ));
     }
 
-    #[test] // xpec: AL
+    #[test] // xpec: v1
     fn agent_message_allows_explicit_selectors_with_default_command_sources() {
         let mut command = command_with_config_path(".canon/check.yml");
         command.options.selectors.push("a7F".into());

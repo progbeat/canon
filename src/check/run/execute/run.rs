@@ -7,7 +7,7 @@ use crate::check::core::{
 };
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::run::selection::{
-    order_in_place_by_absent_fail_history, select_and_order_git_backed_expectations,
+    order_selected_by_rank_and_latest_fail, select_and_order_git_backed_expectations,
     GitBackedCacheFilterContext,
 };
 use crate::evaluator::EvaluatorRunner;
@@ -59,18 +59,24 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     let mut interrogation_run_state = run_try!(InterrogationRunState::new(
         runtime.no_sandbox() || runtime.is_in_place()
     ));
+    // Pass history classifies new passes and regressions in every persistent
+    // runtime. In-place omits Git tree metadata, not last-result history.
+    caches.run_start_pass_ids = run_try!(snapshot_pass_ids(
+        root,
+        &options.candidate_expectations,
+        &mut caches.xpec_state,
+    ));
     let check_work_queue = if runtime.is_in_place() {
         // In-place config compatibility has already been validated by the
-        // command layer, and this runtime has no Git-backed cache source.
-        // The canon check --in-place spec treats persisted xpec history as
-        // absent, so e5 ordering uses the Unix epoch for every candidate.
-        in_place_check_work_queue(options.candidate_expectations.clone())
-    } else {
-        caches.run_start_pass_ids = run_try!(snapshot_pass_ids(
+        // command layer. Cached-result selection is Git-state-specific, but
+        // in-place last-fail history still participates in the common order
+        // policy.
+        run_try!(in_place_check_work_queue(
             root,
-            &options.candidate_expectations,
+            options.candidate_expectations.clone(),
             &mut caches.xpec_state,
-        ));
+        ))
+    } else {
         let source = runtime
             .tree_source()
             .ok_or_else(|| current_error!("missing Git tree source".to_string()))?;
@@ -120,9 +126,8 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         records.push(outcome.record);
         if stop_run {
             // This is the shared default-order stop point for both
-            // materialized and in-place runs. In-place mode changes
-            // cache/state usage, not the stop-after-evaluated-fail
-            // rule.
+            // materialized and in-place runs. In-place mode changes cached
+            // result eligibility, not the stop-after-evaluated-fail rule.
             let report = current_report(records, cached, total_expectations);
             if interrupted {
                 // The interruption still finishes through the normal partial
@@ -140,9 +145,13 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
 }
 
 fn in_place_check_work_queue(
+    root: &std::path::Path,
     evaluation_queue: Vec<ResolvedExpectation>,
-) -> Vec<ResolvedExpectation> {
-    order_in_place_by_absent_fail_history(evaluation_queue, |expectation| expectation)
+    state_cache: &mut crate::xpec_state::XpecStateCache,
+) -> Result<Vec<ResolvedExpectation>, String> {
+    order_selected_by_rank_and_latest_fail(root, evaluation_queue, state_cache, |expectation| {
+        expectation
+    })
 }
 
 fn current_report(
@@ -156,24 +165,66 @@ fn current_report(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::config_types::{AgentConfig, DEFAULT_DIFF_FROM};
+    use super::in_place_check_work_queue;
+    use crate::check::core::{CheckRecord, CheckResult, ResolvedExpectation};
+    use crate::config_types::{AgentConfig, ExpectationTo, DEFAULT_DIFF_FROM};
+    use crate::hash::full_scope;
+    use crate::xpec_state::XpecStateCache;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::process;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
-    // xpec: cv,Df
-    #[test]
-    fn in_place_check_work_queue_uses_in_place_absent_history_epoch_order() {
-        let queue = in_place_check_work_queue(vec![
-            resolved_expectation("first"),
-            resolved_expectation("second"),
-        ]);
+    #[test] // xpec: cv,Df,nv
+    fn in_place_check_work_queue_uses_persisted_latest_fail_history() {
+        let root = test_root("in-place-order-history");
+        fs::create_dir_all(&root).unwrap();
+        let older = resolved_expectation("older");
+        let newer = resolved_expectation("newer");
+        let mut state_cache = XpecStateCache::default();
+        write_in_place_fail(&root, &older, 1, &mut state_cache);
+        write_in_place_fail(&root, &newer, 2, &mut state_cache);
 
+        let queue =
+            in_place_check_work_queue(&root, vec![older, newer], &mut XpecStateCache::default())
+                .unwrap();
         let ids = queue
             .into_iter()
             .map(|expectation| expectation.id)
             .collect::<Vec<_>>();
 
-        // xpec: cv,Df
-        assert_eq!(ids, vec!["first", "second"]);
+        assert_eq!(ids, vec!["newer", "older"]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    fn write_in_place_fail(
+        root: &Path,
+        expectation: &ResolvedExpectation,
+        timestamp: u64,
+        state_cache: &mut XpecStateCache,
+    ) {
+        let record = CheckRecord {
+            timestamp: crate::time::format_record_timestamp(timestamp),
+            number: expectation.number,
+            result: CheckResult::Fail,
+            to: expectation.to,
+            question: Some(expectation.question.clone()),
+            expected_answer: Some(expectation.expected_answer.clone()),
+            observed: "no".to_string(),
+            error: None,
+            evidence: String::new(),
+            scope: full_scope(),
+            question_scope_suggestion: None,
+            visible_tree_oid: "in-place".to_string(),
+            diff_from: None,
+            diff_from_tree_oid: None,
+            diff_from_tree_oid_abbrev: None,
+            id: expectation.id.clone(),
+            display_id: expectation.display_id.clone(),
+        };
+        state_cache
+            .write_last_result_for_record(root, "in-place", expectation, &record)
+            .unwrap();
     }
 
     fn resolved_expectation(id: &str) -> ResolvedExpectation {
@@ -181,7 +232,7 @@ mod tests {
             number: 1,
             id: id.to_string(),
             display_id: id.to_string(),
-            to: crate::config_types::ExpectationTo::Agent,
+            to: ExpectationTo::Agent,
             rank: 0,
             question: "Does it pass?".to_string(),
             expected_answer: "yes".to_string(),
@@ -192,5 +243,13 @@ mod tests {
             agent: AgentConfig::default(),
             cooldown: None,
         }
+    }
+
+    fn test_root(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("canon-{name}-{}-{unique}", process::id()))
     }
 }

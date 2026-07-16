@@ -188,23 +188,23 @@ mod tests {
         }
     }
 
-    // xpec: A8,mf,83
+    // xpec: A8,mf
     #[test]
     fn runtime_permissions_deny_codex_home_state() {
         let permissions = evaluator_runtime_permissions().unwrap();
 
-        // xpec: A8,mf,83
+        // xpec: A8,mf
         assert_permission(&permissions, "~/.codex", FILESYSTEM_DENY);
-        // xpec: A8,mf,83
+        // xpec: A8,mf
         assert_permission(&permissions, "~/.codex/**", FILESYSTEM_DENY);
 
         let mut permissions = BTreeMap::new();
         add_home_runtime_permissions(&mut permissions, Some(OsString::from("/home/canon")))
             .unwrap();
 
-        // xpec: A8,mf,83
+        // xpec: A8,mf
         assert_permission(&permissions, "/home/canon/.codex", FILESYSTEM_DENY);
-        // xpec: A8,mf,83
+        // xpec: A8,mf
         assert_permission(&permissions, "/home/canon/.codex/**", FILESYSTEM_DENY);
     }
 

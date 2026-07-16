@@ -15,7 +15,6 @@ pub(crate) fn resolve_check_options_with_identities(
         candidate_expectations: candidates,
         selectors_provided: !options.selectors.is_empty(),
         keep_going: options.keep_going,
-        ignore_cooldown: options.ignore_cooldown,
         break_after_tokens: options.break_after_tokens,
     })
 }
@@ -26,16 +25,6 @@ pub(crate) fn add_check_option_args(command: Command) -> Command {
             Arg::new("keep_going")
                 .long("keep-going")
                 .help("Continue after failures")
-                .action(ArgAction::SetTrue),
-        )
-        .arg(
-            // Hidden controls are accepted for internal/test workflows but are
-            // deliberately not part of the documented public `canon check`
-            // help surface.
-            Arg::new("ignore_cooldown")
-                .long("ignore-cooldown")
-                .help("Re-evaluate expectations in cooldown")
-                .hide(true)
                 .action(ArgAction::SetTrue),
         )
         .arg(
@@ -71,7 +60,6 @@ pub(crate) fn raw_check_options_from_matches(
     };
     Ok(RawCheckOptions {
         keep_going: matches.get_flag("keep_going"),
-        ignore_cooldown: matches.get_flag("ignore_cooldown"),
         break_after_tokens,
         selectors: matched_os_values(matches, "selectors"),
     })

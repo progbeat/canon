@@ -1,3 +1,5 @@
+//! Identifies the repository view used while expanding check configuration.
+
 use crate::git::TreeSource;
 
 #[derive(Clone)]

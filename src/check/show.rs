@@ -1,7 +1,7 @@
 use crate::check::command::output::{escape_check_output_text, write_stdout_record};
 use crate::check::interrogation::policy::initial_q_scope_for_fresh_interrogation;
 use crate::check::run::selection::{
-    expectation_identities, order_by_latest_fail, order_in_place_by_absent_fail_history,
+    expectation_identities, order_selected_by_rank_and_latest_fail,
     select_expectations_with_identities,
 };
 use crate::check::CHECK_PATH;
@@ -132,14 +132,12 @@ fn select_show_expectations_for_current_run(
             return Err("canon.show pathspecs require a Git-backed check run".to_string());
         }
     };
-    Ok(match request.tree_source {
-        Some(_) => {
-            order_by_latest_fail(request.root, filtered, request.xpec_state, |expectation| {
-                expectation
-            })?
-        }
-        None => order_in_place_by_absent_fail_history(filtered, |expectation| expectation),
-    })
+    order_selected_by_rank_and_latest_fail(
+        request.root,
+        filtered,
+        request.xpec_state,
+        |expectation| expectation,
+    )
 }
 
 fn parse_show_command_args(args: &[OsString]) -> Result<ShowCommandArgs, String> {
@@ -270,7 +268,7 @@ fn render_show_output(expectations: &[ResolvedExpectation]) -> String {
 
 fn render_show_expectation(expectation: &ResolvedExpectation) -> String {
     format!(
-        "{}.\n{}\nExpected: {}\n",
+        "{}\n{}\nexpected: {}\n",
         expectation.display_id,
         escape_check_output_text(&expectation.question),
         escape_check_output_text(&expectation.expected_answer)
@@ -323,7 +321,7 @@ mod tests {
         assert!(parsed.pathspecs.is_empty());
     }
 
-    #[test]
+    #[test] // xpec: t5
     fn show_output_escapes_question_and_expected_answer() {
         let expectation = ResolvedExpectation {
             number: 1,
@@ -343,7 +341,7 @@ mod tests {
 
         assert_eq!(
             render_show_expectation(&expectation),
-            "1.\nLine one\\nLine two\nExpected: yes\\tplease\n"
+            "1\nLine one\\nLine two\nexpected: yes\\tplease\n"
         );
     }
 

@@ -568,7 +568,7 @@ mod tests {
         let _ = fs::remove_dir_all(output_dir);
     }
 
-    #[test] // xpec: 38,M
+    #[test] // xpec: 38,Mo
     fn prompt_template_output_dir_allocations_are_fresh() {
         let first = allocate_prompt_template_artifact_dir().unwrap();
         let second = allocate_prompt_template_artifact_dir().unwrap();
@@ -585,7 +585,7 @@ mod tests {
         }
     }
 
-    #[test] // xpec: M
+    #[test] // xpec: Mo
     fn prompt_template_output_dir_does_not_reuse_fixed_temp_path() {
         let fixed = std::env::temp_dir().join(PROMPT_TEMPLATE_ARTIFACT_DIR_PREFIX);
 
@@ -595,7 +595,7 @@ mod tests {
         assert!(output.path().is_dir());
     }
 
-    #[test] // xpec: M
+    #[test] // xpec: Mo
     fn prompt_template_output_dir_prefers_memory_backed_parent() {
         let memory_backed_parent = test_output_dir("memory-backed-parent");
         let fallback_parent = test_output_dir("fallback-parent");
@@ -616,7 +616,7 @@ mod tests {
         let _ = fs::remove_dir_all(fallback_parent);
     }
 
-    #[test] // xpec: M
+    #[test] // xpec: Mo
     fn prompt_template_output_dir_falls_back_when_memory_backed_parent_is_unavailable() {
         let missing_parent = std::env::temp_dir().join(format!(
             "canon-missing-memory-backed-parent-{}",

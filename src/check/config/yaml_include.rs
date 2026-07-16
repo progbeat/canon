@@ -1,4 +1,5 @@
-use super::config_expansion::CheckConfigSource;
+use super::expansion::CheckConfigSource;
+use super::foreach::expand_foreach_yaml;
 use crate::repo_inspection::RepoInspectionCache;
 use crate::scope::normalize_repo_path;
 use serde::de::DeserializeOwned;
@@ -21,14 +22,15 @@ where
     let mut resolver = CheckConfigIncludeResolver {
         root: root.to_path_buf(),
         root_config_path: config_path.to_path_buf(),
-        source,
+        source: source.clone(),
         cache: RepoInspectionCache::new(),
     };
+    let content = expand_foreach_yaml(root, config_path, content, &source, &mut resolver.cache)?;
     let options = serde_saphyr::options! {
         strict_booleans: true,
     }
     .with_include_resolver(move |request: IncludeRequest<'_>| resolver.resolve(request));
-    from_str_with_options(content, options).map_err(|err| err.to_string())
+    from_str_with_options(&content, options).map_err(|err| err.to_string())
 }
 
 struct CheckConfigIncludeResolver {
@@ -52,6 +54,14 @@ impl CheckConfigIncludeResolver {
             .cache
             .config_source_file_content(&self.root, &self.source, Path::new(&path))
             .map_err(IncludeResolveError::Message)?;
+        let content = expand_foreach_yaml(
+            &self.root,
+            Path::new(&path),
+            &content,
+            &self.source,
+            &mut self.cache,
+        )
+        .map_err(IncludeResolveError::Message)?;
         Ok(ResolvedInclude {
             id: path.clone(),
             name: path,
@@ -124,7 +134,7 @@ mod tests {
     use std::process;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test] // xpec: I8,vc
+    #[test] // xpec: I8,v7
     fn expectation_sequence_includes_are_flattened() {
         let root = test_root("expectation-sequence-include");
         fs::write(
@@ -136,13 +146,50 @@ mod tests {
         let raw = parse_yaml_config_with_includes::<crate::config_types::RawCheckConfig>(
             &root,
             Path::new("check.yml"),
-            "presets:\n  default: {}\nexpectations:\n  - !include included.yml\n  - q: Local\n    a: yes\n",
+            "presets:\n  default: {}\nxpecs:\n  - !include included.yml\n  - q: Local\n    a: yes\n",
             CheckConfigSource::InPlace,
         )
         .unwrap();
 
         assert_eq!(raw.expectations.len(), 3);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test] // xpec: v7
+    fn xpecs_and_expectations_are_exclusive_aliases() {
+        for key in ["xpecs", "expectations"] {
+            let content = format!("presets:\n  default: {{}}\n{key}:\n  - q: Local\n    a: yes\n");
+            let raw = parse_yaml_config_with_includes::<crate::config_types::RawCheckConfig>(
+                Path::new("."),
+                Path::new("check.yml"),
+                &content,
+                CheckConfigSource::InPlace,
+            )
+            .unwrap();
+            assert_eq!(raw.expectations.len(), 1);
+        }
+
+        let error = parse_yaml_config_with_includes::<crate::config_types::RawCheckConfig>(
+            Path::new("."),
+            Path::new("check.yml"),
+            "presets:\n  default: {}\nxpecs: []\nexpectations: []\n",
+            CheckConfigSource::InPlace,
+        )
+        .unwrap_err();
+        assert!(error.contains("duplicate field"));
+    }
+
+    #[test] // xpec: v7
+    fn nested_xpec_sequences_are_recursively_flattened() {
+        let raw = parse_yaml_config_with_includes::<crate::config_types::RawCheckConfig>(
+            Path::new("."),
+            Path::new("check.yml"),
+            "presets:\n  default: {}\nxpecs:\n  - - q: One\n      a: yes\n    - - q: Two\n        a: yes\n",
+            CheckConfigSource::InPlace,
+        )
+        .unwrap();
+
+        assert_eq!(raw.expectations.len(), 2);
     }
 
     // xpec: I8

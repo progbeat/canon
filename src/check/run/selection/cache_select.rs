@@ -1,4 +1,4 @@
-use super::order::order_by_latest_fail;
+use super::order::order_selected_by_rank_and_latest_fail;
 use crate::check::core::{CheckOptions, ResolvedExpectation};
 use crate::check::run::cache::{
     cached_result_for_expectation, write_cache_hit, CachedResultLookup, CheckCacheHit,
@@ -61,7 +61,7 @@ pub(crate) fn select_and_order_git_backed_expectations(
                 CachedResultLookup {
                     now,
                     include_same_tree: true,
-                    include_cooldown: !options.ignore_cooldown,
+                    include_cooldown: true,
                 },
             )? {
                 Some(hit) => {
@@ -75,7 +75,7 @@ pub(crate) fn select_and_order_git_backed_expectations(
         }
         (evaluation_queue, cached_hits)
     };
-    let evaluation_queue = order_by_latest_fail(
+    let evaluation_queue = order_selected_by_rank_and_latest_fail(
         context.root,
         evaluation_queue,
         &mut *context.xpec_state,
@@ -98,7 +98,7 @@ mod tests {
     use std::process::{self, Command};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test] // xpec: jz,E
+    #[test] // xpec: 6,E
     fn default_runs_reuse_cached_results() {
         let root = git_project("default-reuses-cache");
         fs::create_dir_all(root.join("src")).unwrap();
@@ -164,8 +164,8 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test] // xpec: E
-    fn default_fail_history_leaves_candidates_selected() {
+    #[test] // xpec: E,6
+    fn same_tree_fail_history_is_not_a_cached_result() {
         let root = git_project("default-fail-history-does-not-cache");
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src/lib.rs"), "pub fn demo() {}\n").unwrap();
@@ -228,7 +228,6 @@ mod tests {
                 candidate_expectations: expectations,
                 selectors_provided,
                 keep_going: false,
-                ignore_cooldown: false,
                 break_after_tokens: None,
             },
             2,

@@ -1,3 +1,5 @@
+//! Resolves named preset inheritance and expectation field defaults.
+
 use crate::check::config::validation::{
     normalize_agent_ignore_pattern_for_config, validate_agent_config,
 };
@@ -67,10 +69,7 @@ fn raw_preset_from_legacy_agent(agent: RawLegacyAgentConfig) -> RawPresetConfig 
     models.extend(agent.model.fallbacks);
     RawPresetConfig {
         q: None,
-        q_template: None,
         a: None,
-        glob: None,
-        include: None,
         to: None,
         rank: None,
         question_context: None,
@@ -116,30 +115,21 @@ fn apply_raw_preset(preset: &mut ResolvedPresetConfig, raw: &RawPresetConfig) {
     if let Some(q) = &raw.q {
         preset.q = Some(q.clone());
     }
-    if let Some(q_template) = &raw.q_template {
-        preset.q_template = Some(q_template.clone());
-    }
     if let Some(a) = &raw.a {
         preset.a = Some(a.clone());
-    }
-    if let Some(glob) = &raw.glob {
-        preset.glob = Some(glob.clone());
-    }
-    if let Some(include) = &raw.include {
-        preset.include = Some(include.clone());
     }
     let common = &mut preset.common;
     if let Some(context) = &raw.question_context {
         common.question_context = Some(context.clone());
     }
     if let Some(diff_from) = &raw.diff_from {
-        common.diff_from = Some(diff_from.clone());
+        common.git_backed.diff_from = Some(diff_from.clone());
     }
     if let Some(target) = &raw.target {
-        common.target = Some(target.clone());
+        common.git_backed.target = Some(target.clone());
     }
     if let Some(cooldown) = &raw.cooldown {
-        common.cooldown = Some(cooldown.clone());
+        common.git_backed.cooldown = Some(cooldown.clone());
     }
     if let Some(to) = raw.to {
         common.to = Some(to);

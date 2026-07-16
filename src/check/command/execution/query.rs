@@ -6,7 +6,6 @@ use crate::check::command::{
     collect_check_token_usage, prepare_git_backed_check_execution, print_token_usage_summary,
     GitBackedCheckStorage, PrepareGitBackedCheckExecutionOptions,
 };
-use crate::check::config::in_place::validate_in_place_check_config;
 use crate::check::core::ParsedAnswer;
 use crate::check::interrogation::query::{
     query_human_review_reason, run_query_with_runner, QueryExpectationContext, QueryRequest,
@@ -208,10 +207,9 @@ fn run_prepared_query(
     // to/q/a fields and selected preset defaults were resolved together during
     // raw expansion. Configured check expectations are not part of this query.
     if runtime.is_in_place() {
-        validate_in_place_check_config(config)?;
         *enforced_scope = runtime
-            .fresh_scope_without_persistent_history()
-            .expect("in-place query has no persistent q-scope");
+            .scope_without_reusable_q_scope_history()
+            .expect("in-place query has no reusable Git q-scope");
     }
     let [configured_temporary_expectation] = config.expectations.as_slice() else {
         return Err("ask config must contain exactly one temporary expectation"
@@ -318,7 +316,7 @@ mod tests {
     use super::*;
     use crate::config_types::{AgentConfig, ExpectationTarget, ExpectationTo};
 
-    #[test] // xpec: 0N,nK,WH
+    #[test] // xpec: 0N,nK,kP
     fn temporary_query_expectation_has_empty_expected_answer() {
         let agent = AgentConfig::implementation_default();
         let configured = Expectation {

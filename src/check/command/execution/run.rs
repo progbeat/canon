@@ -19,7 +19,6 @@ use crate::app::LazyAppServerRunner;
 use crate::check::command::args::parse_check_command_args;
 use crate::check::command::output::SharedCheckOutput;
 use crate::check::command::{finish_check_report, CheckReportFinishContext};
-use crate::check::config::in_place::validate_in_place_check_config;
 use crate::check::config::validation::check_config_loads_plugins;
 use crate::check::core::CheckCommandArgs;
 use crate::check::interrogation::{state::CheckRuntime, write_check_lifecycle_start_event};
@@ -335,7 +334,7 @@ fn run_in_place_check_command(
 ) -> Result<(), CommandError> {
     // In-place delegates stay behind their component boundaries: CLI dispatch
     // supplies `root` and `default_in_place`, argument parsing rejects Git-tree
-    // and cache controls, repo inspection reads this directory directly, and
+    // controls, repo inspection reads this directory directly, and
     // `CheckRuntime::in_place` owns the evaluator view without Git tree state.
     // This command path coordinates those interfaces and runs
     // config validation before evaluator work starts.
@@ -381,18 +380,6 @@ fn run_in_place_check_command(
         }
     };
     *failure_output = collected_check_output(started, identities.len(), false);
-    // [Df] Reject config-wide mode-invalid fields before applying selectors;
-    // explicit selection cannot make configured Git-backed behavior valid.
-    if let Err(err) = validate_in_place_check_config(&config) {
-        return fail_check_before_selection(
-            &mut diagnostic_log,
-            None,
-            false,
-            trailer_attempted,
-            *failure_output,
-            err,
-        );
-    }
     cleanup_cache_dirs(
         root,
         &identities,

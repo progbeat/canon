@@ -1,11 +1,10 @@
 use crate::check::CheckConfigSource;
 use crate::check::{
-    expand_staged_generator_paths_from_listing,
-    parse_check_config_content_with_root_and_source_and_default_agent_preset,
-    parse_tree_check_config_content_with_root_and_default_agent_preset,
-    parse_yaml_config_with_includes, CHECK_PATH,
+    expand_staged_foreach_paths_from_listing,
+    parse_in_place_check_config_content_with_root_and_default_agent_preset,
+    parse_tree_check_config_content_with_root_and_default_agent_preset, CHECK_PATH,
 };
-use crate::config_types::{CheckConfig, RawExpectationItem};
+use crate::config_types::CheckConfig;
 use crate::fs_util::reject_symlink;
 use crate::git::{read_git_blobs, staged_tracked_files, StagedTrackedFile, TreeSource};
 use crate::platform::git_path_bytes;
@@ -13,7 +12,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-type GeneratorPathsCacheKey = (PathBuf, PathBuf, String, String);
+type ForeachPathsCacheKey = (PathBuf, PathBuf, String, String);
 type InPlaceFileContentCacheKey = (PathBuf, PathBuf);
 type StagedFileContentCacheKey = (PathBuf, PathBuf);
 type TreeFileContentCacheKey = (PathBuf, String, PathBuf);
@@ -25,12 +24,11 @@ type CheckConfigCacheKey = (
     Option<String>,
     Option<String>,
 );
-type IncludedExpectationsCacheKey = (PathBuf, String, String, String);
 type StagedBlobContents = BTreeMap<Vec<u8>, Vec<u8>>;
 
 #[derive(Default)]
 pub(crate) struct RepoInspectionCache {
-    generator_paths: BTreeMap<GeneratorPathsCacheKey, Result<Vec<String>, String>>,
+    foreach_paths: BTreeMap<ForeachPathsCacheKey, Result<Vec<String>, String>>,
     // Per-file decoded content is derived from the root-level staged blob
     // batch below; cache misses here do not spawn additional git processes.
     in_place_file_contents: BTreeMap<InPlaceFileContentCacheKey, Result<String, String>>,
@@ -42,8 +40,6 @@ pub(crate) struct RepoInspectionCache {
     tree_blob_contents: BTreeMap<(PathBuf, String), Result<StagedBlobContents, String>>,
     in_place_files: BTreeMap<PathBuf, Result<Vec<String>, String>>,
     check_configs: BTreeMap<CheckConfigCacheKey, Result<CheckConfig, String>>,
-    included_expectations:
-        BTreeMap<IncludedExpectationsCacheKey, Result<Vec<RawExpectationItem>, String>>,
 }
 
 impl RepoInspectionCache {
@@ -51,7 +47,7 @@ impl RepoInspectionCache {
         RepoInspectionCache::default()
     }
 
-    pub(crate) fn generator_paths(
+    pub(crate) fn foreach_paths(
         &mut self,
         root: &Path,
         config_path: &Path,
@@ -65,21 +61,21 @@ impl RepoInspectionCache {
             glob.to_string(),
             source_key,
         );
-        if let Some(cached) = self.generator_paths.get(&key) {
+        if let Some(cached) = self.foreach_paths.get(&key) {
             return cached.clone();
         }
         let expanded = match source {
             CheckConfigSource::Tree(TreeSource::Staged) => {
-                self.expand_staged_generator_paths(root, config_path, glob)
+                self.expand_staged_foreach_paths(root, config_path, glob)
             }
             CheckConfigSource::Tree(source) => {
-                self.expand_tree_generator_paths(root, config_path, glob, source)
+                self.expand_tree_foreach_paths(root, config_path, glob, source)
             }
             CheckConfigSource::InPlace => {
-                self.expand_in_place_generator_paths(root, config_path, glob)
+                self.expand_in_place_foreach_paths(root, config_path, glob)
             }
         };
-        self.generator_paths.insert(key, expanded.clone());
+        self.foreach_paths.insert(key, expanded.clone());
         expanded
     }
 
@@ -98,7 +94,7 @@ impl RepoInspectionCache {
         content
     }
 
-    fn expand_staged_generator_paths(
+    fn expand_staged_foreach_paths(
         &mut self,
         root: &Path,
         config_path: &Path,
@@ -109,7 +105,7 @@ impl RepoInspectionCache {
             .into_iter()
             .filter_map(|file| String::from_utf8(file.path).ok())
             .collect::<Vec<_>>();
-        expand_staged_generator_paths_from_listing(config_path, glob, &staged_paths)
+        expand_staged_foreach_paths_from_listing(config_path, glob, &staged_paths)
     }
 
     fn staged_file_content_from_batch(
@@ -169,7 +165,7 @@ impl RepoInspectionCache {
         content
     }
 
-    fn expand_tree_generator_paths(
+    fn expand_tree_foreach_paths(
         &mut self,
         root: &Path,
         config_path: &Path,
@@ -182,17 +178,17 @@ impl RepoInspectionCache {
             .filter(|file| file.is_blob_file_entry())
             .filter_map(|file| String::from_utf8(file.path).ok())
             .collect::<Vec<_>>();
-        expand_staged_generator_paths_from_listing(config_path, glob, &tree_paths)
+        expand_staged_foreach_paths_from_listing(config_path, glob, &tree_paths)
     }
 
-    fn expand_in_place_generator_paths(
+    fn expand_in_place_foreach_paths(
         &mut self,
         root: &Path,
         config_path: &Path,
         glob: &str,
     ) -> Result<Vec<String>, String> {
         let files = self.in_place_files(root)?;
-        expand_staged_generator_paths_from_listing(config_path, glob, &files)
+        expand_staged_foreach_paths_from_listing(config_path, glob, &files)
     }
 
     fn tree_file_content_from_batch(
@@ -416,39 +412,15 @@ impl RepoInspectionCache {
         if let Some(cached) = self.check_configs.get(&key) {
             return cached.clone();
         }
-        let parsed = parse_check_config_content_with_root_and_source_and_default_agent_preset(
+        let parsed = parse_in_place_check_config_content_with_root_and_default_agent_preset(
             root,
             config_path,
             &content,
             self,
-            source,
             default_agent_preset,
             ask_question,
         );
         self.check_configs.insert(key, parsed.clone());
-        parsed
-    }
-
-    pub(crate) fn included_expectation_items(
-        &mut self,
-        root: &Path,
-        source: &CheckConfigSource,
-        file: &str,
-        content: &str,
-    ) -> Result<Vec<RawExpectationItem>, String> {
-        let key = (
-            root.to_path_buf(),
-            source.cache_key(),
-            file.to_string(),
-            content.to_string(),
-        );
-        if let Some(cached) = self.included_expectations.get(&key) {
-            return cached.clone();
-        }
-        let parsed =
-            parse_yaml_config_with_includes(root, Path::new(file), content, source.clone())
-                .map_err(|err| format!("failed to parse {}: {}", file, err));
-        self.included_expectations.insert(key, parsed.clone());
         parsed
     }
 }

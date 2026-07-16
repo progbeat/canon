@@ -549,7 +549,7 @@ mod tests {
         assert!(proposed.is_none());
     }
 
-    #[test] // xpec: nv,AL
+    #[test] // xpec: nv
     fn git_backed_interrogation_error_record_preserves_diff_provenance() {
         let root = git_project("interrogation-error-diff-provenance");
         fs::write(root.join("subject.txt"), "subject\n").unwrap();

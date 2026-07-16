@@ -199,8 +199,9 @@ impl<'a> CheckRuntime<'a> {
         // This runtime mode owns the in-place evaluator view: no materialized
         // Git tree, full-project visible scope, stable fake visible-tree
         // metadata, and sessions rooted at the checked directory. Command
-        // execution owns cache-free run orchestration, while config validation
-        // owns mode compatibility after raw config expansion.
+        // execution owns cache-free selection plus persistent last-result
+        // ordering, while config validation owns mode compatibility after raw
+        // config expansion.
         CheckRuntime {
             root,
             config,
@@ -326,15 +327,15 @@ impl<'a> CheckRuntime<'a> {
         visible_scope(agent, scope)
     }
 
-    pub(crate) fn fresh_scope_without_persistent_history(&self) -> Option<Vec<String>> {
+    pub(crate) fn scope_without_reusable_q_scope_history(&self) -> Option<Vec<String>> {
         match &self.mode {
             CheckRuntimeMode::Materialized {
                 persistent_history, ..
             } => (!persistent_history).then(full_scope),
-            // In-place mode treats persisted xpec last-result history as
-            // absent. This is the Interrogation Policy's "no last pass result
-            // with qScope exists" case: fresh interrogations start at full
-            // project scope.
+            // In-place persists pass/fail history for ordering and run
+            // classification, but its last-result files intentionally omit
+            // Git qScope metadata. Fresh interrogations therefore use the
+            // policy's no-reusable-qScope case and start at full scope.
             CheckRuntimeMode::InPlace => Some(full_scope()),
         }
     }
@@ -625,7 +626,7 @@ mod tests {
             full_scope()
         );
         assert_eq!(
-            runtime.fresh_scope_without_persistent_history().unwrap(),
+            runtime.scope_without_reusable_q_scope_history().unwrap(),
             full_scope()
         );
         assert_eq!(
@@ -688,7 +689,7 @@ mod tests {
 
         assert!(runtime.persistent_check_state_root().is_none());
         assert_eq!(
-            runtime.fresh_scope_without_persistent_history().unwrap(),
+            runtime.scope_without_reusable_q_scope_history().unwrap(),
             full_scope()
         );
         fs::remove_dir_all(root).unwrap();

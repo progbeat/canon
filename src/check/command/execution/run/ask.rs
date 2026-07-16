@@ -179,7 +179,7 @@ mod tests {
     use super::*;
     use crate::config_types::Expectation;
 
-    #[test] // xpec: 0N,AL
+    #[test] // xpec: 0N
     fn ask_query_error_uses_typed_sentinel_command_error() {
         let result =
             ask_query_command_result(Err(CheckQueryError::Evaluator("query failed".to_string())));
@@ -217,7 +217,7 @@ mod tests {
         assert_eq!(error, "unknown preset: smart");
     }
 
-    #[test] // xpec: 0N,nK,WH
+    #[test] // xpec: 0N,nK,kP
     fn ask_query_config_keeps_resolved_temporary_expectation() {
         let config = ask_query_config(
             Ok(CheckConfig {

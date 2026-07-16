@@ -28,7 +28,6 @@ use crate::logs::DiagnosticLogWriter;
 use crate::platform::check_interrupted;
 use crate::scope::scope_is_within;
 use std::io::{BufRead, Write};
-use std::process::Stdio;
 
 pub(super) struct ExpectationRunContext<'a, 'out, 'log, R: EvaluatorRunner> {
     pub(super) runtime: &'a CheckRuntime<'a>,
@@ -91,7 +90,7 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     context: &mut ExpectationRunContext<'_, '_, '_, R>,
     expectation: &ResolvedExpectation,
 ) -> Result<ExpectationRunOutcome, String> {
-    // xpec: 8s
+    // xpec: nF
     assert!(
         matches!(
             expectation.to,
@@ -120,10 +119,10 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
     }
 
     let mut verified_q_scope =
-        // In-place mode reaches this branch because its canon says persisted
-        // xpec history is absent. That is the interrogation-policy case where
-        // no last pass result with qScope exists.
-        if let Some(scope) = context.runtime.fresh_scope_without_persistent_history() {
+        // In-place last results intentionally have no Git qScope metadata.
+        // That is the interrogation-policy case where no reusable last-pass
+        // qScope exists, even though pass/fail history itself is persistent.
+        if let Some(scope) = context.runtime.scope_without_reusable_q_scope_history() {
             scope
         } else {
             match initial_q_scope_for_fresh_interrogation(
@@ -279,7 +278,8 @@ fn run_direct_expectation<R: EvaluatorRunner>(
     };
     let response = match expectation.to {
         ExpectationTo::Caller => evaluate_caller(context.result_output, expectation),
-        ExpectationTo::Shell => evaluate_shell(context.runtime.root, expectation),
+        ExpectationTo::Shell => super::shell::evaluate(context.runtime.root, &expectation.question)
+            .map(|evaluation| (evaluation.answer, evaluation.transcript)),
         ExpectationTo::Agent => unreachable!("agent xpecs use interrogation"),
     };
     let (observed, evidence, error) = match response {
@@ -302,12 +302,12 @@ fn run_direct_expectation<R: EvaluatorRunner>(
             diff_from_tree_oid_abbrev: None,
         },
     )?;
-    // xpec: 8s
+    // xpec: nF
     assert!(
         matches!(record.result, CheckResult::Pass | CheckResult::Fail),
         "a direct xpec with an expected answer must finish as PASS or FAIL"
     );
-    // xpec: 8s
+    // xpec: nF
     assert!(
         record.error.is_none() || record.result == CheckResult::Fail,
         "an xpec response error must produce FAIL"
@@ -353,26 +353,6 @@ fn evaluate_caller(
         .map_err(|error| format!("failed to read caller answer: {error}"))?;
     trim_line_ending(&mut answer);
     Ok((answer, String::new()))
-}
-
-fn evaluate_shell(
-    root: &std::path::Path,
-    expectation: &ResolvedExpectation,
-) -> Result<(String, String), String> {
-    let mut command = super::shell::command(&expectation.question);
-    let output = command
-        .current_dir(root)
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| format!("failed to run shell xpec: {error}"))?;
-    let code = output
-        .status
-        .code()
-        .ok_or_else(|| "shell xpec terminated without an exit code".to_string())?;
-    let mut transcript = format!("$ {}\n", expectation.question);
-    transcript.push_str(&String::from_utf8_lossy(&output.stdout));
-    transcript.push_str(&String::from_utf8_lossy(&output.stderr));
-    Ok((code.to_string(), transcript))
 }
 
 fn trim_line_ending(line: &mut String) {

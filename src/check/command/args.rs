@@ -1,4 +1,4 @@
-use crate::check::core::{AskCommandArgs, CheckCommandArgs, RawCheckOptions};
+use crate::check::core::{AskCommandArgs, CheckCommandArgs};
 use crate::check::run::selection::{
     add_check_option_args, matched_os_values, raw_check_options_from_matches,
 };
@@ -50,16 +50,9 @@ pub(crate) fn parse_check_command_args(
 
     if in_place {
         // This parser rejects CLI options whose meaning depends on a Git tree
-        // or cache/path-hiding behavior. Config-level mode compatibility
-        // runs after raw config expansion, so generators/includes have already
-        // been resolved.
-        validate_in_place_options(
-            "canon check",
-            tree_explicit,
-            against_tree_explicit,
-            false,
-            &options,
-        )?;
+        // or path-hiding behavior. Config-level mode compatibility runs after
+        // raw config expansion, so generators/includes have already resolved.
+        validate_in_place_options("canon check", tree_explicit, against_tree_explicit, false)?;
     }
 
     Ok(CheckCommandArgs {
@@ -136,7 +129,6 @@ pub(crate) fn parse_ask_command_args(
             tree_explicit,
             against_tree_explicit,
             query_scope_provided,
-            &RawCheckOptions::default(),
         )?;
     }
 
@@ -293,7 +285,6 @@ fn validate_in_place_options(
     tree_explicit: bool,
     against_tree_explicit: bool,
     query_scope_provided: bool,
-    options: &RawCheckOptions,
 ) -> Result<(), String> {
     let mut invalid = Vec::new();
     if tree_explicit {
@@ -304,9 +295,6 @@ fn validate_in_place_options(
     }
     if query_scope_provided {
         invalid.push("-s/--scope");
-    }
-    if options.ignore_cooldown {
-        invalid.push("--ignore-cooldown");
     }
     if invalid.is_empty() {
         return Ok(());
@@ -360,7 +348,7 @@ mod tests {
         assert!(err.contains("unexpected argument"));
     }
 
-    #[test] // xpec: AL
+    #[test] // xpec: v1
     fn check_help_excludes_ask_only_options() {
         let mut help = Vec::new();
         check_help_command().write_long_help(&mut help).unwrap();
@@ -450,27 +438,6 @@ mod tests {
             err,
             "canon ask --in-place cannot be combined with -s/--scope"
         );
-    }
-
-    #[test]
-    fn in_place_rejects_cache_controls() {
-        let err = match parse(&["--in-place", "--ignore-cooldown"]) {
-            Ok(_) => panic!("expected in-place cache control to fail"),
-            Err(err) => err,
-        };
-
-        assert_eq!(
-            err,
-            "canon check --in-place cannot be combined with --ignore-cooldown"
-        );
-    }
-
-    #[test]
-    fn git_backed_check_accepts_cache_controls() {
-        let command = parse(&["--ignore-cooldown"]).unwrap();
-
-        assert!(!command.in_place);
-        assert!(command.options.ignore_cooldown);
     }
 
     #[test]

@@ -1,14 +1,19 @@
-mod expansion;
 mod presets;
+mod rank;
+mod resolve;
 mod source;
 
-pub(crate) use expansion::{expand_raw_check_config_with_options, CheckConfigExpansionOptions};
+#[cfg(test)]
+pub(crate) use resolve::expand_raw_check_config_with_options;
+pub(crate) use resolve::{
+    expand_raw_check_config_with_requirements, CheckConfigExpansionOptions, ExpandedCheckConfig,
+};
 pub(crate) use source::CheckConfigSource;
 
 #[cfg(test)]
 mod tests {
     use super::{
-        expand_raw_check_config_with_options, expansion::expand_raw_check_config,
+        expand_raw_check_config_with_options, resolve::expand_raw_check_config,
         CheckConfigExpansionOptions, CheckConfigSource,
     };
     use crate::config_types::{Cooldown, ExpectationTarget, ExpectationTo, RawCheckConfig};
@@ -20,7 +25,7 @@ mod tests {
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test] // xpec: vc,WH,cv,8s
+    #[test] // xpec: v7,kP,cv,nF
     fn current_fields_resolve_scalar_values_addressee_and_rank() {
         let raw: RawCheckConfig = serde_saphyr::from_str(
             r#"
@@ -57,236 +62,6 @@ expectations:
         assert_eq!(config.expectations[1].a, "0");
         assert_eq!(config.expectations[1].to, ExpectationTo::Shell);
         assert_eq!(config.expectations[1].rank, 3);
-    }
-
-    #[test]
-    fn glob_generator_expands_q_template_for_each_matching_file() {
-        let root = test_root("glob-generator-q-template");
-        git(&root, &["init"]);
-        fs::create_dir_all(root.join("specs/nested")).unwrap();
-        fs::write(root.join("specs/root.md"), "Root spec").unwrap();
-        fs::write(root.join("specs/nested/child.md"), "Nested spec").unwrap();
-        fs::write(root.join("specs/nested/child.txt"), "Ignored spec").unwrap();
-        git(
-            &root,
-            &[
-                "add",
-                "specs/root.md",
-                "specs/nested/child.md",
-                "specs/nested/child.txt",
-            ],
-        );
-        let raw: RawCheckConfig = serde_saphyr::from_str(
-            r#"
-version: 1
-presets:
-  default: {}
-expectations:
-  - glob: "specs/**.md"
-    q_template: |
-      {{ read(path) }}
-      ---
-      Is this generated spec implemented?
-    a: "yes"
-"#,
-        )
-        .expect("parse raw check config");
-        let mut cache = RepoInspectionCache::new();
-
-        let config = expand_raw_check_config(
-            Some(&root),
-            Path::new("check.yml"),
-            raw,
-            Some(&mut cache),
-            CheckConfigSource::Tree(TreeSource::Staged),
-        )
-        .expect("expand config");
-
-        let questions = config
-            .expectations
-            .iter()
-            .map(|expectation| expectation.q.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            questions,
-            vec![
-                "Nested spec\n---\nIs this generated spec implemented?\n",
-                "Root spec\n---\nIs this generated spec implemented?\n",
-            ]
-        );
-        assert!(config
-            .expectations
-            .iter()
-            .all(|expectation| expectation.a == "yes"));
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test] // xpec: 1r,jz
-    fn include_cooldown_is_inherited_without_overriding_child_cooldown() {
-        let root = test_root("include-cooldown-inheritance");
-        git(&root, &["init"]);
-        fs::create_dir_all(root.join("expects")).unwrap();
-        fs::write(
-            root.join("expects/included.yml"),
-            r#"
-- q: "Does the include cooldown apply?"
-  a: "yes"
-- q: "Does the child cooldown win?"
-  a: "yes"
-  cooldown: 1d
-"#,
-        )
-        .unwrap();
-        git(&root, &["add", "expects/included.yml"]);
-        let raw: RawCheckConfig = serde_saphyr::from_str(
-            r#"
-version: 1
-presets:
-  default: {}
-expectations:
-  - include: "expects/*.yml"
-    cooldown: 7d
-"#,
-        )
-        .expect("parse raw check config");
-        let mut cache = RepoInspectionCache::new();
-
-        let config = expand_raw_check_config(
-            Some(&root),
-            Path::new("check.yml"),
-            raw,
-            Some(&mut cache),
-            CheckConfigSource::Tree(TreeSource::Staged),
-        )
-        .expect("expand config");
-
-        assert_eq!(config.expectations.len(), 2);
-        assert_eq!(
-            config.expectations[0].cooldown,
-            Some(Cooldown {
-                seconds: 7 * 24 * 60 * 60
-            })
-        );
-        assert_eq!(
-            config.expectations[1].cooldown,
-            Some(Cooldown {
-                seconds: 24 * 60 * 60
-            })
-        );
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn include_generator_fields_are_item_defaults() {
-        let root = test_root("include-generator-field-defaults");
-        git(&root, &["init"]);
-        fs::create_dir_all(root.join("expects")).unwrap();
-        fs::create_dir_all(root.join("expects/specs")).unwrap();
-        fs::write(root.join("expects/specs/alpha.md"), "Alpha spec").unwrap();
-        fs::write(
-            root.join("expects/included.yml"),
-            r#"
-- q: "Does the include answer apply?"
-- glob: "specs/*.md"
-- q_template: "Child generated: {{ read(path) }}"
-"#,
-        )
-        .unwrap();
-        git(
-            &root,
-            &["add", "expects/included.yml", "expects/specs/alpha.md"],
-        );
-        let raw: RawCheckConfig = serde_saphyr::from_str(
-            r#"
-version: 1
-presets:
-  default: {}
-expectations:
-  - include: "expects/*.yml"
-    glob: "specs/*.md"
-    q_template: "Inherited generated: {{ read(path) }}"
-    a: "yes"
-"#,
-        )
-        .expect("parse raw check config");
-        let mut cache = RepoInspectionCache::new();
-
-        let config = expand_raw_check_config(
-            Some(&root),
-            Path::new("check.yml"),
-            raw,
-            Some(&mut cache),
-            CheckConfigSource::Tree(TreeSource::Staged),
-        )
-        .expect("expand config");
-
-        let questions = config
-            .expectations
-            .iter()
-            .map(|expectation| expectation.q.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            questions,
-            vec![
-                "Does the include answer apply?",
-                "Inherited generated: Alpha spec",
-                "Child generated: Alpha spec",
-            ]
-        );
-        assert!(config
-            .expectations
-            .iter()
-            .all(|expectation| expectation.a == "yes"));
-        let _ = fs::remove_dir_all(root);
-    }
-
-    // xpec: WH,vc
-    #[test]
-    fn include_generator_defaults_do_not_reclassify_explicit_child_items() {
-        let root = test_root("include-explicit-child-form");
-        git(&root, &["init"]);
-        fs::create_dir_all(root.join("expects")).unwrap();
-        fs::create_dir_all(root.join("expects/specs")).unwrap();
-        fs::write(root.join("expects/specs/alpha.md"), "Alpha spec").unwrap();
-        fs::write(
-            root.join("expects/included.yml"),
-            r#"
-- q: "Does the child stay explicit?"
-"#,
-        )
-        .unwrap();
-        git(
-            &root,
-            &["add", "expects/included.yml", "expects/specs/alpha.md"],
-        );
-        let raw: RawCheckConfig = serde_saphyr::from_str(
-            r#"
-version: 1
-presets:
-  default: {}
-expectations:
-  - include: "expects/*.yml"
-    glob: "specs/*.md"
-    q_template: "Inherited generated: {{ read(path) }}"
-    a: "yes"
-"#,
-        )
-        .expect("parse raw check config");
-        let mut cache = RepoInspectionCache::new();
-
-        let config = expand_raw_check_config(
-            Some(&root),
-            Path::new("check.yml"),
-            raw,
-            Some(&mut cache),
-            CheckConfigSource::Tree(TreeSource::Staged),
-        )
-        .expect("expand config");
-
-        assert_eq!(config.expectations.len(), 1);
-        assert_eq!(config.expectations[0].q, "Does the child stay explicit?");
-        assert_eq!(config.expectations[0].a, "yes");
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -347,54 +122,6 @@ expectations:
             config.expectations[0].target,
             Some(ExpectationTarget::Project)
         );
-    }
-
-    #[test]
-    fn expectation_diff_from_expands_and_inherits() {
-        let raw: RawCheckConfig = serde_saphyr::from_str(
-            r#"
-version: 1
-presets:
-  default: {}
-expectations:
-  - include: "expects.yml"
-    diff-from: ":against-tree"
-"#,
-        )
-        .expect("parse raw check config");
-        let root = test_root("diff-from-inheritance");
-        git(&root, &["init"]);
-        fs::write(
-            root.join("expects.yml"),
-            r#"
-- q: "Does inherited diff-from apply?"
-  a: "yes"
-- q: "Does child diff-from win?"
-  a: "yes"
-  diff-from: "HEAD~1"
-"#,
-        )
-        .unwrap();
-        git(&root, &["add", "expects.yml"]);
-        let mut cache = RepoInspectionCache::new();
-
-        let config = expand_raw_check_config(
-            Some(&root),
-            Path::new("check.yml"),
-            raw,
-            Some(&mut cache),
-            CheckConfigSource::Tree(TreeSource::Staged),
-        )
-        .expect("expand config");
-
-        assert_eq!(
-            config.expectations[0].diff_from.as_deref(),
-            Some(":against-tree")
-        );
-        assert_eq!(config.expectations[1].diff_from.as_deref(), Some("HEAD~1"));
-        assert!(config.expectations[0].diff_from.is_some());
-        assert!(config.expectations[1].diff_from.is_some());
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -505,7 +232,7 @@ expectations:
         );
     }
 
-    #[test] // xpec: 0N,nK,WH
+    #[test] // xpec: 0N,nK,kP
     fn ask_question_uses_selected_preset_defaults_and_explicit_ask_fields() {
         let raw: RawCheckConfig = serde_saphyr::from_str(
             r#"
@@ -552,7 +279,7 @@ expectations:
         assert_eq!(expectation.agent.models, vec!["smart-model".to_string()]);
     }
 
-    // xpec: WH
+    // xpec: kP
 
     #[test]
     fn preset_supplies_expectation_field_defaults() {
@@ -590,7 +317,7 @@ expectations:
         assert_eq!(expectation.question_context, "Use the preset instructions.");
         assert_eq!(expectation.diff_from.as_deref(), Some("master"));
         assert_eq!(expectation.target, Some(ExpectationTarget::Diff));
-        // xpec: 1r,jz
+        // xpec: 1r,kP
         assert_eq!(
             expectation.cooldown,
             Some(Cooldown {
@@ -601,91 +328,8 @@ expectations:
         assert_eq!(expectation.agent.thinking, "high");
     }
 
-    // xpec: WH,vc
-    #[test]
-    fn preset_supplies_generator_field_defaults() {
-        let root = test_root("preset-generator-field-defaults");
-        git(&root, &["init"]);
-        fs::create_dir_all(root.join("specs")).unwrap();
-        fs::write(root.join("specs/alpha.md"), "Alpha spec").unwrap();
-        git(&root, &["add", "specs/alpha.md"]);
-        let raw: RawCheckConfig = serde_saphyr::from_str(
-            r#"
-version: 1
-presets:
-  default:
-    glob: "specs/*.md"
-    q_template: |
-      {{ read(path) }}
-      ---
-      Is this preset-generated spec implemented?
-    a: "yes"
-expectations:
-  - {}
-"#,
-        )
-        .expect("parse raw check config");
-        let mut cache = RepoInspectionCache::new();
-
-        let config = expand_raw_check_config(
-            Some(&root),
-            Path::new("check.yml"),
-            raw,
-            Some(&mut cache),
-            CheckConfigSource::Tree(TreeSource::Staged),
-        )
-        .expect("expand config");
-
-        assert_eq!(config.expectations.len(), 1);
-        assert_eq!(
-            config.expectations[0].q,
-            "Alpha spec\n---\nIs this preset-generated spec implemented?\n"
-        );
-        assert_eq!(config.expectations[0].a, "yes");
-        let _ = fs::remove_dir_all(root);
-    }
-
-    // xpec: WH,vc
-    #[test]
-    fn glob_generator_q_template_takes_item_precedence_over_preset_q() {
-        let root = test_root("preset-generator-q-template-precedence");
-        git(&root, &["init"]);
-        fs::create_dir_all(root.join("specs")).unwrap();
-        fs::write(root.join("specs/alpha.md"), "Alpha spec").unwrap();
-        git(&root, &["add", "specs/alpha.md"]);
-        let raw: RawCheckConfig = serde_saphyr::from_str(
-            r#"
-version: 1
-presets:
-  default:
-    q: "Does the preset question lose to the glob generator item?"
-expectations:
-  - glob: "specs/*.md"
-    q_template: "Generated: {{ read(path) }}"
-    a: "yes"
-"#,
-        )
-        .expect("parse raw check config");
-        let mut cache = RepoInspectionCache::new();
-
-        let config = expand_raw_check_config(
-            Some(&root),
-            Path::new("check.yml"),
-            raw,
-            Some(&mut cache),
-            CheckConfigSource::Tree(TreeSource::Staged),
-        )
-        .expect("expand config");
-
-        assert_eq!(config.expectations.len(), 1);
-        assert_eq!(config.expectations[0].q, "Generated: Alpha spec");
-        assert_eq!(config.expectations[0].a, "yes");
-        let _ = fs::remove_dir_all(root);
-    }
-
-    // xpec: vc
-    #[test]
-    fn explicit_item_with_generator_shape_extra_fields_stays_explicit() {
+    #[test] // xpec: v7
+    fn extra_xpec_fields_do_not_change_resolved_fields() {
         let raw: RawCheckConfig = serde_saphyr::from_str(
             r#"
 version: 1
@@ -717,8 +361,8 @@ expectations:
         assert_eq!(config.expectations[0].a, "yes");
     }
 
-    #[test]
-    fn item_shape_fields_prevent_preset_shape_defaults_from_overriding_form() {
+    #[test] // xpec: kP,v7
+    fn extra_preset_fields_do_not_override_xpec_fields() {
         let raw: RawCheckConfig = serde_saphyr::from_str(
             r#"
 version: 1
@@ -782,42 +426,6 @@ expectations:
             "Does the item question use the preset answer?"
         );
         assert_eq!(config.expectations[0].a, "yes");
-    }
-
-    #[test]
-    fn preset_supplies_missing_fields_for_declared_generator_items() {
-        let root = test_root("preset-declared-generator-fields");
-        git(&root, &["init"]);
-        fs::create_dir_all(root.join("specs")).unwrap();
-        fs::write(root.join("specs/alpha.md"), "Alpha spec").unwrap();
-        git(&root, &["add", "specs/alpha.md"]);
-        let raw: RawCheckConfig = serde_saphyr::from_str(
-            r#"
-version: 1
-presets:
-  default:
-    glob: "specs/*.md"
-    a: "yes"
-expectations:
-  - q_template: "Generated: {{ read(path) }}"
-"#,
-        )
-        .expect("parse raw check config");
-        let mut cache = RepoInspectionCache::new();
-
-        let config = expand_raw_check_config(
-            Some(&root),
-            Path::new("check.yml"),
-            raw,
-            Some(&mut cache),
-            CheckConfigSource::Tree(TreeSource::Staged),
-        )
-        .expect("expand config");
-
-        assert_eq!(config.expectations.len(), 1);
-        assert_eq!(config.expectations[0].q, "Generated: Alpha spec");
-        assert_eq!(config.expectations[0].a, "yes");
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -893,7 +501,7 @@ expectations:
         assert_eq!(expectation.a, "yes");
         assert_eq!(expectation.question_context, " Item instructions. ");
         assert_eq!(expectation.diff_from.as_deref(), Some(" HEAD~1 "));
-        // xpec: 1r,jz
+        // xpec: 1r,kP
         assert_eq!(
             expectation.cooldown,
             Some(Cooldown {

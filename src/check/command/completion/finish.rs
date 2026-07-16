@@ -125,7 +125,7 @@ mod tests {
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test] // xpec: AL
+    #[test] // xpec: v1
     fn new_pass_emits_commit_message() {
         let root = git_project("new-pass-emits-commit-message");
         let agent = AgentConfig::default();
@@ -145,7 +145,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test] // xpec: AL
+    #[test] // xpec: v1
     fn prior_pass_is_not_a_new_pass() {
         let root = git_project("prior-pass-is-not-a-new-pass");
         let agent = AgentConfig::default();
@@ -166,7 +166,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test] // xpec: AL
+    #[test] // xpec: v1
     fn prior_pass_regression_agent_message_repairs_instead_of_commits() {
         let root = git_project("prior-pass-regression-agent-message");
         let agent = AgentConfig::default();

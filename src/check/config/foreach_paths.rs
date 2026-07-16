@@ -3,19 +3,19 @@ use crate::scope::normalize_repo_path;
 use crate::scope::path_bytes_in_scope;
 use std::path::Path;
 
-pub(crate) fn expand_staged_generator_paths_from_listing(
+pub(crate) fn expand_staged_foreach_paths_from_listing(
     config_path: &Path,
     glob: &str,
     staged_paths: &[String],
 ) -> Result<Vec<String>, String> {
-    validate_relative_config_path(glob, "expectation generator glob")?;
+    validate_relative_config_path(glob, "foreach path glob")?;
     let config_dir = config_path.parent().unwrap_or_else(|| Path::new(""));
     let joined = normalize_repo_path(&join_repo_path(config_dir, glob))?;
-    let generator_pathspec = format!(":(glob){}", joined);
-    let generator_scope = std::slice::from_ref(&generator_pathspec);
+    let foreach_pathspec = format!(":(glob){}", joined);
+    let foreach_scope = std::slice::from_ref(&foreach_pathspec);
     let mut files = Vec::new();
     for staged_path in staged_paths {
-        if path_bytes_in_scope(staged_path.as_bytes(), generator_scope)? {
+        if path_bytes_in_scope(staged_path.as_bytes(), foreach_scope)? {
             files.push(staged_path.clone());
         }
     }
@@ -40,9 +40,9 @@ fn join_repo_path(config_dir: &Path, glob: &str) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn star_generator_glob_matches_one_path_segment() {
-        let files = expand_staged_generator_paths_from_listing(
+    #[test] // xpec: Mm
+    fn star_foreach_glob_matches_one_path_segment() {
+        let files = expand_staged_foreach_paths_from_listing(
             Path::new("check.yml"),
             "specs/*.md",
             &staged_paths(&[
@@ -57,9 +57,9 @@ mod tests {
         assert_eq!(files, vec!["specs/root.md"]);
     }
 
-    #[test]
-    fn double_star_generator_glob_matches_nested_path_segments() {
-        let files = expand_staged_generator_paths_from_listing(
+    #[test] // xpec: Mm
+    fn double_star_foreach_glob_matches_nested_path_segments() {
+        let files = expand_staged_foreach_paths_from_listing(
             Path::new("check.yml"),
             "specs/**.md",
             &staged_paths(&[
@@ -82,9 +82,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn path_segment_generator_globs_match_scope_pathspecs() {
-        let files = expand_staged_generator_paths_from_listing(
+    #[test] // xpec: Mm
+    fn path_segment_foreach_globs_match_scope_pathspecs() {
+        let files = expand_staged_foreach_paths_from_listing(
             Path::new("check.yml"),
             "specs/*/*.md",
             &staged_paths(&[

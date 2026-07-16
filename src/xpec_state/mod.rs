@@ -94,7 +94,7 @@ pub(crate) fn cached_last_result_for_expectation(
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
     lookup: CachedLastResultLookup,
 ) -> Result<Option<CachedLastResultHit>, String> {
-    // Cached Result is defined for an expectation and Git state. Same-tree
+    // [jz] Cached Result is defined for an expectation and Git state. Same-tree
     // lookup compares the checked Git state with the last pass's stored
     // visible-tree OID; cooldown lookup consults that same last pass.
     if lookup.include_same_tree {
@@ -210,6 +210,7 @@ fn cooldown_last_result(
     state_cache: &mut XpecStateCache,
     now: u64,
 ) -> Result<Option<LastResult>, String> {
+    // [jz] A cooldown result reuses only a recent last-pass result.
     let Some(cooldown) = expectation.cooldown else {
         return Ok(None);
     };

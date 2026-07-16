@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const DEFAULT_CHECK_TEMPLATE_FILE_CONTENTS: &str =
     include_str!("../.canon/templates/default/check.yml");
 const ZERO_TOKEN_USAGE_LINE: &str =
-    "Token usage: total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n";
+    "token-usage: ref-cost=0$ total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n";
 
 fn canon() -> Command {
     Command::new(env!("CARGO_BIN_EXE_canon"))
@@ -129,7 +129,7 @@ fn pre_commit_commands_render_documented_messages() {
     );
 }
 
-// xpec: 8s
+// xpec: nF
 #[test]
 fn caller_xpec_wrong_answer_fails_with_expected_answer() {
     let repo = temp_repo("canon-check-caller-xpec");
@@ -152,7 +152,7 @@ expectations:
         .current_dir(&repo)
         .output()
         .unwrap();
-    // xpec: 8s
+    // xpec: nF
     assert!(
         add.status.success(),
         "{}",
@@ -170,25 +170,25 @@ expectations:
     child.stdin.take().unwrap().write_all(b"fail\n").unwrap();
     let output = child.wait_with_output().unwrap();
 
-    // xpec: 8s
+    // xpec: nF
     assert!(!output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    // xpec: 8s
+    // xpec: nF
     assert!(stdout.starts_with("Type pass: "));
-    // xpec: 8s
+    // xpec: nF
     assert!(stdout.contains(". FAIL\nexpected: pass\n"));
-    // xpec: AL
+    // xpec: v1
     assert!(stdout.contains(" 1 failed in "));
     let stderr = String::from_utf8(output.stderr).unwrap();
-    // xpec: AL
+    // xpec: v1
     assert_eq!(
         stderr,
-        "Token usage: total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n"
+        "token-usage: ref-cost=0$ total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n"
     );
     let _ = fs::remove_dir_all(&repo);
 }
 
-// xpec: jz
+// xpec: 6
 #[test]
 fn git_backed_check_accepts_optional_cooldown_field() {
     let repo = temp_repo("canon-check-cooldown-field");
@@ -235,7 +235,7 @@ expectations:
     );
 }
 
-// xpec: 8s
+// xpec: nF
 #[test]
 fn in_place_shell_xpec_reports_transcript_and_exit_code() {
     let repo = temp_repo("canon-in-place-shell-xpec");
@@ -264,28 +264,28 @@ expectations:
     drop(child.stdin.take());
     let output = child.wait_with_output().unwrap();
 
-    // xpec: 8s
+    // xpec: nF
     assert!(!output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    // xpec: 8s
+    // xpec: nF
     assert!(stdout.contains(
         ". FAIL\n│ $ printf \"stdout\\n\"; printf \"stderr\\n\" >&2; printf \"after\\n\"; exit 3\n\
          │ stdout\n│ stderr\n│ after\n"
     ));
-    // xpec: 8s
+    // xpec: nF
     assert!(stdout.contains("Command exited with code 3 (expected 0).\n"));
-    // xpec: AL
+    // xpec: v1
     assert!(stdout.contains(" 1 failed in "));
     let stderr = String::from_utf8(output.stderr).unwrap();
-    // xpec: AL
+    // xpec: v1
     assert_eq!(
         stderr,
-        "Token usage: total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n"
+        "token-usage: ref-cost=0$ total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n"
     );
     let _ = fs::remove_dir_all(&repo);
 }
 
-// xpec: AL,Df
+// xpec: v1,Df
 #[test]
 fn in_place_prohibited_expectation_fields_fail_before_evaluation() {
     let repo = temp_repo("canon-in-place-invalid-config-before-evaluation");
@@ -318,19 +318,19 @@ expectations:
     assert!(!output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
-    // xpec: AL,Df
-    assert!(stdout.contains(" 1 pending in "), "{stdout}\n{stderr}");
-    // xpec: AL,Df
+    // xpec: v1,Df
+    assert!(stdout.contains(" 0 passed in "), "{stdout}\n{stderr}");
+    // xpec: v1,Df
     assert_eq!(
         stderr,
         format!(
             "{ZERO_TOKEN_USAGE_LINE}Error: expectation 1 is invalid in in-place mode: \
-             `diff-from` requires Git tree state\n"
+             `diff-from` requires Git-backed check state\n"
         )
     );
 }
 
-// xpec: AL
+// xpec: v1
 #[test]
 fn invalid_check_arguments_still_emit_the_check_trailer() {
     let repo = temp_repo("canon-invalid-check-argument-trailer");
@@ -362,7 +362,7 @@ fn invalid_check_arguments_still_emit_the_check_trailer() {
     assert!(stderr.contains("unexpected argument"));
 }
 
-// xpec: AL,K
+// xpec: v1,K
 #[test]
 fn collected_check_failure_reports_pending_feedback() {
     let repo = temp_repo("canon-collected-check-failure");
@@ -518,7 +518,7 @@ fn gate_passes_non_canon_staged_change_without_config() {
     assert_eq!(String::from_utf8(output.stderr).unwrap(), "");
 }
 
-// xpec: C,AL
+// xpec: C,v1
 #[test]
 fn check_without_config_renders_documented_recovery_message() {
     let repo = temp_repo("canon-missing-config-example");
