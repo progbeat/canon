@@ -5,11 +5,13 @@ expectations:
   - to: caller
     q: Did you stage all the changes you intended to evaluate? [y/N]
     a: y
+    rank: -10
     cooldown: 1h
 
   - to: caller
     q: Did any of your actions deviate from `AGENTS.md` in a way that remains unaddressed? [n/Y]
     a: n
+    rank: -10
     cooldown: 30m
 
   - to: caller
