@@ -96,7 +96,7 @@ def _repair_instructions(failed):
 The check run emits exactly one token usage line to stderr:
 
 ```
-token-usage: ref-cost=<n:.2>$ total=<n> input=<n> (+ <n> cached) output=<n> (reasoning <n>)
+token-usage: ref-cost={:.2}$ total={} input={} (+ {} cached) output={} (reasoning {})
 ```
 
 If token usage data is unavailable, every numeric field is `0`.
