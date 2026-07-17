@@ -51,8 +51,8 @@ impl CheckConfigIncludeResolver {
         // has no ID in that stack, so `resolve_include_path` rejects only the
         // root-file cycle that the parser cannot observe itself.
         let content = self
-            .cache
-            .config_source_file_content(&self.root, &self.source, Path::new(&path))
+            .source
+            .file_content(&mut self.cache, &self.root, Path::new(&path))
             .map_err(IncludeResolveError::Message)?;
         let content = expand_foreach_yaml(
             &self.root,
@@ -128,7 +128,7 @@ mod tests {
         normalize_include_spec, parse_yaml_config_with_includes, reject_root_include,
         resolve_include_path,
     };
-    use crate::check::config::CheckConfigSource;
+    use crate::check::config::expansion::CheckConfigSource;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process;

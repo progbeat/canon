@@ -76,6 +76,7 @@ pub(crate) fn parse_ask_command_args(
         .try_get_matches_from(args)
         .map_err(|err| err.to_string())?;
 
+    let config_explicit = matches.contains_id("config");
     let mut config_path = None;
     if let Some(value) = matches.get_one::<OsString>("config") {
         set_check_config_path(&mut config_path, &arg_to_string(value)?)?;
@@ -134,6 +135,7 @@ pub(crate) fn parse_ask_command_args(
 
     Ok(AskCommandArgs {
         config_path: config_path.unwrap_or_else(|| PathBuf::from(CHECK_PATH)),
+        config_explicit,
         tree,
         against_tree,
         against_tree_explicit,
@@ -365,6 +367,14 @@ mod tests {
 
         assert_eq!(command.question, "Can this pass?");
         assert_eq!(command.default_agent_preset.as_deref(), Some("smart"));
+    }
+
+    #[test] // xpec: nK
+    fn ask_tracks_explicit_config() {
+        let command = parse_ask(&["Can this pass?", "--config", "custom.yml"]).unwrap();
+
+        assert_eq!(command.config_path, PathBuf::from("custom.yml"));
+        assert!(command.config_explicit);
     }
 
     #[test]

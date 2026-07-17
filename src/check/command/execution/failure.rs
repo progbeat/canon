@@ -81,19 +81,22 @@ pub(super) fn fail_check_after_start(
 ) -> Result<(), CommandError> {
     write_check_error_finish_event(diagnostic_log, query, &err).map_err(CommandError::from)?;
     if !query {
-        // [AL,K] The `finally` path always emits token usage and a summary.
+        // [v1] The `finally` path always emits token usage and a summary.
         // Once collection succeeds, every collected xpec without a result is
         // pending, so default-source feedback can use the normal count-derived
-        // continuation branch. Before collection, no truthful feedback inputs
-        // exist and the self-contained command error follows the empty trailer.
+        // continuation branch. Before collection, the empty report still
+        // follows the canon's normal feedback function.
         *trailer_attempted = true;
         write_check_failure_trailer(output)?;
     }
     Err(err.into())
 }
 
-pub(super) fn started_check_output(started: Instant) -> CheckFailureOutput {
-    requested_check_output(started, false)
+pub(super) fn started_check_output(
+    started: Instant,
+    write_agent_message: bool,
+) -> CheckFailureOutput {
+    requested_check_output(started, write_agent_message)
 }
 
 pub(super) fn requested_check_output(
@@ -128,7 +131,7 @@ pub(super) fn write_check_failure_trailer(output: CheckFailureOutput) -> Result<
     };
     write_summary_line(&mut io::stdout(), &report, output.started.elapsed())
         .map_err(CommandError::from)?;
-    if output.write_agent_message && report.skipped > 0 {
+    if output.write_agent_message {
         for message in render_check_agent_messages(&[], 0, 0, report.skipped) {
             let line = format!("{message}\n");
             write_stdout_record(

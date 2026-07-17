@@ -647,3 +647,39 @@ fn temp_path_for(path: &Path) -> Result<PathBuf, String> {
     temp_name.push(format!(".tmp.{}.{}", process::id(), sequence));
     Ok(path.with_file_name(temp_name))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test] // xpec: Df,nv
+    fn in_place_fail_serialization_omits_git_tree_fields() {
+        let result = LastResult {
+            response_timestamp: "2026-01-01T00:00:00Z".to_string(),
+            updated_timestamp: "2026-01-01T00:00:01Z".to_string(),
+            status: LastResultStatus::Fail,
+            response: LastResultResponse::answered("3", "shell transcript", None),
+            q_scope: Vec::new(),
+            visible_scope: Vec::new(),
+            checked_tree_oid: None,
+            visible_tree_oid: None,
+            diff_from: None,
+            diff_from_tree_oid: None,
+        };
+
+        validate_last_result(LastResultStatus::Fail, &result).unwrap();
+        let json = serde_json::to_value(result).unwrap();
+        assert_eq!(json["status"], "fail");
+        assert_eq!(
+            [
+                json.get("qScope"),
+                json.get("visibleScope"),
+                json.get("checkedTreeOid"),
+                json.get("visibleTreeOid"),
+                json.get("diffFrom"),
+                json.get("diffFromTreeOid"),
+            ],
+            [None, None, None, None, None, None]
+        );
+    }
+}

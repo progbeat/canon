@@ -1,7 +1,7 @@
 use crate::check::{
     expectation_identities, is_canon_only_staged_change_bytes, is_canon_project_path_bytes,
-    select_expectations_with_identities, staged_changed_path_bytes, ResolvedExpectation,
-    CHECK_PATH,
+    load_check_config, select_expectations_with_identities, staged_changed_path_bytes,
+    ResolvedExpectation, CHECK_PATH,
 };
 use crate::cli::CommandError;
 use crate::config_types::{AgentConfig, CheckConfig};
@@ -11,7 +11,7 @@ use crate::repo_inspection::RepoInspectionCache;
 use crate::time::unix_timestamp;
 use crate::xpec_state::{
     cached_last_result_for_expectation, refresh_reused_same_tree_last_result,
-    CachedLastResultLookup, CachedResultStatus, XpecStateCache,
+    CachedLastResultLookup, XpecStateCache,
 };
 use std::ffi::OsString;
 use std::path::Path;
@@ -55,11 +55,12 @@ fn gate_regression_count(root: &Path) -> Result<usize, CommandError> {
         crate::git::DEFAULT_AGAINST_TREE_ARG,
         false,
     ))?;
-    let config = match repo_cache.load_check_config(root, Path::new(CHECK_PATH), &config_source) {
-        Ok(config) => config,
-        Err(err) if gate_check_config_is_missing(&err) => return Ok(0),
-        Err(err) => return gate_command_result(Err(err)),
-    };
+    let config =
+        match load_check_config(&mut repo_cache, root, Path::new(CHECK_PATH), &config_source) {
+            Ok(config) => config,
+            Err(err) if gate_check_config_is_missing(&err) => return Ok(0),
+            Err(err) => return gate_command_result(Err(err)),
+        };
     let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
     let mut xpec_state = XpecStateCache::default();
     gate_command_result(gate_regression_count_with_config(
@@ -268,31 +269,22 @@ fn gate_cache_result_for_tree_at(
             include_cooldown: true,
         },
     )?;
-    let hit = match hit {
-        Some(hit) => Some(refresh_reused_same_tree_last_result(
-            root,
-            &source,
-            expectation,
-            xpec_state,
-            hit,
-        )?),
-        None => None,
-    };
-    match hit.map(|hit| hit.status) {
-        Some(CachedResultStatus::Pass) => Ok(GateCacheResult::Pass),
-        None => {
-            let tree_oid = source.tree_oid_for_prompt_diff(root)?;
-            let failed_on_tree = xpec_state
-                .read_last_fail(root, expectation)?
-                .and_then(|result| result.checked_tree_oid)
-                .is_some_and(|checked_tree_oid| checked_tree_oid == tree_oid);
-            Ok(if failed_on_tree {
-                GateCacheResult::Fail
-            } else {
-                GateCacheResult::Missing
-            })
-        }
+    if let Some(hit) = hit {
+        refresh_reused_same_tree_last_result(root, &source, expectation, xpec_state, hit)?;
+        // xpec: 6
+        // `cached_last_result_for_expectation` can return only a pass.
+        return Ok(GateCacheResult::Pass);
     }
+    let tree_oid = source.tree_oid_for_prompt_diff(root)?;
+    let failed_on_tree = xpec_state
+        .read_last_fail(root, expectation)?
+        .and_then(|result| result.checked_tree_oid)
+        .is_some_and(|checked_tree_oid| checked_tree_oid == tree_oid);
+    Ok(if failed_on_tree {
+        GateCacheResult::Fail
+    } else {
+        GateCacheResult::Missing
+    })
 }
 
 #[derive(Clone, Copy)]

@@ -10,12 +10,7 @@ use std::path::Path;
 
 pub(crate) struct GitBackedCacheFilteredCheckWork {
     pub(crate) evaluation_queue: Vec<ResolvedExpectation>,
-    pub(crate) cached_hits: Vec<CachedExpectationHit>,
-}
-
-pub(crate) struct CachedExpectationHit {
-    pub(crate) expectation: ResolvedExpectation,
-    pub(crate) hit: CheckCacheHit,
+    pub(crate) cached_hits: Vec<CheckCacheHit>,
 }
 
 pub(crate) struct GitBackedCacheFilterContext<'a, 'log> {
@@ -26,8 +21,10 @@ pub(crate) struct GitBackedCacheFilterContext<'a, 'log> {
     pub(crate) diagnostic_log: &'a mut Option<&'log mut DiagnosticLogWriter>,
 }
 
-// Git-backed selection applies the cache policy and then the evaluation order
-// before evaluation starts. Explicit selections are forced but still ordered;
+// [6,Df] This is the complete cached-result selection boundary. Cached Result
+// is defined for an expectation and Git state, so both the public function and
+// its context require a `TreeSource`; there is deliberately no in-place cache
+// lookup API. Explicit Git-backed selections are forced but still ordered;
 // otherwise only collected expectations without a reusable pass result are
 // selected and ordered.
 //
@@ -68,7 +65,7 @@ pub(crate) fn select_and_order_git_backed_expectations(
                     if let Some(writer) = context.diagnostic_log.as_deref_mut() {
                         write_cache_hit(writer, &hit)?;
                     }
-                    cached_hits.push(CachedExpectationHit { expectation, hit });
+                    cached_hits.push(hit);
                 }
                 None => evaluation_queue.push(expectation),
             }

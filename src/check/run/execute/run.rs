@@ -2,8 +2,7 @@ use super::expectation::{run_expectation, ExpectationRunContext};
 use super::report::{check_run_report, skipped_count, CheckRunReportCounts};
 use super::CheckRunSideEffects;
 use crate::check::core::{
-    check_run_error, CachedExpectation, CheckOptions, CheckRecord, CheckRunError, CheckRunReport,
-    ResolvedExpectation,
+    check_run_error, CheckOptions, CheckRecord, CheckRunError, CheckRunReport, ResolvedExpectation,
 };
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::run::selection::{
@@ -13,6 +12,7 @@ use crate::check::run::selection::{
 use crate::evaluator::EvaluatorRunner;
 use crate::time::unix_timestamp;
 use crate::xpec_state::snapshot_pass_ids;
+use std::path::Path;
 
 // This runtime layer consumes resolved check options and owns cache/evaluator
 // work ordering. Command-line policy such as default-run agent messaging stays
@@ -67,11 +67,11 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         &mut caches.xpec_state,
     ));
     let check_work_queue = if runtime.is_in_place() {
-        // In-place config compatibility has already been validated by the
-        // command layer. Cached-result selection is Git-state-specific, but
-        // in-place last-fail history still participates in the common order
-        // policy.
-        run_try!(in_place_check_work_queue(
+        // [6,Df] Canon defines a cached result for an expectation and Git
+        // state. In-place has no Git state, so cached-result lookup is not
+        // defined for this branch; every candidate remains queued. Persisted
+        // last-fail history is read only to apply the common order policy.
+        run_try!(order_in_place_evaluation_queue(
             root,
             options.candidate_expectations.clone(),
             &mut caches.xpec_state,
@@ -95,10 +95,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             run_try!(unix_timestamp()),
         ));
         for hit in check_work.cached_hits {
-            cached.push(CachedExpectation {
-                expectation: hit.expectation,
-                record: hit.hit.record,
-            });
+            cached.push(hit.record);
         }
         check_work.evaluation_queue
     };
@@ -144,19 +141,24 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     Ok(current_report(records, cached, total_expectations))
 }
 
-fn in_place_check_work_queue(
-    root: &std::path::Path,
+fn order_in_place_evaluation_queue(
+    // This function contains only platform-independent selection ordering.
+    // Filesystem and process variants stay behind platform-named modules.
+    root: &Path,
     evaluation_queue: Vec<ResolvedExpectation>,
-    state_cache: &mut crate::xpec_state::XpecStateCache,
+    last_result_history: &mut crate::xpec_state::XpecStateCache,
 ) -> Result<Vec<ResolvedExpectation>, String> {
-    order_selected_by_rank_and_latest_fail(root, evaluation_queue, state_cache, |expectation| {
-        expectation
-    })
+    order_selected_by_rank_and_latest_fail(
+        root,
+        evaluation_queue,
+        last_result_history,
+        |expectation| expectation,
+    )
 }
 
 fn current_report(
     records: Vec<CheckRecord>,
-    cached: Vec<CachedExpectation>,
+    cached: Vec<CheckRecord>,
     total_expectations: usize,
 ) -> CheckRunReport {
     let skipped = skipped_count(total_expectations, &records, &cached);
@@ -165,7 +167,7 @@ fn current_report(
 
 #[cfg(test)]
 mod tests {
-    use super::in_place_check_work_queue;
+    use super::order_in_place_evaluation_queue;
     use crate::check::core::{CheckRecord, CheckResult, ResolvedExpectation};
     use crate::config_types::{AgentConfig, ExpectationTo, DEFAULT_DIFF_FROM};
     use crate::hash::full_scope;
@@ -175,19 +177,22 @@ mod tests {
     use std::process;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test] // xpec: cv,Df,nv
-    fn in_place_check_work_queue_uses_persisted_latest_fail_history() {
+    #[test] // xpec: 6,cv,Df,nv
+    fn in_place_queues_every_xpec_and_uses_fail_history_only_for_order() {
         let root = test_root("in-place-order-history");
         fs::create_dir_all(&root).unwrap();
         let older = resolved_expectation("older");
         let newer = resolved_expectation("newer");
-        let mut state_cache = XpecStateCache::default();
-        write_in_place_fail(&root, &older, 1, &mut state_cache);
-        write_in_place_fail(&root, &newer, 2, &mut state_cache);
+        let mut last_result_history = XpecStateCache::default();
+        write_in_place_fail(&root, &older, 1, &mut last_result_history);
+        write_in_place_fail(&root, &newer, 2, &mut last_result_history);
 
-        let queue =
-            in_place_check_work_queue(&root, vec![older, newer], &mut XpecStateCache::default())
-                .unwrap();
+        let queue = order_in_place_evaluation_queue(
+            &root,
+            vec![older, newer],
+            &mut XpecStateCache::default(),
+        )
+        .unwrap();
         let ids = queue
             .into_iter()
             .map(|expectation| expectation.id)
@@ -201,7 +206,7 @@ mod tests {
         root: &Path,
         expectation: &ResolvedExpectation,
         timestamp: u64,
-        state_cache: &mut XpecStateCache,
+        last_result_history: &mut XpecStateCache,
     ) {
         let record = CheckRecord {
             timestamp: crate::time::format_record_timestamp(timestamp),
@@ -222,7 +227,7 @@ mod tests {
             id: expectation.id.clone(),
             display_id: expectation.display_id.clone(),
         };
-        state_cache
+        last_result_history
             .write_last_result_for_record(root, "in-place", expectation, &record)
             .unwrap();
     }

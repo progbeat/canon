@@ -29,6 +29,13 @@ pub(crate) fn create_snapshot_root(_root: &Path) -> Result<SnapshotRoot, String>
     make_temp_dir().map(temporary_snapshot_root)
 }
 
+pub(crate) fn create_invocation_local_snapshot_root() -> Result<SnapshotRoot, String> {
+    // xpec: 0N
+    // Invocation-local materialization deliberately ignores
+    // CANON_TREE_CACHE_DIR and is always removed by its owning worktree view.
+    make_temp_dir().map(temporary_snapshot_root)
+}
+
 fn make_temp_dir() -> Result<PathBuf, String> {
     let mut errors = Vec::new();
     // This is the hardlink materialization policy's `make_temp_dir()`.

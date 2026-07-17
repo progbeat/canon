@@ -2,33 +2,17 @@
 
 use super::presets::{apply_expectation_settings, raw_presets_from_config, resolve_presets};
 use super::rank::resolve_expectation_rank;
-use super::source::CheckConfigSource;
 use crate::check::config::validation::parse_cooldown_config;
 use crate::config_types::{
     AgentConfig, CheckConfig, Expectation, ExpectationTarget, RawCheckConfig,
     RawExpectationCommonConfig, RawExpectationFields, RawExpectationItem, RawExpectationSettings,
     RawGitBackedExpectationConfig, ResolvedPresetConfig, DEFAULT_DIFF_FROM,
 };
-use crate::repo_inspection::RepoInspectionCache;
 use std::collections::BTreeMap;
-use std::path::Path;
 
 #[cfg(test)]
-pub(crate) fn expand_raw_check_config(
-    root: Option<&Path>,
-    config_path: &Path,
-    raw: RawCheckConfig,
-    cache: Option<&mut RepoInspectionCache>,
-    source: CheckConfigSource,
-) -> Result<CheckConfig, String> {
-    expand_raw_check_config_with_options(
-        root,
-        config_path,
-        raw,
-        cache,
-        source,
-        CheckConfigExpansionOptions::default(),
-    )
+pub(crate) fn expand_raw_check_config(raw: RawCheckConfig) -> Result<CheckConfig, String> {
+    expand_raw_check_config_with_options(raw, CheckConfigExpansionOptions::default())
 }
 
 #[derive(Default)]
@@ -39,25 +23,14 @@ pub(crate) struct CheckConfigExpansionOptions<'a> {
 
 #[cfg(test)]
 pub(crate) fn expand_raw_check_config_with_options(
-    root: Option<&Path>,
-    config_path: &Path,
     raw: RawCheckConfig,
-    cache: Option<&mut RepoInspectionCache>,
-    source: CheckConfigSource,
     options: CheckConfigExpansionOptions<'_>,
 ) -> Result<CheckConfig, String> {
-    Ok(
-        expand_raw_check_config_with_requirements(root, config_path, raw, cache, source, options)?
-            .config,
-    )
+    Ok(expand_raw_check_config_with_requirements(raw, options)?.config)
 }
 
 pub(crate) fn expand_raw_check_config_with_requirements(
-    _root: Option<&Path>,
-    _config_path: &Path,
     raw: RawCheckConfig,
-    _cache: Option<&mut RepoInspectionCache>,
-    _source: CheckConfigSource,
     options: CheckConfigExpansionOptions<'_>,
 ) -> Result<ExpandedCheckConfig, String> {
     let RawCheckConfig {
@@ -103,17 +76,19 @@ pub(crate) fn expand_raw_check_config_with_requirements(
     })
 }
 
+#[derive(Clone)]
 pub(crate) struct ExpandedCheckConfig {
     pub(crate) config: CheckConfig,
     pub(crate) in_place_requirements: InPlaceRequirements,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct InPlaceRequirements {
     pub(crate) config_uses_ignore: bool,
     pub(crate) git_backed_only_expectation_fields: Vec<InPlaceExpectationRequirements>,
 }
 
+#[derive(Clone)]
 pub(crate) struct InPlaceExpectationRequirements {
     pub(crate) item_number: usize,
     pub(crate) git_backed_only_field_names: Vec<&'static str>,
@@ -149,8 +124,10 @@ impl RawExpectationExpansion<'_> {
             let item = self
                 .resolve_raw_expectation_item(item)
                 .map_err(|err| format!("expectation {}: {}", item_number, err))?;
-            // [T,Df] Preserve fields forbidden by the separate in-place
-            // contract after preset resolution.
+            // [6,T,Df] Cooldown is an optional cached-result field for
+            // Git-backed xpecs. Preserve it with the other Git-state fields so
+            // the separate in-place contract can reject that execution mode
+            // without narrowing Git-backed cooldown support.
             self.in_place_requirements
                 .record_expectation(item_number, &item)?;
             match item {

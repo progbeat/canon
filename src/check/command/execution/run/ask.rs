@@ -1,13 +1,15 @@
 use super::super::query::{run_check_query_command, CheckQueryCommand, CheckQueryError};
 use crate::check::command::args::parse_ask_command_args;
+use crate::check::command::print_token_usage_summary;
 use crate::check::core::AskCommandArgs;
-use crate::check::CheckRunCaches;
+use crate::check::{load_ask_config, load_in_place_ask_config, CheckRunCaches};
 use crate::cli::{AskFailure, CommandError};
 use crate::config_types::{AgentConfig, CheckConfig, Expectation, ExpectationTo};
 use crate::git::TreeSource;
 use crate::logs::DiagnosticLogWriter;
 use crate::platform::{install_check_signal_handlers, reset_check_interrupted};
 use crate::repo_inspection::RepoInspectionCache;
+use crate::token_usage_types::TokenUsage;
 use std::ffi::OsString;
 use std::path::Path;
 
@@ -16,20 +18,41 @@ pub(crate) fn run_ask_command(
     args: &[OsString],
     default_in_place: bool,
 ) -> Result<(), CommandError> {
+    // xpec: 0N
+    // This is the public `canon ask` finally boundary. It emits exactly one
+    // usage line after every command attempt, including parse, config, Git,
+    // logging, preparation, evaluator, and output failures.
+    let mut token_usage = None;
+    let command_result =
+        run_ask_command_before_token_usage(root, args, default_in_place, &mut token_usage);
+    let usage_result = print_token_usage_summary(token_usage);
+    match (command_result, usage_result) {
+        (Err(err), _) => Err(err),
+        (Ok(()), Err(_)) => Err(CommandError::AskFailed(AskFailure::TokenUsage)),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
+fn run_ask_command_before_token_usage(
+    root: &Path,
+    args: &[OsString],
+    default_in_place: bool,
+    token_usage: &mut Option<TokenUsage>,
+) -> Result<(), CommandError> {
     install_check_signal_handlers().map_err(CommandError::from)?;
     reset_check_interrupted();
     let command = parse_ask_command_args(args, default_in_place)?;
     if command.in_place {
-        return run_in_place_ask_command(root, &command);
+        return run_in_place_ask_command(root, &command, token_usage);
     }
     // xpec: 0N
     // "canon ask always asks" starts after parse/tree/log setup accepts the
     // invocation. These resolves validate the optional Git context for a
     // git-backed ask; they are not cache/config shortcuts. Once the command
-    // context is valid, optional config loading falls back and `run_ask_query`
-    // always receives one temporary ask xpec before reaching the evaluator
-    // boundary. An explicit preset makes config loading part of the command's
-    // selected behavior, so its error is returned instead of being ignored.
+    // context is valid, the default optional config may fall back and
+    // `run_ask_query` always receives one temporary ask xpec before reaching
+    // the evaluator boundary. An explicit config or preset makes config
+    // loading part of the command's selected behavior, so errors are returned.
     let checked_tree = TreeSource::resolve(root, &command.tree, "--tree")?;
     let against_tree = TreeSource::resolve_default_against_tree(
         root,
@@ -39,69 +62,83 @@ pub(crate) fn run_ask_command(
     let mut repo_cache = RepoInspectionCache::new();
     let diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
     let mut check_caches = CheckRunCaches::new();
+    let config_optional = !command.config_explicit && command.default_agent_preset.is_none();
     let config = ask_query_config(
-        repo_cache.load_ask_config(
+        load_ask_config(
+            &mut repo_cache,
             root,
             &command.config_path,
             &checked_tree,
             command.default_agent_preset.as_deref(),
             &command.question,
         ),
-        command.default_agent_preset.is_some(),
+        config_optional,
         &command.question,
     )?;
     run_ask_query(
         root,
         &command,
-        Some(&checked_tree),
-        Some(&against_tree),
-        &config,
-        Some(diagnostic_log),
-        &mut check_caches,
+        AskQueryRun {
+            tree_source: Some(&checked_tree),
+            against_tree: Some(&against_tree),
+            config: &config,
+            diagnostic_log: Some(diagnostic_log),
+            check_caches: &mut check_caches,
+            token_usage,
+        },
     )
 }
 
-fn run_in_place_ask_command(root: &Path, command: &AskCommandArgs) -> Result<(), CommandError> {
+fn run_in_place_ask_command(
+    root: &Path,
+    command: &AskCommandArgs,
+    token_usage: &mut Option<TokenUsage>,
+) -> Result<(), CommandError> {
     let mut repo_cache = RepoInspectionCache::new();
     let mut check_caches = CheckRunCaches::new();
     let diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
     // xpec: 0N
-    // In-place ask has no Git-tree preparation. Its selected preset is resolved
-    // into the temporary xpec; optional config load errors fall back to
-    // implementation defaults instead of preventing that xpec.
+    // In-place ask has no Git-tree preparation. Its selected config and preset
+    // still retain their explicit error behavior; only the default optional
+    // config may fall back to implementation defaults.
+    let config_optional = !command.config_explicit && command.default_agent_preset.is_none();
     let config = ask_query_config(
-        repo_cache.load_in_place_ask_config(
+        load_in_place_ask_config(
+            &mut repo_cache,
             root,
             &command.config_path,
             command.default_agent_preset.as_deref(),
             &command.question,
         ),
-        command.default_agent_preset.is_some(),
+        config_optional,
         &command.question,
     )?;
     run_ask_query(
         root,
         command,
-        None,
-        None,
-        &config,
-        Some(diagnostic_log),
-        &mut check_caches,
+        AskQueryRun {
+            tree_source: None,
+            against_tree: None,
+            config: &config,
+            diagnostic_log: Some(diagnostic_log),
+            check_caches: &mut check_caches,
+            token_usage,
+        },
     )
 }
 
 fn ask_query_config(
     config: Result<CheckConfig, String>,
-    preset_explicit: bool,
+    config_optional: bool,
     question: &str,
 ) -> Result<CheckConfig, String> {
     // `load_ask_config` has already replaced configured check expectations
-    // with the one resolved temporary ask xpec. An explicit preset must resolve
-    // successfully; an unavailable optional config falls back to the same xpec
-    // shape with implementation defaults.
+    // with the one resolved temporary ask xpec. A user-selected config or
+    // preset must resolve successfully; only the command-default config is
+    // optional and may fall back to implementation defaults.
     match config {
         Ok(config) => Ok(config),
-        Err(err) if preset_explicit => Err(err),
+        Err(err) if !config_optional => Err(err),
         Err(_) => Ok(ask_query_config_with_agent(
             question,
             AgentConfig::implementation_default(),
@@ -128,14 +165,19 @@ fn ask_query_config_with_agent(question: &str, agent: AgentConfig) -> CheckConfi
     }
 }
 
+struct AskQueryRun<'a> {
+    tree_source: Option<&'a TreeSource>,
+    against_tree: Option<&'a TreeSource>,
+    config: &'a CheckConfig,
+    diagnostic_log: Option<DiagnosticLogWriter>,
+    check_caches: &'a mut CheckRunCaches,
+    token_usage: &'a mut Option<TokenUsage>,
+}
+
 fn run_ask_query(
     root: &Path,
     command: &AskCommandArgs,
-    tree_source: Option<&TreeSource>,
-    against_tree: Option<&TreeSource>,
-    config: &CheckConfig,
-    diagnostic_log: Option<DiagnosticLogWriter>,
-    check_caches: &mut CheckRunCaches,
+    run: AskQueryRun<'_>,
 ) -> Result<(), CommandError> {
     // Ask receives an ask-only `CheckConfig`: its one temporary xpec carries
     // resolved preset defaults, while configured check expectations are not
@@ -145,15 +187,16 @@ fn run_ask_query(
     // query path always sends an evaluator turn.
     let result = run_check_query_command(CheckQueryCommand {
         root,
-        config,
+        config: run.config,
         query_scope: &command.query_scope,
         query_scope_provided: command.query_scope_provided,
-        tree_source,
-        against_tree,
+        tree_source: run.tree_source,
+        against_tree: run.against_tree,
         no_sandbox: command.no_sandbox,
         in_place: command.in_place,
-        diagnostic_log,
-        check_caches,
+        diagnostic_log: run.diagnostic_log,
+        check_caches: run.check_caches,
+        token_usage: run.token_usage,
     });
     ask_query_command_result(result)
 }
@@ -169,7 +212,6 @@ fn ask_failure_for_query_error(err: &CheckQueryError) -> AskFailure {
     match err {
         CheckQueryError::ReviewRequired(_) => AskFailure::ReviewRequired,
         CheckQueryError::Output(_) => AskFailure::Output,
-        CheckQueryError::TokenUsage(_) => AskFailure::TokenUsage,
         CheckQueryError::Command(_) | CheckQueryError::Evaluator(_) => AskFailure::Query,
     }
 }
@@ -195,7 +237,7 @@ mod tests {
     fn ask_config_load_error_still_builds_temporary_query_config() {
         let config = ask_query_config(
             Err("config unavailable".to_string()),
-            false,
+            true,
             "Does fallback ask work?",
         )
         .expect("optional config errors fall back");
@@ -206,13 +248,13 @@ mod tests {
     }
 
     #[test] // xpec: nK
-    fn explicit_preset_config_error_is_returned() {
+    fn selected_config_error_is_returned() {
         let error = ask_query_config(
             Err("unknown preset: smart".to_string()),
-            true,
+            false,
             "Does preset ask work?",
         )
-        .expect_err("explicit preset errors must not fall back");
+        .expect_err("selected config errors must not fall back");
 
         assert_eq!(error, "unknown preset: smart");
     }

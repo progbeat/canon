@@ -235,7 +235,7 @@ expectations:
     );
 }
 
-// xpec: nF
+// xpec: nF,Df,nv
 #[test]
 fn in_place_shell_xpec_reports_transcript_and_exit_code() {
     let repo = temp_repo("canon-in-place-shell-xpec");
@@ -287,7 +287,7 @@ expectations:
 
 // xpec: v1,Df
 #[test]
-fn in_place_prohibited_expectation_fields_fail_before_evaluation() {
+fn selected_in_place_prohibited_expectation_fields_fail_before_evaluation() {
     let repo = temp_repo("canon-in-place-invalid-config-before-evaluation");
     fs::create_dir_all(repo.join(".canon")).unwrap();
     fs::write(
@@ -308,7 +308,7 @@ expectations:
         // and token-usage contract for invalid in-place config. In-place is
         // explicitly outside default-source feedback eligibility, so the
         // self-contained validation error is the only post-summary message.
-        .args(["check", "--in-place", "unknown-selector"])
+        .args(["check", "--in-place"])
         .current_dir(&repo)
         .output()
         .unwrap();
@@ -319,7 +319,7 @@ expectations:
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
     // xpec: v1,Df
-    assert!(stdout.contains(" 0 passed in "), "{stdout}\n{stderr}");
+    assert!(stdout.contains(" 1 pending in "), "{stdout}\n{stderr}");
     // xpec: v1,Df
     assert_eq!(
         stderr,
@@ -360,6 +360,26 @@ fn invalid_check_arguments_still_emit_the_check_trailer() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.starts_with(ZERO_TOKEN_USAGE_LINE));
     assert!(stderr.contains("unexpected argument"));
+}
+
+// xpec: 0N
+#[test]
+fn invalid_ask_arguments_still_emit_token_usage() {
+    let repo = temp_repo("canon-invalid-ask-argument-token-usage");
+    fs::create_dir_all(&repo).unwrap();
+    let output = canon()
+        .args(["ask", "Can this pass?", "--keep-going"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+
+    let _ = fs::remove_dir_all(&repo);
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.starts_with(ZERO_TOKEN_USAGE_LINE), "{stderr}");
+    assert!(stderr.contains("unexpected argument"), "{stderr}");
 }
 
 // xpec: v1,K
@@ -531,7 +551,7 @@ fn check_without_config_renders_documented_recovery_message() {
     assert!(!output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains(" 0 passed in "), "{stdout}");
-    assert!(!stdout.contains("All checks passed"));
+    assert!(stdout.contains("✓ All checks passed. Commit is allowed.\n"));
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(
         stderr.ends_with(

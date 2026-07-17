@@ -221,15 +221,12 @@ pub(super) fn run_expectation<R: EvaluatorRunner>(
         stop_after_current_expectation,
         interrupted: interrogation_interrupted,
     } = completed_interrogation;
-    // q-scope policy has already decided whether a verification result can be
-    // final; assert the public final-result invariant before public output or
-    // durable state observes the record.
-    assert_final_check_result_has_no_scope_too_narrow(&record);
-    started_report.finish_public_output_before_structured_report(&record);
+    finish_user_visible_started_report(started_report, &record);
     // `record_finished_expectation` is the structured report path after public
     // output is finished: returning the completed CheckRecord lets the caller
-    // append it to the in-memory CheckRunReport, while Git-backed runs can also
-    // update persistent xpec/live-report state.
+    // append it to the in-memory CheckRunReport. Both Git-backed and in-place
+    // checks update persistent xpec state; the in-place persistence boundary
+    // omits Git-only fields from the written last-result record.
     // Later state/cache/logging errors can fail the command, but they occur
     // after the result has been reported through the active report channel.
     record_finished_expectation(
@@ -313,9 +310,9 @@ fn run_direct_expectation<R: EvaluatorRunner>(
         "an xpec response error must produce FAIL"
     );
     if let Some(started_report) = started_report {
-        started_report.finish_public_output_before_structured_report(&record);
+        finish_user_visible_started_report(started_report, &record);
     } else {
-        write_result_output_without_started_report(context.result_output, &record)?;
+        write_user_visible_result_without_started_report(context.result_output, &record)?;
     }
     record_finished_expectation(
         context,
@@ -370,19 +367,35 @@ fn record_finished_expectation<R: EvaluatorRunner>(
     record: &CheckRecord,
     source: FinishedRecordSource,
 ) -> Result<(), String> {
-    // This is the durable result-reporting path used after a CheckRecord is
-    // formed. The xpec write below keeps the completed result available for
-    // later inspection and cache decisions; it is separate from runtime logs.
+    // This is the result-reporting path used after a CheckRecord is formed.
+    // A runtime with persistent history keeps the result available for later
+    // inspection. Git-backed selection may also use that state for cache
+    // decisions; in-place selection never does.
     // The final call emits the evaluated expectation's expectation.result and,
     // when needed, expectation.review_required events through
     // DiagnosticLogWriter::write_record_event in `src/logs/writer.rs`.
+    let Some(persistent_state_root) = context.runtime.persistent_check_state_root() else {
+        return write_expectation_result_event(context.diagnostic_log, record);
+    };
+    if context.runtime.is_in_place() {
+        // [Df] In-place has persistent last-result history even though it has
+        // no Git tree. Use the non-optional writer explicitly; its in-place
+        // serialization omits every Git-only field.
+        context.caches.xpec_state.write_last_result_for_record(
+            persistent_state_root,
+            context.runtime.checked_tree_oid(),
+            expectation,
+            record,
+        )?;
+        return write_expectation_result_event(context.diagnostic_log, record);
+    }
     match source {
         FinishedRecordSource::Interrogation => {
             context
                 .caches
                 .xpec_state
                 .write_interrogation_last_result_for_record_or_absent_history(
-                    context.runtime.persistent_check_state_root(),
+                    Some(persistent_state_root),
                     context.runtime.checked_tree_oid(),
                     expectation,
                     record,
@@ -405,7 +418,7 @@ fn record_finished_expectation<R: EvaluatorRunner>(
                 .caches
                 .xpec_state
                 .write_interrogation_last_result_for_record_or_absent_history(
-                    context.runtime.persistent_check_state_root(),
+                    Some(persistent_state_root),
                     context.runtime.checked_tree_oid(),
                     expectation,
                     &record_for_state,
@@ -416,7 +429,7 @@ fn record_finished_expectation<R: EvaluatorRunner>(
                 .caches
                 .xpec_state
                 .write_last_result_for_record_or_absent_history(
-                    context.runtime.persistent_check_state_root(),
+                    Some(persistent_state_root),
                     context.runtime.checked_tree_oid(),
                     expectation,
                     record,
@@ -427,12 +440,25 @@ fn record_finished_expectation<R: EvaluatorRunner>(
 }
 
 fn assert_final_check_result_has_no_scope_too_narrow(record: &CheckRecord) {
-    // xpec: nO
+    // xpec: RC
     assert_ne!(
         record.error.as_deref(),
         Some(ERROR_SCOPE_TOO_NARROW),
         "user-visible final check results must not expose ScopeTooNarrow"
     );
+}
+
+fn finish_user_visible_started_report(started_report: LiveExpectationReport, record: &CheckRecord) {
+    assert_final_check_result_has_no_scope_too_narrow(record);
+    started_report.finish_public_output_before_structured_report(record);
+}
+
+fn write_user_visible_result_without_started_report(
+    result_output: &mut Option<&mut dyn Write>,
+    record: &CheckRecord,
+) -> Result<(), String> {
+    assert_final_check_result_has_no_scope_too_narrow(record);
+    write_result_output_without_started_report(result_output, record)
 }
 
 struct CompletedInterrogation {
@@ -779,7 +805,7 @@ fn finish_unstarted_expectation_with_error_record_for_visible_tree_oid<R: Evalua
         &error,
         visible_tree_oid.to_string(),
     )?;
-    write_result_output_without_started_report(context.result_output, &record)?;
+    write_user_visible_result_without_started_report(context.result_output, &record)?;
     finish_expectation_with_error_record(
         context,
         expectation,
@@ -806,7 +832,7 @@ fn finish_started_expectation_with_error_record<R: EvaluatorRunner>(
     // itself came from a prompt diff. The durable last-result write below uses
     // `InterrogationAttemptError` to attach the attempted evaluator prompt
     // diff only to state.
-    started_report.finish_public_output_before_structured_report(&record);
+    finish_user_visible_started_report(started_report, &record);
     finish_expectation_with_error_record(
         context,
         expectation,

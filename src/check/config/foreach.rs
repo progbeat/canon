@@ -3,6 +3,7 @@ use crate::repo_inspection::RepoInspectionCache;
 use minijinja::Environment;
 use saphyr_parser::{Event, Parser, ScalarStyle, Span, Tag};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::Path;
 
 pub(super) fn expand_foreach_yaml(
@@ -13,11 +14,19 @@ pub(super) fn expand_foreach_yaml(
     cache: &mut RepoInspectionCache,
 ) -> Result<String, String> {
     let documents = parse_documents(content)?;
+    let next_anchor = documents
+        .iter()
+        .map(max_anchor)
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| "too many YAML anchors".to_string())?;
     let mut expansion = ForeachExpansion {
         root,
         config_path,
         source,
         cache,
+        next_anchor,
     };
     let documents = documents
         .into_iter()
@@ -31,6 +40,7 @@ struct ForeachExpansion<'a> {
     config_path: &'a Path,
     source: &'a CheckConfigSource,
     cache: &'a mut RepoInspectionCache,
+    next_anchor: usize,
 }
 
 impl ForeachExpansion<'_> {
@@ -74,14 +84,15 @@ impl ForeachExpansion<'_> {
         let binding = items.pop().expect("length checked");
         let glob = foreach_glob(binding)?;
         let paths = self
-            .cache
-            .foreach_paths(self.root, self.config_path, &glob, self.source)?;
+            .source
+            .foreach_paths(self.cache, self.root, self.config_path, &glob)?;
         let mut rendered = Vec::with_capacity(paths.len());
         for path in paths {
-            let content =
-                self.cache
-                    .config_source_file_content(self.root, self.source, Path::new(&path))?;
+            let content = self
+                .source
+                .file_content(self.cache, self.root, Path::new(&path))?;
             let mut copy = template.clone();
+            freshen_anchors(&mut copy, &mut self.next_anchor)?;
             render_string_scalars(&mut copy, &path, &content)?;
             rendered.push(self.expand_node(copy)?);
         }
@@ -90,6 +101,81 @@ impl ForeachExpansion<'_> {
             tag: None,
             kind: YamlNodeKind::Sequence(rendered),
         })
+    }
+}
+
+fn max_anchor(node: &YamlNode) -> usize {
+    let child_max = match &node.kind {
+        YamlNodeKind::Sequence(items) => items.iter().map(max_anchor).max().unwrap_or(0),
+        YamlNodeKind::Mapping(entries) => entries
+            .iter()
+            .flat_map(|(key, value)| [max_anchor(key), max_anchor(value)])
+            .max()
+            .unwrap_or(0),
+        YamlNodeKind::Alias(anchor) => *anchor,
+        YamlNodeKind::Scalar(_) => 0,
+    };
+    node.anchor.max(child_max)
+}
+
+fn freshen_anchors(node: &mut YamlNode, next_anchor: &mut usize) -> Result<(), String> {
+    let mut replacements = HashMap::new();
+    collect_anchor_replacements(node, next_anchor, &mut replacements)?;
+    replace_anchors(node, &replacements);
+    Ok(())
+}
+
+fn collect_anchor_replacements(
+    node: &YamlNode,
+    next_anchor: &mut usize,
+    replacements: &mut HashMap<usize, usize>,
+) -> Result<(), String> {
+    if node.anchor > 0 {
+        let replacement = *next_anchor;
+        *next_anchor = next_anchor
+            .checked_add(1)
+            .ok_or_else(|| "too many YAML anchors".to_string())?;
+        replacements.insert(node.anchor, replacement);
+    }
+    match &node.kind {
+        YamlNodeKind::Sequence(items) => {
+            for item in items {
+                collect_anchor_replacements(item, next_anchor, replacements)?;
+            }
+        }
+        YamlNodeKind::Mapping(entries) => {
+            for (key, value) in entries {
+                collect_anchor_replacements(key, next_anchor, replacements)?;
+                collect_anchor_replacements(value, next_anchor, replacements)?;
+            }
+        }
+        YamlNodeKind::Scalar(_) | YamlNodeKind::Alias(_) => {}
+    }
+    Ok(())
+}
+
+fn replace_anchors(node: &mut YamlNode, replacements: &HashMap<usize, usize>) {
+    if let Some(replacement) = replacements.get(&node.anchor) {
+        node.anchor = *replacement;
+    }
+    match &mut node.kind {
+        YamlNodeKind::Sequence(items) => {
+            for item in items {
+                replace_anchors(item, replacements);
+            }
+        }
+        YamlNodeKind::Mapping(entries) => {
+            for (key, value) in entries {
+                replace_anchors(key, replacements);
+                replace_anchors(value, replacements);
+            }
+        }
+        YamlNodeKind::Alias(anchor) => {
+            if let Some(replacement) = replacements.get(anchor) {
+                *anchor = *replacement;
+            }
+        }
+        YamlNodeKind::Scalar(_) => {}
     }
 }
 
@@ -439,6 +525,47 @@ values:
         let _ = fs::remove_dir_all(root);
     }
 
+    #[test] // xpec: Mm
+    fn foreach_gives_each_rendered_copy_distinct_anchors() {
+        let root = test_root("foreach-anchors");
+        git(&root, &["init"]);
+        fs::create_dir_all(root.join(".canon/specs")).unwrap();
+        fs::write(root.join(".canon/specs/alpha.md"), "Alpha spec").unwrap();
+        fs::write(root.join(".canon/specs/beta.md"), "Beta spec").unwrap();
+        git(&root, &["add", ".canon/specs"]);
+
+        let value = parse_yaml_config_with_includes::<Value>(
+            &root,
+            Path::new(".canon/check.yml"),
+            r#"
+values:
+  - !foreach
+    - path: "specs/*.md"
+    - value: &rendered "{{ path }}"
+      alias: *rendered
+"#,
+            CheckConfigSource::Tree(TreeSource::Staged),
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            json!({
+                "values": [[
+                    {
+                        "value": ".canon/specs/alpha.md",
+                        "alias": ".canon/specs/alpha.md"
+                    },
+                    {
+                        "value": ".canon/specs/beta.md",
+                        "alias": ".canon/specs/beta.md"
+                    }
+                ]]
+            })
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[test] // xpec: Mm,I8,v7
     fn foreach_in_include_uses_including_document_directory_and_source() {
         let root = test_root("foreach-in-include");
@@ -463,8 +590,6 @@ values:
                 ".canon/includes/specs/alpha.md",
             ],
         );
-        let mut cache = RepoInspectionCache::new();
-
         let config = parse_tree_check_config_content_with_root_and_default_agent_preset(
             &root,
             Path::new(".canon/check.yml"),
@@ -474,7 +599,6 @@ presets:
 xpecs:
   - !include includes/xpecs.yml
 "#,
-            &mut cache,
             TreeSource::Staged,
             None,
             None,

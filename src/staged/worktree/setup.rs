@@ -1,7 +1,9 @@
 use super::StagedWorktreeView;
 use crate::git::TreeSource;
 use crate::platform;
-use crate::staged::paths::create_snapshot_root;
+use crate::staged::paths::{
+    create_invocation_local_snapshot_root, create_snapshot_root, SnapshotRoot,
+};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::fs;
@@ -13,6 +15,22 @@ impl StagedWorktreeView {
         source: TreeSource,
     ) -> Result<StagedWorktreeView, String> {
         let snapshot_root = create_snapshot_root(root)?;
+        Self::apply_with_snapshot_root(root, source, snapshot_root)
+    }
+
+    pub(crate) fn apply_invocation_local_for_tree_source(
+        root: &Path,
+        source: TreeSource,
+    ) -> Result<StagedWorktreeView, String> {
+        let snapshot_root = create_invocation_local_snapshot_root()?;
+        Self::apply_with_snapshot_root(root, source, snapshot_root)
+    }
+
+    fn apply_with_snapshot_root(
+        root: &Path,
+        source: TreeSource,
+        snapshot_root: SnapshotRoot,
+    ) -> Result<StagedWorktreeView, String> {
         let materialization_root = snapshot_root.path().to_path_buf();
         let remove_materialization_root_on_drop = snapshot_root.remove_on_drop();
         if let Err(err) = platform::create_private_dir_all(&materialization_root.join("lazy"))

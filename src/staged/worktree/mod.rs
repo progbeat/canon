@@ -43,6 +43,21 @@ mod tests {
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    #[test] // xpec: 0N
+    fn invocation_local_view_removes_its_materialization_root() {
+        let root = git_project("invocation-local-snapshot-cleanup");
+        let staged_view =
+            StagedWorktreeView::apply_invocation_local_for_tree_source(&root, TreeSource::Staged)
+                .unwrap();
+        let materialization_root = staged_view.materialization_root.clone();
+
+        assert!(staged_view.remove_materialization_root_on_drop);
+        assert!(materialization_root.is_dir());
+        drop(staged_view);
+        assert!(!materialization_root.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
     #[test]
     fn materialized_scope_files_and_directories_are_read_only() {
         let root = git_project("staged-snapshot-scope-read-only-dirs");

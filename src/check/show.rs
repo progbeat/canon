@@ -5,7 +5,7 @@ use crate::check::run::selection::{
     select_expectations_with_identities,
 };
 use crate::check::CHECK_PATH;
-use crate::check::{CheckRunCaches, ResolvedExpectation};
+use crate::check::{load_check_config, CheckRunCaches, ResolvedExpectation};
 use crate::cli::CommandError;
 use crate::git::{validate_tree_arg, TreeSource, VisibleTreeOidCache, STAGED_TREE_ARG};
 use crate::notes::arg_to_string;
@@ -23,7 +23,7 @@ pub(crate) fn run_show_command(root: &Path, args: &[OsString]) -> Result<(), Com
     let command = parse_show_command_args(args)?;
     let tree_source = TreeSource::resolve(root, &command.tree, "--tree")?;
     let mut repo_cache = RepoInspectionCache::new();
-    let config = repo_cache.load_check_config(root, Path::new(CHECK_PATH), &tree_source)?;
+    let config = load_check_config(&mut repo_cache, root, Path::new(CHECK_PATH), &tree_source)?;
     let mut caches = CheckRunCaches::new();
     let expectations = select_show_expectations_for_current_run(ShowRenderRequest {
         root,
@@ -98,7 +98,7 @@ pub(crate) fn render_show_for_current_run(
         .map(|expectation| expectation.id.clone())
         .collect();
     Ok(ShowRenderedOutput {
-        text: render_show_output(&ordered),
+        text: render_show_expectations_text(&ordered),
         expectation_ids,
     })
 }
@@ -214,14 +214,37 @@ fn expectation_is_affected_by_pathspecs(
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
     xpec_state: &mut XpecStateCache,
 ) -> Result<bool, String> {
-    // This chooses the q-scope used for the selected-tree visible OID below.
-    // Under the `canon show` pathspec rule, "the visible tree OID would change
-    // if every tracked file matched by the pathspecs changed" is equivalent to
-    // "at least one tracked file is in both the visible scope and the pathspecs".
-    // The helper below implements that OID-change predicate by testing the
-    // overlap directly instead of materializing a synthetic changed tree.
     let q_scope = show_q_scope(root, tree_source, expectation, xpec_state)?;
-    let visible_scope = visible_scope(&expectation.agent, &q_scope)?;
+    visible_tree_oid_is_affected_by_pathspecs(
+        root,
+        tree_source,
+        expectation,
+        &q_scope,
+        pathspecs,
+        visible_tree_oid_cache,
+    )
+}
+
+fn visible_tree_oid_is_affected_by_pathspecs(
+    root: &Path,
+    tree_source: &TreeSource,
+    expectation: &ResolvedExpectation,
+    q_scope: &[String],
+    pathspecs: &[String],
+    visible_tree_oid_cache: &mut VisibleTreeOidCache,
+) -> Result<bool, String> {
+    // A missing visible tree OID is a separate exclusion gate from the
+    // changed-file overlap test below.
+    if visible_tree_oid_cache
+        .visible_tree_oid_for_reuse(root, tree_source, &expectation.agent, q_scope)?
+        .is_none()
+    {
+        return Ok(false);
+    }
+    // If every tracked file matched by `pathspecs` changed, the visible tree
+    // OID would change exactly when at least one such file is selected by the
+    // complete visible scope.
+    let visible_scope = visible_scope(&expectation.agent, q_scope)?;
     visible_tree_oid_cache.visible_scope_intersects_pathspecs(
         root,
         tree_source,
@@ -252,21 +275,23 @@ fn write_show_expectations_to(
     for expectation in expectations {
         write_stdout_record(
             output,
-            render_show_expectation(expectation).as_bytes(),
+            render_canonical_show_record(expectation).as_bytes(),
             "show expectation",
         )?;
     }
     Ok(())
 }
 
-fn render_show_output(expectations: &[ResolvedExpectation]) -> String {
+fn render_show_expectations_text(expectations: &[ResolvedExpectation]) -> String {
     expectations
         .iter()
-        .map(render_show_expectation)
+        .map(render_canonical_show_record)
         .collect::<String>()
 }
 
-fn render_show_expectation(expectation: &ResolvedExpectation) -> String {
+fn render_canonical_show_record(expectation: &ResolvedExpectation) -> String {
+    // [t5] This single renderer serves both `canon show` and dynamic
+    // `canon.show`: bare short ID, escaped question, then lowercase `expected:`.
     format!(
         "{}\n{}\nexpected: {}\n",
         expectation.display_id,
@@ -322,7 +347,7 @@ mod tests {
     }
 
     #[test] // xpec: t5
-    fn show_output_escapes_question_and_expected_answer() {
+    fn show_record_has_bare_id_and_lowercase_expected_label() {
         let expectation = ResolvedExpectation {
             number: 1,
             id: "11111111111111111111".to_string(),
@@ -340,7 +365,7 @@ mod tests {
         };
 
         assert_eq!(
-            render_show_expectation(&expectation),
+            render_canonical_show_record(&expectation),
             "1\nLine one\\nLine two\nexpected: yes\\tplease\n"
         );
     }
@@ -410,6 +435,45 @@ expectations:
         assert!(!output.contains("Does ignored source matter?"));
     }
 
+    #[test] // xpec: t5
+    fn pathspec_filter_requires_selected_tree_visible_oid() {
+        let root = git_project("canon-show-filter-visible-oid");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/app.rs"), "fn main() {}\n").unwrap();
+        git(&root, &["add", "src/app.rs"]);
+        let expectation = ResolvedExpectation {
+            number: 1,
+            id: "11111111111111111111".to_string(),
+            display_id: "1".to_string(),
+            to: crate::config_types::ExpectationTo::Agent,
+            rank: 0,
+            question: "Does source matter?".to_string(),
+            expected_answer: "yes".to_string(),
+            question_context: String::new(),
+            diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
+            target: None,
+            question_answer_only: false,
+            agent: Default::default(),
+            cooldown: None,
+        };
+        let tree_source = TreeSource::Staged;
+        let mut visible_tree_oid_cache = VisibleTreeOidCache::default();
+
+        let affected = visible_tree_oid_is_affected_by_pathspecs(
+            &root,
+            &tree_source,
+            &expectation,
+            &["src/app.rs".to_string(), "missing.rs".to_string()],
+            &["src/app.rs".to_string()],
+            &mut visible_tree_oid_cache,
+        )
+        .unwrap();
+
+        let _ = fs::remove_dir_all(root);
+
+        assert!(!affected);
+    }
+
     #[test] // xpec: F
     fn current_run_show_excludes_current_expectation_even_when_explicitly_selected() {
         let root = git_project("canon-show-excludes-current");
@@ -432,9 +496,8 @@ expectations:
         let selector = OsString::from(alpha_id.clone());
         let tree_source = TreeSource::Staged;
         let mut repo_cache = RepoInspectionCache::new();
-        let config = repo_cache
-            .load_check_config(&root, Path::new(CHECK_PATH), &tree_source)
-            .unwrap();
+        let config =
+            load_check_config(&mut repo_cache, &root, Path::new(CHECK_PATH), &tree_source).unwrap();
         let mut caches = CheckRunCaches::new();
 
         let rendered = render_show_for_current_run(ShowRenderRequest {
@@ -464,7 +527,7 @@ expectations:
             parse_show_command_args(&args.iter().map(OsString::from).collect::<Vec<OsString>>())?;
         let tree_source = TreeSource::resolve(root, &command.tree, "--tree")?;
         let mut repo_cache = RepoInspectionCache::new();
-        let config = repo_cache.load_check_config(root, Path::new(CHECK_PATH), &tree_source)?;
+        let config = load_check_config(&mut repo_cache, root, Path::new(CHECK_PATH), &tree_source)?;
         let mut caches = CheckRunCaches::new();
         let expectations = select_show_expectations_for_current_run(ShowRenderRequest {
             root,

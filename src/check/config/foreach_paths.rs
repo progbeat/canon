@@ -6,7 +6,7 @@ use std::path::Path;
 pub(crate) fn expand_staged_foreach_paths_from_listing(
     config_path: &Path,
     glob: &str,
-    staged_paths: &[String],
+    staged_paths: &[Vec<u8>],
 ) -> Result<Vec<String>, String> {
     validate_relative_config_path(glob, "foreach path glob")?;
     let config_dir = config_path.parent().unwrap_or_else(|| Path::new(""));
@@ -15,8 +15,13 @@ pub(crate) fn expand_staged_foreach_paths_from_listing(
     let foreach_scope = std::slice::from_ref(&foreach_pathspec);
     let mut files = Vec::new();
     for staged_path in staged_paths {
-        if path_bytes_in_scope(staged_path.as_bytes(), foreach_scope)? {
-            files.push(staged_path.clone());
+        if path_bytes_in_scope(staged_path, foreach_scope)? {
+            // [Mm,nK] Only a matched path must become the string `path`
+            // binding. Unmatched source paths cannot narrow this glob.
+            let path = std::str::from_utf8(staged_path).map_err(|_| {
+                "!foreach matched a non-UTF-8 file path that cannot be bound to `path`".to_string()
+            })?;
+            files.push(path.to_string());
         }
     }
     files.sort();
@@ -99,7 +104,35 @@ mod tests {
         assert_eq!(files, vec!["specs/nested/child.md", "specs/other/child.md"]);
     }
 
-    fn staged_paths(paths: &[&str]) -> Vec<String> {
-        paths.iter().map(|path| path.to_string()).collect()
+    #[test] // xpec: Mm,nK
+    fn non_utf8_paths_only_fail_when_the_glob_matches_them() {
+        let unrelated_non_utf8 = vec![b'o', b't', b'h', b'e', b'r', b'/', 0xff];
+        let files = expand_staged_foreach_paths_from_listing(
+            Path::new("check.yml"),
+            "specs/*.md",
+            &[b"specs/good.md".to_vec(), unrelated_non_utf8],
+        )
+        .unwrap();
+
+        assert_eq!(files, vec!["specs/good.md"]);
+
+        let matched_non_utf8 = vec![
+            b's', b'p', b'e', b'c', b's', b'/', b'f', 0xff, b'.', b'm', b'd',
+        ];
+        let error = expand_staged_foreach_paths_from_listing(
+            Path::new("check.yml"),
+            "specs/*.md",
+            &[matched_non_utf8],
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            "!foreach matched a non-UTF-8 file path that cannot be bound to `path`"
+        );
+    }
+
+    fn staged_paths(paths: &[&str]) -> Vec<Vec<u8>> {
+        paths.iter().map(|path| path.as_bytes().to_vec()).collect()
     }
 }

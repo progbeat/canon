@@ -3,8 +3,8 @@ use crate::check::command::output::{
     finish_query_output, start_query_report_output, SharedCheckOutput,
 };
 use crate::check::command::{
-    collect_check_token_usage, prepare_git_backed_check_execution, print_token_usage_summary,
-    GitBackedCheckStorage, PrepareGitBackedCheckExecutionOptions,
+    collect_check_token_usage, prepare_git_backed_check_execution, GitBackedCheckStorage,
+    PrepareGitBackedCheckExecutionOptions,
 };
 use crate::check::core::ParsedAnswer;
 use crate::check::interrogation::query::{
@@ -20,6 +20,7 @@ use crate::evaluator::EvaluatorRunner;
 use crate::git::TreeSource;
 use crate::logs::DiagnosticLogWriter;
 use crate::scope::sanitize_scope;
+use crate::token_usage_types::TokenUsage;
 use std::path::Path;
 
 pub(crate) struct CheckQueryCommand<'a> {
@@ -33,6 +34,7 @@ pub(crate) struct CheckQueryCommand<'a> {
     pub(crate) in_place: bool,
     pub(crate) diagnostic_log: Option<DiagnosticLogWriter>,
     pub(crate) check_caches: &'a mut CheckRunCaches,
+    pub(crate) token_usage: &'a mut Option<TokenUsage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,7 +42,6 @@ pub(crate) enum CheckQueryError {
     Command(String),
     Evaluator(String),
     Output(String),
-    TokenUsage(String),
     ReviewRequired(&'static str),
 }
 
@@ -49,8 +50,7 @@ impl std::fmt::Display for CheckQueryError {
         match self {
             CheckQueryError::Command(message)
             | CheckQueryError::Evaluator(message)
-            | CheckQueryError::Output(message)
-            | CheckQueryError::TokenUsage(message) => formatter.write_str(message),
+            | CheckQueryError::Output(message) => formatter.write_str(message),
             CheckQueryError::ReviewRequired(reason) => {
                 write!(formatter, "query requires human review: {reason}")
             }
@@ -78,6 +78,7 @@ pub(crate) fn run_check_query_command(
         in_place,
         diagnostic_log,
         check_caches,
+        token_usage,
     } = command;
     let mut diagnostic_log = diagnostic_log;
     if let Some(writer) = diagnostic_log.as_mut() {
@@ -94,6 +95,7 @@ pub(crate) fn run_check_query_command(
         in_place,
         diagnostic_log: diagnostic_log.as_mut(),
         check_caches,
+        token_usage,
     });
     let finish_error = result.as_ref().err().map(ToString::to_string);
     if let Some(writer) = diagnostic_log.as_mut() {
@@ -114,6 +116,7 @@ struct StartedCheckQueryCommand<'a, 'b> {
     in_place: bool,
     diagnostic_log: Option<&'b mut DiagnosticLogWriter>,
     check_caches: &'a mut CheckRunCaches,
+    token_usage: &'a mut Option<TokenUsage>,
 }
 
 fn run_started_check_query_command(
@@ -130,6 +133,7 @@ fn run_started_check_query_command(
         in_place,
         mut diagnostic_log,
         check_caches,
+        token_usage,
     } = command;
     // Scope sanitization is command validation. A prepared ask starts only
     // after this succeeds, then sends the temporary xpec to the evaluator.
@@ -143,7 +147,7 @@ fn run_started_check_query_command(
             no_sandbox,
         )?;
         (
-            CheckRuntime::in_place(root, config, no_sandbox),
+            CheckRuntime::in_place_temporary_query(root, config, no_sandbox),
             &mut in_place_runner,
         )
     } else {
@@ -178,6 +182,7 @@ fn run_started_check_query_command(
             &mut enforced_scope,
             &mut diagnostic_log,
             check_caches,
+            token_usage,
         );
     };
     run_prepared_query(
@@ -189,6 +194,7 @@ fn run_started_check_query_command(
         &mut enforced_scope,
         &mut diagnostic_log,
         check_caches,
+        token_usage,
     )
 }
 
@@ -202,6 +208,7 @@ fn run_prepared_query(
     enforced_scope: &mut Vec<String>,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     check_caches: &mut CheckRunCaches,
+    token_usage: &mut Option<TokenUsage>,
 ) -> Result<(), CheckQueryError> {
     // The ask-only config contains exactly one temporary xpec whose explicit
     // to/q/a fields and selected preset defaults were resolved together during
@@ -247,13 +254,18 @@ fn run_prepared_query(
         Ok(result) => result,
         Err(err) => {
             let answer = query_failure_answer(&err);
-            return match finish_query_output_and_print_usage(started_report, &answer, runner) {
+            return match finish_query_output_and_collect_usage(
+                started_report,
+                &answer,
+                runner,
+                token_usage,
+            ) {
                 Ok(()) => Err(CheckQueryError::Evaluator(err)),
                 Err(output_err) => Err(output_err),
             };
         }
     };
-    finish_query_output_and_print_usage(started_report, &result.answer, runner)?;
+    finish_query_output_and_collect_usage(started_report, &result.answer, runner, token_usage)?;
     if let Some(reason) = query_human_review_reason(&result) {
         return Err(CheckQueryError::ReviewRequired(reason));
     }
@@ -264,26 +276,17 @@ fn query_failure_answer(error: &str) -> ParsedAnswer {
     ParsedAnswer::error(error.to_string(), error.to_string())
 }
 
-fn finish_query_output_and_print_usage(
+fn finish_query_output_and_collect_usage(
     started_report: crate::check::command::output::StartedExpectationReportOutput,
     answer: &ParsedAnswer,
     runner: &mut LazyAppServerRunner,
+    token_usage: &mut Option<TokenUsage>,
 ) -> Result<(), CheckQueryError> {
-    // Attempt both public output surfaces before returning either error. This
-    // preserves the query token-usage stderr line even when stdout finishing
-    // reports a write/flush failure.
+    // Collect usage even when stdout finishing fails. The outer ask command
+    // boundary prints it after this result and all lifecycle cleanup.
     let output_result = finish_query_output(started_report, answer);
-    let usage_result = print_query_token_usage(runner);
-    match (output_result, usage_result) {
-        (Err(err), _) => Err(CheckQueryError::Output(err)),
-        (Ok(()), Err(err)) => Err(CheckQueryError::TokenUsage(err)),
-        (Ok(()), Ok(())) => Ok(()),
-    }
-}
-
-fn print_query_token_usage(runner: &mut LazyAppServerRunner) -> Result<(), String> {
-    let usage = collect_check_token_usage(runner);
-    print_token_usage_summary(usage)
+    *token_usage = collect_check_token_usage(runner);
+    output_result.map_err(CheckQueryError::Output)
 }
 
 fn query_enforced_scope(query_scope: &[String]) -> Result<Vec<String>, String> {

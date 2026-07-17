@@ -39,11 +39,8 @@ mod tests {
         write_result_output_without_started_report, write_summary_line, SharedCheckOutput,
     };
     use crate::check::core::{
-        CachedExpectation, CheckRecord, CheckResult, CheckRunReport, ParsedAnswer,
-        ERROR_INVALID_QUESTION,
+        CheckRecord, CheckResult, CheckRunReport, ParsedAnswer, ERROR_INVALID_QUESTION,
     };
-    use crate::check::ResolvedExpectation;
-    use crate::config_types::AgentConfig;
     use crate::token_usage_types::TokenUsage;
     use std::io::{self, Write};
     use std::sync::{Arc, Mutex};
@@ -265,27 +262,6 @@ mod tests {
             id,
             display_id,
         )
-    }
-
-    fn cached_expectation(record: CheckRecord) -> CachedExpectation {
-        CachedExpectation {
-            expectation: ResolvedExpectation {
-                number: record.number,
-                id: record.id.clone(),
-                display_id: record.display_id.clone(),
-                to: crate::config_types::ExpectationTo::Agent,
-                rank: 0,
-                question: record.question_text().to_string(),
-                expected_answer: record.expected_answer_text().unwrap_or("yes").to_string(),
-                question_context: String::new(),
-                diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
-                target: None,
-                question_answer_only: true,
-                agent: AgentConfig::default(),
-                cooldown: None,
-            },
-            record,
-        }
     }
 
     fn record_with_result(result: CheckResult, observed: &str) -> CheckRecord {

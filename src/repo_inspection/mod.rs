@@ -1,10 +1,3 @@
-use crate::check::CheckConfigSource;
-use crate::check::{
-    expand_staged_foreach_paths_from_listing,
-    parse_in_place_check_config_content_with_root_and_default_agent_preset,
-    parse_tree_check_config_content_with_root_and_default_agent_preset, CHECK_PATH,
-};
-use crate::config_types::CheckConfig;
 use crate::fs_util::reject_symlink;
 use crate::git::{read_git_blobs, staged_tracked_files, StagedTrackedFile, TreeSource};
 use crate::platform::git_path_bytes;
@@ -12,71 +5,23 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-type ForeachPathsCacheKey = (PathBuf, PathBuf, String, String);
 type InPlaceFileContentCacheKey = (PathBuf, PathBuf);
 type StagedFileContentCacheKey = (PathBuf, PathBuf);
 type TreeFileContentCacheKey = (PathBuf, String, PathBuf);
-type CheckConfigCacheKey = (
-    PathBuf,
-    PathBuf,
-    String,
-    String,
-    Option<String>,
-    Option<String>,
-);
-type StagedBlobContents = BTreeMap<Vec<u8>, Vec<u8>>;
 
 #[derive(Default)]
 pub(crate) struct RepoInspectionCache {
-    foreach_paths: BTreeMap<ForeachPathsCacheKey, Result<Vec<String>, String>>,
-    // Per-file decoded content is derived from the root-level staged blob
-    // batch below; cache misses here do not spawn additional git processes.
     in_place_file_contents: BTreeMap<InPlaceFileContentCacheKey, Result<String, String>>,
     staged_file_contents: BTreeMap<StagedFileContentCacheKey, Result<String, String>>,
     tree_file_contents: BTreeMap<TreeFileContentCacheKey, Result<String, String>>,
     staged_files: BTreeMap<PathBuf, Result<Vec<StagedTrackedFile>, String>>,
     tree_files: BTreeMap<(PathBuf, String), Result<Vec<StagedTrackedFile>, String>>,
-    staged_blob_contents: BTreeMap<PathBuf, Result<StagedBlobContents, String>>,
-    tree_blob_contents: BTreeMap<(PathBuf, String), Result<StagedBlobContents, String>>,
-    in_place_files: BTreeMap<PathBuf, Result<Vec<String>, String>>,
-    check_configs: BTreeMap<CheckConfigCacheKey, Result<CheckConfig, String>>,
+    in_place_files: BTreeMap<PathBuf, Result<Vec<Vec<u8>>, String>>,
 }
 
 impl RepoInspectionCache {
     pub(crate) fn new() -> RepoInspectionCache {
         RepoInspectionCache::default()
-    }
-
-    pub(crate) fn foreach_paths(
-        &mut self,
-        root: &Path,
-        config_path: &Path,
-        glob: &str,
-        source: &CheckConfigSource,
-    ) -> Result<Vec<String>, String> {
-        let source_key = source.cache_key();
-        let key = (
-            root.to_path_buf(),
-            config_path.to_path_buf(),
-            glob.to_string(),
-            source_key,
-        );
-        if let Some(cached) = self.foreach_paths.get(&key) {
-            return cached.clone();
-        }
-        let expanded = match source {
-            CheckConfigSource::Tree(TreeSource::Staged) => {
-                self.expand_staged_foreach_paths(root, config_path, glob)
-            }
-            CheckConfigSource::Tree(source) => {
-                self.expand_tree_foreach_paths(root, config_path, glob, source)
-            }
-            CheckConfigSource::InPlace => {
-                self.expand_in_place_foreach_paths(root, config_path, glob)
-            }
-        };
-        self.foreach_paths.insert(key, expanded.clone());
-        expanded
     }
 
     pub(crate) fn staged_file_content(
@@ -89,36 +34,37 @@ impl RepoInspectionCache {
         if let Some(cached) = self.staged_file_contents.get(&key) {
             return cached.clone();
         }
-        let content = self.staged_file_content_from_batch(root, path);
+        let content = self.staged_file_content_from_git(root, path);
         self.staged_file_contents.insert(key, content.clone());
         content
     }
 
-    fn expand_staged_foreach_paths(
+    pub(crate) fn tree_blob_paths(
         &mut self,
         root: &Path,
-        config_path: &Path,
-        glob: &str,
-    ) -> Result<Vec<String>, String> {
-        let staged_paths = self
-            .staged_files(root)?
-            .into_iter()
-            .filter_map(|file| String::from_utf8(file.path).ok())
-            .collect::<Vec<_>>();
-        expand_staged_foreach_paths_from_listing(config_path, glob, &staged_paths)
+        source: &TreeSource,
+    ) -> Result<Vec<Vec<u8>>, String> {
+        match source {
+            TreeSource::Staged => Ok(blob_paths_from_tracked_files(self.staged_files(root)?)),
+            source => Ok(blob_paths_from_tracked_files(
+                self.tree_files(root, source)?,
+            )),
+        }
     }
 
-    fn staged_file_content_from_batch(
-        &mut self,
-        root: &Path,
-        path: &Path,
-    ) -> Result<String, String> {
+    fn staged_file_content_from_git(&mut self, root: &Path, path: &Path) -> Result<String, String> {
         let raw_path = git_path_bytes(path)?;
-        let contents = self.staged_blob_contents(root)?;
-        let content = contents
-            .get(&raw_path)
-            .ok_or_else(|| missing_staged_file_message(path))?;
-        String::from_utf8(content.clone())
+        let files = self.staged_files(root)?;
+        let content = tracked_blob_content(
+            root,
+            &files,
+            &raw_path,
+            format!(
+                "failed to read staged {}: path is not in the staged index",
+                path.display()
+            ),
+        )?;
+        String::from_utf8(content)
             .map_err(|_| format!("staged {} must be valid UTF-8", path.display()))
     }
 
@@ -136,26 +82,18 @@ impl RepoInspectionCache {
                 if let Some(cached) = self.tree_file_contents.get(&key) {
                     return cached.clone();
                 }
-                let content = self.tree_file_content_from_batch(root, source, path);
+                let content = self.tree_file_content_from_git(root, source, path);
                 self.tree_file_contents.insert(key, content.clone());
                 content
             }
         }
     }
 
-    pub(crate) fn config_source_file_content(
+    pub(crate) fn in_place_file_content(
         &mut self,
         root: &Path,
-        source: &CheckConfigSource,
-        path: impl AsRef<Path>,
+        path: &Path,
     ) -> Result<String, String> {
-        match source {
-            CheckConfigSource::Tree(source) => self.tree_file_content(root, source, path),
-            CheckConfigSource::InPlace => self.in_place_file_content(root, path.as_ref()),
-        }
-    }
-
-    fn in_place_file_content(&mut self, root: &Path, path: &Path) -> Result<String, String> {
         let key = (root.to_path_buf(), path.to_path_buf());
         if let Some(cached) = self.in_place_file_contents.get(&key) {
             return cached.clone();
@@ -165,48 +103,22 @@ impl RepoInspectionCache {
         content
     }
 
-    fn expand_tree_foreach_paths(
-        &mut self,
-        root: &Path,
-        config_path: &Path,
-        glob: &str,
-        source: &TreeSource,
-    ) -> Result<Vec<String>, String> {
-        let tree_paths = self
-            .tree_files(root, source)?
-            .into_iter()
-            .filter(|file| file.is_blob_file_entry())
-            .filter_map(|file| String::from_utf8(file.path).ok())
-            .collect::<Vec<_>>();
-        expand_staged_foreach_paths_from_listing(config_path, glob, &tree_paths)
-    }
-
-    fn expand_in_place_foreach_paths(
-        &mut self,
-        root: &Path,
-        config_path: &Path,
-        glob: &str,
-    ) -> Result<Vec<String>, String> {
-        let files = self.in_place_files(root)?;
-        expand_staged_foreach_paths_from_listing(config_path, glob, &files)
-    }
-
-    fn tree_file_content_from_batch(
+    fn tree_file_content_from_git(
         &mut self,
         root: &Path,
         source: &TreeSource,
         path: &Path,
     ) -> Result<String, String> {
         let raw_path = git_path_bytes(path)?;
-        let contents = self.tree_blob_contents(root, source)?;
-        let content = contents.get(&raw_path).ok_or_else(|| {
+        let files = self.tree_files(root, source)?;
+        let content = tracked_blob_content(root, &files, &raw_path, {
             format!(
                 "failed to read {} from {}: path is not in the selected tree",
                 path.display(),
                 source.cache_key()
             )
         })?;
-        String::from_utf8(content.clone())
+        String::from_utf8(content)
             .map_err(|_| format!("tree {} must be valid UTF-8", path.display()))
     }
 
@@ -233,7 +145,7 @@ impl RepoInspectionCache {
         files
     }
 
-    fn in_place_files(&mut self, root: &Path) -> Result<Vec<String>, String> {
+    pub(crate) fn in_place_file_paths(&mut self, root: &Path) -> Result<Vec<Vec<u8>>, String> {
         if let Some(cached) = self.in_place_files.get(root) {
             return cached.clone();
         }
@@ -242,187 +154,33 @@ impl RepoInspectionCache {
             .insert(root.to_path_buf(), files.clone());
         files
     }
+}
 
-    fn staged_blob_contents(&mut self, root: &Path) -> Result<BTreeMap<Vec<u8>, Vec<u8>>, String> {
-        if let Some(cached) = self.staged_blob_contents.get(root) {
-            return cached.clone();
-        }
-        let files = self.staged_files(root)?;
-        let blob_files = files
-            .iter()
-            .filter(|file| file.is_blob_file_entry())
-            .cloned()
-            .collect::<Vec<_>>();
-        let object_ids = blob_files
-            .iter()
-            .map(|file| file.object_id.clone())
-            .collect::<Vec<_>>();
-        let blobs = read_git_blobs(root, &object_ids)?;
-        let contents = blob_files
-            .into_iter()
-            .zip(blobs)
-            .map(|(file, blob)| (file.path, blob))
-            .collect::<BTreeMap<_, _>>();
-        let result = Ok(contents);
-        self.staged_blob_contents
-            .insert(root.to_path_buf(), result.clone());
-        result
-    }
+fn tracked_blob_content(
+    root: &Path,
+    files: &[StagedTrackedFile],
+    raw_path: &[u8],
+    missing_message: String,
+) -> Result<Vec<u8>, String> {
+    // [tf] A config read must not materialize unrelated repository blobs:
+    // their size is outside the bounded configuration being parsed.
+    let object_id = files
+        .iter()
+        .find(|file| file.is_blob_file_entry() && file.path == raw_path)
+        .map(|file| file.object_id.clone())
+        .ok_or(missing_message)?;
+    read_git_blobs(root, std::slice::from_ref(&object_id))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| format!("git cat-file returned no content for blob {object_id}"))
+}
 
-    fn tree_blob_contents(
-        &mut self,
-        root: &Path,
-        source: &TreeSource,
-    ) -> Result<BTreeMap<Vec<u8>, Vec<u8>>, String> {
-        match source {
-            TreeSource::Staged => self.staged_blob_contents(root),
-            TreeSource::Git { .. } => {
-                let key = (root.to_path_buf(), source.cache_key());
-                if let Some(cached) = self.tree_blob_contents.get(&key) {
-                    return cached.clone();
-                }
-                let files = self.tree_files(root, source)?;
-                let blob_files = files
-                    .iter()
-                    .filter(|file| file.is_blob_file_entry())
-                    .cloned()
-                    .collect::<Vec<_>>();
-                let object_ids = blob_files
-                    .iter()
-                    .map(|file| file.object_id.clone())
-                    .collect::<Vec<_>>();
-                let blobs = read_git_blobs(root, &object_ids)?;
-                let contents = blob_files
-                    .into_iter()
-                    .zip(blobs)
-                    .map(|(file, blob)| (file.path, blob))
-                    .collect::<BTreeMap<_, _>>();
-                let result = Ok(contents);
-                self.tree_blob_contents.insert(key, result.clone());
-                result
-            }
-        }
-    }
-
-    pub(crate) fn load_check_config(
-        &mut self,
-        root: &Path,
-        config_path: &Path,
-        source: &TreeSource,
-    ) -> Result<CheckConfig, String> {
-        self.load_check_config_with_default_agent_preset(root, config_path, source, None)
-    }
-
-    pub(crate) fn load_check_config_with_default_agent_preset(
-        &mut self,
-        root: &Path,
-        config_path: &Path,
-        source: &TreeSource,
-        default_agent_preset: Option<&str>,
-    ) -> Result<CheckConfig, String> {
-        self.load_tree_check_config(root, config_path, source, default_agent_preset, None)
-    }
-
-    pub(crate) fn load_ask_config(
-        &mut self,
-        root: &Path,
-        config_path: &Path,
-        source: &TreeSource,
-        default_agent_preset: Option<&str>,
-        question: &str,
-    ) -> Result<CheckConfig, String> {
-        self.load_tree_check_config(
-            root,
-            config_path,
-            source,
-            default_agent_preset,
-            Some(question),
-        )
-    }
-
-    fn load_tree_check_config(
-        &mut self,
-        root: &Path,
-        config_path: &Path,
-        source: &TreeSource,
-        default_agent_preset: Option<&str>,
-        ask_question: Option<&str>,
-    ) -> Result<CheckConfig, String> {
-        let content = self.tree_file_content(root, source, config_path)?;
-        let key = (
-            root.to_path_buf(),
-            config_path.to_path_buf(),
-            content.clone(),
-            source.cache_key(),
-            default_agent_preset.map(str::to_string),
-            ask_question.map(str::to_string),
-        );
-        if let Some(cached) = self.check_configs.get(&key) {
-            return cached.clone();
-        }
-        let parsed = parse_tree_check_config_content_with_root_and_default_agent_preset(
-            root,
-            config_path,
-            &content,
-            self,
-            source.clone(),
-            default_agent_preset,
-            ask_question,
-        );
-        self.check_configs.insert(key, parsed.clone());
-        parsed
-    }
-
-    pub(crate) fn load_in_place_check_config_with_default_agent_preset(
-        &mut self,
-        root: &Path,
-        config_path: &Path,
-        default_agent_preset: Option<&str>,
-    ) -> Result<CheckConfig, String> {
-        self.load_in_place_check_config(root, config_path, default_agent_preset, None)
-    }
-
-    pub(crate) fn load_in_place_ask_config(
-        &mut self,
-        root: &Path,
-        config_path: &Path,
-        default_agent_preset: Option<&str>,
-        question: &str,
-    ) -> Result<CheckConfig, String> {
-        self.load_in_place_check_config(root, config_path, default_agent_preset, Some(question))
-    }
-
-    fn load_in_place_check_config(
-        &mut self,
-        root: &Path,
-        config_path: &Path,
-        default_agent_preset: Option<&str>,
-        ask_question: Option<&str>,
-    ) -> Result<CheckConfig, String> {
-        let source = CheckConfigSource::InPlace;
-        let content = self.in_place_file_content(root, config_path)?;
-        let key = (
-            root.to_path_buf(),
-            config_path.to_path_buf(),
-            content.clone(),
-            source.cache_key(),
-            default_agent_preset.map(str::to_string),
-            ask_question.map(str::to_string),
-        );
-        if let Some(cached) = self.check_configs.get(&key) {
-            return cached.clone();
-        }
-        let parsed = parse_in_place_check_config_content_with_root_and_default_agent_preset(
-            root,
-            config_path,
-            &content,
-            self,
-            default_agent_preset,
-            ask_question,
-        );
-        self.check_configs.insert(key, parsed.clone());
-        parsed
-    }
+fn blob_paths_from_tracked_files(files: Vec<StagedTrackedFile>) -> Vec<Vec<u8>> {
+    files
+        .into_iter()
+        .filter(|file| file.is_blob_file_entry())
+        .map(|file| file.path)
+        .collect()
 }
 
 fn in_place_file_content_from_fs(root: &Path, path: &Path) -> Result<String, String> {
@@ -431,21 +189,23 @@ fn in_place_file_content_from_fs(root: &Path, path: &Path) -> Result<String, Str
     fs::read_to_string(&path).map_err(|err| format!("failed to read {}: {}", path.display(), err))
 }
 
-fn in_place_file_listing(root: &Path) -> Result<Vec<String>, String> {
+fn in_place_file_listing(root: &Path) -> Result<Vec<Vec<u8>>, String> {
     let mut files = Vec::new();
     collect_in_place_files(root, root, &mut files)?;
     files.sort();
     Ok(files)
 }
 
-fn collect_in_place_files(root: &Path, dir: &Path, files: &mut Vec<String>) -> Result<(), String> {
+fn collect_in_place_files(root: &Path, dir: &Path, files: &mut Vec<Vec<u8>>) -> Result<(), String> {
     for entry in
         fs::read_dir(dir).map_err(|err| format!("failed to read {}: {}", dir.display(), err))?
     {
         let entry = entry.map_err(|err| format!("failed to read {}: {}", dir.display(), err))?;
-        // [Df] In-place inspects filesystem project contents without consuming
-        // Git repository metadata. `.gitignore` and other ordinary project
-        // files remain visible; only metadata entries named `.git` are skipped.
+        // [Df] Git exposes worktree metadata through an entry named `.git`.
+        // That entry may be either a metadata directory or a gitfile pointing
+        // elsewhere, so this name check deliberately runs before file-type
+        // inspection and excludes both forms. Git-controlled project files
+        // such as `.gitignore` remain ordinary visible filesystem contents.
         if entry.file_name() == ".git" {
             continue;
         }
@@ -459,33 +219,10 @@ fn collect_in_place_files(root: &Path, dir: &Path, files: &mut Vec<String>) -> R
             let relative = path
                 .strip_prefix(root)
                 .map_err(|_| format!("failed to relativize {}", path.display()))?;
-            if let Some(path) = relative.to_str() {
-                files.push(path.replace(std::path::MAIN_SEPARATOR, "/"));
-            }
+            files.push(git_path_bytes(relative)?);
         }
     }
     Ok(())
-}
-
-fn missing_staged_file_message(path: &Path) -> String {
-    if path == Path::new(CHECK_PATH) {
-        return format!(
-            "No canon check config found at {CHECK_PATH}\n\
-             ▷ If the human asked you to use any `canon-*` skill in this project, \
-             treat the missing config as permission to set up canon rather than asking \
-             for confirmation. Run `canon init`, inspect the current project enough to \
-             understand its purpose, public behavior, and important invariants, then \
-             draft a minimal `.canon/check.yml` that the human can grow over time. Use \
-             canon's own `.canon/check.yml` as a reference for structure and style: \
-             `https://raw.githubusercontent.com/progbeat/canon/main/.canon/check.yml`. \
-             Start with a few simple, objective expectations that protect important \
-             user-facing behavior."
-        );
-    }
-    format!(
-        "failed to read staged {}: path is not in the staged index",
-        path.display()
-    )
 }
 
 #[cfg(test)]
@@ -493,6 +230,55 @@ mod tests {
     use super::*;
     use std::process;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test] // xpec: tf,d
+    fn staged_file_content_does_not_read_unrelated_blobs() {
+        let root = test_root("staged-file-content-requested-blob-only");
+        let init = process::Command::new("git")
+            .arg("init")
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(
+            init.status.success(),
+            "git init failed: {}",
+            String::from_utf8_lossy(&init.stderr)
+        );
+        fs::write(root.join("config.yml"), "xpecs: []\n").unwrap();
+        let add = process::Command::new("git")
+            .args(["add", "config.yml"])
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(
+            add.status.success(),
+            "git add failed: {}",
+            String::from_utf8_lossy(&add.stderr)
+        );
+        let add_missing_blob = process::Command::new("git")
+            .args([
+                "update-index",
+                "--add",
+                "--info-only",
+                "--cacheinfo",
+                "100644,1111111111111111111111111111111111111111,unrelated.bin",
+            ])
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(
+            add_missing_blob.status.success(),
+            "git update-index failed: {}",
+            String::from_utf8_lossy(&add_missing_blob.stderr)
+        );
+
+        let content = RepoInspectionCache::new()
+            .staged_file_content(&root, "config.yml")
+            .unwrap();
+
+        assert_eq!(content, "xpecs: []\n");
+        let _ = fs::remove_dir_all(root);
+    }
 
     #[cfg(unix)]
     #[test]
@@ -521,28 +307,38 @@ mod tests {
 
         let files = in_place_file_listing(&root).unwrap();
 
-        assert_eq!(files, vec!["specs/link.md", "specs/real.md"]);
+        assert_eq!(
+            files,
+            vec![b"specs/link.md".to_vec(), b"specs/real.md".to_vec()]
+        );
         let _ = fs::remove_file(outside);
         let _ = fs::remove_dir_all(root);
     }
 
     #[test] // xpec: Df
-    fn in_place_file_listing_ignores_git_metadata_only() {
-        let root = test_root("in-place-file-listing-ignores-git-metadata");
-        fs::create_dir_all(root.join(".git/objects")).unwrap();
-        fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
-        fs::write(root.join(".gitignore"), "target/\n").unwrap();
-        fs::create_dir_all(root.join("src")).unwrap();
-        fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    fn in_place_file_listing_ignores_git_directory_or_gitfile_only() {
+        for gitfile in [false, true] {
+            let kind = if gitfile { "gitfile" } else { "directory" };
+            let root = test_root(&format!("in-place-listing-git-{kind}"));
+            if gitfile {
+                fs::write(root.join(".git"), "gitdir: ../metadata\n").unwrap();
+            } else {
+                fs::create_dir_all(root.join(".git/objects")).unwrap();
+                fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+            }
+            fs::write(root.join(".gitignore"), "target/\n").unwrap();
+            fs::create_dir_all(root.join("src")).unwrap();
+            fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
 
-        let files = in_place_file_listing(&root).unwrap();
+            let files = in_place_file_listing(&root).unwrap();
 
-        assert_eq!(
-            files,
-            vec![".gitignore", "src/main.rs"],
-            "in-place listing must ignore Git metadata without hiding project files"
-        );
-        let _ = fs::remove_dir_all(root);
+            assert_eq!(
+                files,
+                vec![b".gitignore".to_vec(), b"src/main.rs".to_vec()],
+                "in-place listing must ignore a .git {kind} without hiding project files"
+            );
+            let _ = fs::remove_dir_all(root);
+        }
     }
 
     fn test_root(name: &str) -> PathBuf {

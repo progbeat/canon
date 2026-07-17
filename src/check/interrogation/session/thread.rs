@@ -497,6 +497,9 @@ fn start_or_reuse_thread_session_after_rendering<R: EvaluatorRunner>(
     } else {
         Vec::new()
     };
+    // `start_session` sends thread/start: this is where the evaluator agent is
+    // started. Its cwd is `session_cwd`, independently of the cwd of the
+    // already-running app-server transport process.
     let created = match runner.start_session(
         session_cwd,
         &template_artifact_paths,

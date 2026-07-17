@@ -11,6 +11,9 @@ use crate::xpec_state::{
 use serde_json::json;
 use std::path::Path;
 
+// [6,Df] Every operation in this module requires a Git `TreeSource`, matching
+// the canon domain "an expectation and Git state." In-place execution does not
+// have a cached-result domain and cannot call this API.
 pub(crate) struct CheckCacheHit {
     pub(crate) record: CheckRecord,
     pub(crate) kind: CachedResultKind,

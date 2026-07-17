@@ -1,5 +1,4 @@
 use super::evaluator_response::ParsedAnswer;
-use super::expectation::ResolvedExpectation;
 use super::record::CheckRecord;
 use crate::token_usage_types::TokenUsage;
 use std::collections::BTreeSet;
@@ -30,23 +29,17 @@ pub(crate) struct QueryResult {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct CachedExpectation {
-    pub(crate) expectation: ResolvedExpectation,
-    pub(crate) record: CheckRecord,
-}
-
-#[derive(Debug, Clone)]
 pub(crate) struct CheckRunReport {
     // Structured result records produced by evaluator work in this run.
     pub(crate) records: Vec<CheckRecord>,
-    pub(crate) cached: Vec<CachedExpectation>,
+    pub(crate) cached: Vec<CheckRecord>,
     // Expectations not covered by evaluated records or cached results.
     pub(crate) skipped: usize,
 }
 
 pub(crate) fn for_each_unique_report_record(
     records: &[CheckRecord],
-    cached: &[CachedExpectation],
+    cached: &[CheckRecord],
     mut visit: impl FnMut(&CheckRecord),
 ) {
     let mut seen = BTreeSet::new();
@@ -55,14 +48,9 @@ pub(crate) fn for_each_unique_report_record(
             visit(record);
         }
     }
-    for cached in cached {
-        let id = if cached.record.id.is_empty() {
-            &cached.expectation.id
-        } else {
-            &cached.record.id
-        };
-        if seen.insert(id.clone()) {
-            visit(&cached.record);
+    for record in cached {
+        if seen.insert(record.id.clone()) {
+            visit(record);
         }
     }
 }

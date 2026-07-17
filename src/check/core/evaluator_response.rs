@@ -2,6 +2,15 @@ use serde::{de, Deserialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod contract;
+
+pub(crate) use contract::evaluator_response_output_schema_for_scope;
+#[cfg(test)]
+pub(crate) use contract::{
+    evaluator_response_json_schema, evaluator_response_output_schema_for_requested_short_ids,
+    evaluator_response_output_schema_for_schema_scope,
+};
+
 pub(crate) const ERROR_SCOPE_TOO_NARROW: &str = "ScopeTooNarrow";
 pub(crate) const ERROR_INVALID_QUESTION: &str = "InvalidQuestion";
 pub(crate) const ANSWER_PATTERN: &str = "^[-_a-z0-9]+$";
@@ -151,155 +160,6 @@ impl std::fmt::Display for EvaluatorResponseParseError {
             | EvaluatorResponseParseError::ShortIdResponse(error) => formatter.write_str(error),
         }
     }
-}
-
-#[cfg(test)]
-pub(crate) fn evaluator_response_json_schema(schema_scope: EvaluatorResponseSchemaScope) -> Value {
-    json!({
-        "type": "object",
-        "propertyNames": {
-            "pattern": "^[A-Za-z0-9]+$",
-        },
-        "additionalProperties": evaluator_response_result_json_schema(schema_scope),
-    })
-}
-
-fn evaluator_response_result_json_schema(schema_scope: EvaluatorResponseSchemaScope) -> Value {
-    let mut schema = json!({
-        "type": "object",
-        "properties": {
-            "answer": {
-                "type": "string",
-                "pattern": ANSWER_PATTERN,
-            },
-            "error": {
-                "type": "string",
-                "enum": schema_scope.error_enum(),
-            },
-            "evidence": {
-                "type": "string",
-            },
-        },
-        "required": ["evidence"],
-        "oneOf": [
-            {"required": ["answer"], "not": { "required": ["error"] }},
-            {"required": ["error"], "not": { "required": ["answer"] }},
-        ],
-        "additionalProperties": false,
-    });
-    if schema_scope.allows_question_scope_suggestion() {
-        // Interrogations that may hide files outside the visible scope require
-        // qScopeSuggestion, even when the q-scope is full project before
-        // configured ignore exclusions. A full-scope first turn can still
-        // propose a narrower reusable q-scope. Check modes that never hide
-        // files use WithoutQuestionScopeSuggestion.
-        schema["properties"]["qScopeSuggestion"] = json!({
-            "type": "array",
-            "minItems": 1,
-            "items": {
-                "type": "string",
-                // Interrogation Policy's qScopeSuggestion item schema requires
-                // non-empty path strings in addition to rejecting CR/LF.
-                "minLength": 1,
-                "pattern": "^[^\\r\\n]*$",
-            },
-        });
-        if schema_scope.requires_question_scope_suggestion() {
-            schema["required"] = json!(["evidence", "qScopeSuggestion"]);
-        }
-    }
-    schema
-}
-
-pub(crate) fn evaluator_response_output_schema_for_scope(
-    schema_scope: EvaluatorResponseSchemaScope,
-    short_id: &str,
-) -> Value {
-    evaluator_response_output_schema_for_requested_short_ids(schema_scope, &[short_id])
-}
-
-pub(crate) fn evaluator_response_output_schema_for_requested_short_ids(
-    schema_scope: EvaluatorResponseSchemaScope,
-    short_ids: &[&str],
-) -> Value {
-    assert!(!short_ids.is_empty(), "requested short IDs are required");
-    assert!(
-        short_ids
-            .iter()
-            .all(|short_id| matches_short_id_pattern(short_id)),
-        "requested short IDs must match the evaluator response pattern"
-    );
-    let result_schema = evaluator_response_output_result_json_schema(schema_scope);
-    let required = short_ids.to_vec();
-    let mut properties = serde_json::Map::new();
-    for short_id in short_ids {
-        properties.insert((*short_id).to_string(), result_schema.clone());
-    }
-    json!({
-        "type": "object",
-        "properties": Value::Object(properties),
-        "required": required,
-        "additionalProperties": false,
-    })
-}
-
-fn evaluator_response_output_result_json_schema(
-    schema_scope: EvaluatorResponseSchemaScope,
-) -> Value {
-    let schema = evaluator_response_result_json_schema(schema_scope);
-    let properties = schema["properties"]
-        .as_object()
-        .expect("evaluator response schema has properties");
-    // The app-server structured-output subset rejects `oneOf`. Two strict
-    // `anyOf` branches preserve the same accepted shape without null transport
-    // placeholders: one branch has `answer`, the other has `error`.
-    json!({
-        "anyOf": [
-            evaluator_response_output_branch_schema(properties, schema_scope, "answer"),
-            evaluator_response_output_branch_schema(properties, schema_scope, "error"),
-        ],
-    })
-}
-
-fn evaluator_response_output_branch_schema(
-    properties: &serde_json::Map<String, Value>,
-    schema_scope: EvaluatorResponseSchemaScope,
-    result_field: &str,
-) -> Value {
-    let mut branch_properties = serde_json::Map::new();
-    for key in ["evidence", result_field] {
-        branch_properties.insert(
-            key.to_string(),
-            properties
-                .get(key)
-                .expect("evaluator response schema property exists")
-                .clone(),
-        );
-    }
-    let mut required = vec!["evidence", result_field];
-    if schema_scope.requires_question_scope_suggestion() {
-        branch_properties.insert(
-            "qScopeSuggestion".to_string(),
-            properties
-                .get("qScopeSuggestion")
-                .expect("evaluator response schema property exists")
-                .clone(),
-        );
-        required.push("qScopeSuggestion");
-    }
-    json!({
-        "type": "object",
-        "properties": branch_properties,
-        "required": required,
-        "additionalProperties": false,
-    })
-}
-
-#[cfg(test)]
-pub(crate) fn evaluator_response_output_schema_for_schema_scope(
-    schema_scope: EvaluatorResponseSchemaScope,
-) -> Value {
-    evaluator_response_output_schema_for_scope(schema_scope, "q")
 }
 
 #[derive(Debug, Deserialize)]
@@ -590,6 +450,3 @@ where
         .map(Some)
         .map_err(de::Error::custom)
 }
-
-#[cfg(test)]
-mod tests;

@@ -32,6 +32,7 @@ pub(crate) struct CheckCommandArgs {
 
 pub(crate) struct AskCommandArgs {
     pub(crate) config_path: PathBuf,
+    pub(crate) config_explicit: bool,
     pub(crate) tree: String,
     pub(crate) against_tree: String,
     pub(crate) against_tree_explicit: bool,

@@ -138,7 +138,8 @@ enum CheckRuntimeMode<'a> {
         staged_view: &'a StagedWorktreeView,
         persistent_history: bool,
     },
-    InPlace,
+    InPlaceCheck,
+    InPlaceTemporaryQuery,
 }
 
 #[derive(Clone)]
@@ -199,14 +200,28 @@ impl<'a> CheckRuntime<'a> {
         // This runtime mode owns the in-place evaluator view: no materialized
         // Git tree, full-project visible scope, stable fake visible-tree
         // metadata, and sessions rooted at the checked directory. Command
-        // execution owns cache-free selection plus persistent last-result
-        // ordering, while config validation owns mode compatibility after raw
-        // config expansion.
+        // execution queues every selected xpec without cached-result reuse,
+        // reads last-fail history only for ordering, and writes every completed
+        // result under this checked-directory state root. Config validation
+        // owns mode compatibility after raw config expansion.
         CheckRuntime {
             root,
             config,
             no_sandbox,
-            mode: CheckRuntimeMode::InPlace,
+            mode: CheckRuntimeMode::InPlaceCheck,
+        }
+    }
+
+    pub(crate) fn in_place_temporary_query(
+        root: &'a Path,
+        config: &'a CheckConfig,
+        no_sandbox: bool,
+    ) -> CheckRuntime<'a> {
+        CheckRuntime {
+            root,
+            config,
+            no_sandbox,
+            mode: CheckRuntimeMode::InPlaceTemporaryQuery,
         }
     }
 
@@ -215,7 +230,10 @@ impl<'a> CheckRuntime<'a> {
     }
 
     pub(crate) fn is_in_place(&self) -> bool {
-        matches!(self.mode, CheckRuntimeMode::InPlace)
+        matches!(
+            self.mode,
+            CheckRuntimeMode::InPlaceCheck | CheckRuntimeMode::InPlaceTemporaryQuery
+        )
     }
 
     pub(crate) fn evaluator_interrogations_never_hide_files(&self) -> bool {
@@ -230,35 +248,42 @@ impl<'a> CheckRuntime<'a> {
             CheckRuntimeMode::Materialized {
                 persistent_history, ..
             } => persistent_history.then_some(self.root),
-            CheckRuntimeMode::InPlace => Some(self.root),
+            CheckRuntimeMode::InPlaceCheck => Some(self.root),
+            CheckRuntimeMode::InPlaceTemporaryQuery => None,
         }
     }
 
     pub(crate) fn tree_source(&self) -> Option<&TreeSource> {
         match &self.mode {
             CheckRuntimeMode::Materialized { tree_source, .. } => Some(tree_source),
-            CheckRuntimeMode::InPlace => None,
+            CheckRuntimeMode::InPlaceCheck | CheckRuntimeMode::InPlaceTemporaryQuery => None,
         }
     }
 
     pub(crate) fn checked_tree_oid(&self) -> &str {
         match &self.mode {
             CheckRuntimeMode::Materialized { tree_context, .. } => &tree_context.checked_tree_oid,
-            CheckRuntimeMode::InPlace => IN_PLACE_VISIBLE_TREE_OID,
+            CheckRuntimeMode::InPlaceCheck | CheckRuntimeMode::InPlaceTemporaryQuery => {
+                IN_PLACE_VISIBLE_TREE_OID
+            }
         }
     }
 
     pub(crate) fn against_tree_oid(&self) -> &str {
         match &self.mode {
             CheckRuntimeMode::Materialized { tree_context, .. } => &tree_context.against_tree_oid,
-            CheckRuntimeMode::InPlace => IN_PLACE_VISIBLE_TREE_OID,
+            CheckRuntimeMode::InPlaceCheck | CheckRuntimeMode::InPlaceTemporaryQuery => {
+                IN_PLACE_VISIBLE_TREE_OID
+            }
         }
     }
 
     pub(crate) fn checked_file_count(&self) -> usize {
         match &self.mode {
             CheckRuntimeMode::Materialized { tree_context, .. } => tree_context.checked_file_count,
-            CheckRuntimeMode::InPlace => IN_PLACE_VISIBLE_FILE_COUNT,
+            CheckRuntimeMode::InPlaceCheck | CheckRuntimeMode::InPlaceTemporaryQuery => {
+                IN_PLACE_VISIBLE_FILE_COUNT
+            }
         }
     }
 
@@ -275,7 +300,9 @@ impl<'a> CheckRuntime<'a> {
             // In-place mode does not construct scoped visible trees. Every
             // requested q-scope induces the same full-project evaluator view
             // rooted at the checked directory.
-            CheckRuntimeMode::InPlace => Ok(IN_PLACE_VISIBLE_TREE_OID.to_string()),
+            CheckRuntimeMode::InPlaceCheck | CheckRuntimeMode::InPlaceTemporaryQuery => {
+                Ok(IN_PLACE_VISIBLE_TREE_OID.to_string())
+            }
         }
     }
 
@@ -289,7 +316,9 @@ impl<'a> CheckRuntime<'a> {
             CheckRuntimeMode::Materialized { tree_source, .. } => {
                 cache.visible_tree_oid_for_reuse(self.root, tree_source, agent, scope)
             }
-            CheckRuntimeMode::InPlace => Ok(Some(IN_PLACE_VISIBLE_TREE_OID.to_string())),
+            CheckRuntimeMode::InPlaceCheck | CheckRuntimeMode::InPlaceTemporaryQuery => {
+                Ok(Some(IN_PLACE_VISIBLE_TREE_OID.to_string()))
+            }
         }
     }
 
@@ -309,7 +338,9 @@ impl<'a> CheckRuntime<'a> {
             // visible tree: in in-place mode every q-scope induces the same
             // full-project visible tree, so the exact positive count is
             // irrelevant but must be stable across requested scopes.
-            CheckRuntimeMode::InPlace => Ok(IN_PLACE_VISIBLE_FILE_COUNT),
+            CheckRuntimeMode::InPlaceCheck | CheckRuntimeMode::InPlaceTemporaryQuery => {
+                Ok(IN_PLACE_VISIBLE_FILE_COUNT)
+            }
         }
     }
 
@@ -336,7 +367,9 @@ impl<'a> CheckRuntime<'a> {
             // classification, but its last-result files intentionally omit
             // Git qScope metadata. Fresh interrogations therefore use the
             // policy's no-reusable-qScope case and start at full scope.
-            CheckRuntimeMode::InPlace => Some(full_scope()),
+            CheckRuntimeMode::InPlaceCheck | CheckRuntimeMode::InPlaceTemporaryQuery => {
+                Some(full_scope())
+            }
         }
     }
 
@@ -360,7 +393,9 @@ impl<'a> CheckRuntime<'a> {
             CheckRuntimeMode::Materialized { staged_view, .. } => {
                 staged_view.materialize_visible_scope(&visible_scope, visible_tree_oid)
             }
-            CheckRuntimeMode::InPlace => Ok(self.root.to_path_buf()),
+            CheckRuntimeMode::InPlaceCheck | CheckRuntimeMode::InPlaceTemporaryQuery => {
+                Ok(self.root.to_path_buf())
+            }
         }
     }
 }
@@ -634,6 +669,24 @@ mod tests {
                 .session_root_for_scope(&AgentConfig::default(), &requested_scope, "in-place")
                 .unwrap(),
             root
+        );
+    }
+
+    #[test] // xpec: 0N
+    fn in_place_temporary_query_runtime_has_no_state_root() {
+        let root = PathBuf::from("/tmp/canon-in-place-query-runtime");
+        let config = CheckConfig {
+            version: 1,
+            agent: AgentConfig::default(),
+            expectations: Vec::new(),
+        };
+        let runtime = CheckRuntime::in_place_temporary_query(&root, &config, false);
+
+        assert!(runtime.is_in_place());
+        assert!(runtime.persistent_check_state_root().is_none());
+        assert_eq!(
+            runtime.scope_without_reusable_q_scope_history().unwrap(),
+            full_scope()
         );
     }
 

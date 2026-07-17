@@ -24,6 +24,7 @@ use crate::check::core::CheckCommandArgs;
 use crate::check::interrogation::{state::CheckRuntime, write_check_lifecycle_start_event};
 use crate::check::run::selection::{expectation_identities, resolve_check_options_with_identities};
 use crate::check::{
+    load_check_config, load_in_place_check_config_with_default_agent_preset,
     run_check_with_runner_and_caches, CheckRunCaches, CheckRunSideEffects, CHECK_PATH,
 };
 use crate::cli::CommandError;
@@ -77,8 +78,12 @@ fn collect_default_pending_failure_output(
     output: CheckFailureOutput,
 ) -> CheckFailureOutput {
     let mut repo_cache = RepoInspectionCache::new();
-    let Ok(config) = repo_cache.load_check_config(root, Path::new(CHECK_PATH), &TreeSource::Staged)
-    else {
+    let Ok(config) = load_check_config(
+        &mut repo_cache,
+        root,
+        Path::new(CHECK_PATH),
+        &TreeSource::Staged,
+    ) else {
         return output;
     };
     let Ok(identities) = expectation_identities(&config) else {
@@ -173,18 +178,19 @@ fn run_check_command_after_start(
     // events through this writer.
     let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
     let mut check_caches = CheckRunCaches::new();
-    let config = match repo_cache.load_check_config(root, &command.config_path, &checked_tree) {
+    let config = match load_check_config(&mut repo_cache, root, &command.config_path, &checked_tree)
+    {
         Ok(config) => config,
         Err(err) => {
-            // The config failed before expectation selection, so the check
-            // trailer has no records to summarize while the command error
-            // still carries the documented recovery text.
+            // The config failed before expectation selection, so the trailer
+            // reports an empty check result before the command error carries
+            // its self-contained diagnostic.
             return fail_check_before_selection(
                 &mut diagnostic_log,
                 None,
                 false,
                 trailer_attempted,
-                started_check_output(started),
+                started_check_output(started, write_agent_message),
                 err,
             );
         }
@@ -197,7 +203,7 @@ fn run_check_command_after_start(
                 None,
                 false,
                 trailer_attempted,
-                started_check_output(started),
+                started_check_output(started, write_agent_message),
                 err,
             )
         }
@@ -345,11 +351,10 @@ fn run_in_place_check_command(
     // expectations no longer present in the config.
     let mut check_caches = CheckRunCaches::new();
     let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
-    // This is the `canon check --in-place` validation boundary. Config load or
-    // validation failures return through `fail_check_before_selection`, which
-    // owns the check summary, token usage line, and runtime log reporting before
-    // hook, selection, or evaluator work can start.
-    let config = match repo_cache.load_in_place_check_config_with_default_agent_preset(
+    // Config load performs source-independent validation first and retains the
+    // configured Git-backed-only fields for the in-place mode validation below.
+    let in_place_config = match load_in_place_check_config_with_default_agent_preset(
+        &mut repo_cache,
         root,
         &command.config_path,
         None,
@@ -361,12 +366,13 @@ fn run_in_place_check_command(
                 None,
                 false,
                 trailer_attempted,
-                started_check_output(started),
+                started_check_output(started, false),
                 err,
             )
         }
     };
-    let identities = match expectation_identities(&config) {
+    let config = in_place_config.config();
+    let identities = match expectation_identities(config) {
         Ok(identities) => identities,
         Err(err) => {
             return fail_check_before_selection(
@@ -374,12 +380,45 @@ fn run_in_place_check_command(
                 None,
                 false,
                 trailer_attempted,
-                started_check_output(started),
+                started_check_output(started, false),
                 err,
             )
         }
     };
     *failure_output = collected_check_output(started, identities.len(), false);
+    // [Df] In-place-only field validation is config-wide and precedes command
+    // selector resolution. An unselected xpec cannot hide an invalid
+    // diff-from, target, cooldown, or ignore setting.
+    if let Err(err) = in_place_config.validate_all() {
+        return fail_check_before_selection(
+            &mut diagnostic_log,
+            None,
+            false,
+            trailer_attempted,
+            *failure_output,
+            err,
+        );
+    }
+    let options = match resolve_check_options_with_identities(config, &identities, &command.options)
+    {
+        Ok(options) => options,
+        Err(err) => {
+            return fail_check_before_selection(
+                &mut diagnostic_log,
+                None,
+                false,
+                trailer_attempted,
+                *failure_output,
+                err,
+            )
+        }
+    };
+    let selected_ids = options
+        .candidate_expectations
+        .iter()
+        .map(|expectation| expectation.id.clone())
+        .collect::<Vec<_>>();
+    write_check_lifecycle_start_event(&mut diagnostic_log, None, selected_ids)?;
     cleanup_cache_dirs(
         root,
         &identities,
@@ -387,38 +426,15 @@ fn run_in_place_check_command(
         trailer_attempted,
         *failure_output,
     )?;
-    let options =
-        match resolve_check_options_with_identities(&config, &identities, &command.options) {
-            Ok(options) => options,
-            Err(err) => {
-                return fail_check_before_selection(
-                    &mut diagnostic_log,
-                    None,
-                    false,
-                    trailer_attempted,
-                    *failure_output,
-                    err,
-                )
-            }
-        };
-    write_check_lifecycle_start_event(
-        &mut diagnostic_log,
-        None,
-        options
-            .candidate_expectations
-            .iter()
-            .map(|expectation| expectation.id.clone())
-            .collect(),
-    )?;
     let shared_output = SharedCheckOutput::stdout();
     let mut result_output = shared_output.clone();
     let mut runner = LazyAppServerRunner::new_in_place(
         root,
-        check_config_loads_plugins(&config),
+        check_config_loads_plugins(config),
         &config.agent,
         command.no_sandbox,
     )?;
-    let runtime = CheckRuntime::in_place(root, &config, command.no_sandbox);
+    let runtime = CheckRuntime::in_place(root, config, command.no_sandbox);
     // The in-place runtime makes `run_check_with_runner_and_caches` build a
     // direct Evaluate-only work queue: no Git-backed cache selection or xpec
     // ordering is read. The completed records are returned in this invocation's

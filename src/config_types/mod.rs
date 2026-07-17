@@ -311,6 +311,8 @@ impl std::str::FromStr for ExpectationTarget {
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 #[serde(transparent)]
+// [6] A transparent String accepts only the canonical scalar duration form;
+// YAML mappings cannot deserialize into this type.
 pub(crate) struct CooldownConfig(pub(crate) String);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -326,12 +328,13 @@ pub(crate) enum RawExpectationItem {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RawGitBackedExpectationConfig {
-    // These YAML fields are valid only when the xpec is evaluated against Git
-    // state. Keeping them grouped prevents mode-independent config code from
-    // accidentally treating cache/diff policy as universally available.
+    // [6,Df] These YAML fields belong to the Git-backed check contract. In
+    // particular, Cached Result is defined only for an expectation and Git
+    // state, so its optional cooldown is fully supported here. The separate
+    // in-place contract later rejects selected config that requires cache,
+    // diff, or other Git-backed behavior.
     pub(crate) diff_from: Option<String>,
     pub(crate) target: Option<String>,
-    // [jz] Cooldown config belongs to Git-backed xpec state.
     pub(crate) cooldown: Option<CooldownConfig>,
 }
 

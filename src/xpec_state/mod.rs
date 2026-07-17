@@ -23,14 +23,10 @@ pub(crate) struct XpecStateCache {
 
 type LastResultCacheKey = (PathBuf, String, LastResultStatus);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CachedResultStatus {
-    Pass,
-}
-
 pub(crate) struct CachedLastResultHit {
+    // [6] This type has no status field because both constructors below read
+    // only last-pass.json. Fail history is never representable as a cache hit.
     pub(crate) result: LastResult,
-    pub(crate) status: CachedResultStatus,
     pub(crate) kind: CachedLastResultKind,
 }
 
@@ -94,7 +90,7 @@ pub(crate) fn cached_last_result_for_expectation(
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
     lookup: CachedLastResultLookup,
 ) -> Result<Option<CachedLastResultHit>, String> {
-    // [jz] Cached Result is defined for an expectation and Git state. Same-tree
+    // [6] Cached Result is defined for an expectation and Git state. Same-tree
     // lookup compares the checked Git state with the last pass's stored
     // visible-tree OID; cooldown lookup consults that same last pass.
     if lookup.include_same_tree {
@@ -107,7 +103,6 @@ pub(crate) fn cached_last_result_for_expectation(
         )? {
             return Ok(Some(CachedLastResultHit {
                 result,
-                status: CachedResultStatus::Pass,
                 kind: CachedLastResultKind::SameTree,
             }));
         }
@@ -116,7 +111,6 @@ pub(crate) fn cached_last_result_for_expectation(
         if let Some(result) = cooldown_last_result(root, expectation, state_cache, lookup.now)? {
             return Ok(Some(CachedLastResultHit {
                 result,
-                status: CachedResultStatus::Pass,
                 kind: CachedLastResultKind::Cooldown,
             }));
         }
@@ -151,20 +145,25 @@ pub(crate) fn check_record_from_cached_result(
     expectation: &ResolvedExpectation,
     hit: &CachedLastResultHit,
 ) -> Result<CheckRecord, String> {
-    match hit.status {
-        CachedResultStatus::Pass if hit.kind == CachedLastResultKind::Cooldown => {
+    match hit.kind {
+        CachedLastResultKind::Cooldown => {
             pass_record_from_cooldown_result(root, expectation, &hit.result)
         }
-        CachedResultStatus::Pass => check_record_from_last_result(root, expectation, &hit.result),
+        CachedLastResultKind::SameTree => {
+            check_record_from_last_result(root, expectation, &hit.result)
+        }
     }
 }
 
 pub(crate) fn latest_fail_timestamp(
     root: &Path,
     expectation: &ResolvedExpectation,
-    cache: &mut XpecStateCache,
+    last_result_history: &mut XpecStateCache,
 ) -> Result<Option<u64>, String> {
-    Ok(cache
+    // Reading a last-fail timestamp is history lookup for ordering. Unlike
+    // `cached_last_result_for_expectation`, it cannot produce a reusable
+    // result or remove the expectation from the evaluation queue.
+    Ok(last_result_history
         .read_last_fail(root, expectation)?
         .and_then(|result| parse_record_timestamp(&result.response_timestamp)))
 }
@@ -179,12 +178,12 @@ fn same_tree_last_result(
     let Some(result) = state_cache.read_last_pass(root, expectation)? else {
         return Ok(None);
     };
-    let resolver = visible_tree_oid_cache.reuse_resolver(root, source)?;
+    let resolver = visible_tree_oid_cache.stored_visible_scope_oid_resolver(root, source)?;
     result_matches_checked_tree(&resolver, &result).map(|matches| matches.then_some(result))
 }
 
 fn result_matches_checked_tree(
-    resolver: &crate::git::VisibleTreeOidReuseResolver,
+    resolver: &crate::git::StoredVisibleScopeOidResolver,
     result: &LastResult,
 ) -> Result<bool, String> {
     let Some(stored_visible_tree_oid) = result.visible_tree_oid.as_deref() else {
@@ -197,7 +196,7 @@ fn result_matches_checked_tree(
     // Reconstructing a q-scope here would make current agent ignores part of
     // history reuse.
     let Some(current_visible_tree_oid) =
-        resolver.visible_tree_oid_for_visible_scope_pathspec(&result.visible_scope)?
+        resolver.oid_for_stored_visible_scope(&result.visible_scope)?
     else {
         return Ok(false);
     };
@@ -210,7 +209,7 @@ fn cooldown_last_result(
     state_cache: &mut XpecStateCache,
     now: u64,
 ) -> Result<Option<LastResult>, String> {
-    // [jz] A cooldown result reuses only a recent last-pass result.
+    // [6] A cooldown result reuses only a recent last-pass result.
     let Some(cooldown) = expectation.cooldown else {
         return Ok(None);
     };

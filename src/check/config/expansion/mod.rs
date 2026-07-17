@@ -7,6 +7,7 @@ mod source;
 pub(crate) use resolve::expand_raw_check_config_with_options;
 pub(crate) use resolve::{
     expand_raw_check_config_with_requirements, CheckConfigExpansionOptions, ExpandedCheckConfig,
+    InPlaceRequirements,
 };
 pub(crate) use source::CheckConfigSource;
 
@@ -14,16 +15,9 @@ pub(crate) use source::CheckConfigSource;
 mod tests {
     use super::{
         expand_raw_check_config_with_options, resolve::expand_raw_check_config,
-        CheckConfigExpansionOptions, CheckConfigSource,
+        CheckConfigExpansionOptions,
     };
     use crate::config_types::{Cooldown, ExpectationTarget, ExpectationTo, RawCheckConfig};
-    use crate::git::TreeSource;
-    use crate::repo_inspection::RepoInspectionCache;
-    use std::fs;
-    use std::path::{Path, PathBuf};
-    use std::process;
-    use std::process::Command;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test] // xpec: v7,kP,cv,nF
     fn current_fields_resolve_scalar_values_addressee_and_rank() {
@@ -45,14 +39,7 @@ expectations:
         )
         .expect("parse current check config");
 
-        let config = expand_raw_check_config(
-            None,
-            Path::new("check.yml"),
-            raw,
-            None,
-            CheckConfigSource::Tree(TreeSource::Staged),
-        )
-        .expect("resolve current expectation fields");
+        let config = expand_raw_check_config(raw).expect("resolve current expectation fields");
 
         assert_eq!(config.expectations.len(), 2);
         assert_eq!(config.expectations[0].q, "7");
@@ -79,14 +66,7 @@ expectations:
         )
         .expect("parse raw check config");
 
-        let error = expand_raw_check_config(
-            None,
-            Path::new("check.yml"),
-            raw,
-            None,
-            CheckConfigSource::Tree(TreeSource::Staged),
-        )
-        .unwrap_err();
+        let error = expand_raw_check_config(raw).unwrap_err();
 
         assert_eq!(
             error,
@@ -109,14 +89,7 @@ expectations:
         )
         .expect("parse raw check config");
 
-        let config = expand_raw_check_config(
-            None,
-            Path::new("check.yml"),
-            raw,
-            None,
-            CheckConfigSource::Tree(TreeSource::Staged),
-        )
-        .expect("expand config");
+        let config = expand_raw_check_config(raw).expect("expand config");
 
         assert_eq!(
             config.expectations[0].target,
@@ -142,14 +115,7 @@ expectations:
         )
         .expect("parse legacy raw check config");
 
-        let config = expand_raw_check_config(
-            None,
-            Path::new("check.yml"),
-            raw,
-            None,
-            CheckConfigSource::Tree(TreeSource::Staged),
-        )
-        .expect("expand legacy config");
+        let config = expand_raw_check_config(raw).expect("expand legacy config");
 
         assert_eq!(
             config.agent.models,
@@ -180,14 +146,7 @@ expectations:
         )
         .expect("parse raw check config");
 
-        let config = expand_raw_check_config(
-            None,
-            Path::new("check.yml"),
-            raw,
-            None,
-            CheckConfigSource::Tree(TreeSource::Staged),
-        )
-        .expect("expand config");
+        let config = expand_raw_check_config(raw).expect("expand config");
 
         let expectation = &config.expectations[0];
         assert_eq!(expectation.agent.models, vec!["default-model".to_string()]);
@@ -213,11 +172,7 @@ expectations:
         .expect("parse raw check config");
 
         let config = expand_raw_check_config_with_options(
-            None,
-            Path::new("check.yml"),
             raw,
-            None,
-            CheckConfigSource::Tree(TreeSource::Staged),
             CheckConfigExpansionOptions {
                 default_agent_preset: Some("smart"),
                 ask_question: None,
@@ -255,11 +210,7 @@ expectations:
         .expect("parse raw check config");
 
         let config = expand_raw_check_config_with_options(
-            None,
-            Path::new("check.yml"),
             raw,
-            None,
-            CheckConfigSource::Tree(TreeSource::Staged),
             CheckConfigExpansionOptions {
                 default_agent_preset: Some("smart"),
                 ask_question: Some("Does preset ask work?"),
@@ -302,14 +253,7 @@ expectations:
         )
         .expect("parse raw check config");
 
-        let config = expand_raw_check_config(
-            None,
-            Path::new("check.yml"),
-            raw,
-            None,
-            CheckConfigSource::Tree(TreeSource::Staged),
-        )
-        .expect("expand config");
+        let config = expand_raw_check_config(raw).expect("expand config");
 
         let expectation = &config.expectations[0];
         assert_eq!(expectation.q, "Does the preset supply defaults?");
@@ -344,14 +288,7 @@ expectations:
         )
         .expect("parse raw check config");
 
-        let config = expand_raw_check_config(
-            None,
-            Path::new("check.yml"),
-            raw,
-            None,
-            CheckConfigSource::Tree(TreeSource::Staged),
-        )
-        .expect("expand config");
+        let config = expand_raw_check_config(raw).expect("expand config");
 
         assert_eq!(config.expectations.len(), 1);
         assert_eq!(
@@ -380,14 +317,7 @@ expectations:
         )
         .expect("parse raw check config");
 
-        let config = expand_raw_check_config(
-            None,
-            Path::new("check.yml"),
-            raw,
-            None,
-            CheckConfigSource::Tree(TreeSource::Staged),
-        )
-        .expect("expand config");
+        let config = expand_raw_check_config(raw).expect("expand config");
 
         assert_eq!(config.expectations.len(), 1);
         assert_eq!(
@@ -411,14 +341,7 @@ expectations:
         )
         .expect("parse raw check config");
 
-        let config = expand_raw_check_config(
-            None,
-            Path::new("check.yml"),
-            raw,
-            None,
-            CheckConfigSource::Tree(TreeSource::Staged),
-        )
-        .expect("expand config");
+        let config = expand_raw_check_config(raw).expect("expand config");
 
         assert_eq!(config.expectations.len(), 1);
         assert_eq!(
@@ -446,14 +369,7 @@ expectations:
         )
         .expect("parse raw check config");
 
-        let config = expand_raw_check_config(
-            None,
-            Path::new("check.yml"),
-            raw,
-            None,
-            CheckConfigSource::Tree(TreeSource::Staged),
-        )
-        .expect("expand config");
+        let config = expand_raw_check_config(raw).expect("expand config");
 
         let expectation = &config.expectations[0];
         assert!(!expectation.question_answer_only);
@@ -487,14 +403,7 @@ expectations:
         )
         .expect("parse raw check config");
 
-        let config = expand_raw_check_config(
-            None,
-            Path::new("check.yml"),
-            raw,
-            None,
-            CheckConfigSource::Tree(TreeSource::Staged),
-        )
-        .expect("expand config");
+        let config = expand_raw_check_config(raw).expect("expand config");
 
         let expectation = &config.expectations[0];
         assert_eq!(expectation.q, "Does the item win?");
@@ -509,33 +418,5 @@ expectations:
             })
         );
         assert_eq!(expectation.agent.thinking, "high");
-    }
-
-    fn test_root(name: &str) -> PathBuf {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join("test-tmp")
-            .join(format!("canon-test-{}-{}-{}", name, process::id(), unique));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        root
-    }
-
-    fn git(root: &Path, args: &[&str]) {
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(root)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "git {:?} failed: {}",
-            args,
-            String::from_utf8_lossy(&output.stderr)
-        );
     }
 }
