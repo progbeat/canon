@@ -7,3 +7,10 @@
 - [ ] `canon show --failed --pending`.
 - [ ] `canon show --jsonl`.
 - [ ] Update `check-q-scope` to search xpecs by text.
+- [ ] SemVer & CHANGELOG.
+- [ ] preset: A+B+C
+- [ ] Instruct evaluator agent to treat tests and asserts as source of truth.
+- [ ] Add an xpec that checks that tests are directly derived from xpecs.
+- [ ] When the result is FAIL, retry with a smarter model to reduce false negatives.
+- [ ] Forbid feedback in `error` being not constructive, e.g. "unparsable".
+- [ ] Ask if there's user facing lie.
