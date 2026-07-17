@@ -22,6 +22,6 @@ The symbol is chosen by the first matching rule for the minute:
 .  a minute during which no higher-priority rule applied
 ```
 
-`~` is chosen only while time is actively counting toward the turn attempt's no-progress timeout.
+`~` is chosen only when the no-progress timeout accumulated continuously for that entire full minute.
 
 If that timeout is exhausted, the attempt fails and `×` is chosen.
