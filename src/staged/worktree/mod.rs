@@ -13,8 +13,8 @@ use std::path::PathBuf;
 pub(crate) struct StagedWorktreeView {
     source_root: PathBuf,
     source: TreeSource,
-    materialization_root: PathBuf,
-    remove_materialization_root_on_drop: bool,
+    tmp_dir: PathBuf,
+    canon_owns_tmp_dir: bool,
     lazy_tree_dir: PathBuf,
     trees_dir: PathBuf,
     unpacked_paths: RefCell<BTreeSet<Vec<u8>>>,
@@ -23,9 +23,9 @@ pub(crate) struct StagedWorktreeView {
 
 impl Drop for StagedWorktreeView {
     fn drop(&mut self) {
-        if self.remove_materialization_root_on_drop {
+        if self.canon_owns_tmp_dir {
             let _ = permissions::make_materialization_tree_private(&self.trees_dir);
-            let _ = std::fs::remove_dir_all(&self.materialization_root);
+            let _ = std::fs::remove_dir_all(&self.tmp_dir);
         }
     }
 }
@@ -42,21 +42,6 @@ mod tests {
     use std::process;
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
-
-    #[test] // xpec: 0N
-    fn invocation_local_view_removes_its_materialization_root() {
-        let root = git_project("invocation-local-snapshot-cleanup");
-        let staged_view =
-            StagedWorktreeView::apply_invocation_local_for_tree_source(&root, TreeSource::Staged)
-                .unwrap();
-        let materialization_root = staged_view.materialization_root.clone();
-
-        assert!(staged_view.remove_materialization_root_on_drop);
-        assert!(materialization_root.is_dir());
-        drop(staged_view);
-        assert!(!materialization_root.exists());
-        let _ = fs::remove_dir_all(root);
-    }
 
     #[test]
     fn materialized_scope_files_and_directories_are_read_only() {

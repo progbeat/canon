@@ -3,7 +3,7 @@ use crate::check::command::output::{summary_outcome_counts, write_summary_line};
 use crate::check::command::{collect_check_token_usage, print_token_usage_summary};
 use crate::check::core::{CheckCommandArgs, CheckRunReport};
 use crate::check::CHECK_PATH;
-use crate::git::{TreeSource, DEFAULT_AGAINST_TREE_ARG, STAGED_TREE_ARG};
+use crate::git::{DEFAULT_AGAINST_TREE_ARG, STAGED_TREE_ARG};
 use crate::scope::normalize_repo_path;
 use crate::token_usage_types::TokenUsage;
 use std::io::Write;
@@ -17,20 +17,14 @@ pub(super) struct CompletedCheckRun {
 
 pub(super) fn check_report_passed(report: &CheckRunReport) -> bool {
     let counts = summary_outcome_counts(report);
-    counts.failed == 0 && report.skipped == 0
+    counts.failed == 0 && counts.pending == 0
 }
 
-pub(super) fn check_command_writes_agent_message(
-    command: &CheckCommandArgs,
-    checked_tree: &TreeSource,
-    against_tree: &TreeSource,
-) -> bool {
+pub(super) fn check_command_writes_agent_message(command: &CheckCommandArgs) -> bool {
     !command.in_place
         && check_config_path_is_default(&command.config_path)
         && command.tree == STAGED_TREE_ARG
         && command.against_tree == DEFAULT_AGAINST_TREE_ARG
-        && checked_tree.is_default_checked_tree()
-        && against_tree.is_default_against_tree()
 }
 
 pub(super) fn check_config_path_is_default(config_path: &Path) -> bool {
@@ -73,22 +67,14 @@ mod tests {
     fn agent_message_allows_normalized_default_config_path() {
         let command = command_with_config_path("./.canon/check.yml");
 
-        assert!(check_command_writes_agent_message(
-            &command,
-            &TreeSource::Staged,
-            &default_against_tree()
-        ));
+        assert!(check_command_writes_agent_message(&command));
     }
 
     #[test] // xpec: v1
     fn agent_message_rejects_non_default_config_path() {
         let command = command_with_config_path(".canon/other.yml");
 
-        assert!(!check_command_writes_agent_message(
-            &command,
-            &TreeSource::Staged,
-            &default_against_tree()
-        ));
+        assert!(!check_command_writes_agent_message(&command));
     }
 
     #[test] // xpec: v1
@@ -96,11 +82,7 @@ mod tests {
         let mut command = command_with_config_path(".canon/check.yml");
         command.options.selectors.push("a7F".into());
 
-        assert!(check_command_writes_agent_message(
-            &command,
-            &TreeSource::Staged,
-            &default_against_tree()
-        ));
+        assert!(check_command_writes_agent_message(&command));
     }
 
     // xpec: T
@@ -109,7 +91,7 @@ mod tests {
         let report = CheckRunReport {
             records: Vec::new(),
             cached: Vec::new(),
-            skipped: 1,
+            pending: 1,
         };
 
         // xpec: T
@@ -125,13 +107,6 @@ mod tests {
             in_place: false,
             no_sandbox: false,
             options: RawCheckOptions::default(),
-        }
-    }
-
-    fn default_against_tree() -> TreeSource {
-        TreeSource::Git {
-            treeish: DEFAULT_AGAINST_TREE_ARG.to_string(),
-            tree_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
         }
     }
 }

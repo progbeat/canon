@@ -8,15 +8,15 @@ pub(super) fn check_run_report(
     CheckRunReport {
         records,
         cached,
-        skipped: counts.skipped,
+        pending: counts.pending,
     }
 }
 
 pub(super) struct CheckRunReportCounts {
-    pub(super) skipped: usize,
+    pub(super) pending: usize,
 }
 
-pub(crate) fn skipped_count(
+pub(crate) fn pending_count(
     total_expectations: usize,
     records: &[CheckRecord],
     cached: &[CheckRecord],

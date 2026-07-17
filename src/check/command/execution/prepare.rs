@@ -32,20 +32,10 @@ pub(crate) fn prepare_git_backed_check_execution(
     options: PrepareGitBackedCheckExecutionOptions<'_>,
     visible_tree_oid_cache: &mut VisibleTreeOidCache,
 ) -> Result<PreparedGitBackedCheckExecution, String> {
-    let staged_view = match options.storage {
-        GitBackedCheckStorage::Persistent => {
-            StagedWorktreeView::apply_for_tree_source(root, options.tree_source.clone())?
-        }
-        GitBackedCheckStorage::InvocationLocal => {
-            // xpec: 0N
-            // `canon ask` may persist runtime logs only. Its checked-tree
-            // materialization must not write to CANON_TREE_CACHE_DIR.
-            StagedWorktreeView::apply_invocation_local_for_tree_source(
-                root,
-                options.tree_source.clone(),
-            )?
-        }
-    };
+    // [1M] Checked-tree materialization always follows the hardlink policy's
+    // tmp_dir selection. The storage option below controls non-temporary
+    // evaluator state, not materialization's temporary storage.
+    let staged_view = StagedWorktreeView::apply_for_tree_source(root, options.tree_source.clone())?;
     // Prompt rendering receives concrete checked/against tree OIDs, so
     // non-staged `--tree` checks still show the selected checked-vs-against
     // diff.

@@ -20,11 +20,13 @@ use crate::check::command::args::parse_check_command_args;
 use crate::check::command::output::SharedCheckOutput;
 use crate::check::command::{finish_check_report, CheckReportFinishContext};
 use crate::check::config::validation::check_config_loads_plugins;
+use crate::check::config::{
+    collect_check_config, collect_in_place_check_config_with_default_agent_preset,
+};
 use crate::check::core::CheckCommandArgs;
 use crate::check::interrogation::{state::CheckRuntime, write_check_lifecycle_start_event};
 use crate::check::run::selection::{expectation_identities, resolve_check_options_with_identities};
 use crate::check::{
-    load_check_config, load_in_place_check_config_with_default_agent_preset,
     run_check_with_runner_and_caches, CheckRunCaches, CheckRunSideEffects, CHECK_PATH,
 };
 use crate::cli::CommandError;
@@ -52,7 +54,7 @@ pub(crate) fn run_check_command(
     let mut trailer_attempted = false;
     let mut failure_output = requested_check_output(
         started,
-        raw_check_args_request_default_sources(args, default_in_place),
+        preparse_args_use_default_feedback_sources(args, default_in_place),
     );
     let result = run_check_command_after_start(
         root,
@@ -78,7 +80,7 @@ fn collect_default_pending_failure_output(
     output: CheckFailureOutput,
 ) -> CheckFailureOutput {
     let mut repo_cache = RepoInspectionCache::new();
-    let Ok(config) = load_check_config(
+    let Ok(config) = collect_check_config(
         &mut repo_cache,
         root,
         Path::new(CHECK_PATH),
@@ -86,13 +88,16 @@ fn collect_default_pending_failure_output(
     ) else {
         return output;
     };
-    let Ok(identities) = expectation_identities(&config) else {
-        return output;
-    };
-    output.with_pending(identities.len())
+    // [NQ] Successful expansion establishes the collected set even when
+    // subsequent config validation rejects that set.
+    output.with_pending(config.expectation_count())
 }
 
-fn raw_check_args_request_default_sources(args: &[OsString], default_in_place: bool) -> bool {
+// [NQ] This fallback is used only when argument parsing or source resolution
+// fails before a CheckCommandArgs exists. Once those steps succeed,
+// check_command_writes_agent_message computes authoritative eligibility from
+// the parsed command-default values and replaces this state.
+fn preparse_args_use_default_feedback_sources(args: &[OsString], default_in_place: bool) -> bool {
     if default_in_place {
         return false;
     }
@@ -168,8 +173,7 @@ fn run_check_command_after_start(
         &command.against_tree,
         command.against_tree_explicit,
     )?;
-    let write_agent_message =
-        check_command_writes_agent_message(&command, &checked_tree, &against_tree);
+    let write_agent_message = check_command_writes_agent_message(&command);
     let mut repo_cache = RepoInspectionCache::new();
     // Runtime-log entry point for `canon check`: `src/logs/writer.rs` resolves
     // `${CANON_STATE_DIR}/logs/0.jsonl` and owns JSONL append/flush/rotation.
@@ -178,21 +182,39 @@ fn run_check_command_after_start(
     // events through this writer.
     let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
     let mut check_caches = CheckRunCaches::new();
-    let config = match load_check_config(&mut repo_cache, root, &command.config_path, &checked_tree)
-    {
+    let collected_config =
+        match collect_check_config(&mut repo_cache, root, &command.config_path, &checked_tree) {
+            Ok(config) => config,
+            Err(err) => {
+                // The config failed before expectation selection, so the trailer
+                // reports an empty check result before the command error carries
+                // its self-contained diagnostic.
+                return fail_check_before_selection(
+                    &mut diagnostic_log,
+                    None,
+                    false,
+                    trailer_attempted,
+                    started_check_output(started, write_agent_message),
+                    err,
+                );
+            }
+        };
+    *failure_output = collected_check_output(
+        started,
+        collected_config.expectation_count(),
+        write_agent_message,
+    );
+    let config = match collected_config.into_validated() {
         Ok(config) => config,
         Err(err) => {
-            // The config failed before expectation selection, so the trailer
-            // reports an empty check result before the command error carries
-            // its self-contained diagnostic.
             return fail_check_before_selection(
                 &mut diagnostic_log,
                 None,
                 false,
                 trailer_attempted,
-                started_check_output(started, write_agent_message),
+                *failure_output,
                 err,
-            );
+            )
         }
     };
     let identities = match expectation_identities(&config) {
@@ -203,12 +225,11 @@ fn run_check_command_after_start(
                 None,
                 false,
                 trailer_attempted,
-                started_check_output(started, write_agent_message),
+                *failure_output,
                 err,
             )
         }
     };
-    *failure_output = collected_check_output(started, identities.len(), write_agent_message);
     let options =
         match resolve_check_options_with_identities(&config, &identities, &command.options) {
             Ok(options) => options,
@@ -353,7 +374,7 @@ fn run_in_place_check_command(
     let mut diagnostic_log = DiagnosticLogWriter::create_with_cache(root, &mut repo_cache)?;
     // Config load performs source-independent validation first and retains the
     // configured Git-backed-only fields for the in-place mode validation below.
-    let in_place_config = match load_in_place_check_config_with_default_agent_preset(
+    let collected_config = match collect_in_place_check_config_with_default_agent_preset(
         &mut repo_cache,
         root,
         &command.config_path,
@@ -371,6 +392,20 @@ fn run_in_place_check_command(
             )
         }
     };
+    *failure_output = collected_check_output(started, collected_config.expectation_count(), false);
+    let in_place_config = match collected_config.into_validated() {
+        Ok(config) => config,
+        Err(err) => {
+            return fail_check_before_selection(
+                &mut diagnostic_log,
+                None,
+                false,
+                trailer_attempted,
+                *failure_output,
+                err,
+            )
+        }
+    };
     let config = in_place_config.config();
     let identities = match expectation_identities(config) {
         Ok(identities) => identities,
@@ -380,25 +415,11 @@ fn run_in_place_check_command(
                 None,
                 false,
                 trailer_attempted,
-                started_check_output(started, false),
+                *failure_output,
                 err,
             )
         }
     };
-    *failure_output = collected_check_output(started, identities.len(), false);
-    // [Df] In-place-only field validation is config-wide and precedes command
-    // selector resolution. An unselected xpec cannot hide an invalid
-    // diff-from, target, cooldown, or ignore setting.
-    if let Err(err) = in_place_config.validate_all() {
-        return fail_check_before_selection(
-            &mut diagnostic_log,
-            None,
-            false,
-            trailer_attempted,
-            *failure_output,
-            err,
-        );
-    }
     let options = match resolve_check_options_with_identities(config, &identities, &command.options)
     {
         Ok(options) => options,
@@ -413,6 +434,16 @@ fn run_in_place_check_command(
             )
         }
     };
+    if let Err(err) = in_place_config.validate_configured_fields() {
+        return fail_check_before_selection(
+            &mut diagnostic_log,
+            None,
+            false,
+            trailer_attempted,
+            *failure_output,
+            err,
+        );
+    }
     let selected_ids = options
         .candidate_expectations
         .iter()

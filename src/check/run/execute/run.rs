@@ -1,5 +1,5 @@
 use super::expectation::{run_expectation, ExpectationRunContext};
-use super::report::{check_run_report, skipped_count, CheckRunReportCounts};
+use super::report::{check_run_report, pending_count, CheckRunReportCounts};
 use super::CheckRunSideEffects;
 use crate::check::core::{
     check_run_error, CheckOptions, CheckRecord, CheckRunError, CheckRunReport, ResolvedExpectation,
@@ -44,7 +44,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                     records.clone(),
                     cached.clone(),
                     CheckRunReportCounts {
-                        skipped: skipped_count(total_expectations, &records, &cached),
+                        pending: pending_count(total_expectations, &records, &cached),
                     },
                 ),
             )
@@ -161,8 +161,8 @@ fn current_report(
     cached: Vec<CheckRecord>,
     total_expectations: usize,
 ) -> CheckRunReport {
-    let skipped = skipped_count(total_expectations, &records, &cached);
-    check_run_report(records, cached, CheckRunReportCounts { skipped })
+    let pending = pending_count(total_expectations, &records, &cached);
+    check_run_report(records, cached, CheckRunReportCounts { pending })
 }
 
 #[cfg(test)]

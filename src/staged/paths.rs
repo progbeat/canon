@@ -4,49 +4,50 @@ use std::process;
 
 const CANON_TREE_CACHE_DIR: &str = "CANON_TREE_CACHE_DIR";
 
-// Hardlink materialization cannot be evaluated from this file alone:
-// paths.rs owns tmp_dir selection, and worktree/mod.rs owns lazy_tree_dir,
-// trees_dir, unpacked_paths, visible_tree.entry_paths, and materialize().
-pub(crate) struct SnapshotRoot {
-    path: PathBuf,
-    remove_on_drop: bool,
+// Hardlink materialization cannot be evaluated from this file alone: paths.rs
+// owns the temporary-directory selection, and worktree/mod.rs owns
+// lazy_tree_dir, trees_dir, unpacked_paths, visible_tree.entry_paths, and
+// materialize().
+pub(crate) struct TemporaryMaterializationRoot {
+    tmp_dir: PathBuf,
+    ownership: TemporaryDirectoryOwnership,
 }
 
-impl SnapshotRoot {
-    pub(crate) fn path(&self) -> &Path {
-        &self.path
+enum TemporaryDirectoryOwnership {
+    Caller,
+    Canon,
+}
+
+impl TemporaryMaterializationRoot {
+    pub(crate) fn tmp_dir(&self) -> &Path {
+        &self.tmp_dir
     }
 
-    pub(crate) fn remove_on_drop(&self) -> bool {
-        self.remove_on_drop
+    pub(crate) fn is_canon_owned(&self) -> bool {
+        matches!(self.ownership, TemporaryDirectoryOwnership::Canon)
     }
 }
 
-pub(crate) fn create_snapshot_root(_root: &Path) -> Result<SnapshotRoot, String> {
-    if let Some(path) = configured_tree_cache_dir() {
-        return create_snapshot_root_from_configured_cache_dir(&path);
+pub(crate) fn create_temporary_materialization_root(
+    _root: &Path,
+) -> Result<TemporaryMaterializationRoot, String> {
+    if let Some(tmp_dir) = configured_tmp_dir() {
+        return caller_owned_temporary_root(&tmp_dir);
     }
-    make_temp_dir().map(temporary_snapshot_root)
-}
-
-pub(crate) fn create_invocation_local_snapshot_root() -> Result<SnapshotRoot, String> {
-    // xpec: 0N
-    // Invocation-local materialization deliberately ignores
-    // CANON_TREE_CACHE_DIR and is always removed by its owning worktree view.
-    make_temp_dir().map(temporary_snapshot_root)
+    make_temp_dir().map(canon_owned_temporary_root)
 }
 
 fn make_temp_dir() -> Result<PathBuf, String> {
     let mut errors = Vec::new();
     // This is the hardlink materialization policy's `make_temp_dir()`.
     // Canon's temporary-storage expectation defines the parent preference.
-    if let Some(path) = create_snapshot_root_from_candidates(
+    if let Some(path) = create_tmp_dir_from_candidates(
         crate::platform::memory_backed_staged_snapshot_parent_candidates(),
         &mut errors,
     ) {
         return Ok(path);
     }
-    if let Some(path) = create_snapshot_root_from_candidates(
+    if let Some(path) = create_tmp_dir_from_candidates(
         crate::platform::ordinary_staged_snapshot_parent_candidates(),
         &mut errors,
     ) {
@@ -58,7 +59,7 @@ fn make_temp_dir() -> Result<PathBuf, String> {
     ))
 }
 
-fn configured_tree_cache_dir() -> Option<PathBuf> {
+fn configured_tmp_dir() -> Option<PathBuf> {
     let value = std::env::var_os(CANON_TREE_CACHE_DIR)?;
     if value.is_empty() {
         return None;
@@ -66,36 +67,36 @@ fn configured_tree_cache_dir() -> Option<PathBuf> {
     Some(PathBuf::from(value))
 }
 
-fn create_snapshot_root_from_configured_cache_dir(path: &Path) -> Result<SnapshotRoot, String> {
-    // This file only owns the hardlink policy's tmp_dir selection. The
-    // remaining fields and materialize() flow live in src/staged/worktree/mod.rs.
-    crate::platform::create_private_dir_all(path).map_err(|err| {
+fn caller_owned_temporary_root(tmp_dir: &Path) -> Result<TemporaryMaterializationRoot, String> {
+    // CANON_TREE_CACHE_DIR supplies the policy's caller-owned tmp_dir. It is
+    // temporary storage, not project-owned persistent state.
+    crate::platform::create_private_dir_all(tmp_dir).map_err(|err| {
         format!(
             "failed to create {} {}: {}",
             CANON_TREE_CACHE_DIR,
-            path.display(),
+            tmp_dir.display(),
             err
         )
     })?;
-    Ok(SnapshotRoot {
-        path: path.to_path_buf(),
-        remove_on_drop: false,
+    Ok(TemporaryMaterializationRoot {
+        tmp_dir: tmp_dir.to_path_buf(),
+        ownership: TemporaryDirectoryOwnership::Caller,
     })
 }
 
-fn temporary_snapshot_root(path: PathBuf) -> SnapshotRoot {
-    SnapshotRoot {
-        path,
-        remove_on_drop: true,
+fn canon_owned_temporary_root(tmp_dir: PathBuf) -> TemporaryMaterializationRoot {
+    TemporaryMaterializationRoot {
+        tmp_dir,
+        ownership: TemporaryDirectoryOwnership::Canon,
     }
 }
 
-fn create_snapshot_root_from_candidates(
+fn create_tmp_dir_from_candidates(
     parents: Vec<PathBuf>,
     errors: &mut Vec<String>,
 ) -> Option<PathBuf> {
     for parent in parents {
-        let path = match create_snapshot_root_in(&parent) {
+        let path = match create_tmp_dir_in(&parent) {
             Ok(path) => path,
             Err(err) => {
                 errors.push(err);
@@ -107,7 +108,7 @@ fn create_snapshot_root_from_candidates(
     None
 }
 
-fn create_snapshot_root_in(parent: &Path) -> Result<PathBuf, String> {
+fn create_tmp_dir_in(parent: &Path) -> Result<PathBuf, String> {
     if !parent.is_dir() {
         return Err(format!("{} is not a directory", parent.display()));
     }

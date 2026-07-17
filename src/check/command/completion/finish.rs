@@ -72,7 +72,7 @@ pub(crate) fn check_agent_messages(
     let num_new_passes = current_passes_without_prior_pass_count(report, run_start_pass_ids);
     let num_regressions = current_failures_with_prior_pass_count(report, run_start_pass_ids);
     let issue_ids = report_issue_display_ids(report);
-    render_check_agent_messages(&issue_ids, num_new_passes, num_regressions, report.skipped)
+    render_check_agent_messages(&issue_ids, num_new_passes, num_regressions, report.pending)
 }
 
 fn report_issue_display_ids(report: &CheckRunReport) -> Vec<String> {
@@ -176,7 +176,7 @@ mod tests {
         let report = CheckRunReport {
             records: vec![staged_scope_record(&root, &expectation, &scope, "no")],
             cached: Vec::new(),
-            skipped: 0,
+            pending: 0,
         };
         let run_start_pass_ids = BTreeSet::from([expectation.id.clone()]);
 
@@ -199,7 +199,7 @@ mod tests {
         CheckRunReport {
             records: vec![staged_scope_record(root, expectation, scope, "yes")],
             cached: Vec::new(),
-            skipped: 0,
+            pending: 0,
         }
     }
 

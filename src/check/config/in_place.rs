@@ -30,9 +30,10 @@ impl InPlaceCheckConfig {
         self.config
     }
 
-    pub(crate) fn validate_all(&self) -> Result<(), String> {
-        // [Df] These fields are invalid in in-place mode wherever they are
-        // configured. Validate before command selectors are resolved.
+    pub(crate) fn validate_configured_fields(&self) -> Result<(), String> {
+        // [Df] The canon separately requires selected expectations to work
+        // without Git-backed behavior and prohibits these configured fields
+        // throughout in-place mode, including on unselected expectations.
         if self.requirements.config_uses_ignore {
             return Err(
                 "configured `ignore` is invalid in in-place mode because path hiding requires Git"
@@ -73,8 +74,47 @@ mod tests {
         InPlaceCheckConfig::from_expanded(expanded)
     }
 
+    fn parse_in_place_ask_config(yaml: &str) -> InPlaceCheckConfig {
+        let raw: RawCheckConfig = serde_saphyr::from_str(yaml).expect("parse raw config");
+        let expanded = expand_raw_check_config_with_requirements(
+            raw,
+            CheckConfigExpansionOptions {
+                ask_question: Some("Does this work in place?"),
+                ..CheckConfigExpansionOptions::default()
+            },
+        )
+        .expect("expand raw ask config");
+        InPlaceCheckConfig::from_expanded(expanded)
+    }
+
+    #[test] // xpec: Df,T
+    fn ask_validation_retains_prohibitions_from_configured_expectations() {
+        let config = parse_in_place_ask_config(
+            r#"
+presets:
+  default: {}
+expectations:
+  - q: "Configured Git-backed check"
+    a: "yes"
+    diff-from: :against-tree
+"#,
+        );
+
+        assert_eq!(config.config().expectations.len(), 1);
+        assert_eq!(
+            config.config().expectations[0].q,
+            "Does this work in place?"
+        );
+        assert_eq!(
+            config.validate_configured_fields(),
+            Err("expectation 1 is invalid in in-place mode: \
+                 `diff-from` requires Git-backed check state"
+                .to_string())
+        );
+    }
+
     #[test] // xpec: Df
-    fn git_backed_expectation_fields_invalidate_the_whole_in_place_config() {
+    fn configured_git_backed_expectation_fields_are_invalid_in_place() {
         let config = parse_in_place_config(
             r#"
 presets:
@@ -89,7 +129,7 @@ expectations:
         );
 
         assert_eq!(
-            config.validate_all(),
+            config.validate_configured_fields(),
             Err("expectation 2 is invalid in in-place mode: \
                  `diff-from` requires Git-backed check state"
                 .to_string())
@@ -110,7 +150,7 @@ expectations:
         );
 
         assert_eq!(
-            config.validate_all(),
+            config.validate_configured_fields(),
             Err("expectation 1 is invalid in in-place mode: \
                  `cooldown` requires Git-backed check state"
                 .to_string())
@@ -118,7 +158,7 @@ expectations:
     }
 
     #[test] // xpec: Df
-    fn config_wide_ignore_is_invalid_without_selected_expectations() {
+    fn configured_ignore_is_invalid_in_place() {
         let config = parse_in_place_config(
             r#"
 presets:
@@ -131,7 +171,7 @@ expectations:
         );
 
         assert_eq!(
-            config.validate_all(),
+            config.validate_configured_fields(),
             Err(
                 "configured `ignore` is invalid in in-place mode because path hiding requires Git"
                     .to_string()

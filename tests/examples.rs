@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const DEFAULT_CHECK_TEMPLATE_FILE_CONTENTS: &str =
     include_str!("../.canon/templates/default/check.yml");
 const ZERO_TOKEN_USAGE_LINE: &str =
-    "token-usage: ref-cost=0$ total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n";
+    "token-usage: ref-cost=0.00$ total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n";
 
 fn canon() -> Command {
     Command::new(env!("CARGO_BIN_EXE_canon"))
@@ -180,10 +180,10 @@ expectations:
     // xpec: v1
     assert!(stdout.contains(" 1 failed in "));
     let stderr = String::from_utf8(output.stderr).unwrap();
-    // xpec: v1
+    // xpec: v1,NQ
     assert_eq!(
         stderr,
-        "token-usage: ref-cost=0$ total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n"
+        "token-usage: ref-cost=0.00$ total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n"
     );
     let _ = fs::remove_dir_all(&repo);
 }
@@ -229,6 +229,7 @@ expectations:
     assert!(String::from_utf8(output.stdout)
         .unwrap()
         .contains(" 1 passed in "));
+    // xpec: NQ
     assert_eq!(
         String::from_utf8(output.stderr).unwrap(),
         ZERO_TOKEN_USAGE_LINE
@@ -277,10 +278,10 @@ expectations:
     // xpec: v1
     assert!(stdout.contains(" 1 failed in "));
     let stderr = String::from_utf8(output.stderr).unwrap();
-    // xpec: v1
+    // xpec: v1,NQ
     assert_eq!(
         stderr,
-        "token-usage: ref-cost=0$ total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n"
+        "token-usage: ref-cost=0.00$ total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n"
     );
     let _ = fs::remove_dir_all(&repo);
 }
@@ -320,7 +321,7 @@ expectations:
     let stderr = String::from_utf8(output.stderr).unwrap();
     // xpec: v1,Df
     assert!(stdout.contains(" 1 pending in "), "{stdout}\n{stderr}");
-    // xpec: v1,Df
+    // xpec: v1,Df,NQ
     assert_eq!(
         stderr,
         format!(
@@ -358,6 +359,7 @@ fn invalid_check_arguments_still_emit_the_check_trailer() {
     assert!(stdout.contains(" 1 pending in "));
     assert!(stdout.contains("▷ Run `canon check` to continue evaluation.\n"));
     let stderr = String::from_utf8(output.stderr).unwrap();
+    // xpec: NQ
     assert!(stderr.starts_with(ZERO_TOKEN_USAGE_LINE));
     assert!(stderr.contains("unexpected argument"));
 }
@@ -401,8 +403,46 @@ fn collected_check_failure_reports_pending_feedback() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stdout.contains(" 1 pending in "), "{stdout}\n{stderr}");
     assert!(stdout.contains("▷ Run `canon check` to continue evaluation.\n"));
+    // xpec: NQ
     assert!(stderr.starts_with(ZERO_TOKEN_USAGE_LINE));
     assert!(stderr.contains("expectation"), "{stderr}");
+}
+
+// xpec: NQ
+#[test]
+fn identity_validation_failure_counts_collected_expectations_as_pending() {
+    let repo = temp_repo("canon-collected-identity-failure");
+    init_git_repo(&repo);
+    fs::create_dir_all(repo.join(".canon")).unwrap();
+    fs::write(
+        repo.join(".canon/check.yml"),
+        r#"
+presets:
+  default: {}
+expectations:
+  - q: "Duplicate expectation"
+    a: "yes"
+  - q: "Duplicate expectation"
+    a: "yes"
+"#,
+    )
+    .unwrap();
+    Command::new("git")
+        .args(["add", ".canon/check.yml"])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
+
+    let output = canon().arg("check").current_dir(&repo).output().unwrap();
+
+    let _ = fs::remove_dir_all(&repo);
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stdout.contains(" 2 pending in "), "{stdout}\n{stderr}");
+    assert!(stdout.contains("▷ Run `canon check` to continue evaluation.\n"));
+    assert!(stderr.contains("duplicate expectation ID"), "{stderr}");
 }
 
 // xpec: C

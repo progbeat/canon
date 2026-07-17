@@ -24,7 +24,11 @@ pub(crate) fn write_summary_line(
 }
 
 fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -> String {
-    let SummaryOutcomeCounts { passed, failed } = summary_outcome_counts(report);
+    let SummaryOutcomeCounts {
+        failed,
+        passed,
+        pending,
+    } = summary_outcome_counts(report);
     let mut outcomes = Vec::new();
     if failed > 0 {
         outcomes.push(format!("{} failed", failed));
@@ -32,8 +36,8 @@ fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -> String {
     if passed > 0 {
         outcomes.push(format!("{} passed", passed));
     }
-    if report.skipped > 0 {
-        outcomes.push(format!("{} pending", report.skipped));
+    if pending > 0 {
+        outcomes.push(format!("{} pending", pending));
     }
     if outcomes.is_empty() {
         outcomes.push("0 passed".to_string());
@@ -103,14 +107,16 @@ fn pass_improvement_notice(count: usize) -> Option<String> {
 }
 
 pub(crate) struct SummaryOutcomeCounts {
-    pub(crate) passed: usize,
     pub(crate) failed: usize,
+    pub(crate) passed: usize,
+    pub(crate) pending: usize,
 }
 
 pub(crate) fn summary_outcome_counts(report: &CheckRunReport) -> SummaryOutcomeCounts {
     let mut counts = SummaryOutcomeCounts {
-        passed: 0,
         failed: 0,
+        passed: 0,
+        pending: report.pending,
     };
     for_each_unique_report_record(&report.records, &report.cached, |record| {
         if record.passed() {

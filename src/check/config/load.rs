@@ -10,23 +10,37 @@ use crate::git::TreeSource;
 use crate::repo_inspection::RepoInspectionCache;
 use std::path::Path;
 
+pub(crate) struct CollectedCheckConfig<T> {
+    expectation_count: usize,
+    validation: Result<T, String>,
+}
+
+impl<T> CollectedCheckConfig<T> {
+    pub(crate) fn expectation_count(&self) -> usize {
+        self.expectation_count
+    }
+
+    pub(crate) fn into_validated(self) -> Result<T, String> {
+        self.validation
+    }
+}
+
 pub(crate) fn load_check_config(
     cache: &mut RepoInspectionCache,
     root: &Path,
     config_path: &Path,
     source: &TreeSource,
 ) -> Result<CheckConfig, String> {
-    load_check_config_with_default_agent_preset(cache, root, config_path, source, None)
+    collect_check_config(cache, root, config_path, source)?.into_validated()
 }
 
-fn load_check_config_with_default_agent_preset(
+pub(crate) fn collect_check_config(
     cache: &mut RepoInspectionCache,
     root: &Path,
     config_path: &Path,
     source: &TreeSource,
-    default_agent_preset: Option<&str>,
-) -> Result<CheckConfig, String> {
-    load_tree_check_config(cache, root, config_path, source, default_agent_preset, None)
+) -> Result<CollectedCheckConfig<CheckConfig>, String> {
+    collect_tree_check_config(cache, root, config_path, source, None, None)
 }
 
 pub(crate) fn load_ask_config(
@@ -68,13 +82,34 @@ fn load_tree_check_config(
     )
 }
 
-pub(crate) fn load_in_place_check_config_with_default_agent_preset(
+fn collect_tree_check_config(
+    cache: &mut RepoInspectionCache,
+    root: &Path,
+    config_path: &Path,
+    source: &TreeSource,
+    default_agent_preset: Option<&str>,
+    ask_question: Option<&str>,
+) -> Result<CollectedCheckConfig<CheckConfig>, String> {
+    let content = cache
+        .tree_file_content(root, source, config_path)
+        .map_err(|err| map_missing_default_config_error(config_path, source, err))?;
+    collect_tree_check_config_content_with_root_and_default_agent_preset(
+        root,
+        config_path,
+        &content,
+        source.clone(),
+        default_agent_preset,
+        ask_question,
+    )
+}
+
+pub(crate) fn collect_in_place_check_config_with_default_agent_preset(
     cache: &mut RepoInspectionCache,
     root: &Path,
     config_path: &Path,
     default_agent_preset: Option<&str>,
-) -> Result<InPlaceCheckConfig, String> {
-    load_in_place_config(cache, root, config_path, default_agent_preset, None)
+) -> Result<CollectedCheckConfig<InPlaceCheckConfig>, String> {
+    collect_in_place_config(cache, root, config_path, default_agent_preset, None)
 }
 
 pub(crate) fn load_in_place_ask_config(
@@ -91,7 +126,7 @@ pub(crate) fn load_in_place_ask_config(
         default_agent_preset,
         Some(question),
     )?;
-    config.validate_all()?;
+    config.validate_configured_fields()?;
     Ok(config.into_config())
 }
 
@@ -102,8 +137,19 @@ fn load_in_place_config(
     default_agent_preset: Option<&str>,
     ask_question: Option<&str>,
 ) -> Result<InPlaceCheckConfig, String> {
+    collect_in_place_config(cache, root, config_path, default_agent_preset, ask_question)?
+        .into_validated()
+}
+
+fn collect_in_place_config(
+    cache: &mut RepoInspectionCache,
+    root: &Path,
+    config_path: &Path,
+    default_agent_preset: Option<&str>,
+    ask_question: Option<&str>,
+) -> Result<CollectedCheckConfig<InPlaceCheckConfig>, String> {
     let content = cache.in_place_file_content(root, config_path)?;
-    parse_in_place_check_config_content_with_root_and_default_agent_preset(
+    collect_in_place_check_config_content_with_root_and_default_agent_preset(
         root,
         config_path,
         &content,
@@ -120,6 +166,25 @@ pub(super) fn parse_tree_check_config_content_with_root_and_default_agent_preset
     default_agent_preset: Option<&str>,
     ask_question: Option<&str>,
 ) -> Result<CheckConfig, String> {
+    collect_tree_check_config_content_with_root_and_default_agent_preset(
+        root,
+        config_path,
+        content,
+        source,
+        default_agent_preset,
+        ask_question,
+    )?
+    .into_validated()
+}
+
+fn collect_tree_check_config_content_with_root_and_default_agent_preset(
+    root: &Path,
+    config_path: &Path,
+    content: &str,
+    source: TreeSource,
+    default_agent_preset: Option<&str>,
+    ask_question: Option<&str>,
+) -> Result<CollectedCheckConfig<CheckConfig>, String> {
     let expanded = expand_check_config_content(
         root,
         config_path,
@@ -128,17 +193,22 @@ pub(super) fn parse_tree_check_config_content_with_root_and_default_agent_preset
         default_agent_preset,
         ask_question,
     )?;
-    validate_expanded_check_config(&expanded.config, ask_question)?;
-    Ok(expanded.config)
+    let expectation_count = expanded.config.expectations.len();
+    let validation =
+        validate_expanded_check_config(&expanded.config, ask_question).map(|()| expanded.config);
+    Ok(CollectedCheckConfig {
+        expectation_count,
+        validation,
+    })
 }
 
-fn parse_in_place_check_config_content_with_root_and_default_agent_preset(
+fn collect_in_place_check_config_content_with_root_and_default_agent_preset(
     root: &Path,
     config_path: &Path,
     content: &str,
     default_agent_preset: Option<&str>,
     ask_question: Option<&str>,
-) -> Result<InPlaceCheckConfig, String> {
+) -> Result<CollectedCheckConfig<InPlaceCheckConfig>, String> {
     let expanded = expand_check_config_content(
         root,
         config_path,
@@ -147,8 +217,13 @@ fn parse_in_place_check_config_content_with_root_and_default_agent_preset(
         default_agent_preset,
         ask_question,
     )?;
-    validate_expanded_check_config(&expanded.config, ask_question)?;
-    Ok(InPlaceCheckConfig::from_expanded(expanded))
+    let expectation_count = expanded.config.expectations.len();
+    let validation = validate_expanded_check_config(&expanded.config, ask_question)
+        .map(|()| InPlaceCheckConfig::from_expanded(expanded));
+    Ok(CollectedCheckConfig {
+        expectation_count,
+        validation,
+    })
 }
 
 fn expand_check_config_content(
@@ -160,8 +235,9 @@ fn expand_check_config_content(
     ask_question: Option<&str>,
 ) -> Result<ExpandedCheckConfig, String> {
     // `RawCheckConfig` is the serde schema for the whole check.yml file.
-    // Expansion resolves either its configured expectations or one ask-owned
-    // temporary item before validation and command execution.
+    // Expansion resolves either configured runtime expectations or one
+    // ask-owned temporary item. In-place requirements also retain prohibited
+    // fields from configured expectations that ask replaces at runtime.
     let raw = parse_raw_check_config(root, config_path, content, source.clone())?;
     expand_raw_check_config_with_requirements(
         raw,

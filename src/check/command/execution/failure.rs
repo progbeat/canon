@@ -25,18 +25,34 @@ pub(super) struct CheckErrorReportFinish<'b> {
 #[derive(Clone, Copy)]
 pub(super) struct CheckFailureOutput {
     started: Instant,
-    pending: Option<usize>,
+    collection: CheckFailureCollection,
     write_agent_message: bool,
+}
+
+#[derive(Clone, Copy)]
+enum CheckFailureCollection {
+    NotCollected,
+    Collected { pending: usize },
 }
 
 impl CheckFailureOutput {
     pub(super) fn needs_pending_collection(self) -> bool {
-        self.write_agent_message && self.pending.is_none()
+        self.write_agent_message && matches!(self.collection, CheckFailureCollection::NotCollected)
     }
 
     pub(super) fn with_pending(mut self, pending: usize) -> Self {
-        self.pending = Some(pending);
+        self.collection = CheckFailureCollection::Collected { pending };
         self
+    }
+
+    fn pending_count(self) -> usize {
+        // [NQ] Before config collection there are zero collected xpecs. After
+        // collection, every xpec without a result is pending. Represent those
+        // two canon states explicitly instead of fabricating result records.
+        match self.collection {
+            CheckFailureCollection::NotCollected => 0,
+            CheckFailureCollection::Collected { pending } => pending,
+        }
     }
 }
 
@@ -105,7 +121,7 @@ pub(super) fn requested_check_output(
 ) -> CheckFailureOutput {
     CheckFailureOutput {
         started,
-        pending: None,
+        collection: CheckFailureCollection::NotCollected,
         write_agent_message,
     }
 }
@@ -117,22 +133,23 @@ pub(super) fn collected_check_output(
 ) -> CheckFailureOutput {
     CheckFailureOutput {
         started,
-        pending: Some(pending),
+        collection: CheckFailureCollection::Collected { pending },
         write_agent_message,
     }
 }
 
 pub(super) fn write_check_failure_trailer(output: CheckFailureOutput) -> Result<(), CommandError> {
     print_token_usage_summary(None).map_err(CommandError::from)?;
+    let pending = output.pending_count();
     let report = CheckRunReport {
         records: Vec::new(),
         cached: Vec::new(),
-        skipped: output.pending.unwrap_or(0),
+        pending,
     };
     write_summary_line(&mut io::stdout(), &report, output.started.elapsed())
         .map_err(CommandError::from)?;
     if output.write_agent_message {
-        for message in render_check_agent_messages(&[], 0, 0, report.skipped) {
+        for message in render_check_agent_messages(&[], 0, 0, pending) {
             let line = format!("{message}\n");
             write_stdout_record(
                 &mut io::stdout(),

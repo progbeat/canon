@@ -49,14 +49,6 @@ pub(crate) fn expand_raw_check_config_with_requirements(
         .get(default_agent_preset)
         .map(ResolvedPresetConfig::agent_config)
         .ok_or_else(|| format!("unknown preset: {}", default_agent_preset))?;
-    // `canon ask` supplies one synthetic explicit item so ordinary preset
-    // resolution applies every selected field default at this boundary. Its
-    // command-owned to/q/a fields remain higher precedence than the preset,
-    // and configured check expectations never enter the ask config.
-    let raw_expectations = match options.ask_question {
-        Some(question) => vec![raw_ask_expectation(question, default_agent_preset)],
-        None => configured_expectations,
-    };
     let mut expansion = RawExpectationExpansion {
         presets: &resolved_presets,
         expectations: Vec::new(),
@@ -64,6 +56,19 @@ pub(crate) fn expand_raw_check_config_with_requirements(
             config_uses_ignore: !default_agent.ignore.is_empty(),
             git_backed_only_expectation_fields: Vec::new(),
         },
+    };
+    // `canon ask` supplies one synthetic explicit item so ordinary preset
+    // resolution applies every selected field default at this boundary. Its
+    // command-owned to/q/a fields remain higher precedence than the preset,
+    // and configured check expectations never enter the ask runtime config.
+    // [T,Df] They still contribute configured in-place prohibitions before
+    // being replaced, so ask validation cannot lose forbidden fields.
+    let raw_expectations = match options.ask_question {
+        Some(question) => {
+            expansion.record_configured_in_place_requirements(&configured_expectations);
+            vec![raw_ask_expectation(question, default_agent_preset)]
+        }
+        None => configured_expectations,
     };
     expansion.expand_items(raw_expectations)?;
     Ok(ExpandedCheckConfig {
@@ -118,6 +123,21 @@ struct RawExpectationExpansion<'a> {
 // This impl is the raw config expansion boundary. It may consume named presets;
 // check execution receives only the resolved `Expectation` values it produces.
 impl RawExpectationExpansion<'_> {
+    fn record_configured_in_place_requirements(&mut self, items: &[RawExpectationItem]) {
+        for (index, item) in items.iter().enumerate() {
+            let mut common = match item {
+                RawExpectationItem::Explicit(item) => item.common.clone(),
+                RawExpectationItem::Unresolved(item) => item.common.clone(),
+            };
+            let preset_name = common.settings.preset.as_deref().unwrap_or("default");
+            if let Some(preset) = self.presets.get(preset_name) {
+                merge_raw_expectation_common_defaults(&mut common, &preset.common);
+            }
+            self.in_place_requirements
+                .record_expectation_common(index + 1, &common);
+        }
+    }
+
     fn expand_items(&mut self, items: Vec<RawExpectationItem>) -> Result<(), String> {
         for (index, item) in items.into_iter().enumerate() {
             let item_number = index + 1;
@@ -236,6 +256,15 @@ impl InPlaceRequirements {
                 )
             }
         };
+        self.record_expectation_common(item_number, common);
+        Ok(())
+    }
+
+    fn record_expectation_common(
+        &mut self,
+        item_number: usize,
+        common: &RawExpectationCommonConfig,
+    ) {
         // [Df] The separate in-place contract rejects configuration whose
         // semantics require Git state, cached results, or path hiding.
         let mut git_backed_only_field_names = common.git_backed.configured_field_names();
@@ -249,7 +278,6 @@ impl InPlaceRequirements {
                     git_backed_only_field_names,
                 });
         }
-        Ok(())
     }
 }
 

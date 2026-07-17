@@ -62,14 +62,6 @@ impl TreeSource {
             TreeSource::Git { tree_oid, .. } => Ok(tree_oid.clone()),
         }
     }
-
-    pub(crate) fn is_default_checked_tree(&self) -> bool {
-        matches!(self, TreeSource::Staged)
-    }
-
-    pub(crate) fn is_default_against_tree(&self) -> bool {
-        matches!(self, TreeSource::Git { treeish, .. } if treeish == DEFAULT_AGAINST_TREE_ARG)
-    }
 }
 
 pub(crate) fn validate_tree_arg(value: &str, option: &str) -> Result<(), String> {

@@ -331,7 +331,7 @@ pub(crate) struct RawGitBackedExpectationConfig {
     // [6,Df] These YAML fields belong to the Git-backed check contract. In
     // particular, Cached Result is defined only for an expectation and Git
     // state, so its optional cooldown is fully supported here. The separate
-    // in-place contract later rejects selected config that requires cache,
+    // in-place contract later rejects configured fields that require cache,
     // diff, or other Git-backed behavior.
     pub(crate) diff_from: Option<String>,
     pub(crate) target: Option<String>,

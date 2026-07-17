@@ -34,14 +34,13 @@ pub(crate) use usage::render_token_usage_summary;
 // tests outside implementation files exercise public CLI behavior instead.
 mod tests {
     use super::{
-        finish_query_output, render_check_agent_messages, render_token_usage_summary,
-        start_expectation_report_output, start_query_report_output, summary_outcome_counts,
+        finish_query_output, render_check_agent_messages, start_expectation_report_output,
+        start_query_report_output, summary_outcome_counts,
         write_result_output_without_started_report, write_summary_line, SharedCheckOutput,
     };
     use crate::check::core::{
         CheckRecord, CheckResult, CheckRunReport, ParsedAnswer, ERROR_INVALID_QUESTION,
     };
-    use crate::token_usage_types::TokenUsage;
     use std::io::{self, Write};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -73,12 +72,12 @@ mod tests {
         assert_result_entry(&rendered, "PASS");
     }
 
-    #[test] // xpec: v1,Z8
-    fn summary_and_token_usage_output_match_documented_lines() {
+    #[test] // xpec: v1,NQ
+    fn summary_output_matches_documented_line() {
         let report = CheckRunReport {
             records: vec![passing_record()],
             cached: Vec::new(),
-            skipped: 2,
+            pending: 2,
         };
         let mut summary_bytes = Vec::new();
 
@@ -88,18 +87,6 @@ mod tests {
         assert!(summary.contains(" 1 passed, 2 pending in 1.25s "));
         assert!(summary.starts_with('='));
         assert!(summary.ends_with("=\n"));
-
-        let usage = TokenUsage {
-            total_tokens: 9,
-            input_tokens: 4,
-            cached_input_tokens: 3,
-            output_tokens: 2,
-            reasoning_output_tokens: 1,
-        };
-        assert_eq!(
-            render_token_usage_summary(usage),
-            "token-usage: ref-cost=0.0000243$ total=9 input=4 (+ 3 cached) output=2 (reasoning 1)"
-        );
     }
 
     #[test] // xpec: nF

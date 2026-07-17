@@ -34,7 +34,7 @@ pub(crate) struct CheckRunReport {
     pub(crate) records: Vec<CheckRecord>,
     pub(crate) cached: Vec<CheckRecord>,
     // Expectations not covered by evaluated records or cached results.
-    pub(crate) skipped: usize,
+    pub(crate) pending: usize,
 }
 
 pub(crate) fn for_each_unique_report_record(
