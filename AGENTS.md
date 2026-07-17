@@ -6,8 +6,6 @@
 - If the evaluator returns a valid answer that does not match the expected answer, never try to influence the answer through developer instructions.
 - Optimize evaluator developer instructions only to reduce token usage or to fix errors such as unparseable answers.
 - Keep the evaluator agent’s developer instructions concise.
-- For every test declaration and every assert invocation, the behavior checked on that execution path must logically follow from the canon. Add a source-comment marker `xpec: <shortID>[,<shortID>...]`, preferring the same line over the immediately preceding non-blank line. A marker on a test declaration covers assert invocations in that test unless an assert has its own marker.
-- Source comments may reference xpecs compactly as `[<shortID>]` or `[<shortID>,<shortID>...]`, e.g. `[e5]` or `[e5,nT]`.
 - Treat any codex_app_server ERROR or permission-config warning during canon check as a blocker, even if the command exits successfully.
 - For reference, Codex GitHub: https://github.com/openai/codex
 
@@ -42,11 +40,23 @@ Do not edit files under `.canon/` proactively. Edit them only when a human expli
 
 ### Canon Enforcement
 
+When implementing or reviewing an expectation, actively derive useful assertions from it where possible.
+
+Every test declaration and assert invocation must be covered by a source-comment marker `xpec: <shortID>[,<shortID>...]`, preferring the same line over the immediately preceding non-blank line.
+A test marker applies to assertions without their own marker; an assertion marker overrides it.
+
+Every test or assertion failure must imply a violation of at least one xpec in its applicable marker.
+When a failure is not self-explanatory, ensure its diagnostics identify the violated canon behavior.
+
+Source comments may reference xpecs compactly as `[<shortID>]` or `[<shortID>,<shortID>...]`, e.g. `[e5]` or `[e5,nT]`.
+
 Always stage your edits before running `canon check`, because it does not check unstaged changes.
 
 When `canon` writes an instruction, execute it. If the instruction says to commit, commit immediately.
 
-When you are already making project changes and the canon is violated, whether detected by `canon check` or after a human updates the canon, proactively fix the implementation to match the canon without waiting for a separate human command.
+When you are already making project changes and discover a canon violation, proactively fix the implementation without waiting for a separate human request.
+This includes violations reported by `canon check`, exposed by a canon update, or observed directly.
+A passing `canon check` does not override an observed violation.
 Continue until there are no remaining issues that you are allowed and able to fix. When a fix causes a regression, improve the readability of the fragile logic before retrying.
 
 When a test fails, compare the behavior asserted by the test with the canon.
