@@ -43,7 +43,7 @@ Do not edit files under `.canon/` proactively. Edit them only when a human expli
 When implementing or reviewing an expectation, actively derive useful assertions from it where possible.
 
 Every test declaration and assert invocation must be covered by a source-comment marker `xpec: <shortID>[,<shortID>...]`, preferring the same line over the immediately preceding non-blank line.
-A test marker applies to assertions without their own marker; an assertion marker overrides it.
+Within a test, an assertion inherits the test marker unless it has its own.
 
 Every test or assertion failure must imply a violation of at least one xpec in its applicable marker.
 When a failure is not self-explanatory, ensure its diagnostics identify the violated canon behavior.
