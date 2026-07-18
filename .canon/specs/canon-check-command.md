@@ -58,29 +58,22 @@ def canon_check():
         ):
             emit_feedback(...)
 
-def emit_feedback(failed, num_new_passes, num_regressions, num_pending):
+def emit_feedback(failed, num_pending):
     """
     :param failed: Short IDs of failed expectations.
-    :param num_new_passes: Number of xpecs classified as **new pass**.
-    :param num_regressions: Number of xpecs classified as **regression**.
     :param num_pending: Number of pending expectations.
     """
-    if num_regressions > 0 or (len(failed) > 0 and num_new_passes == 0):
-        _repair_instructions(failed)
-        print(f"▷ Fix the issues and run `canon check` again!")
-        return
-    if len(failed) == 0 and num_pending > 0:
-        print(f"▷ Run `canon check` to continue evaluation.")
-        return
-    if len(failed) == 0 and num_new_passes == 0:
-        print("✓ All checks passed. Commit is allowed.")
-        return
-    assert num_new_passes > 0
-    passes_msg = f'1 pass' if num_new_passes == 1 else f'{num_new_passes} passes'
-    print(f"▷ +{passes_msg}. Commit the staged changes NOW!")
+    assert against_tree_oid == head_tree_oid
     if len(failed) > 0:
         _repair_instructions(failed)
-        print(f"▷ Then fix the remaining issues and run `canon check` again!")
+        return print(f"▷ Fix the issues and run `canon check` again!")
+    if num_pending > 0:
+        return print("▷ Run `canon check` to continue evaluation.")
+    need_to_commit = (checked_tree_oid != against_tree_oid)
+    print(
+        "✓ All checks passed." +
+        (" Commit the staged changes!" if need_to_commit else "")
+    )
 
 def _repair_instructions(failed):
     assert len(failed) > 0
