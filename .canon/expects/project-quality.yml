@@ -70,7 +70,7 @@
   a: no
   target: diff
 
-- q: 'Can you find tests that assert incidental implementation details instead of stable observable behavior through a public or component interface?'
+- q: "Can you find tests that assert incidental implementation details instead of stable observable behavior through a public or component interface?"
   a: no
   target: diff
 
@@ -97,6 +97,10 @@
 
 - q: "Is any invocation-local state written to disk instead of being kept in memory?"
   a: no
+  target: diff
+
+- q: "Can you find any user-facing output that misrepresents what happened, why it happened, current progress, or what the user should do next?"
+  a: "no"
   target: diff
 
 - q: |-

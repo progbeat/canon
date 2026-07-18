@@ -40,8 +40,8 @@ The behavior of `canon check` follows this shape:
 
 ```python
 def canon_check():
+    ... # do everything needed to prepare for evaluation
     try:
-        ... # do everything needed to prepare for evaluation
         for xpec in check_order_policy(selected_expectations):
             evaluation = evaluate(xpec)
             ...
@@ -86,7 +86,7 @@ def _repair_instructions(failed):
 
 ## Token Usage Line
 
-The check run emits exactly one token usage line to stderr:
+The token usage line is written to stderr as:
 
 ```
 token-usage: ref-cost={:.2}$ total={} input={} (+ {} cached) output={} (reasoning {})
@@ -96,7 +96,7 @@ If token usage data is unavailable, every numeric field is `0`.
 
 ## Summary Line
 
-The check run emits one stdout summary line:
+The summary line is written to stdout as:
 
 ```
 ============================= <outcome-list> in <duration>s =============================

@@ -42,13 +42,18 @@ class _Evaluator:
                 self.status = PASS if self.response.answer == self.expected else FAIL
                 self.on_status()
                 if self.response.error is not None:
-                    print('error:', self.response.error)
+                    self.on_error()
                 elif self.status == FAIL:
                     self.on_wrong_answer()
 
     def on_start(self):
         print(self.xpec.shortID, end='')
         self.timeline.on_symbol(lambda c: print(c, end=''))
+
+    def on_error(self):
+        print('error:', self.response.error)
+        if self.response.evidence is not None:
+            print('evidence:', escape_inline(self.response.evidence))
 
     def on_status(self):
         print('' if self.ask_mode else (' ' + _STATUS_TO_STR[self.status]))
