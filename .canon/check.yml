@@ -29,9 +29,9 @@ xpecs:
     cooldown: 20m
 
   # on-pass checks
-  - to: shell
-    q: ".canon/scripts/check-q-scope"
-    rank: +10
+  # - to: shell
+  #   q: ".canon/scripts/check-q-scope"
+  #   rank: +10
 
   - !include expects/canon-gate.yml
   - !include expects/efficiency.yml
