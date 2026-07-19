@@ -110,4 +110,4 @@ class _ShellEvaluator(_Evaluator):
         print(f'Command exited with code {self.response.answer} (expected {self.expected}).')
 
 
-_STATUS_TO_STR = {PASS: 'OK', FAIL: 'FAIL'}
+_STATUS_TO_STR = {PASS: 'ok', FAIL: 'fail'}
