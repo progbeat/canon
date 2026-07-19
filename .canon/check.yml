@@ -43,9 +43,9 @@ xpecs:
 
   # Glossary
   - !foreach
-    - path: ["glossary.md"]
+    - _: [0]
     - q: |-
-        {{ read(path) }}
+        {{ read("glossary.md") }}
         ---
         Can you find any inconsistency between the implementation and this glossary definition?
       a: "no"
@@ -57,11 +57,11 @@ xpecs:
     - q: |-
         {{ read(path) }}
         ---
-        Can you find any violation of this specification in the implementation?
+        Can you find any high-confidence violation of this specification in the implementation?
       a: no
 
   - !foreach
-    - path: "specs/**.py"
+    - path: ["specs/**.py"]
     - q: |-
         --- # {{ path }}
         {{ read(path) }}
@@ -69,7 +69,7 @@ xpecs:
         The implementation may differ from the pseudocode in internal structure and control flow, but it must:
         - preserve every specified behavior;
         - preserve every pseudocode assertion as an explicit assertion.
-        Can you find any violation?
+        Can you find any high-confidence violation?
       a: no
 
   # Docker

@@ -20,7 +20,7 @@ Strings containing `*` or `?` are globs resolved relative to the directory conta
 All other values are literals.
 
 For every combination of the resulting values, every string scalar in a copy of the foreach template is rendered with the corresponding variable bindings.
-`read(value)` returns the named file's UTF-8 contents from the same source, resolving literal filenames relative to the directory containing the YAML document.
+`read(filename)` returns the file's UTF-8 contents from the same source, resolving `filename` relative to the directory containing the YAML document.
 A combination selected more than once contributes one rendered copy.
 
 `!foreach` resolves to a sequence containing the rendered copies.
