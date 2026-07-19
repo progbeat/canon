@@ -1,4 +1,4 @@
-use super::escape::escape_check_output_text;
+use super::escape::{escape_check_output_text, push_escaped_check_output_line};
 use super::shared::{write_stdout_record, SharedCheckOutput};
 use crate::check::core::{CheckRecord, ERROR_SCOPE_TOO_NARROW};
 use crate::config_types::ExpectationTo;
@@ -303,8 +303,8 @@ fn wait_for_next_elapsed_marker(timeline: &Arc<Mutex<ElapsedProgressTimelineStat
         .unwrap_or(PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL)
 }
 
-// Results without a live evaluated report still have a progress timeline: the
-// complete timeline is the initial marker.
+// Results that finish before a live evaluation report starts still have the
+// required final progress marker.
 pub(crate) fn write_result_output_without_started_report(
     result_output: &mut Option<&mut dyn Write>,
     record: &CheckRecord,
@@ -316,9 +316,30 @@ pub(crate) fn write_result_output_without_started_report(
     Ok(())
 }
 
+pub(crate) fn write_result_output_with_elapsed_timeline(
+    result_output: &mut Option<&mut dyn Write>,
+    record: &CheckRecord,
+    elapsed: Duration,
+) -> Result<(), String> {
+    if let Some(writer) = result_output.as_mut() {
+        let completed_minutes =
+            elapsed.as_secs() / PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL.as_secs();
+        let marker_count = usize::try_from(completed_minutes.saturating_add(1))
+            .map_err(|_| "progress timeline marker count exceeds platform limits".to_string())?;
+        let timeline = ".".repeat(marker_count);
+        let line = render_check_output_record_with_timeline(record, &timeline);
+        write_stdout_record(*writer, line.as_bytes(), "check result")?;
+    }
+    Ok(())
+}
+
 fn render_check_output_record_with_initial_marker_timeline(record: &CheckRecord) -> String {
+    render_check_output_record_with_timeline(record, ".")
+}
+
+fn render_check_output_record_with_timeline(record: &CheckRecord, timeline: &str) -> String {
     let mut output = record.display_id.clone();
-    output.push('.');
+    output.push_str(timeline);
     output.push_str(&render_check_output_record_status_and_details(record));
     output
 }
@@ -328,31 +349,34 @@ pub(super) fn render_check_output_record_status_and_details(record: &CheckRecord
     // response payloads. It renders the final CheckRecord as provided;
     // selected-expectation execution asserts ScopeTooNarrow is never a final
     // check result before this public-output boundary.
-    // xpec: nO
+    // xpec: RC
     debug_assert_ne!(record.error.as_deref(), Some(ERROR_SCOPE_TOO_NARROW));
     let expected = record.expected_answer_text().unwrap_or("");
     let ask_mode = expected.is_empty();
     if record.passed() {
-        return (if ask_mode { "\n" } else { " PASS\n" }).to_string();
+        return (if ask_mode { "\n" } else { " ok\n" }).to_string();
     }
     let mut output = String::new();
-    output.push_str(if ask_mode { "\n" } else { " FAIL\n" });
+    output.push_str(if ask_mode { "\n" } else { " fail\n" });
     if let Some(error) = record.error.as_deref() {
         output.push_str("error: ");
-        output.push_str(&escape_check_output_text(error));
+        output.push_str(error);
         output.push('\n');
+        if let Some(evidence) = record.evidence.as_deref() {
+            push_escaped_check_output_line(&mut output, "evidence", evidence);
+        }
         return output;
     }
     if record.to == ExpectationTo::Caller {
-        output.push_str("expected: ");
-        output.push_str(&escape_check_output_text(
+        push_escaped_check_output_line(
+            &mut output,
+            "expected",
             record.expected_answer_text().unwrap_or(""),
-        ));
-        output.push('\n');
+        );
         return output;
     }
     if record.to == ExpectationTo::Shell {
-        for line in record.evidence.lines() {
+        for line in record.evidence.as_deref().unwrap_or("").lines() {
             output.push_str("│ ");
             output.push_str(line);
             output.push('\n');
@@ -377,22 +401,18 @@ pub(super) fn render_check_output_record_status_and_details(record: &CheckRecord
         record.diff_from_tree_oid_abbrev.as_deref(),
     ) {
         output.push_str("diff-from: ");
-        output.push_str(&escape_check_output_text(diff_from_tree_oid_abbrev));
+        output.push_str(diff_from_tree_oid_abbrev);
         output.push_str(" (");
-        output.push_str(&escape_check_output_text(diff_from));
+        output.push_str(diff_from);
         output.push_str(")\n");
     }
     if !ask_mode {
-        output.push_str("expected: ");
-        output.push_str(&escape_check_output_text(expected));
-        output.push('\n');
+        push_escaped_check_output_line(&mut output, "expected", expected);
     }
-    output.push_str("observed: ");
-    output.push_str(&escape_check_output_text(&record.observed));
-    output.push('\n');
-    output.push_str("evidence: ");
-    output.push_str(&escape_check_output_text(&record.evidence));
-    output.push('\n');
+    push_escaped_check_output_line(&mut output, "observed", &record.observed);
+    if let Some(evidence) = record.evidence.as_deref() {
+        push_escaped_check_output_line(&mut output, "evidence", evidence);
+    }
     if ask_mode {
         if let Some(suggestion) = record.question_scope_suggestion.as_deref() {
             output.push_str("q-scope-suggestion: ");
@@ -438,7 +458,7 @@ mod tests {
         );
     }
 
-    #[test] // xpec: sy,Od
+    #[test] // xpec: sy,Od,90
     fn invalid_turn_timeout_timeline_still_writes_final_result() {
         let bytes = Arc::new(Mutex::new(Vec::new()));
         let output = SharedCheckOutput::new(Box::new(CapturedOutput {
@@ -450,8 +470,45 @@ mod tests {
         let _ = report.finish_with_record(&timeout_error_record());
 
         let output = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
-        assert!(output.contains("j× FAIL\n"));
+        assert!(output.contains("j× fail\n"));
         assert!(output.contains("error: unparsable\n"));
+    }
+
+    #[test] // xpec: 90
+    fn check_error_output_prints_error_without_inline_escaping() {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let output = SharedCheckOutput::new(Box::new(CapturedOutput {
+            bytes: bytes.clone(),
+        }));
+        let report = start_expectation_report_output(output, "j");
+        let mut record = timeout_error_record();
+        record.error = Some("first\nsecond".to_string());
+
+        let _ = report.finish_with_record(&record);
+
+        assert!(String::from_utf8(bytes.lock().unwrap().clone())
+            .unwrap()
+            .contains("error: first\nsecond\n"));
+    }
+
+    #[test] // xpec: 90
+    fn check_diff_from_output_is_not_inline_escaped() {
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let output = SharedCheckOutput::new(Box::new(CapturedOutput {
+            bytes: bytes.clone(),
+        }));
+        let report = start_expectation_report_output(output, "j");
+        let mut record = timeout_error_record();
+        record.error = None;
+        record.observed = "no".to_string();
+        record.diff_from = Some("head\nbase".to_string());
+        record.diff_from_tree_oid_abbrev = Some("abc123".to_string());
+
+        let _ = report.finish_with_record(&record);
+
+        assert!(String::from_utf8(bytes.lock().unwrap().clone())
+            .unwrap()
+            .contains("diff-from: abc123 (head\nbase)\n"));
     }
 
     #[test] // xpec: sy
@@ -520,10 +577,10 @@ mod tests {
             expected_answer: Some("yes".to_string()),
             observed: INTERNAL_ERROR_UNPARSABLE.to_string(),
             error: Some(INTERNAL_ERROR_UNPARSABLE.to_string()),
-            evidence: "technical timeout".to_string(),
+            evidence: Some("technical timeout".to_string()),
             scope: vec![".".to_string()],
             question_scope_suggestion: None,
-            visible_tree_oid: "visible".to_string(),
+            visible_tree_oid: Some("visible".to_string()),
             diff_from: None,
             diff_from_tree_oid: None,
             diff_from_tree_oid_abbrev: None,

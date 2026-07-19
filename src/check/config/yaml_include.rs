@@ -7,6 +7,7 @@ use serde_saphyr::{
     from_str_with_options, IncludeRequest, IncludeResolveError, InputSource, ResolvedInclude,
 };
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 // Shared by top-level check config loading and recursive expectation includes;
 // both paths need the same source-aware YAML `!include` resolver.
@@ -23,9 +24,15 @@ where
         root: root.to_path_buf(),
         root_config_path: config_path.to_path_buf(),
         source: source.clone(),
-        cache: RepoInspectionCache::new(),
+        cache: Arc::new(Mutex::new(RepoInspectionCache::new())),
     };
-    let content = expand_foreach_yaml(root, config_path, content, &source, &mut resolver.cache)?;
+    let content = expand_foreach_yaml(
+        root,
+        config_path,
+        content,
+        &source,
+        Arc::clone(&resolver.cache),
+    )?;
     let options = serde_saphyr::options! {
         strict_booleans: true,
     }
@@ -37,7 +44,7 @@ struct CheckConfigIncludeResolver {
     root: PathBuf,
     root_config_path: PathBuf,
     source: CheckConfigSource,
-    cache: RepoInspectionCache,
+    cache: Arc<Mutex<RepoInspectionCache>>,
 }
 
 impl CheckConfigIncludeResolver {
@@ -50,16 +57,20 @@ impl CheckConfigIncludeResolver {
         // `ResolvedInclude.id` against the active include IDs. The root input
         // has no ID in that stack, so `resolve_include_path` rejects only the
         // root-file cycle that the parser cannot observe itself.
-        let content = self
-            .source
-            .file_content(&mut self.cache, &self.root, Path::new(&path))
-            .map_err(IncludeResolveError::Message)?;
+        let content = {
+            let mut cache = self.cache.lock().map_err(|_| {
+                IncludeResolveError::Message("config source cache lock is poisoned".to_string())
+            })?;
+            self.source
+                .file_content(&mut cache, &self.root, Path::new(&path))
+                .map_err(IncludeResolveError::Message)?
+        };
         let content = expand_foreach_yaml(
             &self.root,
             Path::new(&path),
             &content,
             &self.source,
-            &mut self.cache,
+            Arc::clone(&self.cache),
         )
         .map_err(IncludeResolveError::Message)?;
         Ok(ResolvedInclude {
@@ -134,7 +145,7 @@ mod tests {
     use std::process;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test] // xpec: I8,v7
+    #[test] // xpec: I8,3Z
     fn expectation_sequence_includes_are_flattened() {
         let root = test_root("expectation-sequence-include");
         fs::write(
@@ -155,7 +166,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test] // xpec: v7
+    #[test] // xpec: 3Z
     fn xpecs_and_expectations_are_exclusive_aliases() {
         for key in ["xpecs", "expectations"] {
             let content = format!("presets:\n  default: {{}}\n{key}:\n  - q: Local\n    a: yes\n");
@@ -179,7 +190,7 @@ mod tests {
         assert!(error.contains("duplicate field"));
     }
 
-    #[test] // xpec: v7
+    #[test] // xpec: 3Z
     fn nested_xpec_sequences_are_recursively_flattened() {
         let raw = parse_yaml_config_with_includes::<crate::config_types::RawCheckConfig>(
             Path::new("."),

@@ -19,9 +19,11 @@ pub(crate) fn expectation_id(
     let context_hash = hash_60(question_context.as_bytes());
     let mut input = Vec::new();
     push_expectation_id_frame(&mut input, "question", question.as_bytes());
-    // Preserve the established IDs (and their cached results) for the default
-    // agent addressee. Non-default addressees add a discriminator so otherwise
-    // identical agent, caller, and shell xpecs still have distinct IDs.
+    // `to` is encoded as a tagged union: absence of a `to` frame is the
+    // canonical discriminant for `agent`; every other addressee uses a frame
+    // containing its name. Thus every addressee value affects the tuple while
+    // the established agent encoding—and canon references to those IDs—stays
+    // stable.
     if to != "agent" {
         push_expectation_id_frame(&mut input, "to", to.as_bytes());
     }
@@ -82,7 +84,7 @@ fn encode_base62_20(mut value: u128) -> String {
 mod tests {
     use super::expectation_id;
 
-    #[test] // xpec: eP
+    #[test] // xpec: 1g
     fn expectation_id_changes_when_expected_answer_changes() {
         let yes = expectation_id("Does it pass?", "agent", "yes", "");
         let no = expectation_id("Does it pass?", "agent", "no", "");
@@ -90,7 +92,7 @@ mod tests {
         assert_ne!(yes, no);
     }
 
-    #[test] // xpec: eP
+    #[test] // xpec: 1g
     fn expectation_id_changes_when_addressee_changes() {
         let agent = expectation_id("Does it pass?", "agent", "yes", "");
         let caller = expectation_id("Does it pass?", "caller", "yes", "");
@@ -98,8 +100,8 @@ mod tests {
         assert_ne!(agent, caller, "the xpec ID must distinguish addressees");
     }
 
-    #[test] // xpec: AB,eP
-    fn default_agent_id_preserves_existing_references() {
+    #[test] // xpec: AB,1g
+    fn agent_addressee_uses_stable_implicit_discriminant() {
         assert_eq!(
             expectation_id("2+2=?", "agent", "4", ""),
             "3nSMjraHbFW7BMLJ4AcO",

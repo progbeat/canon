@@ -139,6 +139,7 @@ pub(crate) fn render_expectation_validation_error(
     error: &str,
     evidence: &str,
 ) -> String {
+    // xpec: RC
     assert_ne!(
         error, ERROR_SCOPE_TOO_NARROW,
         "public expectation error blocks must not expose ScopeTooNarrow"
@@ -218,8 +219,10 @@ pub(crate) fn validate_agent_config(agent: &AgentConfig, label: &str) -> Result<
         )?;
     }
     validate_thinking(&agent.thinking).map_err(|err| format!("{}: {}", label, err))?;
-    for path in &agent.ignore {
-        normalize_agent_ignore_pattern_for_config(path)?;
+    if let Some(ignore) = &agent.ignore {
+        for path in ignore {
+            normalize_agent_ignore_pattern_for_config(path)?;
+        }
     }
     for plugin in &agent.plugins {
         validate_plugin_config_key(plugin)?;
@@ -375,12 +378,6 @@ pub(crate) fn check_config_loads_plugins(config: &CheckConfig) -> bool {
             .any(|expectation| !expectation.agent.plugins.is_empty())
 }
 
-pub(crate) fn validate_relative_config_path(value: &str, label: &str) -> Result<(), String> {
-    normalize_repo_path(value)
-        .map(|_| ())
-        .map_err(|err| format!("{}: {}", label, err))
-}
-
 pub(crate) fn normalize_agent_ignore_pattern_for_config(value: &str) -> Result<String, String> {
     if value.trim().is_empty() {
         return Err("agent ignore pattern: path must not be empty".to_string());
@@ -397,9 +394,10 @@ mod tests {
     use crate::check::core::ERROR_SCOPE_TOO_NARROW;
     use crate::config_types::{
         AgentConfig, CheckConfig, Cooldown, CooldownConfig, Expectation, ExpectationTarget,
+        DEFAULT_DIFF_FROM,
     };
 
-    #[test] // xpec: 6
+    #[test] // xpec: uf
     fn cooldown_config_accepts_compact_positive_duration() {
         assert_eq!(
             parse_cooldown_config(&CooldownConfig("30m".to_string())).unwrap(),
@@ -407,13 +405,13 @@ mod tests {
         );
     }
 
-    #[test] // xpec: 6
+    #[test] // xpec: uf
     fn cooldown_config_rejects_mapping_and_fail_specific_forms() {
         assert!(serde_saphyr::from_str::<CooldownConfig>("fail: 1h").is_err());
         assert!(serde_saphyr::from_str::<CooldownConfig>("pass: 7d").is_err());
     }
 
-    #[test]
+    #[test] // xpec: aw,9b
     fn invalid_expected_answer_error_uses_expectation_block_format() {
         let question = "What is this project implemented in?";
         let agent = AgentConfig::default();
@@ -426,11 +424,12 @@ mod tests {
                 q: question.to_string(),
                 a: "Rust".to_string(),
                 question_context: String::new(),
-                diff_from: None,
+                diff_from: DEFAULT_DIFF_FROM.to_string(),
                 target: None,
                 question_answer_only: false,
                 agent,
                 cooldown: None,
+                in_place_compatibility: Default::default(),
             }],
         };
 
@@ -463,7 +462,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[test] // xpec: 9b
     fn expectation_validation_error_escapes_all_public_fields() {
         let rendered =
             render_expectation_validation_error("A", "Question\ntext", "bad\terror", "line\rbreak");
@@ -474,13 +473,13 @@ mod tests {
         );
     }
 
-    #[test]
+    #[test] // xpec: RC
     #[should_panic(expected = "public expectation error blocks must not expose ScopeTooNarrow")]
     fn expectation_validation_error_rejects_scope_too_narrow() {
         render_expectation_validation_error("A", "Question", ERROR_SCOPE_TOO_NARROW, "scope");
     }
 
-    #[test]
+    #[test] // xpec: 3Z
     fn duplicate_expectation_ids_are_rejected_even_when_targets_differ() {
         let agent = AgentConfig::default();
         let expectation = |target| Expectation {
@@ -489,11 +488,12 @@ mod tests {
             q: "Does this behavior work?".to_string(),
             a: "yes".to_string(),
             question_context: String::new(),
-            diff_from: None,
+            diff_from: DEFAULT_DIFF_FROM.to_string(),
             target,
             question_answer_only: false,
             agent: agent.clone(),
             cooldown: None,
+            in_place_compatibility: Default::default(),
         };
         let config = CheckConfig {
             version: 1,
@@ -510,7 +510,7 @@ mod tests {
         assert!(error.starts_with("duplicate expectation ID: "), "{error}");
     }
 
-    #[test] // xpec: 6
+    #[test] // xpec: uf
     fn git_backed_config_accepts_canonical_cooldown() {
         let agent = AgentConfig::default();
         let mut item = expectation(&agent, None);
@@ -524,7 +524,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[test] // xpec: 9b
     fn unicode_escape_uses_surrogate_pairs_for_non_bmp_codepoints() {
         let mut escaped = String::new();
 
@@ -540,11 +540,12 @@ mod tests {
             q: "Does this behavior work?".to_string(),
             a: "yes".to_string(),
             question_context: String::new(),
-            diff_from: None,
+            diff_from: DEFAULT_DIFF_FROM.to_string(),
             target,
             question_answer_only: false,
             agent: agent.clone(),
             cooldown: None,
+            in_place_compatibility: Default::default(),
         }
     }
 

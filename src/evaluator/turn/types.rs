@@ -1,5 +1,4 @@
 use crate::check::ParsedAnswer;
-use crate::token_usage_types::TokenUsage;
 use serde::Serialize;
 
 pub(crate) struct EvaluatorTurnContext<'a> {
@@ -18,12 +17,14 @@ pub(crate) struct ThreadLifecycleLog {
 
 #[derive(Clone, Serialize)]
 pub(crate) struct ThreadReuseLogContext {
-    #[serde(rename = "visibleTreeOid")]
-    pub(crate) visible_tree_oid: String,
-    #[serde(rename = "diffBaseTreeOid")]
-    pub(crate) diff_base_tree_oid: String,
-    #[serde(rename = "checkedTreeOid")]
-    pub(crate) checked_tree_oid: String,
+    #[serde(rename = "inPlace")]
+    pub(crate) in_place: bool,
+    #[serde(rename = "visibleTreeOid", skip_serializing_if = "Option::is_none")]
+    pub(crate) visible_tree_oid: Option<String>,
+    #[serde(rename = "diffBaseTreeOid", skip_serializing_if = "Option::is_none")]
+    pub(crate) diff_base_tree_oid: Option<String>,
+    #[serde(rename = "checkedTreeOid", skip_serializing_if = "Option::is_none")]
+    pub(crate) checked_tree_oid: Option<String>,
     #[serde(rename = "turnPrompt")]
     pub(crate) turn_prompt: String,
     #[serde(rename = "questionContext")]
@@ -34,13 +35,11 @@ pub(crate) struct ThreadReuseLogContext {
 
 pub(crate) struct ParsedTurnResponse {
     pub(crate) answer: ParsedAnswer,
-    pub(crate) usage: Option<TokenUsage>,
     pub(crate) context_compacted: bool,
     pub(crate) schema_valid: bool,
 }
 
 pub(super) struct RawTurnResponse {
     pub(super) text: String,
-    pub(super) usage: Option<TokenUsage>,
     pub(super) context_compacted: bool,
 }

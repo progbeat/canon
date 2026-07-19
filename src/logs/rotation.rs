@@ -1,7 +1,6 @@
 use crate::fs_util::reject_symlink;
 use crate::logs::config::{
-    active_log_max_bytes, diagnostic_log_files, diagnostic_logs_explicitly_disabled,
-    DiagnosticLogConfig,
+    active_log_rotation_target_bytes, diagnostic_log_files, PersistentDiagnosticLogConfig,
 };
 use crate::logs::error::{log_io_error, log_rename_error, DiagnosticLogError, DiagnosticLogResult};
 use crate::logs::fs::remove_file_if_exists;
@@ -31,16 +30,13 @@ pub(crate) fn append_runtime_log_event_to_file(
 
 pub(crate) fn rotate_diagnostic_logs_with_config(
     log_dir: &Path,
-    config: &DiagnosticLogConfig,
+    config: &PersistentDiagnosticLogConfig,
 ) -> DiagnosticLogResult<()> {
-    if diagnostic_logs_explicitly_disabled(config) {
-        return Ok(());
-    }
     let files = diagnostic_log_files();
     let active = log_dir.join(files[0]);
-    let active_limit = active_log_max_bytes(config, files.len());
+    let active_rotation_target = active_log_rotation_target_bytes(config, files.len());
     let should_rotate = match active.metadata() {
-        Ok(metadata) => metadata.len() > active_limit,
+        Ok(metadata) => metadata.len() > active_rotation_target,
         Err(err) if err.kind() == io::ErrorKind::NotFound => false,
         Err(err) => return Err(log_io_error("stat", &active, err)),
     };
@@ -74,14 +70,11 @@ pub(crate) fn rotate_active_diagnostic_logs(
     Ok(())
 }
 
-pub(crate) fn rotate_active_diagnostic_logs_to_fit(
+pub(crate) fn prune_diagnostic_logs_to_fit(
     log_dir: &Path,
-    config: &DiagnosticLogConfig,
+    config: &PersistentDiagnosticLogConfig,
     incoming_size: u64,
 ) -> DiagnosticLogResult<()> {
-    if diagnostic_logs_explicitly_disabled(config) {
-        return Ok(());
-    }
     let files = diagnostic_log_files();
     loop {
         let size = diagnostic_log_dir_size(log_dir)?;
@@ -93,7 +86,12 @@ pub(crate) fn rotate_active_diagnostic_logs_to_fit(
         if total <= config.max_bytes {
             return Ok(());
         }
-        rotate_active_diagnostic_logs(log_dir, files)?;
+        for file_name in files.iter().rev() {
+            remove_file_if_exists(&log_dir.join(file_name))?;
+            if diagnostic_log_dir_size(log_dir)? < size {
+                break;
+            }
+        }
         if diagnostic_log_dir_size(log_dir)? >= size {
             return Err(DiagnosticLogError::RecordTooLarge {
                 size: total,
@@ -113,20 +111,29 @@ fn rename_file_if_exists(from: &Path, to: &Path) -> DiagnosticLogResult<()> {
 
 fn diagnostic_log_dir_size(log_dir: &Path) -> DiagnosticLogResult<u64> {
     let mut total = 0u64;
-    for file_name in diagnostic_log_files() {
-        let path = log_dir.join(file_name);
+    let entries =
+        fs::read_dir(log_dir).map_err(|err| log_io_error("read directory", log_dir, err))?;
+    for entry in entries {
+        let entry = entry.map_err(|err| log_io_error("read directory", log_dir, err))?;
+        let path = entry.path();
         reject_symlink(&path)
             .map_err(|message| log_io_error("inspect", &path, io::Error::other(message)))?;
-        let size = match path.metadata() {
-            Ok(metadata) => metadata.len(),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
-            Err(err) => return Err(log_io_error("stat", &path, err)),
-        };
-        total = total
-            .checked_add(size)
-            .ok_or_else(|| DiagnosticLogError::SizeOverflow {
-                path: log_dir.to_path_buf(),
-            })?;
+        let metadata = path
+            .metadata()
+            .map_err(|err| log_io_error("stat", &path, err))?;
+        if !metadata.is_file() {
+            return Err(log_io_error(
+                "inspect",
+                &path,
+                io::Error::other("runtime log directory entries must be regular files"),
+            ));
+        }
+        total =
+            total
+                .checked_add(metadata.len())
+                .ok_or_else(|| DiagnosticLogError::SizeOverflow {
+                    path: log_dir.to_path_buf(),
+                })?;
     }
     Ok(total)
 }

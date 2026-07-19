@@ -1,4 +1,3 @@
-use crate::fs_util::reject_symlink;
 use crate::git::{read_git_blobs, staged_tracked_files, StagedTrackedFile, TreeSource};
 use crate::platform::git_path_bytes;
 use std::collections::BTreeMap;
@@ -76,7 +75,7 @@ impl RepoInspectionCache {
     ) -> Result<String, String> {
         match source {
             TreeSource::Staged => self.staged_file_content(root, path),
-            TreeSource::Git { .. } => {
+            TreeSource::Git { .. } | TreeSource::DefaultAgainstHead { .. } => {
                 let path = path.as_ref();
                 let key = (root.to_path_buf(), source.cache_key(), path.to_path_buf());
                 if let Some(cached) = self.tree_file_contents.get(&key) {
@@ -185,7 +184,8 @@ fn blob_paths_from_tracked_files(files: Vec<StagedTrackedFile>) -> Vec<Vec<u8>> 
 
 fn in_place_file_content_from_fs(root: &Path, path: &Path) -> Result<String, String> {
     let path = root.join(path);
-    reject_symlink(&path)?;
+    // [cg,s6] In-place uses ordinary filesystem semantics. A path discovered
+    // from this same source remains readable when it is a symlink.
     fs::read_to_string(&path).map_err(|err| format!("failed to read {}: {}", path.display(), err))
 }
 
@@ -201,11 +201,16 @@ fn collect_in_place_files(root: &Path, dir: &Path, files: &mut Vec<Vec<u8>>) -> 
         fs::read_dir(dir).map_err(|err| format!("failed to read {}: {}", dir.display(), err))?
     {
         let entry = entry.map_err(|err| format!("failed to read {}: {}", dir.display(), err))?;
-        // [Df] Git exposes worktree metadata through an entry named `.git`.
-        // That entry may be either a metadata directory or a gitfile pointing
-        // elsewhere, so this name check deliberately runs before file-type
-        // inspection and excludes both forms. Git-controlled project files
-        // such as `.gitignore` remain ordinary visible filesystem contents.
+        // [I4] This listing is used only to discover filesystem inputs for
+        // config `foreach` expansion. It is not the evaluator's filesystem
+        // view: the in-place evaluator starts directly in `root`, with no
+        // project-file hiding at all. Git exposes repository metadata through
+        // an entry named `.git`; ignoring that metadata here prevents it from
+        // becoming config input. The entry may be either a metadata directory
+        // or a gitfile pointing elsewhere, so the name check deliberately runs
+        // before file-type inspection and excludes both forms. Project files
+        // such as `.gitignore` remain ordinary config inputs and evaluator-
+        // visible filesystem contents.
         if entry.file_name() == ".git" {
             continue;
         }
@@ -231,7 +236,7 @@ mod tests {
     use std::process;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test] // xpec: tf,d
+    #[test] // xpec: tf,dx
     fn staged_file_content_does_not_read_unrelated_blobs() {
         let root = test_root("staged-file-content-requested-blob-only");
         let init = process::Command::new("git")
@@ -281,22 +286,22 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn in_place_file_content_rejects_symlink() {
-        let root = test_root("in-place-file-content-rejects-symlink");
+    #[test] // xpec: cg,s6
+    fn in_place_file_content_reads_listed_symlink() {
+        let root = test_root("in-place-file-content-reads-symlink");
         let outside = outside_test_file(&root);
         fs::write(&outside, "secret").unwrap();
         std::os::unix::fs::symlink(&outside, root.join("config.yml")).unwrap();
 
-        let error = in_place_file_content_from_fs(&root, Path::new("config.yml")).unwrap_err();
+        let content = in_place_file_content_from_fs(&root, Path::new("config.yml")).unwrap();
 
-        assert!(error.contains("refusing to use symlink"));
+        assert_eq!(content, "secret");
         let _ = fs::remove_file(outside);
         let _ = fs::remove_dir_all(root);
     }
 
     #[cfg(unix)]
-    #[test]
+    #[test] // xpec: I4
     fn in_place_file_listing_includes_symlinks() {
         let root = test_root("in-place-file-listing-includes-symlinks");
         fs::create_dir_all(root.join("specs")).unwrap();
@@ -315,7 +320,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test] // xpec: Df
+    #[test] // xpec: I4
     fn in_place_file_listing_ignores_git_directory_or_gitfile_only() {
         for gitfile in [false, true] {
             let kind = if gitfile { "gitfile" } else { "directory" };

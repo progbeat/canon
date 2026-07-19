@@ -70,7 +70,7 @@ mod tests {
     #[cfg(windows)]
     const INTERLEAVED_COMMAND: &str = "echo stdout& 1>&2 echo stderr& echo after& exit /b 3";
 
-    #[test] // xpec: 1r,nF
+    #[test] // xpec: 1r,k4
     fn shell_evaluation_preserves_stdout_stderr_order_in_one_transcript() {
         let evaluation = evaluate(Path::new("."), INTERLEAVED_COMMAND).unwrap();
 

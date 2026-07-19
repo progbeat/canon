@@ -1,39 +1,25 @@
-use super::fs::read_optional_file;
+use super::fs::{inspect_hook_file, HookFile};
 use super::{
-    DEFAULT_GIT_PRE_COMMIT_HOOK_PATH, DEFAULT_PRE_COMMIT_GIT_PATH, GIT_HOOKS_PATH,
-    GIT_WORKTREE_REQUIRED_FOR_HOOK_INSTALL, PRE_COMMIT_HOOK_PATH,
+    DEFAULT_GIT_HOOKS_PATH, DEFAULT_GIT_PRE_COMMIT_HOOK_PATH, DEFAULT_PRE_COMMIT_GIT_PATH,
+    GIT_WORKTREE_REQUIRED_FOR_HOOK_INSTALL,
 };
 use crate::platform;
 use crate::project::command_output_trimmed;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus, Output};
 
-fn current_git_hooks_paths_for_worktree(root: &Path) -> Result<Vec<String>, String> {
+fn current_git_hooks_path_for_worktree(root: &Path) -> Result<Option<String>, String> {
     let output = run_git_config_with_status(
         root,
-        &["--local", "--get-all", "core.hooksPath"],
+        &["--get", "core.hooksPath"],
         "failed to read git core.hooksPath",
         |status| status.success() || status.code() == Some(1),
     )?;
     if output.status.success() {
-        return command_output_lines(&output.stdout, "git config stdout");
+        return command_output_trimmed(&output.stdout, "git config stdout")
+            .map(|value| Some(value.to_string()));
     }
-    Ok(Vec::new())
-}
-
-fn command_output_lines(output: &[u8], description: &str) -> Result<Vec<String>, String> {
-    let mut text = String::from_utf8(output.to_vec())
-        .map_err(|err| format!("{} was not valid UTF-8: {}", description, err))?;
-    if text.is_empty() {
-        return Ok(Vec::new());
-    }
-    if text.ends_with('\n') {
-        text.pop();
-    }
-    Ok(text
-        .split('\n')
-        .map(|line| line.strip_suffix('\r').unwrap_or(line).to_string())
-        .collect())
+    Ok(None)
 }
 
 pub(super) fn configure_git_hooks_path(
@@ -52,16 +38,12 @@ pub(super) fn configure_git_hooks_path(
 }
 
 pub(super) fn uses_canon_git_hooks_path(preflight: &HookInstallPreflight) -> bool {
-    !preflight.current_git_hooks_paths.is_empty()
-        && preflight.current_git_hooks_paths.iter().all(|existing| {
+    preflight
+        .current_git_hooks_path
+        .as_deref()
+        .is_some_and(|existing| {
             git_hooks_path_matches(&preflight.root, &preflight.git_hooks_path, existing)
         })
-}
-
-pub(super) fn has_canon_git_hooks_path(preflight: &HookInstallPreflight) -> bool {
-    preflight.current_git_hooks_paths.iter().any(|existing| {
-        git_hooks_path_matches(&preflight.root, &preflight.git_hooks_path, existing)
-    })
 }
 
 pub(super) fn set_git_hooks_path(
@@ -142,8 +124,8 @@ pub(super) fn is_git_worktree(root: &Path) -> Result<bool, String> {
 }
 
 pub(super) struct HookInstallPreflight {
-    pub(super) current_git_hooks_paths: Vec<String>,
-    pub(super) default_pre_commit_hook: Option<String>,
+    pub(super) current_git_hooks_path: Option<String>,
+    pub(super) default_pre_commit_hook: HookFile,
     pub(super) is_git_worktree: bool,
     pub(super) root: PathBuf,
     pub(super) git_hooks_path: PathBuf,
@@ -156,14 +138,14 @@ impl HookInstallPreflight {
         let git_hooks_path = canon_git_hooks_path(root, is_git_worktree)?;
         let pre_commit_hook_path = canon_pre_commit_hook_path(root, is_git_worktree)?;
         let default_pre_commit_hook_path = default_git_pre_commit_hook_path(root, is_git_worktree)?;
-        let current_git_hooks_paths = if is_git_worktree {
-            current_git_hooks_paths_for_worktree(root)?
+        let current_git_hooks_path = if is_git_worktree {
+            current_git_hooks_path_for_worktree(root)?
         } else {
-            Vec::new()
+            None
         };
         Ok(HookInstallPreflight {
-            current_git_hooks_paths,
-            default_pre_commit_hook: read_optional_file(&default_pre_commit_hook_path)?,
+            current_git_hooks_path,
+            default_pre_commit_hook: inspect_hook_file(&default_pre_commit_hook_path),
             is_git_worktree,
             root: root.to_path_buf(),
             git_hooks_path,
@@ -173,13 +155,17 @@ impl HookInstallPreflight {
 }
 
 fn canon_git_hooks_path(root: &Path, is_git_worktree: bool) -> Result<PathBuf, String> {
-    let _ = is_git_worktree;
-    crate::state_paths::canon_state_path(root, GIT_HOOKS_PATH)
+    if is_git_worktree {
+        return Ok(git_common_dir_path(root)?.join("hooks"));
+    }
+    Ok(root.join(DEFAULT_GIT_HOOKS_PATH))
 }
 
 fn canon_pre_commit_hook_path(root: &Path, is_git_worktree: bool) -> Result<PathBuf, String> {
-    let _ = is_git_worktree;
-    crate::state_paths::canon_state_path(root, PRE_COMMIT_HOOK_PATH)
+    if is_git_worktree {
+        return Ok(git_common_dir_path(root)?.join(DEFAULT_PRE_COMMIT_GIT_PATH));
+    }
+    Ok(root.join(DEFAULT_GIT_PRE_COMMIT_HOOK_PATH))
 }
 
 fn default_git_pre_commit_hook_path(root: &Path, is_git_worktree: bool) -> Result<PathBuf, String> {

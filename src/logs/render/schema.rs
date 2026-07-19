@@ -49,12 +49,12 @@ fn required_runtime_log_fields(event: &str) -> Option<&'static [&'static str]> {
     // This table is the schema map for known runtime-log events. Thread
     // lifecycle events require the effective base/developer instructions for
     // inspection, and `validate_agent_token_usage_schema` below validates
-    // per-turn token usage fields for agent response/error events.
+    // per-turn fields for dedicated agent token-usage events.
     match event {
         "agent.request" => Some(&["id", "attempt", "reason", "request"]),
         "agent.response" => Some(&["id", "attempt", "reason", "response"]),
         "agent.turn_error" => Some(&["id", "attempt", "reason", "response"]),
-        "cache.cleanup" => Some(&["removed", "kept"]),
+        "agent.token_usage" => Some(&["id", "attempt", "reason", "threadId", "turnId"]),
         "cache.hit" => Some(&["id", "result", "scope"]),
         "check.start" => Some(&["selected"]),
         "expectation.result" | "interrogation.result" => {
@@ -85,6 +85,7 @@ fn required_runtime_log_fields(event: &str) -> Option<&'static [&'static str]> {
         ]),
         "thread.start" | "thread.reuse" => Some(&[
             "threadId",
+            "id",
             "scope",
             "model",
             "thinking",
@@ -93,6 +94,7 @@ fn required_runtime_log_fields(event: &str) -> Option<&'static [&'static str]> {
             "reuseContext",
         ]),
         "check.finish" => Some(&["query"]),
+        "xpec_state.retention" => Some(&["removed", "kept"]),
         _ => None,
     }
 }
@@ -111,7 +113,10 @@ pub(super) fn validate_runtime_log_extra_fields(
 ) -> DiagnosticLogResult<()> {
     let mut seen = BTreeSet::new();
     for (key, _) in fields {
-        if matches!(*key, "timestamp" | "level" | "event") {
+        if matches!(
+            *key,
+            "timestamp" | "level" | "event" | "processId" | "invocationId"
+        ) {
             return Err(DiagnosticLogError::InvalidRuntimeField {
                 key: (*key).to_string(),
                 reason: "reserved",

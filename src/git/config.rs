@@ -17,10 +17,18 @@ pub(crate) enum GitConfigGetError {
 }
 
 pub(crate) fn git_config_get(root: &Path, key: &str) -> Result<Option<String>, GitConfigGetError> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .arg("config")
+    let mut command = project_config_command(root);
+    run_config_get(&mut command, key)
+}
+
+fn project_config_command(root: &Path) -> Command {
+    let mut command = Command::new("git");
+    command.arg("-C").arg(root).arg("config");
+    command
+}
+
+fn run_config_get(command: &mut Command, key: &str) -> Result<Option<String>, GitConfigGetError> {
+    let output = command
         .arg("--get")
         .arg(key)
         .output()

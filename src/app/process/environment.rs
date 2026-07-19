@@ -37,7 +37,7 @@ mod tests {
     use super::*;
     use std::ffi::{OsStr, OsString};
 
-    #[test]
+    #[test] // xpec: A8,mf
     fn app_server_environment_uses_isolated_codex_home() {
         let mut command = Command::new("codex");
         let codex_home = Path::new("/tmp/canon-evaluator-home/.codex");

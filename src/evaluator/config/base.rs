@@ -12,7 +12,7 @@ use crate::config_types::AgentConfig;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const EVALUATOR_PERMISSION_PROFILE: &str = "canon_check";
 
@@ -89,7 +89,7 @@ pub(crate) fn evaluator_thread_config_with_no_sandbox(
     thinking: &str,
     app_server_state_root: Option<&Path>,
     session_root: &Path,
-    template_artifact_paths: &[PathBuf],
+    template_artifact_directory: &Path,
     no_sandbox: bool,
 ) -> EvaluatorConfigResult<Value> {
     // Scope and ignore filtering is enforced by the materialized evaluator
@@ -108,7 +108,7 @@ pub(crate) fn evaluator_thread_config_with_no_sandbox(
     }
     merge_filesystem_permissions(
         &mut extra_permissions,
-        evaluator_template_artifact_permissions(template_artifact_paths)?,
+        evaluator_template_artifact_permissions(template_artifact_directory)?,
     )?;
     EvaluatorConfigSettings::new(FILESYSTEM_DENY, codex_reasoning_effort(thinking))
         .with_extra_filesystem_permissions(extra_permissions)
@@ -412,7 +412,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    #[test]
+    #[test] // xpec: A8,mf
     fn startup_config_denies_root_access_before_thread_scope_is_known() {
         let agent = AgentConfig::default();
         let config = evaluator_startup_config_settings(&agent)

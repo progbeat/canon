@@ -8,7 +8,7 @@ use crate::evaluator::{
 use crate::token_usage_types::EvaluatorTurnUsage;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const EVALUATOR_SESSION_START_SOURCE: &str = "clear";
 const LOCAL_ENVIRONMENT_ID: &str = "local";
@@ -17,7 +17,7 @@ impl EvaluatorRunner for AppServerRunner {
     fn start_session(
         &mut self,
         session_cwd: &Path,
-        template_artifact_paths: &[PathBuf],
+        template_artifact_directory: &Path,
         base_instructions: &str,
         developer_instructions: &str,
         agent: &AgentConfig,
@@ -46,7 +46,7 @@ impl EvaluatorRunner for AppServerRunner {
                 thinking,
                 self.app_server_state_root(),
                 session_cwd,
-                template_artifact_paths,
+                template_artifact_directory,
                 self.no_sandbox(),
             )
             .map_err(|err| EvaluatorError::message(err.to_string()))?,

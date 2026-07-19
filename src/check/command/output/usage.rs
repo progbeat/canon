@@ -17,7 +17,7 @@ mod tests {
     use super::render_token_usage_summary;
     use crate::token_usage_types::TokenUsage;
 
-    #[test] // xpec: NQ,Z8
+    #[test] // xpec: 9b,8J
     fn token_usage_output_matches_documented_line() {
         let usage = TokenUsage {
             total_tokens: 9,

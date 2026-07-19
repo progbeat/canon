@@ -1,25 +1,20 @@
 use super::evaluator_response::ParsedAnswer;
 use super::record::CheckRecord;
-use crate::token_usage_types::TokenUsage;
 use std::collections::BTreeSet;
 
 pub(crate) struct InterrogationResult {
     pub(crate) record: CheckRecord,
-    pub(crate) turn_usage: Option<TokenUsage>,
     pub(crate) context_compacted: bool,
-    pub(crate) stop_after_current_expectation: bool,
     pub(crate) interrupted: bool,
 }
 
 pub(crate) struct InterrogationAnswer {
     pub(crate) answer: ParsedAnswer,
-    pub(crate) visible_tree_oid: String,
+    pub(crate) visible_tree_oid: Option<String>,
     pub(crate) diff_from: Option<String>,
     pub(crate) diff_from_tree_oid: Option<String>,
     pub(crate) diff_from_tree_oid_abbrev: Option<String>,
-    pub(crate) turn_usage: Option<TokenUsage>,
     pub(crate) context_compacted: bool,
-    pub(crate) stop_after_current_expectation: bool,
     pub(crate) interrupted: bool,
 }
 

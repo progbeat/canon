@@ -11,38 +11,56 @@ pub(crate) fn order_selected_by_rank_and_latest_fail<T>(
     last_result_history: &mut XpecStateCache,
     expectation: impl Fn(&T) -> &ResolvedExpectation,
 ) -> Result<Vec<T>, String> {
-    // [cv] The caller passes selected evaluator work after applying the
+    // [IJ] The caller passes selected evaluator work after applying the
     // mode-specific selection policy; this function only orders that work and
     // never turns history into cached results or removes an item.
-    order_by_rank_and_latest_fail_with(items, |item| {
-        let expectation = expectation(item);
-        latest_fail_timestamp(root, expectation, last_result_history)
-            .map(|latest| (expectation.rank, latest.unwrap_or(UNIX_EPOCH_TIMESTAMP)))
-    })
+    let items_with_order_fields = items
+        .into_iter()
+        .map(|item| {
+            let expectation = expectation(&item);
+            let rank = expectation.rank;
+            let latest_fail = latest_fail_timestamp(root, expectation, last_result_history)?
+                .unwrap_or(UNIX_EPOCH_TIMESTAMP);
+            Ok((item, rank, latest_fail))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(order_precomputed_by_rank_and_latest_fail(
+        items_with_order_fields,
+    ))
 }
 
-fn order_by_rank_and_latest_fail_with<T>(
+pub(crate) fn order_selected_when_every_expectation_has_no_fail_result<T>(
     items: Vec<T>,
-    mut key_for: impl FnMut(&T) -> Result<(i64, u64), String>,
-) -> Result<Vec<T>, String> {
+    expectation: impl Fn(&T) -> &ResolvedExpectation,
+) -> Vec<T> {
+    let items_with_order_fields = items
+        .into_iter()
+        .map(|item| {
+            let rank = expectation(&item).rank;
+            (item, rank, UNIX_EPOCH_TIMESTAMP)
+        })
+        .collect::<Vec<_>>();
+    order_precomputed_by_rank_and_latest_fail(items_with_order_fields)
+}
+
+fn order_precomputed_by_rank_and_latest_fail<T>(items: Vec<(T, i64, u64)>) -> Vec<T> {
     let mut ordered = items
         .into_iter()
         .enumerate()
-        .map(|(index, item)| {
-            let (rank, latest_fail) = key_for(&item)?;
+        .map(|(index, (item, rank, latest_fail))| {
             let key = CheckOrderKey {
                 rank_ascending: rank,
                 latest_fail_descending: Reverse(latest_fail),
                 original_selection_index: index,
             };
-            Ok((key, item))
+            (key, item)
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Vec<_>>();
     ordered.sort_by_key(|(key, _)| *key);
-    Ok(ordered.into_iter().map(|(_, item)| item).collect())
+    ordered.into_iter().map(|(_, item)| item).collect()
 }
 
-// xpec: cv
+// xpec: IJ
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct CheckOrderKey {
     rank_ascending: i64,
@@ -52,9 +70,14 @@ struct CheckOrderKey {
 
 #[cfg(test)]
 mod tests {
-    use super::order_by_rank_and_latest_fail_with;
+    use super::{
+        order_precomputed_by_rank_and_latest_fail,
+        order_selected_when_every_expectation_has_no_fail_result,
+    };
+    use crate::check::core::ResolvedExpectation;
+    use crate::config_types::{AgentConfig, ExpectationTo, DEFAULT_DIFF_FROM};
 
-    #[test] // xpec: cv
+    #[test] // xpec: IJ
     fn rank_precedes_latest_fail_and_ties_remain_stable() {
         let items = vec![
             ("rank-zero-old", 0, 1),
@@ -63,9 +86,7 @@ mod tests {
             ("rank-zero-new-tie", 0, 2),
         ];
 
-        let ordered = order_by_rank_and_latest_fail_with(items, |item| Ok((item.1, item.2)))
-            .expect("order selected xpecs");
-        let names = ordered.into_iter().map(|item| item.0).collect::<Vec<_>>();
+        let names = order_precomputed_by_rank_and_latest_fail(items);
 
         assert_eq!(
             names,
@@ -76,5 +97,51 @@ mod tests {
                 "rank-zero-old",
             ]
         );
+    }
+
+    #[test] // xpec: IJ,I4
+    fn absent_latest_fail_results_all_use_epoch_and_keep_same_rank_ties_stable() {
+        let expectations = vec![
+            expectation("later-rank", 1),
+            expectation("same-rank-first", 0),
+            expectation("same-rank-second", 0),
+            expectation("earlier-rank", -1),
+        ];
+
+        let ordered =
+            order_selected_when_every_expectation_has_no_fail_result(expectations, |expectation| {
+                expectation
+            });
+
+        assert_eq!(
+            ordered
+                .into_iter()
+                .map(|expectation| expectation.id)
+                .collect::<Vec<_>>(),
+            vec![
+                "earlier-rank",
+                "same-rank-first",
+                "same-rank-second",
+                "later-rank",
+            ]
+        );
+    }
+
+    fn expectation(id: &str, rank: i64) -> ResolvedExpectation {
+        ResolvedExpectation {
+            number: 0,
+            id: id.to_string(),
+            display_id: id.to_string(),
+            to: ExpectationTo::Agent,
+            rank,
+            question: String::new(),
+            expected_answer: String::new(),
+            question_context: String::new(),
+            diff_from: DEFAULT_DIFF_FROM.to_string(),
+            target: None,
+            question_answer_only: false,
+            agent: AgentConfig::default(),
+            cooldown: None,
+        }
     }
 }

@@ -10,8 +10,8 @@ use crate::output::write_stderr_line;
 use crate::repo_inspection::RepoInspectionCache;
 use crate::time::unix_timestamp;
 use crate::xpec_state::{
-    cached_last_result_for_expectation, refresh_reused_same_tree_last_result,
-    CachedLastResultLookup, XpecStateCache,
+    cached_pass_result_for_expectation, refresh_reused_same_tree_pass_result,
+    CachedPassResultLookup, XpecStateCache,
 };
 use std::ffi::OsString;
 use std::path::Path;
@@ -28,7 +28,7 @@ pub(crate) fn run_gate_command(root: &Path, args: &[OsString]) -> Result<(), Com
         );
     }
     let changed_paths = gate_command_result(staged_changed_path_bytes(root))?;
-    // `canon check` prints "Commit the staged changes NOW!" only when this
+    // `canon check` prints "Commit the staged changes!" only when this
     // same HEAD-vs-staged regression count is zero. In that same-tree commit
     // case, remaining expectation failures are not gate failures; only a
     // staged regression from HEAD pass to staged fail blocks the hook.
@@ -53,7 +53,6 @@ fn gate_regression_count(root: &Path) -> Result<usize, CommandError> {
     let config_source = gate_command_result(TreeSource::resolve_default_against_tree(
         root,
         crate::git::DEFAULT_AGAINST_TREE_ARG,
-        false,
     ))?;
     let config =
         match load_check_config(&mut repo_cache, root, Path::new(CHECK_PATH), &config_source) {
@@ -81,11 +80,11 @@ enum GateDecision {
 }
 
 fn gate_decision(num_regressions: usize, changed_paths: &[Vec<u8>]) -> GateDecision {
-    if num_regressions > 0 {
-        return GateDecision::RegressionFailure;
-    }
     if has_mixed_canon_and_non_canon_changes(changed_paths) {
         return GateDecision::MixedCanonChangeFailure;
+    }
+    if num_regressions > 0 {
+        return GateDecision::RegressionFailure;
     }
     GateDecision::Pass
 }
@@ -251,28 +250,26 @@ fn gate_cache_result_for_tree_at(
 ) -> Result<GateCacheResult, String> {
     let source = match tree {
         GateComparisonTree::StagedIndex => TreeSource::Staged,
-        GateComparisonTree::Head => TreeSource::resolve_default_against_tree(
-            root,
-            crate::git::DEFAULT_AGAINST_TREE_ARG,
-            false,
-        )?,
+        GateComparisonTree::Head => {
+            TreeSource::resolve_default_against_tree(root, crate::git::DEFAULT_AGAINST_TREE_ARG)?
+        }
     };
-    let hit = cached_last_result_for_expectation(
+    let hit = cached_pass_result_for_expectation(
         root,
         &source,
         expectation,
         xpec_state,
         visible_tree_oid_cache,
-        CachedLastResultLookup {
+        CachedPassResultLookup {
             now,
             include_same_tree: true,
             include_cooldown: true,
         },
     )?;
     if let Some(hit) = hit {
-        refresh_reused_same_tree_last_result(root, &source, expectation, xpec_state, hit)?;
-        // xpec: 6
-        // `cached_last_result_for_expectation` can return only a pass.
+        refresh_reused_same_tree_pass_result(root, &source, expectation, xpec_state, hit)?;
+        // xpec: uf
+        // `cached_pass_result_for_expectation` can return only a pass.
         return Ok(GateCacheResult::Pass);
     }
     let tree_oid = source.tree_oid_for_prompt_diff(root)?;
@@ -297,7 +294,7 @@ pub(crate) enum GateComparisonTree {
 mod tests {
     use super::{gate_decision, GateDecision};
 
-    #[test]
+    #[test] // xpec: va
     fn gate_decision_prioritizes_regressions_over_canon_only_pass() {
         let changed_paths = vec![b".canon/check.yml".to_vec()];
 
@@ -307,7 +304,17 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[test] // xpec: Y8
+    fn gate_decision_reports_mixed_change_even_with_regressions() {
+        let changed_paths = vec![b".canon/check.yml".to_vec(), b"src/lib.rs".to_vec()];
+
+        assert!(matches!(
+            gate_decision(1, &changed_paths),
+            GateDecision::MixedCanonChangeFailure
+        ));
+    }
+
+    #[test] // xpec: va
     fn gate_decision_passes_same_tree_commit_shape_without_regressions() {
         let changed_paths = vec![b"src/lib.rs".to_vec()];
 

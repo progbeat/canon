@@ -31,7 +31,7 @@ pub(crate) fn run_show_command(root: &Path, args: &[OsString]) -> Result<(), Com
         tree_source: Some(&tree_source),
         selectors: &command.selectors,
         pathspecs: &command.pathspecs,
-        excluded_expectation_id: None,
+        current_interrogation_expectation_id: None,
         xpec_state: &mut caches.xpec_state,
         visible_tree_oid_cache: &mut caches.visible_tree_oid,
     })?;
@@ -79,7 +79,7 @@ pub(crate) struct ShowRenderRequest<'a> {
     pub(crate) tree_source: Option<&'a TreeSource>,
     pub(crate) selectors: &'a [OsString],
     pub(crate) pathspecs: &'a [String],
-    pub(crate) excluded_expectation_id: Option<&'a str>,
+    pub(crate) current_interrogation_expectation_id: Option<&'a str>,
     pub(crate) xpec_state: &'a mut XpecStateCache,
     pub(crate) visible_tree_oid_cache: &'a mut VisibleTreeOidCache,
 }
@@ -107,17 +107,18 @@ fn select_show_expectations_for_current_run(
     request: ShowRenderRequest<'_>,
 ) -> Result<Vec<ResolvedExpectation>, String> {
     let identities = expectation_identities(request.config)?;
+    let mut selectors = request.selectors.to_vec();
+    // xpec: DI,tf
+    // This is the dynamic-tool answer-leakage boundary. Appending the
+    // prohibition before ordinary selection ensures that the expectation
+    // being interrogated cannot be rendered, even when requested directly,
+    // while preserving every `canon show` selector validation rule.
+    if let Some(current_expectation_id) = request.current_interrogation_expectation_id {
+        selectors.push(OsString::from(format!("not:{}", current_expectation_id)));
+    }
     // Shared with `canon check`; this handles include selectors and
     // `not:<ID-PREFIX>` exclusions before pathspec filtering.
-    let mut selected =
-        select_expectations_with_identities(request.config, &identities, request.selectors)?;
-    // xpec: F
-    // Dynamic `canon.show` supplies the current expectation here, so this
-    // exclusion is applied after explicit selectors and before pathspec
-    // filtering; even a direct selector cannot return the current xpec.
-    if let Some(excluded_expectation_id) = request.excluded_expectation_id {
-        selected.retain(|expectation| expectation.id != excluded_expectation_id);
-    }
+    let selected = select_expectations_with_identities(request.config, &identities, &selectors)?;
     let filtered = match request.tree_source {
         Some(tree_source) => filter_expectations_by_pathspecs(
             request.root,
@@ -290,7 +291,7 @@ fn render_show_expectations_text(expectations: &[ResolvedExpectation]) -> String
 }
 
 fn render_canonical_show_record(expectation: &ResolvedExpectation) -> String {
-    // [t5] This single renderer serves both `canon show` and dynamic
+    // [E] This single renderer serves both `canon show` and dynamic
     // `canon.show`: bare short ID, escaped question, then lowercase `expected:`.
     format!(
         "{}\n{}\nexpected: {}\n",
@@ -309,7 +310,7 @@ mod tests {
     use std::process::Command as ProcessCommand;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test]
+    #[test] // xpec: E
     fn parse_show_splits_selectors_from_pathspecs_after_separator() {
         let parsed = parse_show_command_args(&[
             OsString::from("abc"),
@@ -322,7 +323,7 @@ mod tests {
         assert_eq!(parsed.pathspecs, vec!["src/lib.rs".to_string()]);
     }
 
-    #[test]
+    #[test] // xpec: E
     fn parse_show_supports_pathspecs_without_selectors() {
         let parsed = parse_show_command_args(&[
             OsString::from("--"),
@@ -338,7 +339,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[test] // xpec: E
     fn parse_show_accepts_separator_without_pathspecs() {
         let parsed = parse_show_command_args(&[OsString::from("--")]).unwrap();
 
@@ -346,7 +347,7 @@ mod tests {
         assert!(parsed.pathspecs.is_empty());
     }
 
-    #[test] // xpec: t5
+    #[test] // xpec: E
     fn show_record_has_bare_id_and_lowercase_expected_label() {
         let expectation = ResolvedExpectation {
             number: 1,
@@ -370,7 +371,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[test] // xpec: E
     fn show_selector_supports_not_prefix() {
         let root = git_project("canon-show-not-selector");
         fs::create_dir_all(root.join(".canon")).unwrap();
@@ -402,7 +403,7 @@ expectations:
         assert!(output.contains("Does beta pass?"));
     }
 
-    #[test]
+    #[test] // xpec: E
     fn pathspec_filter_respects_expectation_visible_scope() {
         let root = git_project("canon-show-filter");
         fs::create_dir_all(root.join(".canon")).unwrap();
@@ -435,8 +436,37 @@ expectations:
         assert!(!output.contains("Does ignored source matter?"));
     }
 
-    #[test] // xpec: t5
-    fn pathspec_filter_requires_selected_tree_visible_oid() {
+    #[test] // xpec: E
+    fn pathspec_filter_uses_git_wildcard_semantics() {
+        let root = git_project("canon-show-filter-git-wildcard");
+        fs::create_dir_all(root.join(".canon")).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/app.rs"), "fn main() {}\n").unwrap();
+        fs::write(
+            root.join(".canon/check.yml"),
+            r#"version: 1
+presets:
+  default: {}
+expectations:
+  - q: Does wildcard-selected source matter?
+    a: yes
+"#,
+        )
+        .unwrap();
+        git(&root, &["add", ".canon/check.yml", "src/app.rs"]);
+
+        let mut output = Vec::new();
+        let result = run_show_for_test(&root, &["--", "src/*.rs"], &mut output);
+
+        let _ = fs::remove_dir_all(root);
+
+        result.unwrap();
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("Does wildcard-selected source matter?"));
+    }
+
+    #[test] // xpec: bi
+    fn pathspec_filter_accepts_union_scope_with_stale_term() {
         let root = git_project("canon-show-filter-visible-oid");
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src/app.rs"), "fn main() {}\n").unwrap();
@@ -471,11 +501,11 @@ expectations:
 
         let _ = fs::remove_dir_all(root);
 
-        assert!(!affected);
+        assert!(affected);
     }
 
-    #[test] // xpec: F
-    fn current_run_show_excludes_current_expectation_even_when_explicitly_selected() {
+    #[test] // xpec: DI,tf
+    fn dynamic_show_appends_current_exclusion_before_normal_selection() {
         let root = git_project("canon-show-excludes-current");
         fs::create_dir_all(root.join(".canon")).unwrap();
         fs::write(
@@ -506,16 +536,34 @@ expectations:
             tree_source: Some(&tree_source),
             selectors: &[selector],
             pathspecs: &[],
-            excluded_expectation_id: Some(&alpha_id),
+            current_interrogation_expectation_id: Some(&alpha_id),
             xpec_state: &mut caches.xpec_state,
             visible_tree_oid_cache: &mut caches.visible_tree_oid,
         })
         .unwrap();
 
+        let duplicate_exclusion = OsString::from(format!("not:{}", alpha_id));
+        let err = render_show_for_current_run(ShowRenderRequest {
+            root: &root,
+            config: &config,
+            tree_source: Some(&tree_source),
+            selectors: &[duplicate_exclusion],
+            pathspecs: &[],
+            current_interrogation_expectation_id: Some(&alpha_id),
+            xpec_state: &mut caches.xpec_state,
+            visible_tree_oid_cache: &mut caches.visible_tree_oid,
+        })
+        .err()
+        .expect("duplicate appended selector must fail");
+
         let _ = fs::remove_dir_all(root);
 
         assert_eq!(rendered.text, "");
         assert!(rendered.expectation_ids.is_empty());
+        assert_eq!(
+            err,
+            format!("duplicate expectation selector: not:{}", alpha_id)
+        );
     }
 
     fn run_show_for_test(
@@ -535,7 +583,7 @@ expectations:
             tree_source: Some(&tree_source),
             selectors: &command.selectors,
             pathspecs: &command.pathspecs,
-            excluded_expectation_id: None,
+            current_interrogation_expectation_id: None,
             xpec_state: &mut caches.xpec_state,
             visible_tree_oid_cache: &mut caches.visible_tree_oid,
         })?;
@@ -566,6 +614,7 @@ expectations:
             .current_dir(root)
             .output()
             .unwrap();
+        // xpec: E
         assert!(
             output.status.success(),
             "git {} failed: {}",

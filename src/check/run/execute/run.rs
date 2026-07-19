@@ -6,12 +6,13 @@ use crate::check::core::{
 };
 use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
 use crate::check::run::selection::{
-    order_selected_by_rank_and_latest_fail, select_and_order_git_backed_expectations,
-    GitBackedCacheFilterContext,
+    order_selected_by_rank_and_latest_fail,
+    order_selected_when_every_expectation_has_no_fail_result,
+    select_and_order_git_backed_expectations, GitBackedCacheFilterContext,
 };
 use crate::evaluator::EvaluatorRunner;
+use crate::isolation::prepare_evaluator_isolation_environment;
 use crate::time::unix_timestamp;
-use crate::xpec_state::snapshot_pass_ids;
 use std::path::Path;
 
 // This runtime layer consumes resolved check options and owns cache/evaluator
@@ -34,7 +35,11 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
     } = side_effects;
     let mut records = Vec::new();
     let mut cached = Vec::new();
-    let total_expectations = runtime.config.expectations.len();
+    // xpec: 9b
+    // Config expansion establishes the collected set. CLI selectors choose
+    // candidates from that set; they do not remove unselected xpecs from it,
+    // so every collected xpec without a result remains pending.
+    let total_collected_expectations = runtime.config.expectations.len();
     let root = runtime.root;
     macro_rules! current_error {
         ($error:expr) => {
@@ -44,7 +49,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
                     records.clone(),
                     cached.clone(),
                     CheckRunReportCounts {
-                        pending: pending_count(total_expectations, &records, &cached),
+                        pending: pending_count(total_collected_expectations, &records, &cached),
                     },
                 ),
             )
@@ -56,26 +61,29 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         };
     }
 
-    let mut interrogation_run_state = run_try!(InterrogationRunState::new(
-        runtime.no_sandbox() || runtime.is_in_place()
-    ));
-    // Pass history classifies new passes and regressions in every persistent
-    // runtime. In-place omits Git tree metadata, not last-result history.
-    caches.run_start_pass_ids = run_try!(snapshot_pass_ids(
-        root,
-        &options.candidate_expectations,
-        &mut caches.xpec_state,
-    ));
+    let disable_session_isolation = runtime.disable_session_isolation();
+    if !disable_session_isolation {
+        // `canon check` preparation may create its configured evaluator
+        // sandbox. `canon ask` constructs the shared run state without this
+        // check-only persistent side effect.
+        run_try!(prepare_evaluator_isolation_environment());
+    }
+    let mut interrogation_run_state =
+        run_try!(InterrogationRunState::new(disable_session_isolation));
     let check_work_queue = if runtime.is_in_place() {
-        // [6,Df] Canon defines a cached result for an expectation and Git
-        // state. In-place has no Git state, so cached-result lookup is not
-        // defined for this branch; every candidate remains queued. Persisted
-        // last-fail history is read only to apply the common order policy.
-        run_try!(order_in_place_evaluation_queue(
-            root,
-            options.candidate_expectations.clone(),
-            &mut caches.xpec_state,
-        ))
+        // The in-place selection boundary proves why every candidate is
+        // Selected before applying the common order policy.
+        if runtime.persistent_check_state_root().is_some() {
+            run_try!(select_and_order_in_place_expectations(
+                root,
+                options.candidate_expectations.clone(),
+                &mut caches.xpec_state,
+            ))
+        } else {
+            select_and_order_in_place_expectations_without_state(
+                options.candidate_expectations.clone(),
+            )
+        }
     } else {
         let source = runtime
             .tree_source()
@@ -94,10 +102,13 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             options,
             run_try!(unix_timestamp()),
         ));
-        for hit in check_work.cached_hits {
+        // [iZ] These records were excluded before Canon's Selected set was
+        // formed. Adding them to summary bookkeeping here does not evaluate,
+        // emit, or interleave them with the ordered evaluator queue.
+        for hit in check_work.reused_non_selected_results {
             cached.push(hit.record);
         }
-        check_work.evaluation_queue
+        check_work.selected_evaluation_queue
     };
     for expectation in check_work_queue {
         let outcome = match run_expectation(
@@ -125,7 +136,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             // This is the shared default-order stop point for both
             // materialized and in-place runs. In-place mode changes cached
             // result eligibility, not the stop-after-evaluated-fail rule.
-            let report = current_report(records, cached, total_expectations);
+            let report = current_report(records, cached, total_collected_expectations);
             if interrupted {
                 // The interruption still finishes through the normal partial
                 // report path. Default-source runs emit the feedback required
@@ -138,56 +149,72 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
             return Ok(report);
         }
     }
-    Ok(current_report(records, cached, total_expectations))
+    Ok(current_report(
+        records,
+        cached,
+        total_collected_expectations,
+    ))
 }
 
-fn order_in_place_evaluation_queue(
+fn select_and_order_in_place_expectations(
     // This function contains only platform-independent selection ordering.
     // Filesystem and process variants stay behind platform-named modules.
     root: &Path,
-    evaluation_queue: Vec<ResolvedExpectation>,
+    candidates: Vec<ResolvedExpectation>,
     last_result_history: &mut crate::xpec_state::XpecStateCache,
 ) -> Result<Vec<ResolvedExpectation>, String> {
-    order_selected_by_rank_and_latest_fail(
-        root,
-        evaluation_queue,
-        last_result_history,
-        |expectation| expectation,
-    )
+    // [eM,iY,cg,uf,I4] Cached Result is defined only for an expectation plus
+    // Git state. In-place mode has no Git state, so its Cached set is
+    // structurally empty and both default and explicit selection retain every
+    // CLI candidate. Persisted last-fail history affects only their order.
+    order_selected_by_rank_and_latest_fail(root, candidates, last_result_history, |expectation| {
+        expectation
+    })
+}
+
+fn select_and_order_in_place_expectations_without_state(
+    candidates: Vec<ResolvedExpectation>,
+) -> Vec<ResolvedExpectation> {
+    // [eM,iY,cg,IJ,I4] In-place still has no Cached Result domain. Without a
+    // persistent state root it also has no last-result namespace, so every
+    // selected candidate has the Unix epoch as its absent fail timestamp.
+    order_selected_when_every_expectation_has_no_fail_result(candidates, |expectation| expectation)
 }
 
 fn current_report(
     records: Vec<CheckRecord>,
     cached: Vec<CheckRecord>,
-    total_expectations: usize,
+    total_collected_expectations: usize,
 ) -> CheckRunReport {
-    let pending = pending_count(total_expectations, &records, &cached);
+    let pending = pending_count(total_collected_expectations, &records, &cached);
     check_run_report(records, cached, CheckRunReportCounts { pending })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::order_in_place_evaluation_queue;
+    use super::select_and_order_in_place_expectations;
     use crate::check::core::{CheckRecord, CheckResult, ResolvedExpectation};
     use crate::config_types::{AgentConfig, ExpectationTo, DEFAULT_DIFF_FROM};
     use crate::hash::full_scope;
     use crate::xpec_state::XpecStateCache;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::process;
+    use std::process::{self, Command};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test] // xpec: 6,cv,Df,nv
-    fn in_place_queues_every_xpec_and_uses_fail_history_only_for_order() {
+    #[test] // xpec: eM,iY,cg,uf,IJ,I4,gD
+    fn in_place_has_no_cached_results_and_selects_every_candidate() {
         let root = test_root("in-place-order-history");
         fs::create_dir_all(&root).unwrap();
+        let status = Command::new("git").arg("init").arg(&root).status().unwrap();
+        assert!(status.success());
         let older = resolved_expectation("older");
         let newer = resolved_expectation("newer");
         let mut last_result_history = XpecStateCache::default();
         write_in_place_fail(&root, &older, 1, &mut last_result_history);
         write_in_place_fail(&root, &newer, 2, &mut last_result_history);
 
-        let queue = order_in_place_evaluation_queue(
+        let queue = select_and_order_in_place_expectations(
             &root,
             vec![older, newer],
             &mut XpecStateCache::default(),
@@ -217,10 +244,10 @@ mod tests {
             expected_answer: Some(expectation.expected_answer.clone()),
             observed: "no".to_string(),
             error: None,
-            evidence: String::new(),
+            evidence: Some(String::new()),
             scope: full_scope(),
             question_scope_suggestion: None,
-            visible_tree_oid: "in-place".to_string(),
+            visible_tree_oid: None,
             diff_from: None,
             diff_from_tree_oid: None,
             diff_from_tree_oid_abbrev: None,
@@ -228,7 +255,7 @@ mod tests {
             display_id: expectation.display_id.clone(),
         };
         last_result_history
-            .write_last_result_for_record(root, "in-place", expectation, &record)
+            .write_last_result_for_record(root, None, expectation, &record)
             .unwrap();
     }
 

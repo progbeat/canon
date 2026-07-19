@@ -96,13 +96,14 @@ resource files under `resources/prompts/`. Config values such as expectation
 `instructions` are human-authored canon data passed into those templates, not
 additional implementation-owned prompt templates or instruction sources.
 
-## Generator item
+## YAML expansion
 
-A config entry that expands into additional expectations. Generator items
-include `include` entries and glob-generator entries. A glob-generator entry
-uses `glob`, `q_template`, and `a`, and expands matching checked files. The
-template receives the current `path`; file contents are read explicitly with
-`read(path)`.
+`!include <relative-yaml-path>` inserts YAML read from the same config source,
+relative to the including document. `!foreach` applies to a two-item sequence
+of variable bindings and a YAML template. It renders one template copy for
+every combination of binding values; binding strings containing `*` or `?`
+select matching paths from the same source. `read(filename)` returns UTF-8 file
+contents relative to the document containing the expansion.
 
 ## Observed answer
 
@@ -119,10 +120,12 @@ history.
 
 ## `canon check`
 
-The command that evaluates expectations against the staged project state. It
-collects configured expectations, computes cached pass results, and selects the
-uncached expectations for evaluation. Explicit selectors force evaluation even
-when a cached result exists.
+The command that evaluates expectations against the staged project state by
+default inside a Git worktree. Outside a Git worktree it selects in-place mode
+automatically. An explicit Git tree may be selected, and in-place mode evaluates
+the current directory directly. It collects configured expectations, computes
+cached pass results, and selects the uncached expectations for evaluation.
+Explicit selectors force evaluation even when a cached result exists.
 
 ## `canon gate`
 
@@ -161,17 +164,29 @@ that verification produces a valid evaluator response with an answer.
 The expectation's last pass result when its stored `visibleTreeOid` matches the
 current `visibleTreeOid` for that result's visible scope.
 
+## Runtime log history
+
+Every applicable runtime event is constructed through the command's diagnostic
+writer. A positive `canon.logs.maxSize` and a persistent state namespace retain
+JSON Lines copies as bounded cross-invocation history under `LOGS_DIR`
+(`${CANON_STATE_DIR}/logs`).
+Otherwise, the writer keeps the current invocation's events in memory. The
+zero-size configuration also removes previously retained runtime log files when
+a persistent state namespace is available. Persistent history is intentional
+command output, not invocation-local working state.
+
 ## Selected expectations
 
-The expectations that require evaluator work in the current `canon check` run.
+The expectations that require evaluation work in the current `canon check` run.
 Explicit selectors select matching expectations directly; the default
 no-selector check subtracts cached expectations from collected expectations.
 
 ## Staged snapshot
 
-The temporary Git-tracked project state that `canon check` evaluates. It comes
-from the Git index, so unstaged and untracked working tree files are not part of
-the snapshot.
+The temporary Git-tracked project state that `canon check` evaluates by default
+inside a Git worktree. It comes from the Git index, so unstaged and untracked
+working tree files are not part of the snapshot. Explicit tree selection creates
+an analogous snapshot; in-place checks do not use one.
 
 ## `visibleTreeOid`
 
@@ -192,6 +207,16 @@ pathspec items, and applied last.
 The scoped tree induced by a visible scope.
 
 ## Implementation Map
+
+### In-place check boundary
+
+An in-place check treats the current directory as filesystem contents, not as
+a Git-backed checked tree. Repository-derived evaluation inputs—tree and object
+IDs, refs, rendered diffs, tracking state, Git-root discovery, and file
+hiding—are therefore absent from its evaluator context. Command-wide canon
+configuration and canon-owned output paths are control-plane inputs; using them
+for runtime-event retention does not make repository information part of the
+checked subject or evaluator context.
 
 `config_types::Expectation` and `check::core::ResolvedExpectation` carry
 expectation questions, addressees, ranks, expected answers, the resolved

@@ -45,11 +45,11 @@ where
         }
 
         fn visit_none<E>(self) -> Result<Self::Value, E> {
-            Ok(None)
+            Ok(Some("null".to_string()))
         }
 
         fn visit_unit<E>(self) -> Result<Self::Value, E> {
-            Ok(None)
+            Ok(Some("null".to_string()))
         }
 
         fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
@@ -78,6 +78,79 @@ where
     }
 
     deserializer.deserialize_any(OptionalScalarStringVisitor)
+}
+
+fn deserialize_optional_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct OptionalStringVisitor;
+
+    impl<'de> Visitor<'de> for OptionalStringVisitor {
+        type Value = Option<String>;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a string")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+            Ok(Some(value.to_string()))
+        }
+
+        fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+            Ok(Some(value))
+        }
+    }
+
+    deserializer.deserialize_any(OptionalStringVisitor)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ConfiguredValue<T> {
+    pub(crate) value: Option<T>,
+    pub(crate) configured: bool,
+}
+
+impl<T> ConfiguredValue<T> {
+    pub(crate) fn from_option(value: Option<T>) -> ConfiguredValue<T> {
+        ConfiguredValue {
+            configured: value.is_some(),
+            value,
+        }
+    }
+
+    pub(crate) fn some(value: T) -> ConfiguredValue<T> {
+        ConfiguredValue {
+            value: Some(value),
+            configured: true,
+        }
+    }
+}
+
+impl<T> Default for ConfiguredValue<T> {
+    fn default() -> ConfiguredValue<T> {
+        ConfiguredValue {
+            value: None,
+            configured: false,
+        }
+    }
+}
+
+impl<'de, T> Deserialize<'de> for ConfiguredValue<T>
+where
+    T: Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<ConfiguredValue<T>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // [T] The wrapper itself, rather than its optional value, receives the
+        // YAML field. That keeps explicit null distinct from an omitted field.
+        Ok(ConfiguredValue {
+            value: Option::<T>::deserialize(deserializer)?,
+            configured: true,
+        })
+    }
 }
 
 #[derive(Deserialize)]
@@ -120,7 +193,9 @@ pub(crate) struct AgentConfig {
     #[serde(default = "default_thinking")]
     pub(crate) thinking: String,
     #[serde(default)]
-    pub(crate) ignore: Vec<String>,
+    pub(crate) ignore: Option<Vec<String>>,
+    #[serde(skip)]
+    pub(crate) ignore_configured: bool,
     #[serde(default)]
     pub(crate) plugins: Vec<String>,
 }
@@ -130,7 +205,8 @@ impl AgentConfig {
         AgentConfig {
             models: Vec::new(),
             thinking: default_thinking(),
-            ignore: Vec::new(),
+            ignore: None,
+            ignore_configured: false,
             plugins: Vec::new(),
         }
     }
@@ -144,38 +220,38 @@ impl Default for AgentConfig {
 
 #[derive(Debug, Deserialize, Clone, Default)]
 pub(crate) struct RawPresetConfig {
-    #[serde(default, deserialize_with = "deserialize_optional_scalar_string")]
+    #[serde(default, deserialize_with = "deserialize_optional_string")]
     pub(crate) q: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_scalar_string")]
     pub(crate) a: Option<String>,
     #[serde(default)]
-    pub(crate) to: Option<ExpectationTo>,
+    pub(crate) to: ConfiguredValue<ExpectationTo>,
     #[serde(default)]
-    pub(crate) rank: Option<i64>,
+    pub(crate) rank: ConfiguredValue<i64>,
     #[serde(default)]
     // Human-authored expectation context data inherited by expectation items.
     // Despite the config key name, this is not an implementation-owned
     // evaluator-agent instruction source; only resource templates under
     // `resources/prompts/` decide how to embed it.
     #[serde(rename = "instructions")]
-    pub(crate) question_context: Option<String>,
+    pub(crate) question_context: ConfiguredValue<String>,
     #[serde(default)]
     #[serde(rename = "diff-from")]
-    pub(crate) diff_from: Option<String>,
+    pub(crate) diff_from: ConfiguredValue<String>,
     #[serde(default)]
-    pub(crate) target: Option<String>,
+    pub(crate) target: ConfiguredValue<String>,
     #[serde(default)]
-    pub(crate) cooldown: Option<CooldownConfig>,
+    pub(crate) cooldown: ConfiguredValue<CooldownConfig>,
     #[serde(default)]
     pub(crate) preset: Option<String>,
     #[serde(default)]
-    pub(crate) models: Option<Vec<String>>,
+    pub(crate) models: ConfiguredValue<Vec<String>>,
     #[serde(default)]
-    pub(crate) thinking: Option<String>,
+    pub(crate) thinking: ConfiguredValue<String>,
     #[serde(default)]
-    pub(crate) ignore: Option<Vec<String>>,
+    pub(crate) ignore: ConfiguredValue<Vec<String>>,
     #[serde(default)]
-    pub(crate) plugins: Option<Vec<String>>,
+    pub(crate) plugins: ConfiguredValue<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -189,16 +265,15 @@ impl ResolvedPresetConfig {
     pub(crate) fn agent_config(&self) -> AgentConfig {
         let mut agent = AgentConfig::implementation_default();
         let settings = &self.common.settings;
-        if let Some(models) = &settings.models {
+        if let Some(models) = &settings.models.value {
             agent.models = models.clone();
         }
-        if let Some(thinking) = &settings.thinking {
+        if let Some(thinking) = &settings.thinking.value {
             agent.thinking = thinking.clone();
         }
-        if let Some(ignore) = &settings.ignore {
-            agent.ignore = ignore.clone();
-        }
-        if let Some(plugins) = &settings.plugins {
+        agent.ignore = settings.ignore.value.clone();
+        agent.ignore_configured = settings.ignore.configured;
+        if let Some(plugins) = &settings.plugins.value {
             agent.plugins = plugins.clone();
         }
         agent
@@ -213,7 +288,7 @@ pub(crate) struct RawLegacyAgentConfig {
     #[serde(default)]
     pub(crate) thinking: Option<String>,
     #[serde(default)]
-    pub(crate) ignore: Option<Vec<String>>,
+    pub(crate) ignore: ConfiguredValue<Vec<String>>,
     #[serde(default)]
     pub(crate) plugins: Option<Vec<String>>,
 }
@@ -230,10 +305,10 @@ pub(crate) struct RawLegacyModelConfig {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RawExpectationSettings {
     pub(crate) preset: Option<String>,
-    pub(crate) models: Option<Vec<String>>,
-    pub(crate) thinking: Option<String>,
-    pub(crate) ignore: Option<Vec<String>>,
-    pub(crate) plugins: Option<Vec<String>>,
+    pub(crate) models: ConfiguredValue<Vec<String>>,
+    pub(crate) thinking: ConfiguredValue<String>,
+    pub(crate) ignore: ConfiguredValue<Vec<String>>,
+    pub(crate) plugins: ConfiguredValue<Vec<String>>,
 }
 
 pub(crate) fn default_thinking() -> String {
@@ -248,18 +323,67 @@ pub(crate) struct Expectation {
     pub(crate) to: ExpectationTo,
     pub(crate) q: String,
     pub(crate) a: String,
-    // [cv] Canon check orders ascending by rank; omitted config resolves to 0.
+    // [IJ] Canon check orders ascending by rank; omitted config resolves to 0.
     pub(crate) rank: i64,
     // Human-authored expectation context data from check config, like `q` and
     // `a`. Despite the config key name, this is not an implementation-owned
     // evaluator-agent prompt or policy source; only the resource template in
     // `resources/prompts/` decides how to embed it.
     pub(crate) question_context: String,
-    pub(crate) diff_from: Option<String>,
+    pub(crate) diff_from: String,
     pub(crate) target: Option<ExpectationTarget>,
     pub(crate) question_answer_only: bool,
     pub(crate) agent: AgentConfig,
     pub(crate) cooldown: Option<Cooldown>,
+    // Raw expansion classifies mode compatibility once; later validation
+    // consumes this typed domain result without recovering it from values or
+    // field-name strings.
+    pub(crate) in_place_compatibility: InPlaceCompatibility,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) enum InPlaceCompatibility {
+    #[default]
+    Compatible,
+    Incompatible(Vec<InPlaceIncompatibleField>),
+}
+
+impl InPlaceCompatibility {
+    pub(crate) fn with_incompatible_field(self, field: InPlaceIncompatibleField) -> Self {
+        match self {
+            InPlaceCompatibility::Compatible => InPlaceCompatibility::Incompatible(vec![field]),
+            InPlaceCompatibility::Incompatible(mut fields) => {
+                fields.push(field);
+                InPlaceCompatibility::Incompatible(fields)
+            }
+        }
+    }
+
+    pub(crate) fn incompatible_fields(&self) -> &[InPlaceIncompatibleField] {
+        match self {
+            InPlaceCompatibility::Compatible => &[],
+            InPlaceCompatibility::Incompatible(fields) => fields,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InPlaceIncompatibleField {
+    DiffFrom,
+    Target,
+    Cooldown,
+    Ignore,
+}
+
+impl InPlaceIncompatibleField {
+    pub(crate) fn config_name(self) -> &'static str {
+        match self {
+            InPlaceIncompatibleField::DiffFrom => "diff-from",
+            InPlaceIncompatibleField::Target => "target",
+            InPlaceIncompatibleField::Cooldown => "cooldown",
+            InPlaceIncompatibleField::Ignore => "ignore",
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone, Copy, Default, PartialEq, Eq)]
@@ -288,15 +412,6 @@ pub(crate) enum ExpectationTarget {
     Diff,
 }
 
-impl ExpectationTarget {
-    pub(crate) fn as_str(&self) -> &'static str {
-        match self {
-            ExpectationTarget::Project => "project",
-            ExpectationTarget::Diff => "diff",
-        }
-    }
-}
-
 impl std::str::FromStr for ExpectationTarget {
     type Err = String;
 
@@ -311,7 +426,7 @@ impl std::str::FromStr for ExpectationTarget {
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 #[serde(transparent)]
-// [6] A transparent String accepts only the canonical scalar duration form;
+// [uf] A transparent String accepts only the canonical scalar duration form;
 // YAML mappings cannot deserialize into this type.
 pub(crate) struct CooldownConfig(pub(crate) String);
 
@@ -328,26 +443,37 @@ pub(crate) enum RawExpectationItem {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RawGitBackedExpectationConfig {
-    // [6,Df] These YAML fields belong to the Git-backed check contract. In
+    // [uf,I4] These YAML fields belong to the Git-backed check contract. In
     // particular, Cached Result is defined only for an expectation and Git
     // state, so its optional cooldown is fully supported here. The separate
     // in-place contract later rejects configured fields that require cache,
     // diff, or other Git-backed behavior.
-    pub(crate) diff_from: Option<String>,
-    pub(crate) target: Option<String>,
-    pub(crate) cooldown: Option<CooldownConfig>,
+    pub(crate) diff_from: ConfiguredValue<String>,
+    pub(crate) target: ConfiguredValue<String>,
+    pub(crate) cooldown: ConfiguredValue<CooldownConfig>,
 }
 
 impl RawGitBackedExpectationConfig {
-    pub(crate) fn configured_field_names(&self) -> Vec<&'static str> {
+    pub(crate) fn in_place_compatibility(&self) -> InPlaceCompatibility {
+        // [cg,eS,T] In-place compatibility depends only on whether a field was
+        // configured, including an explicit YAML null. Target values share the
+        // same prohibition; only prompt rendering later distinguishes them.
         [
-            (self.diff_from.is_some(), "diff-from"),
-            (self.target.is_some(), "target"),
-            (self.cooldown.is_some(), "cooldown"),
+            self.diff_from
+                .configured
+                .then_some(InPlaceIncompatibleField::DiffFrom),
+            self.target
+                .configured
+                .then_some(InPlaceIncompatibleField::Target),
+            self.cooldown
+                .configured
+                .then_some(InPlaceIncompatibleField::Cooldown),
         ]
         .into_iter()
-        .filter_map(|(configured, name)| configured.then_some(name))
-        .collect()
+        .flatten()
+        .fold(InPlaceCompatibility::Compatible, |compatibility, field| {
+            compatibility.with_incompatible_field(field)
+        })
     }
 }
 
@@ -355,10 +481,10 @@ impl RawGitBackedExpectationConfig {
 pub(crate) struct RawExpectationCommonConfig {
     // Raw config data shared by presets and expectation items. It is not an
     // implementation-owned evaluator prompt or policy source.
-    pub(crate) question_context: Option<String>,
+    pub(crate) question_context: ConfiguredValue<String>,
     pub(crate) git_backed: RawGitBackedExpectationConfig,
-    pub(crate) to: Option<ExpectationTo>,
-    pub(crate) rank: Option<i64>,
+    pub(crate) to: ConfiguredValue<ExpectationTo>,
+    pub(crate) rank: ConfiguredValue<i64>,
     pub(crate) settings: RawExpectationSettings,
 }
 
@@ -380,7 +506,7 @@ pub(crate) struct RawExpectationFields {
 // Expectation items intentionally omit `deny_unknown_fields`: the xpecs spec
 // allows extra fields so external IDs or annotations can stay in check files.
 struct RawExpectationFieldValues {
-    #[serde(default, deserialize_with = "deserialize_optional_scalar_string")]
+    #[serde(default, deserialize_with = "deserialize_optional_string")]
     q: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_scalar_string")]
     a: Option<String>,
@@ -388,28 +514,28 @@ struct RawExpectationFieldValues {
     // Human-authored canon data for one expectation item, not a prompt
     // template defined by this config parser.
     #[serde(rename = "instructions")]
-    question_context: Option<String>,
+    question_context: ConfiguredValue<String>,
     #[serde(default)]
     #[serde(rename = "diff-from")]
-    diff_from: Option<String>,
+    diff_from: ConfiguredValue<String>,
     #[serde(default)]
-    target: Option<String>,
+    target: ConfiguredValue<String>,
     #[serde(default)]
-    to: Option<ExpectationTo>,
+    to: ConfiguredValue<ExpectationTo>,
     #[serde(default)]
-    rank: Option<i64>,
+    rank: ConfiguredValue<i64>,
     #[serde(default)]
-    cooldown: Option<CooldownConfig>,
+    cooldown: ConfiguredValue<CooldownConfig>,
     #[serde(default)]
     preset: Option<String>,
     #[serde(default)]
-    models: Option<Vec<String>>,
+    models: ConfiguredValue<Vec<String>>,
     #[serde(default)]
-    thinking: Option<String>,
+    thinking: ConfiguredValue<String>,
     #[serde(default)]
-    ignore: Option<Vec<String>>,
+    ignore: ConfiguredValue<Vec<String>>,
     #[serde(default)]
-    plugins: Option<Vec<String>>,
+    plugins: ConfiguredValue<Vec<String>>,
 }
 
 impl From<RawExpectationFieldValues> for RawExpectationFields {
@@ -472,7 +598,7 @@ impl RawExpectationItem {
             a,
             common,
         } = fields;
-        let a = resolve_expected_answer(common.to.unwrap_or_default(), a)?;
+        let a = resolve_expected_answer(common.to.value.unwrap_or_default(), a)?;
         match explicit_q {
             Some(q) => Ok(RawExpectationItem::Explicit(RawExplicitExpectation {
                 q,

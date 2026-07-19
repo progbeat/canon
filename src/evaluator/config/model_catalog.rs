@@ -215,7 +215,7 @@ impl Drop for ModelCatalogFile {
 mod tests {
     use super::*;
 
-    #[test]
+    #[test] // xpec: fh
     fn model_catalog_paths_are_unique_per_write() {
         let models = vec!["gpt-test".to_string()];
 

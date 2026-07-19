@@ -41,7 +41,7 @@ impl std::fmt::Display for CheckResult {
 mod tests {
     use super::CheckResult;
 
-    #[test]
+    #[test] // xpec: k4
     fn observed_answer_must_match_expected_answer_exactly() {
         assert_eq!(
             CheckResult::from_expected_answer("yes", "yes"),

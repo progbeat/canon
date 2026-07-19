@@ -1,5 +1,5 @@
 use crate::check::core::ResolvedExpectation;
-use crate::config_types::{CheckConfig, DEFAULT_DIFF_FROM};
+use crate::config_types::CheckConfig;
 use crate::hash::expectation_id;
 use std::collections::BTreeSet;
 use std::ffi::OsString;
@@ -59,9 +59,7 @@ pub(crate) fn select_expectations_with_identities(
                 }
             }
         }
-        if !has_include {
-            selected_indexes.retain(|index| !excluded_indexes.contains(index));
-        }
+        selected_indexes.retain(|index| !excluded_indexes.contains(index));
     }
 
     selected_indexes
@@ -121,12 +119,7 @@ pub(crate) fn selected_expectation_at(
         question: expectation.q.clone(),
         expected_answer: expectation.a.clone(),
         question_context: expectation.question_context.clone(),
-        // [1r] Apply the implementation default once when the configured
-        // optional value becomes an evaluation-ready xpec.
-        diff_from: expectation
-            .diff_from
-            .clone()
-            .unwrap_or_else(|| DEFAULT_DIFF_FROM.to_string()),
+        diff_from: expectation.diff_from.clone(),
         target: expectation.target.clone(),
         question_answer_only: expectation.question_answer_only,
         agent: expectation.agent.clone(),
@@ -196,7 +189,7 @@ mod tests {
     use super::*;
     use crate::config_types::{AgentConfig, CheckConfig, Expectation};
 
-    #[test]
+    #[test] // xpec: sw,ri
     fn include_selector_selects_matching_unique_id_prefix() {
         let config = two_expectation_config();
         let identities = expectation_identities(&config).unwrap();
@@ -209,7 +202,7 @@ mod tests {
         assert_eq!(selected[0].id, identities[0].id);
     }
 
-    #[test]
+    #[test] // xpec: sw,ri
     fn include_selector_accepts_full_id() {
         let config = two_expectation_config();
         let identities = expectation_identities(&config).unwrap();
@@ -222,7 +215,7 @@ mod tests {
         assert_eq!(selected[0].id, identities[1].id);
     }
 
-    #[test]
+    #[test] // xpec: sw,ri
     fn exclusion_selector_selects_all_except_matching_prefix() {
         let config = two_expectation_config();
         let identities = expectation_identities(&config).unwrap();
@@ -235,8 +228,8 @@ mod tests {
         assert_eq!(selected[0].id, identities[1].id);
     }
 
-    #[test]
-    fn exclusion_selector_does_not_filter_explicit_includes() {
+    #[test] // xpec: nK,sw,ri
+    fn exclusion_selector_filters_explicit_includes() {
         let config = two_expectation_config();
         let identities = expectation_identities(&config).unwrap();
         let selectors = [
@@ -248,12 +241,11 @@ mod tests {
         let selected =
             select_expectations_with_identities(&config, &identities, &selectors).unwrap();
 
-        assert_eq!(selected.len(), 2);
-        assert_eq!(selected[0].id, identities[0].id);
-        assert_eq!(selected[1].id, identities[1].id);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].id, identities[1].id);
     }
 
-    #[test]
+    #[test] // xpec: sw
     fn empty_exclusion_selector_is_rejected() {
         let config = two_expectation_config();
         let identities = expectation_identities(&config).unwrap();
@@ -263,6 +255,25 @@ mod tests {
                 .unwrap_err();
 
         assert_eq!(err, "expectation selector must not be empty");
+    }
+
+    #[test] // xpec: DI
+    fn duplicate_appended_exclusion_is_rejected() {
+        let config = two_expectation_config();
+        let identities = expectation_identities(&config).unwrap();
+        let selector = OsString::from(format!("not:{}", identities[0].id));
+
+        let err = select_expectations_with_identities(
+            &config,
+            &identities,
+            &[selector.clone(), selector],
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            format!("duplicate expectation selector: not:{}", identities[0].id)
+        );
     }
 
     fn two_expectation_config() -> CheckConfig {
@@ -283,11 +294,12 @@ mod tests {
             q: question.to_string(),
             a: "yes".to_string(),
             question_context: String::new(),
-            diff_from: None,
+            diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
             target: None,
             question_answer_only: true,
             agent: AgentConfig::implementation_default(),
             cooldown: None,
+            in_place_compatibility: Default::default(),
         }
     }
 }

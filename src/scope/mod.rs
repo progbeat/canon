@@ -12,5 +12,5 @@ mod visible;
 pub(crate) use compare::scope_is_within;
 pub(crate) use ignore::effective_ignore_patterns;
 pub(crate) use normalize::{normalize_repo_path, sanitize_scope};
-pub(crate) use pathspec::{path_bytes_in_scope, pathspec_is_exclude};
+pub(crate) use pathspec::{path_bytes_in_scope, pathspec_is_exclude, utf8_path_matches_glob};
 pub(crate) use visible::visible_scope;

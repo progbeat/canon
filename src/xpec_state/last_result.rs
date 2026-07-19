@@ -46,12 +46,14 @@ impl LastResultStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct LastResult {
-    // This struct is the persisted last-result schema. Git-backed evaluator
-    // interrogation responses store the prompt-rendered diff base as
-    // `diffFrom` and `diffFromTreeOid`; records from paths without such an
-    // interrogation leave those fields absent. The containing xpec directory
-    // is keyed by the full expectation ID; the JSON body does not persist the
-    // expectation ID or human display prefix.
+    // [g2,gD] This is deliberate cross-invocation xpec history, not
+    // invocation-local execution state. Git-backed evaluator interrogation
+    // responses store the prompt-rendered diff base as `diffFrom` and
+    // `diffFromTreeOid`; records from paths without such an interrogation leave
+    // those fields absent. An in-place status result also omits checkedTreeOid,
+    // so a pass there does not define a Git-tree checkpoint. The containing
+    // xpec directory is keyed by the full expectation ID; the JSON body does not
+    // persist the expectation ID or human display prefix.
     #[serde(rename = "responseTimestamp")]
     pub(crate) response_timestamp: String,
     #[serde(rename = "updatedTimestamp")]
@@ -131,7 +133,7 @@ impl LastResultResponse {
     fn from_record(record: &CheckRecord) -> Self {
         let question_scope_suggestion = record.question_scope_suggestion.clone();
         if let Some(suggestion) = question_scope_suggestion.as_deref() {
-            // xpec: mh
+            // xpec: w
             assert!(
                 !suggestion.is_empty(),
                 "qScopeSuggestion must be non-empty when present"
@@ -141,15 +143,18 @@ impl LastResultResponse {
             Self {
                 answer: None,
                 error: Some(error),
+                evidence: record.evidence.clone(),
+                question_scope_suggestion,
+            }
+        } else if let Some(evidence) = record.evidence.clone() {
+            Self::answered(record.observed.clone(), evidence, question_scope_suggestion)
+        } else {
+            Self {
+                answer: Some(record.observed.clone()),
+                error: None,
                 evidence: None,
                 question_scope_suggestion,
             }
-        } else {
-            Self::answered(
-                record.observed.clone(),
-                record.evidence.clone(),
-                question_scope_suggestion,
-            )
         }
     }
 }
@@ -163,8 +168,8 @@ impl LastResult {
         self.response.error.as_deref()
     }
 
-    fn evidence(&self) -> String {
-        self.response.evidence.as_deref().unwrap_or("").to_string()
+    fn evidence(&self) -> Option<String> {
+        self.response.evidence.clone()
     }
 
     fn question_scope_suggestion(&self) -> Option<Vec<String>> {
@@ -221,7 +226,7 @@ impl XpecStateCache {
     pub(crate) fn write_last_result_for_record(
         &mut self,
         root: &Path,
-        checked_tree_oid: &str,
+        checked_tree_oid: Option<&str>,
         expectation: &ResolvedExpectation,
         record: &CheckRecord,
     ) -> Result<LastResult, String> {
@@ -231,7 +236,7 @@ impl XpecStateCache {
     pub(crate) fn write_interrogation_last_result_for_record_or_absent_history(
         &mut self,
         root: Option<&Path>,
-        checked_tree_oid: &str,
+        checked_tree_oid: Option<&str>,
         expectation: &ResolvedExpectation,
         record: &CheckRecord,
     ) -> Result<Option<LastResult>, String> {
@@ -245,7 +250,7 @@ impl XpecStateCache {
         // interrogation-only writer requires the resolved diff provenance.
         // Lower-level writers still accept absent provenance for refreshed or
         // synthetic records that did not come from such an interrogation.
-        if checked_tree_oid != "in-place" {
+        if checked_tree_oid.is_some() {
             require_git_backed_diff_provenance(
                 record.diff_from.as_deref(),
                 record.diff_from_tree_oid.as_deref(),
@@ -258,7 +263,7 @@ impl XpecStateCache {
     pub(crate) fn write_last_result_for_record_or_absent_history(
         &mut self,
         root: Option<&Path>,
-        checked_tree_oid: &str,
+        checked_tree_oid: Option<&str>,
         expectation: &ResolvedExpectation,
         record: &CheckRecord,
     ) -> Result<Option<LastResult>, String> {
@@ -275,21 +280,21 @@ impl XpecStateCache {
     fn write_last_result_for_record_inner(
         &mut self,
         root: &Path,
-        checked_tree_oid: &str,
+        checked_tree_oid: Option<&str>,
         expectation: &ResolvedExpectation,
         record: &CheckRecord,
     ) -> Result<LastResult, String> {
         let status = last_result_status_for_record(expectation, record);
         let now = format_record_timestamp(unix_timestamp()?);
         let q_scope = record.scope.clone();
-        let git_backed = checked_tree_oid != "in-place";
-        let visible_scope = git_backed
+        let visible_scope = checked_tree_oid
+            .is_some()
             .then(|| visible_scope(&expectation.agent, &q_scope))
             .transpose()?;
-        // [Df] In-place results persist pass/fail history but have no Git diff
+        // [I4] In-place results persist pass/fail history but have no Git diff
         // context. Enforce that at the persistence boundary so their
         // status-specific files cannot leak tree OIDs.
-        let (diff_from, diff_from_tree_oid) = if git_backed {
+        let (diff_from, diff_from_tree_oid) = if checked_tree_oid.is_some() {
             (record.diff_from.clone(), record.diff_from_tree_oid.clone())
         } else {
             (None, None)
@@ -299,24 +304,25 @@ impl XpecStateCache {
             updated_timestamp: now,
             status,
             response: LastResultResponse::from_record(record),
-            q_scope: if git_backed {
+            q_scope: if checked_tree_oid.is_some() {
                 q_scope.clone()
             } else {
                 Vec::new()
             },
             visible_scope: visible_scope.unwrap_or_default(),
-            checked_tree_oid: git_backed.then(|| checked_tree_oid.to_string()),
-            visible_tree_oid: (git_backed && status == LastResultStatus::Pass)
-                .then(|| {
-                    visible_tree_oid_for_persisted_scope(
+            checked_tree_oid: checked_tree_oid.map(str::to_string),
+            visible_tree_oid: match (checked_tree_oid, status) {
+                (Some(checked_tree_oid), LastResultStatus::Pass) => {
+                    Some(visible_tree_oid_for_persisted_scope(
                         root,
                         checked_tree_oid,
                         expectation,
                         record,
                         &q_scope,
-                    )
-                })
-                .transpose()?,
+                    )?)
+                }
+                _ => None,
+            },
             diff_from,
             diff_from_tree_oid,
         };
@@ -324,7 +330,7 @@ impl XpecStateCache {
         Ok(result)
     }
 
-    pub(crate) fn refresh_last_result_for_checked_tree(
+    pub(crate) fn refresh_git_backed_last_result_for_checked_tree(
         &mut self,
         root: &Path,
         current_checked_tree_oid: &str,
@@ -436,7 +442,7 @@ pub(super) fn check_record_from_last_result(
             result.q_scope.clone()
         },
         question_scope_suggestion: response_question_scope_suggestion,
-        visible_tree_oid: result.visible_tree_oid.clone().unwrap_or_default(),
+        visible_tree_oid: result.visible_tree_oid.clone(),
         diff_from: result.diff_from.clone(),
         diff_from_tree_oid: result.diff_from_tree_oid.clone(),
         diff_from_tree_oid_abbrev: diff_from_tree_oid_abbrev(root, result),
@@ -467,7 +473,7 @@ pub(super) fn pass_record_from_cooldown_result(
             result.q_scope.clone()
         },
         question_scope_suggestion: response_question_scope_suggestion,
-        visible_tree_oid: result.visible_tree_oid.clone().unwrap_or_default(),
+        visible_tree_oid: result.visible_tree_oid.clone(),
         diff_from: result.diff_from.clone(),
         diff_from_tree_oid: result.diff_from_tree_oid.clone(),
         diff_from_tree_oid_abbrev: diff_from_tree_oid_abbrev(root, result),
@@ -506,10 +512,12 @@ fn visible_tree_oid_for_persisted_scope(
     q_scope: &[String],
 ) -> Result<String, String> {
     if q_scope == record.scope.as_slice() {
-        return Ok(record.visible_tree_oid.clone());
+        return record
+            .visible_tree_oid
+            .clone()
+            .ok_or("Git-backed pass record is missing visible tree OID".to_string());
     }
     let checked_source = TreeSource::Git {
-        treeish: checked_tree_oid.to_string(),
         tree_oid: checked_tree_oid.to_string(),
     };
     VisibleTreeOidCache::new()
@@ -556,7 +564,18 @@ fn validate_last_result(
     if parse_record_timestamp(&result.updated_timestamp).is_none() {
         return Err("updatedTimestamp must be UTC in YYYY-MM-DDTHH:MM:SSZ form".to_string());
     }
+    // [iR] A Git-backed result may omit diff provenance when its response did
+    // not come from a diff-rendered evaluator interrogation. The inverse is
+    // not true: a diff provenance pair proves Git backing and therefore
+    // requires the complete Git-tree context.
+    validate_optional_diff_provenance_pair(
+        result.diff_from.as_deref(),
+        result.diff_from_tree_oid.as_deref(),
+    )?;
     let git_backed = result.checked_tree_oid.is_some();
+    if result.diff_from.is_some() && !git_backed {
+        return Err("diffFrom and diffFromTreeOid require checkedTreeOid".to_string());
+    }
     if git_backed == result.q_scope.is_empty() || git_backed == result.visible_scope.is_empty() {
         return Err(
             "qScope and visibleScope are required exactly for Git-backed results".to_string(),
@@ -565,14 +584,6 @@ fn validate_last_result(
     if let Some(suggestion) = result.response.question_scope_suggestion.as_deref() {
         validate_response_question_scope_suggestion(suggestion)?;
     }
-    // Reads of existing state and generic last-result writes can observe
-    // optional diff provenance independently of the stricter Git-backed
-    // interrogation writer, so schema validation rejects malformed partial
-    // pairs while still allowing the pair to be absent.
-    validate_optional_diff_provenance_pair(
-        result.diff_from.as_deref(),
-        result.diff_from_tree_oid.as_deref(),
-    )?;
     match expected_status {
         LastResultStatus::Pass => {
             if result.answer().is_none() {
@@ -652,20 +663,9 @@ fn temp_path_for(path: &Path) -> Result<PathBuf, String> {
 mod tests {
     use super::*;
 
-    #[test] // xpec: Df,nv
+    #[test] // xpec: I4,gD
     fn in_place_fail_serialization_omits_git_tree_fields() {
-        let result = LastResult {
-            response_timestamp: "2026-01-01T00:00:00Z".to_string(),
-            updated_timestamp: "2026-01-01T00:00:01Z".to_string(),
-            status: LastResultStatus::Fail,
-            response: LastResultResponse::answered("3", "shell transcript", None),
-            q_scope: Vec::new(),
-            visible_scope: Vec::new(),
-            checked_tree_oid: None,
-            visible_tree_oid: None,
-            diff_from: None,
-            diff_from_tree_oid: None,
-        };
+        let result = in_place_fail_result();
 
         validate_last_result(LastResultStatus::Fail, &result).unwrap();
         let json = serde_json::to_value(result).unwrap();
@@ -681,5 +681,31 @@ mod tests {
             ],
             [None, None, None, None, None, None]
         );
+    }
+
+    #[test] // xpec: iR
+    fn diff_provenance_requires_git_backed_tree_context() {
+        let mut result = in_place_fail_result();
+        result.diff_from = Some(":checkpoint".to_string());
+        result.diff_from_tree_oid = Some("0123456789abcdef".to_string());
+
+        let error = validate_last_result(LastResultStatus::Fail, &result).unwrap_err();
+
+        assert_eq!(error, "diffFrom and diffFromTreeOid require checkedTreeOid");
+    }
+
+    fn in_place_fail_result() -> LastResult {
+        LastResult {
+            response_timestamp: "2026-01-01T00:00:00Z".to_string(),
+            updated_timestamp: "2026-01-01T00:00:01Z".to_string(),
+            status: LastResultStatus::Fail,
+            response: LastResultResponse::answered("3", "shell transcript", None),
+            q_scope: Vec::new(),
+            visible_scope: Vec::new(),
+            checked_tree_oid: None,
+            visible_tree_oid: None,
+            diff_from: None,
+            diff_from_tree_oid: None,
+        }
     }
 }

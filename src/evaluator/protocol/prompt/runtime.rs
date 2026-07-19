@@ -12,6 +12,7 @@ use crate::process_cwd::with_current_dir;
 use minijinja::value::{Kwargs, Value as MiniValue};
 use minijinja::{Error, ErrorKind};
 use sha2::{Digest, Sha256};
+use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -260,7 +261,8 @@ pub(super) fn shell_transcript_filter(
     root: &Path,
     template_artifact_dir: &PromptTemplateArtifactDir,
     template_artifact_paths: &Mutex<Vec<PathBuf>>,
-    template_shell_env: &[(String, String)],
+    template_shell_env: &[(OsString, OsString)],
+    template_shell_args: &[String],
     command: String,
     kwargs: Kwargs,
 ) -> Result<String, Error> {
@@ -275,12 +277,11 @@ pub(super) fn shell_transcript_filter(
     // The prompt-template `sh` filter is defined to run the rendered block body
     // as a shell command. That CWD-sensitive template operation runs from the
     // repository root without mutating the parent process cwd.
-    let env_refs = template_shell_env
-        .iter()
-        .map(|(key, value)| (key.as_str(), value.as_str()))
-        .collect::<Vec<_>>();
-    let output = run_prompt_template_shell_command(root, &command, &env_refs)
-        .map_err(|err| template_error(format!("failed to run prompt template command: {err}")))?;
+    let output =
+        run_prompt_template_shell_command(root, &command, template_shell_env, template_shell_args)
+            .map_err(|err| {
+                template_error(format!("failed to run prompt template command: {err}"))
+            })?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(template_error(format!(
@@ -355,8 +356,9 @@ fn template_command_stdout_head(stdout: &[u8]) -> (String, usize) {
 
     let end = TEMPLATE_OUTPUT_HEAD_BYTES.min(stdout.len());
     let head = String::from_utf8_lossy(&stdout[..end]).into_owned();
-    let head_lines = output_line_count(&stdout[..end]);
-    (head, head_lines)
+    // No complete line fit in the byte budget. The byte head remains useful,
+    // but it must not be reported as one fully shown line.
+    (head, 0)
 }
 
 fn output_line_count(output: &[u8]) -> usize {
@@ -509,7 +511,7 @@ mod tests {
     use super::*;
     use crate::platform::create_private_dir;
 
-    #[test] // xpec: 38
+    #[test] // xpec: C
     fn template_command_output_truncates_large_output() {
         let output = (0..6000)
             .map(|index| format!("line {index}\n"))
@@ -531,7 +533,26 @@ mod tests {
         let _ = fs::remove_dir_all(output_dir);
     }
 
-    #[test] // xpec: 38,d
+    #[test] // xpec: C
+    fn partial_oversized_first_line_is_not_counted_as_shown() {
+        let output = vec![b'x'; TEMPLATE_OUTPUT_HEAD_BYTES + 1];
+        let output_dir = test_output_dir("partial-first-line");
+        let artifact_paths = Mutex::new(Vec::new());
+
+        let rendered = truncated_template_command_output(
+            &output,
+            &PromptTemplateArtifactDir::Fixed(output_dir.clone()),
+            &artifact_paths,
+        )
+        .unwrap();
+
+        assert!(rendered.contains("[truncated: showing first 0 of 1 lines; full output: "));
+        let path = full_output_path_from_rendered(&rendered);
+        assert_eq!(fs::read(path).unwrap(), output);
+        let _ = fs::remove_dir_all(output_dir);
+    }
+
+    #[test] // xpec: C,dx
     fn template_command_output_file_is_content_addressed_and_deduplicated() {
         let output = (0..1200)
             .map(|index| format!("line {index}\n"))
@@ -568,7 +589,7 @@ mod tests {
         let _ = fs::remove_dir_all(output_dir);
     }
 
-    #[test] // xpec: 38,Mo
+    #[test] // xpec: C,M
     fn prompt_template_output_dir_allocations_are_fresh() {
         let first = allocate_prompt_template_artifact_dir().unwrap();
         let second = allocate_prompt_template_artifact_dir().unwrap();
@@ -585,7 +606,7 @@ mod tests {
         }
     }
 
-    #[test] // xpec: Mo
+    #[test] // xpec: M
     fn prompt_template_output_dir_does_not_reuse_fixed_temp_path() {
         let fixed = std::env::temp_dir().join(PROMPT_TEMPLATE_ARTIFACT_DIR_PREFIX);
 
@@ -595,7 +616,7 @@ mod tests {
         assert!(output.path().is_dir());
     }
 
-    #[test] // xpec: Mo
+    #[test] // xpec: M
     fn prompt_template_output_dir_prefers_memory_backed_parent() {
         let memory_backed_parent = test_output_dir("memory-backed-parent");
         let fallback_parent = test_output_dir("fallback-parent");
@@ -616,7 +637,7 @@ mod tests {
         let _ = fs::remove_dir_all(fallback_parent);
     }
 
-    #[test] // xpec: Mo
+    #[test] // xpec: M
     fn prompt_template_output_dir_falls_back_when_memory_backed_parent_is_unavailable() {
         let missing_parent = std::env::temp_dir().join(format!(
             "canon-missing-memory-backed-parent-{}",
@@ -638,7 +659,7 @@ mod tests {
         let _ = fs::remove_dir_all(fallback_parent);
     }
 
-    #[test] // xpec: 38,d
+    #[test] // xpec: C,dx
     fn prompt_template_output_dir_cache_reuses_artifact_dir() {
         let first;
         {
@@ -653,7 +674,7 @@ mod tests {
         assert!(!first.exists());
     }
 
-    #[test] // xpec: 38
+    #[test] // xpec: C
     fn prompt_template_output_dir_caches_use_distinct_artifact_dirs() {
         let first;
         let second;
@@ -672,7 +693,7 @@ mod tests {
         assert!(!second.exists());
     }
 
-    #[test] // xpec: 38
+    #[test] // xpec: C
     fn template_command_stdout_path_is_deterministic_within_run_output_dir() {
         let output_dir = test_output_dir("same-run-content-addressed");
         let stdout = b"same complete stdout";
@@ -690,7 +711,7 @@ mod tests {
         let _ = fs::remove_dir_all(output_dir);
     }
 
-    #[test] // xpec: 38
+    #[test] // xpec: C
     fn template_command_output_file_preserves_raw_stdout_bytes() {
         // The saved file is raw command stdout. The full rendered prompt string
         // is trimmed separately after all `sh` filters return.
@@ -742,7 +763,7 @@ mod tests {
         path
     }
 
-    #[test] // xpec: 38
+    #[test] // xpec: C
     fn outer_trim_preserves_shell_transcript_edges() {
         let markers = test_markers();
         let transcript = "$ cmd\n  output  \n";
@@ -753,7 +774,7 @@ mod tests {
         assert_eq!(trimmed, transcript);
     }
 
-    #[test] // xpec: 38
+    #[test] // xpec: C
     fn shell_transcript_markers_are_preserved_inside_transcript_text() {
         let markers = test_markers();
         let transcript = format!(

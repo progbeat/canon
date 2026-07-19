@@ -95,7 +95,7 @@ mod tests {
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test]
+    #[test] // xpec: Ky
     fn ask_temporary_expectation_reports_answer_without_result_record() {
         let root = temp_root("ask-temporary-expectation");
         let config = CheckConfig {
@@ -146,10 +146,13 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         assert_eq!(runner.ask_count, 1);
         assert_eq!(result.answer.observed, "yes");
-        assert_eq!(result.answer.evidence, "checked visible files");
+        assert_eq!(
+            result.answer.evidence.as_deref(),
+            Some("checked visible files")
+        );
     }
 
-    #[test]
+    #[test] // xpec: Ky
     fn ask_temporary_expectation_does_not_write_git_backed_xpec_state() {
         let root = temp_git_root("ask-no-xpec-state");
         let config = CheckConfig {
@@ -165,6 +168,7 @@ mod tests {
             against_tree_oid: checked_tree_oid.clone(),
             checked_tree_oid,
             checked_file_count: 0,
+            prompt_git_environment: Vec::new(),
         };
         let runtime = CheckRuntime::materialized(
             &root,
@@ -215,7 +219,11 @@ mod tests {
         .unwrap();
 
         let xpec_state_dir = root.join(".git").join("canon").join("xpecs");
-        assert_eq!(result.answer.observed, "yes", "{}", result.answer.evidence);
+        assert_eq!(
+            result.answer.observed, "yes",
+            "{:?}",
+            result.answer.evidence
+        );
         assert!(!xpec_state_dir.exists());
         let _ = fs::remove_dir_all(&root);
     }
@@ -238,7 +246,7 @@ mod tests {
         fn start_session(
             &mut self,
             _session_cwd: &Path,
-            _template_artifact_paths: &[PathBuf],
+            _template_artifact_directory: &Path,
             _base_instructions: &str,
             _developer_instructions: &str,
             _agent: &AgentConfig,
@@ -272,6 +280,12 @@ mod tests {
                 context_compaction_events: Vec::new(),
             })
         }
+
+        fn set_progress_reporter(
+            &mut self,
+            _progress: Option<crate::evaluator::EvaluatorProgress>,
+        ) {
+        }
     }
 
     fn temp_root(label: &str) -> PathBuf {
@@ -300,6 +314,7 @@ mod tests {
             .current_dir(root)
             .output()
             .unwrap();
+        // xpec: Ky
         assert!(
             output.status.success(),
             "git {:?} failed: {}",

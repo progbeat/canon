@@ -10,7 +10,7 @@ mod snapshot;
 pub(crate) use chmod::{
     chmod_secret_dir_no_access, make_hook_executable, restore_secret_dir_mode, secret_dir_mode,
     set_materialized_dir_permissions, set_materialized_file_permissions,
-    set_private_dir_permissions, set_private_file_permissions, SecretDirMode,
+    set_private_dir_permissions, SecretDirMode,
 };
 pub(crate) use dirs::{create_private_dir, create_private_dir_all};
 pub(crate) use error::PlatformError;

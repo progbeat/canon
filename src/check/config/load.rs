@@ -1,11 +1,11 @@
 use crate::check::config::expansion::{
-    expand_raw_check_config_with_requirements, CheckConfigExpansionOptions, CheckConfigSource,
-    ExpandedCheckConfig,
+    expand_raw_check_config_for_command, CheckConfigExpansionOptions, CheckConfigSource,
 };
 use crate::check::config::in_place::InPlaceCheckConfig;
 use crate::check::config::validation::{validate_ask_config, validate_check_config};
 use crate::check::config::yaml_include::parse_yaml_config_with_includes;
 use crate::config_types::{CheckConfig, RawCheckConfig};
+use crate::fs_util::path_exists_no_follow;
 use crate::git::TreeSource;
 use crate::repo_inspection::RepoInspectionCache;
 use std::path::Path;
@@ -148,7 +148,9 @@ fn collect_in_place_config(
     default_agent_preset: Option<&str>,
     ask_question: Option<&str>,
 ) -> Result<CollectedCheckConfig<InPlaceCheckConfig>, String> {
-    let content = cache.in_place_file_content(root, config_path)?;
+    let content = cache
+        .in_place_file_content(root, config_path)
+        .map_err(|err| map_missing_in_place_default_config_error(root, config_path, err))?;
     collect_in_place_check_config_content_with_root_and_default_agent_preset(
         root,
         config_path,
@@ -193,9 +195,8 @@ fn collect_tree_check_config_content_with_root_and_default_agent_preset(
         default_agent_preset,
         ask_question,
     )?;
-    let expectation_count = expanded.config.expectations.len();
-    let validation =
-        validate_expanded_check_config(&expanded.config, ask_question).map(|()| expanded.config);
+    let expectation_count = expanded.expectations.len();
+    let validation = validate_expanded_check_config(&expanded, ask_question).map(|()| expanded);
     Ok(CollectedCheckConfig {
         expectation_count,
         validation,
@@ -217,9 +218,9 @@ fn collect_in_place_check_config_content_with_root_and_default_agent_preset(
         default_agent_preset,
         ask_question,
     )?;
-    let expectation_count = expanded.config.expectations.len();
-    let validation = validate_expanded_check_config(&expanded.config, ask_question)
-        .map(|()| InPlaceCheckConfig::from_expanded(expanded));
+    let expectation_count = expanded.expectations.len();
+    let validation = validate_expanded_check_config(&expanded, ask_question)
+        .map(|()| InPlaceCheckConfig::from_config(expanded));
     Ok(CollectedCheckConfig {
         expectation_count,
         validation,
@@ -233,17 +234,18 @@ fn expand_check_config_content(
     source: CheckConfigSource,
     default_agent_preset: Option<&str>,
     ask_question: Option<&str>,
-) -> Result<ExpandedCheckConfig, String> {
+) -> Result<CheckConfig, String> {
     // `RawCheckConfig` is the serde schema for the whole check.yml file.
-    // Expansion resolves either configured runtime expectations or one
-    // ask-owned temporary item. In-place requirements also retain prohibited
-    // fields from configured expectations that ask replaces at runtime.
+    // Expansion resolves both configured items and the optional ask-owned
+    // temporary runtime item through one preset-resolution boundary.
+    let in_place = matches!(&source, CheckConfigSource::InPlace);
     let raw = parse_raw_check_config(root, config_path, content, source.clone())?;
-    expand_raw_check_config_with_requirements(
+    expand_raw_check_config_for_command(
         raw,
         CheckConfigExpansionOptions {
             default_agent_preset,
             ask_question,
+            in_place,
         },
     )
 }
@@ -275,27 +277,93 @@ fn map_missing_default_config_error(
     source: &TreeSource,
     err: String,
 ) -> String {
-    let missing_staged_path = format!(
-        "failed to read staged {}: path is not in the staged index",
-        config_path.display()
-    );
-    if config_path == Path::new(super::CHECK_PATH)
-        && matches!(source, TreeSource::Staged)
-        && err == missing_staged_path
-    {
-        return format!(
-            "No canon check config found at {}\n\
-             ▷ If the human asked you to use any `canon-*` skill in this project, \
-             treat the missing config as permission to set up canon rather than asking \
-             for confirmation. Run `canon init`, inspect the current project enough to \
-             understand its purpose, public behavior, and important invariants, then \
-             draft a minimal `.canon/check.yml` that the human can grow over time. Use \
-             canon's own `.canon/check.yml` as a reference for structure and style: \
-             `https://raw.githubusercontent.com/progbeat/canon/main/.canon/check.yml`. \
-             Start with a few simple, objective expectations that protect important \
-             user-facing behavior.",
-            super::CHECK_PATH
-        );
+    let missing_path_error = match source {
+        TreeSource::Staged => format!(
+            "failed to read staged {}: path is not in the staged index",
+            config_path.display()
+        ),
+        TreeSource::Git { .. } | TreeSource::DefaultAgainstHead { .. } => format!(
+            "failed to read {} from {}: path is not in the selected tree",
+            config_path.display(),
+            source.cache_key()
+        ),
+    };
+    if config_path == Path::new(super::CHECK_PATH) && err == missing_path_error {
+        return missing_default_config_error();
     }
     err
+}
+
+fn map_missing_in_place_default_config_error(
+    root: &Path,
+    config_path: &Path,
+    err: String,
+) -> String {
+    if config_path == Path::new(super::CHECK_PATH)
+        && matches!(path_exists_no_follow(&root.join(config_path)), Ok(false))
+    {
+        return missing_default_config_error();
+    }
+    err
+}
+
+fn missing_default_config_error() -> String {
+    format!(
+        "No canon check config found at {}\n\
+         ▷ If the human asked you to use any `canon-*` skill in this project, \
+         treat the missing config as permission to set up canon rather than asking \
+         for confirmation. Run `canon init`, inspect the current project enough to \
+         understand its purpose, public behavior, and important invariants, then \
+         draft a minimal `.canon/check.yml` that the human can grow over time. Use \
+         canon's own `.canon/check.yml` as a reference for structure and style: \
+         `https://raw.githubusercontent.com/progbeat/canon/main/.canon/check.yml`. \
+         Start with a few simple, objective expectations that protect important \
+         user-facing behavior.",
+        super::CHECK_PATH
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    // xpec: Y8
+    #[test]
+    fn missing_default_staged_config_has_setup_guidance() {
+        let error = map_missing_default_config_error(
+            Path::new(super::super::CHECK_PATH),
+            &TreeSource::Staged,
+            "failed to read staged .canon/check.yml: path is not in the staged index".into(),
+        );
+
+        assert!(error.starts_with("No canon check config found at .canon/check.yml\n"));
+        assert!(error.contains("Run `canon init`"));
+        assert!(error.contains("draft a minimal `.canon/check.yml`"));
+    }
+
+    #[test] // xpec: Y8
+    fn missing_default_in_place_config_has_setup_guidance() {
+        let root = std::env::temp_dir().join(format!(
+            "canon-missing-in-place-config-{}-{:016x}",
+            std::process::id(),
+            getrandom::u64().unwrap()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let mut cache = RepoInspectionCache::new();
+
+        let error = match collect_in_place_check_config_with_default_agent_preset(
+            &mut cache,
+            &root,
+            Path::new(super::super::CHECK_PATH),
+            None,
+        ) {
+            Ok(_) => panic!("missing default config must fail"),
+            Err(error) => error,
+        };
+
+        assert!(error.starts_with("No canon check config found at .canon/check.yml\n"));
+        assert!(error.contains("Run `canon init`"));
+        fs::remove_dir_all(root).unwrap();
+    }
 }

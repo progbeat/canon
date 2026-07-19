@@ -18,9 +18,7 @@ pub(crate) fn interrogation_result_from_answer(
         diff_from,
         diff_from_tree_oid,
         diff_from_tree_oid_abbrev,
-        turn_usage,
         context_compacted,
-        stop_after_current_expectation,
         interrupted,
     } = answer;
     let record = record_from_response(
@@ -36,9 +34,7 @@ pub(crate) fn interrogation_result_from_answer(
     }
     Ok(InterrogationResult {
         record,
-        turn_usage,
         context_compacted,
-        stop_after_current_expectation,
         interrupted,
     })
 }
@@ -49,7 +45,6 @@ pub(crate) fn finalize_interrogation_answer(
     agent: &crate::config_types::AgentConfig,
     enforced_scope: &[String],
     response: ParsedAnswer,
-    turn_usage: Option<crate::token_usage_types::TokenUsage>,
     context_compacted: bool,
 ) -> Result<InterrogationAnswer, EvaluatorError> {
     // InterrogationAnswer is invocation-local normalized evaluator output.
@@ -62,9 +57,7 @@ pub(crate) fn finalize_interrogation_answer(
         diff_from: None,
         diff_from_tree_oid: None,
         diff_from_tree_oid_abbrev: None,
-        turn_usage,
         context_compacted,
-        stop_after_current_expectation: false,
         interrupted: false,
     })
 }
@@ -75,7 +68,7 @@ pub(crate) fn write_query_result_event(
     answer: &ParsedAnswer,
 ) -> Result<(), EvaluatorError> {
     if let Some(writer) = diagnostic_log.as_deref_mut() {
-        writer.write_event(
+        writer.emit_event(
             "info",
             "query.result",
             &[
@@ -117,7 +110,7 @@ pub(crate) fn write_query_review_required_event(
     reason: &str,
 ) -> Result<(), EvaluatorError> {
     if let Some(writer) = diagnostic_log.as_deref_mut() {
-        writer.write_event(
+        writer.emit_event(
             "warn",
             "query.review_required",
             &[
@@ -137,7 +130,7 @@ pub(crate) fn write_query_review_required_event(
 
 struct FinalizedParsedAnswer {
     response: ParsedAnswer,
-    visible_tree_oid: String,
+    visible_tree_oid: Option<String>,
 }
 
 fn finalize_parsed_answer(

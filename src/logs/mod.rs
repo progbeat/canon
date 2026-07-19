@@ -7,15 +7,16 @@ mod render;
 mod rotation;
 mod writer;
 
+pub(crate) use config::DiagnosticLogPlan;
 pub(crate) use error::{DiagnosticLogError, DiagnosticLogResult};
 // `logs::events` contains generic lifecycle/boundary helpers. Query result
 // events are emitted from `check::interrogation::result::records`, beside
 // `QueryResult` finalization, because those events are query-result specific.
 pub(crate) use events::{
     write_agent_failure_event, write_agent_missing_usage_event, write_agent_request_event,
-    write_agent_response_event, write_cache_cleanup_event, write_check_finish_event,
-    write_check_start_event, write_query_finish_event, write_query_start_event,
-    write_thread_lifecycle_event, write_thread_restart_event, AgentTurnLogRequest,
+    write_agent_response_event, write_check_finish_event, write_check_start_event,
+    write_query_finish_event, write_query_start_event, write_thread_lifecycle_event,
+    write_thread_restart_event, write_xpec_state_retention_event, AgentTurnLogRequest,
     ThreadLifecycleEventFields, ThreadRestartEventFields,
 };
 pub(crate) use render::push_json_control_escape;

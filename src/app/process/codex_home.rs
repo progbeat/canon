@@ -10,27 +10,45 @@ const EVALUATOR_CODEX_HOME_RANDOM_BYTES: usize = 16;
 const EVALUATOR_CODEX_HOME_RANDOM_ATTEMPTS: usize = 1000;
 const SYSTEM_SKILLS_MARKER: &str = ".codex-system-skills.marker";
 
-pub(crate) fn prepare_evaluator_codex_home(root: &Path) -> Result<PathBuf, String> {
-    let codex_home = evaluator_codex_home_path(root)?;
-    ensure_evaluator_codex_home_dir(&codex_home)?;
+pub(crate) struct EvaluatorCodexHome {
+    path: PathBuf,
+}
+
+impl EvaluatorCodexHome {
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for EvaluatorCodexHome {
+    fn drop(&mut self) {
+        if let Some(parent) = self.path.parent() {
+            let _ = fs::remove_dir_all(parent);
+        }
+    }
+}
+
+pub(crate) fn prepare_evaluator_codex_home(root: &Path) -> Result<EvaluatorCodexHome, String> {
+    let codex_home = allocate_evaluator_codex_home(root)?;
+    ensure_evaluator_codex_home_dir(codex_home.path())?;
     for dir in [
         ".tmp", "cache", "log", "mcp", "memories", "plugins", "sessions", "skills",
     ] {
-        ensure_evaluator_codex_home_dir(&codex_home.join(dir))?;
+        ensure_evaluator_codex_home_dir(&codex_home.path().join(dir))?;
     }
     let source_home = source_codex_home();
-    write_empty_system_skills_marker(source_home.as_deref(), &codex_home)?;
+    write_empty_system_skills_marker(source_home.as_deref(), codex_home.path())?;
     if let Some(source_home) = source_home {
-        if !same_existing_path(&source_home, &codex_home) {
+        if !same_existing_path(&source_home, codex_home.path()) {
             for file_name in EVALUATOR_CODEX_HOME_AUTH_FILES {
-                mirror_codex_home_file(&source_home, &codex_home, file_name)?;
+                mirror_codex_home_file(&source_home, codex_home.path(), file_name)?;
             }
         }
     }
     Ok(codex_home)
 }
 
-fn evaluator_codex_home_path(_root: &Path) -> Result<PathBuf, String> {
+fn allocate_evaluator_codex_home(_root: &Path) -> Result<EvaluatorCodexHome, String> {
     let temp_root = env::temp_dir()
         .canonicalize()
         .map_err(|err| format!("failed to canonicalize temp dir: {}", err))?;
@@ -40,7 +58,11 @@ fn evaluator_codex_home_path(_root: &Path) -> Result<PathBuf, String> {
             random_hex(EVALUATOR_CODEX_HOME_RANDOM_BYTES)?
         ));
         match platform::create_private_dir(&parent) {
-            Ok(()) => return Ok(parent.join(".codex")),
+            Ok(()) => {
+                return Ok(EvaluatorCodexHome {
+                    path: parent.join(".codex"),
+                })
+            }
             Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
             Err(err) => return Err(format!("failed to create {}: {}", parent.display(), err)),
         }
@@ -148,16 +170,18 @@ fn remove_existing_codex_home_entry(path: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn evaluator_codex_home_path_uses_private_random_temp_parent() {
+    #[test] // xpec: Ky,mf
+    fn evaluator_codex_home_owner_cleans_private_random_temp_parent() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .canonicalize()
             .unwrap();
-        let first = evaluator_codex_home_path(&root).unwrap();
-        let second = evaluator_codex_home_path(&root).unwrap();
+        let first = allocate_evaluator_codex_home(&root).unwrap();
+        let second = allocate_evaluator_codex_home(&root).unwrap();
+        let first_parent = first.path().parent().unwrap().to_path_buf();
+        let second_parent = second.path().parent().unwrap().to_path_buf();
 
-        assert_ne!(first, second);
-        for codex_home in [&first, &second] {
+        assert_ne!(first.path(), second.path());
+        for codex_home in [first.path(), second.path()] {
             assert_eq!(codex_home.file_name(), Some(std::ffi::OsStr::new(".codex")));
             assert!(codex_home.starts_with(env::temp_dir().canonicalize().unwrap()));
             assert!(!codex_home.starts_with(&root));
@@ -166,7 +190,9 @@ mod tests {
                 .contains(&root.to_string_lossy()[..]));
             assert!(codex_home.parent().unwrap().is_dir());
         }
-        let _ = fs::remove_dir_all(first.parent().unwrap());
-        let _ = fs::remove_dir_all(second.parent().unwrap());
+        drop(first);
+        drop(second);
+        assert!(!first_parent.exists());
+        assert!(!second_parent.exists());
     }
 }

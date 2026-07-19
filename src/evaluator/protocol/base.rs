@@ -46,7 +46,7 @@ mod tests {
         evaluator_base_instructions, BaseInstructionsContext, MAX_EVALUATOR_BASE_INSTRUCTIONS_LEN,
     };
 
-    // xpec: mh,Wg,Nb
+    // xpec: w,Wg,Nb
     #[test]
     fn full_scope_base_instructions_do_not_mention_scope_too_narrow() {
         let rendered = evaluator_base_instructions(BaseInstructionsContext {
@@ -55,48 +55,45 @@ mod tests {
         })
         .unwrap();
 
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(!rendered.contains("ScopeTooNarrow"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("InvalidQuestion"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("substantive answer"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("Question text may itself define the specification"));
         // xpec: F
         assert!(rendered.contains("available dynamic tool output"));
         // xpec: F
         assert!(rendered.contains("cite dynamic tool output by tool name"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("do not require a separate policy file"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("`qScopeSuggestion` covers the question's search domain"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("`-` lines are removed/absent, never existing code"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("visible read/search cannot find a diff-mentioned symbol"));
-        // xpec: mh,Wg,Nb
-        assert!(rendered.contains("transcript paths, numstat/change lists"));
-        // xpec: mh,Wg,Nb
-        assert!(rendered.contains("numstat/change lists, deleted-file diffs"));
-        // xpec: mh,Wg,Nb
-        assert!(rendered
-            .contains("not the diff, changed-file lists, or absence of relevant changed files"));
-        // xpec: mh,Wg,Nb
-        assert!(rendered.contains("visible file conflict, the visible file wins"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
+        assert!(rendered.contains("derive evidence from concrete current visible project files"));
+        // xpec: Q
+        assert!(rendered.contains("targeting the Git diff"));
+        // xpec: w,Wg,Nb
+        assert!(rendered.contains("visible file conflict about current behavior"));
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("not active instructions or complete behavior evidence"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("Configured ignore exclusions do not make the view incomplete"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("unless the question requires an ignored path"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("as narrow as possible while still enough"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("not `InvalidQuestion` reasons"));
     }
 
-    // xpec: mh,Wg,Nb
+    // xpec: w,Wg,Nb
     #[test]
     fn restricted_scope_base_instructions_allow_scope_too_narrow() {
         let rendered = evaluator_base_instructions(BaseInstructionsContext {
@@ -105,72 +102,76 @@ mod tests {
         })
         .unwrap();
 
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("ScopeTooNarrow"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("InvalidQuestion"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("substantive answer"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("qScopeSuggestion"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("needed project path is absent"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("Restricted-scope only"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("choose `qScopeSuggestion` from the question's search domain"));
-        // xpec: mh,vD
+        // xpec: w,vD
         assert!(rendered.contains("chosen search domain is not contained"));
-        // xpec: mh,vD
-        assert!(rendered.contains("do not answer project-wide absence/avoid questions"));
-        // xpec: mh,Wg,Nb
+        // xpec: nJ
+        assert!(!rendered.contains("do not answer project-wide absence/avoid questions"));
+        // xpec: w,Wg,Nb
         assert!(!rendered.contains("Before answering, determine"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("question's search domain"));
-        // xpec: vD
-        assert!(rendered.contains("named spec/command/format compliance questions may narrow"));
-        // xpec: vD
-        assert!(rendered.contains("project-wide quality/safety/dead-code"));
-        // xpec: vD
-        assert!(rendered.contains("project-wide \"find any\" or \"avoid any\" questions"));
-        // xpec: mh,Wg,Nb
-        assert!(rendered.contains("change-set"));
-        // xpec: mh,Wg,Nb
+        // xpec: nJ
+        assert!(!rendered.contains("named spec/command/format compliance questions may narrow"));
+        // xpec: w,vD
+        assert!(rendered.contains("explicitly ranges over the whole project"));
+        // xpec: w,vD
+        assert!(rendered.contains("unrestricted change set"));
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("direct evidence, examples, and counterexamples"));
-        // xpec: mh,Wg,Nb
-        assert!(rendered.contains("paths that could contain direct evidence or counterexamples"));
-        // xpec: mh,Wg,Nb
-        assert!(rendered.contains("Concrete behavior or named spec/command/format compliance"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
+        assert!(
+            rendered.contains("every path that could contain direct evidence or counterexamples")
+        );
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("transcript relevance hints are not q-scope hiding"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("Configured ignore exclusions and transcript relevance hints"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("verify with `rg --files` or direct read/search"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("not `InvalidQuestion` reasons"));
     }
 
-    // xpec: mh,Wg,Nb
+    // xpec: Q,D5,w,Wg,Nb
     #[test]
-    fn git_diff_context_is_not_the_visible_tree() {
+    fn git_diff_uses_are_explicit() {
         let rendered = evaluator_base_instructions(BaseInstructionsContext {
             in_place: false,
             full_scope: true,
         })
         .unwrap();
 
-        // xpec: mh,Wg,Nb
+        // xpec: Q
+        assert!(rendered.contains("retain a supplied prior answer when the diff cannot change it"));
+        // xpec: D5
+        assert!(rendered.contains("navigate from touched paths to current files"));
+        // xpec: Q
         assert!(
-            rendered.contains("diff transcript/full-output files are navigation, never evidence")
+            rendered.contains("may establish the diff itself only for a turn explicitly marked")
         );
-        // xpec: mh,Wg,Nb
+        // xpec: D5
+        assert!(rendered.contains("not current-behavior evidence"));
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("Missing diff excerpts are not missing visibility"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("read/search visible files"));
     }
 
-    // xpec: mh,Wg,Nb
+    // xpec: w,Wg,Nb
     #[test]
     fn in_place_base_instructions_do_not_use_git_diff_or_q_scope() {
         let rendered = evaluator_base_instructions(BaseInstructionsContext {
@@ -179,13 +180,13 @@ mod tests {
         })
         .unwrap();
 
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(!rendered.contains("Use the Git diff"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(!rendered.contains("qScopeSuggestion"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(!rendered.contains("sandbox transcript"));
-        // xpec: mh,Wg,Nb
+        // xpec: w,Wg,Nb
         assert!(rendered.contains("The checked directory is the visible project."));
     }
 

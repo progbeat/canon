@@ -79,7 +79,7 @@ impl EvaluatorFailureKind {
 pub(crate) fn record_from_response(
     expectation: &ResolvedExpectation,
     response: ParsedAnswer,
-    visible_tree_oid: String,
+    visible_tree_oid: Option<String>,
     diff_from: Option<String>,
     diff_from_tree_oid: Option<String>,
     diff_from_tree_oid_abbrev: Option<String>,
@@ -121,7 +121,7 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
-    // xpec: mh
+    // xpec: w
     #[test]
     fn schema_valid_evidence_file_refs_do_not_trigger_repair() {
         let root = temp_root("schema-valid-evidence");
@@ -151,13 +151,16 @@ mod tests {
 
         assert_eq!(parsed.answer.error, None);
         assert_eq!(parsed.answer.observed, "yes");
-        assert_eq!(parsed.answer.evidence, "`src/hidden.rs` supports it.");
+        assert_eq!(
+            parsed.answer.evidence.as_deref(),
+            Some("`src/hidden.rs` supports it.")
+        );
         assert!(runner.responses.is_empty());
 
         let _ = fs::remove_dir_all(root);
     }
 
-    // xpec: mh
+    // xpec: w
     #[test]
     fn malformed_response_stays_unparsable_without_repair() {
         let root = temp_root("unparsable");
@@ -190,13 +193,14 @@ mod tests {
         assert!(parsed
             .answer
             .evidence
-            .contains("evaluator response could not be parsed"));
+            .as_deref()
+            .is_some_and(|evidence| evidence.contains("evaluator response could not be parsed")));
         assert_eq!(runner.responses.len(), 1);
 
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test]
+    #[test] // xpec: k4,Ky
     fn check_record_requires_expected_answer() {
         let expectation = ResolvedExpectation {
             number: 0,
@@ -216,7 +220,7 @@ mod tests {
         let err = record_from_response(
             &expectation,
             ParsedAnswer::answer("yes".to_string(), "`src/main.rs`".to_string(), None),
-            "visible".to_string(),
+            Some("visible".to_string()),
             None,
             None,
             None,
@@ -264,7 +268,7 @@ mod tests {
         fn start_session(
             &mut self,
             _session_cwd: &Path,
-            _template_artifact_paths: &[PathBuf],
+            _template_artifact_directory: &Path,
             _base_instructions: &str,
             _developer_instructions: &str,
             _agent: &AgentConfig,
@@ -299,6 +303,12 @@ mod tests {
                 token_usage_updates: Vec::new(),
                 context_compaction_events: Vec::new(),
             })
+        }
+
+        fn set_progress_reporter(
+            &mut self,
+            _progress: Option<crate::evaluator::EvaluatorProgress>,
+        ) {
         }
     }
 }

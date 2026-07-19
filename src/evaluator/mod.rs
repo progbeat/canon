@@ -10,9 +10,10 @@ pub(crate) use config::{
 pub(crate) use progress::{EvaluatorProgress, EvaluatorProgressMarker};
 pub(crate) use protocol::{
     evaluator_base_instructions, q_scope_is_full_project, BaseInstructionsContext,
-    DeveloperInstructionsContext, EvaluatorDynamicToolCall, EvaluatorDynamicToolHandler,
-    EvaluatorDynamicToolResult, EvaluatorError, EvaluatorResponseParseCache, EvaluatorRunner,
-    EvaluatorTurnPromptContext, PromptRenderer, RenderedPrompt,
+    DeveloperInstructionsContext, DeveloperInstructionsMode, EvaluatorDynamicToolCall,
+    EvaluatorDynamicToolHandler, EvaluatorDynamicToolResult, EvaluatorError,
+    EvaluatorResponseParseCache, EvaluatorRunner, EvaluatorTurnPromptContext,
+    EvaluatorTurnPromptMode, PromptRenderer, RenderedPrompt,
 };
 pub(crate) use turn::{
     ask_once, effective_thinking, evaluator_models, is_context_window_failure,

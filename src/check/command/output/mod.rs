@@ -23,10 +23,14 @@ pub(crate) use escape::escape_check_output_text;
 pub(crate) use query::finish_query_output;
 pub(crate) use record::{
     start_expectation_report_output, start_query_report_output,
-    write_result_output_without_started_report, StartedExpectationReportOutput,
+    write_result_output_with_elapsed_timeline, write_result_output_without_started_report,
+    StartedExpectationReportOutput,
 };
 pub(crate) use shared::{write_stdout_record, SharedCheckOutput};
-pub(crate) use summary::{render_check_agent_messages, summary_outcome_counts, write_summary_line};
+pub(crate) use summary::{
+    continue_evaluation_message, render_check_agent_messages, summary_outcome_counts,
+    write_summary_line,
+};
 pub(crate) use usage::render_token_usage_summary;
 
 #[cfg(test)]
@@ -36,7 +40,8 @@ mod tests {
     use super::{
         finish_query_output, render_check_agent_messages, start_expectation_report_output,
         start_query_report_output, summary_outcome_counts,
-        write_result_output_without_started_report, write_summary_line, SharedCheckOutput,
+        write_result_output_with_elapsed_timeline, write_result_output_without_started_report,
+        write_summary_line, SharedCheckOutput,
     };
     use crate::check::core::{
         CheckRecord, CheckResult, CheckRunReport, ParsedAnswer, ERROR_INVALID_QUESTION,
@@ -61,7 +66,7 @@ mod tests {
         }
     }
 
-    #[test] // xpec: nF
+    #[test] // xpec: k4,90
     fn non_live_report_result_output_matches_documented_record_shape() {
         let mut bytes = Vec::new();
         let mut result_output = Some(&mut bytes as &mut dyn Write);
@@ -69,10 +74,25 @@ mod tests {
         write_result_output_without_started_report(&mut result_output, &passing_record()).unwrap();
 
         let rendered = String::from_utf8(bytes).unwrap();
-        assert_result_entry(&rendered, "PASS");
+        assert_result_entry(&rendered, "ok");
     }
 
-    #[test] // xpec: v1,NQ
+    #[test] // xpec: 03,90
+    fn elapsed_caller_result_output_contains_each_due_default_marker() {
+        let mut bytes = Vec::new();
+        let mut result_output = Some(&mut bytes as &mut dyn Write);
+
+        write_result_output_with_elapsed_timeline(
+            &mut result_output,
+            &passing_record(),
+            Duration::from_secs(120),
+        )
+        .unwrap();
+
+        assert_eq!(String::from_utf8(bytes).unwrap(), "j... ok\n");
+    }
+
+    #[test] // xpec: 9b
     fn summary_output_matches_documented_line() {
         let report = CheckRunReport {
             records: vec![passing_record()],
@@ -89,7 +109,7 @@ mod tests {
         assert!(summary.ends_with("=\n"));
     }
 
-    #[test] // xpec: nF
+    #[test] // xpec: k4,90
     fn failed_result_output_matches_documented_detail_lines() {
         let mut bytes = Vec::new();
         let mut result_output = Some(&mut bytes as &mut dyn Write);
@@ -101,7 +121,7 @@ mod tests {
         write_result_output_without_started_report(&mut result_output, &record).unwrap();
 
         let rendered = String::from_utf8(bytes).unwrap();
-        assert_result_entry(&rendered, "FAIL");
+        assert_result_entry(&rendered, "fail");
         assert!(rendered.contains("Does it pass?\n"));
         assert!(rendered.contains("diff-from: 1234567 (:against-tree)\n"));
         assert!(rendered.contains("expected: yes\n"));
@@ -109,7 +129,7 @@ mod tests {
         assert!(rendered.contains("evidence: test evidence\n"));
     }
 
-    #[test] // xpec: nF
+    #[test] // xpec: RU,90
     fn error_result_output_matches_documented_detail_lines() {
         let mut bytes = Vec::new();
         let mut result_output = Some(&mut bytes as &mut dyn Write);
@@ -122,14 +142,14 @@ mod tests {
         write_result_output_without_started_report(&mut result_output, &record).unwrap();
 
         let rendered = String::from_utf8(bytes).unwrap();
-        assert_result_entry(&rendered, "FAIL");
+        assert_result_entry(&rendered, "fail");
         assert!(rendered.contains("error: InvalidQuestion\n"));
+        assert!(rendered.contains("evidence: test evidence\n"));
         assert!(!rendered.contains("expected:"));
         assert!(!rendered.contains("observed:"));
-        assert!(!rendered.contains("evidence:"));
     }
 
-    #[test] // xpec: nF
+    #[test] // xpec: k4,90
     fn live_report_result_output_matches_documented_record_shape() {
         let bytes = Arc::new(Mutex::new(Vec::new()));
         let output = SharedCheckOutput::new(Box::new(CapturedOutput {
@@ -140,7 +160,7 @@ mod tests {
         let _ = report.finish_with_record(&passing_record());
 
         let completed = captured_string(&bytes);
-        assert_result_entry(&completed, "PASS");
+        assert_result_entry(&completed, "ok");
     }
 
     #[test] // xpec: sy,1h
@@ -156,7 +176,7 @@ mod tests {
         let _ = report.finish_with_record(&passing_record());
     }
 
-    #[test] // xpec: 0N
+    #[test] // xpec: Ky
     fn query_output_starts_with_progress_timeline_line() {
         let bytes = Arc::new(Mutex::new(Vec::new()));
         let output = SharedCheckOutput::new(Box::new(CapturedOutput {
@@ -177,28 +197,32 @@ mod tests {
         );
     }
 
-    #[test] // xpec: v1
+    #[test] // xpec: 9b
     fn agent_messages_cover_documented_actions() {
-        let repair_messages = render_check_agent_messages(&issues(&["a", "b"]), 0, 0, 0);
+        let repair_messages = render_check_agent_messages(&issues(&["a", "b"]), 0, true);
         assert!(has_action(&repair_messages, "Fix the issues"));
         assert_eq!(
             repair_messages[1],
             "❕ Plan the repair, then run `canon show not:a not:b -- <PATHSPEC>...` for the planned edit paths to identify expectations that may be affected."
         );
         assert!(has_action(
-            &render_check_agent_messages(&[], 0, 0, 0),
+            &render_check_agent_messages(&[], 0, false),
             "All checks passed"
         ));
-        assert!(has_action(
-            &render_check_agent_messages(&[], 1, 0, 0),
+        assert!(!has_action(
+            &render_check_agent_messages(&[], 0, false),
             "Commit the staged changes"
         ));
         assert!(has_action(
-            &render_check_agent_messages(&issues(&["a"]), 2, 0, 1),
-            "Then fix the remaining issues"
+            &render_check_agent_messages(&[], 0, true),
+            "Commit the staged changes"
+        ));
+        assert!(has_action(
+            &render_check_agent_messages(&[], 1, true),
+            "Run `canon check`"
         ));
         assert!(!has_action(
-            &render_check_agent_messages(&issues(&["a"]), 1, 1, 0),
+            &render_check_agent_messages(&issues(&["a"]), 0, true),
             "Commit the staged changes"
         ));
     }
@@ -216,8 +240,11 @@ mod tests {
         let (id_and_dots, observed_status) = first_line
             .split_once(' ')
             .expect("result entry separates id/dots from status");
+        // xpec: 03,k4,90
         assert_eq!(id_and_dots.trim_end_matches('.'), "j");
+        // xpec: 03,k4,90
         assert!(id_and_dots.ends_with('.'));
+        // xpec: 03,k4,90
         assert_eq!(observed_status, status);
     }
 
@@ -271,10 +298,10 @@ mod tests {
             expected_answer: Some("yes".to_string()),
             observed: observed.to_string(),
             error: error.map(str::to_string),
-            evidence: "test evidence".to_string(),
+            evidence: Some("test evidence".to_string()),
             scope: vec![".".to_string()],
             question_scope_suggestion: None,
-            visible_tree_oid: "visible".to_string(),
+            visible_tree_oid: Some("visible".to_string()),
             diff_from: None,
             diff_from_tree_oid: None,
             diff_from_tree_oid_abbrev: None,

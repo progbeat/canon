@@ -28,7 +28,7 @@ impl AppServerRunner {
         // Codex home; the checked tree must not select user-installed plugins
         // by making the app server inherit the caller's real home.
         let codex_home = prepare_evaluator_codex_home(root).map_err(EvaluatorError::message)?;
-        configure_app_server_environment(&mut command, &codex_home)
+        configure_app_server_environment(&mut command, codex_home.path())
             .map_err(EvaluatorError::message)?;
         prepare_app_server_command(&mut command);
         let mut child = command
@@ -56,6 +56,7 @@ impl AppServerRunner {
         let (stderr, stderr_reader) = spawn_app_server_stderr_reader(stderr);
         let mut runner = AppServerRunner {
             app_server_state_root: state_root.map(Path::to_path_buf),
+            _evaluator_codex_home: codex_home,
             child,
             stdin,
             messages,

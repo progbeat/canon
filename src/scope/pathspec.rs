@@ -111,14 +111,48 @@ fn slash_terminated_base(base: &[u8]) -> Vec<u8> {
 fn path_matches_pathspec_glob_bytes(path: &[u8], pattern: &[u8]) -> bool {
     let path = trim_dot_slash_bytes(path);
     let pattern = trim_dot_slash_bytes(pattern);
-    pathspec_glob_matches_at(path, pattern, 0, 0, &mut HashMap::new())
+    glob_matches(
+        path,
+        pattern,
+        GlobSyntax {
+            slash: b'/',
+            star: b'*',
+            question: b'?',
+        },
+    )
 }
 
-fn pathspec_glob_matches_at(
-    path: &[u8],
-    pattern: &[u8],
+pub(crate) fn utf8_path_matches_glob(path: &str, pattern: &str) -> bool {
+    let path = trim_dot_slash(path).chars().collect::<Vec<_>>();
+    let pattern = trim_dot_slash(pattern).chars().collect::<Vec<_>>();
+    glob_matches(
+        &path,
+        &pattern,
+        GlobSyntax {
+            slash: '/',
+            star: '*',
+            question: '?',
+        },
+    )
+}
+
+#[derive(Clone, Copy)]
+struct GlobSyntax<T> {
+    slash: T,
+    star: T,
+    question: T,
+}
+
+fn glob_matches<T: Copy + Eq>(path: &[T], pattern: &[T], syntax: GlobSyntax<T>) -> bool {
+    glob_matches_at(path, pattern, 0, 0, syntax, &mut HashMap::new())
+}
+
+fn glob_matches_at<T: Copy + Eq>(
+    path: &[T],
+    pattern: &[T],
     path_index: usize,
     pattern_index: usize,
+    syntax: GlobSyntax<T>,
     memo: &mut HashMap<(usize, usize), bool>,
 ) -> bool {
     if let Some(result) = memo.get(&(path_index, pattern_index)) {
@@ -126,40 +160,58 @@ fn pathspec_glob_matches_at(
     }
     let result = if pattern_index == pattern.len() {
         path_index == path.len()
-    } else if pattern[pattern_index..].starts_with(b"**/") {
-        double_star_slash_matches(path, pattern, path_index, pattern_index, memo)
-    } else if pattern[pattern_index..].starts_with(b"**") {
-        double_star_matches(path, pattern, path_index, pattern_index, memo)
+    } else if starts_with(
+        pattern,
+        pattern_index,
+        &[syntax.star, syntax.star, syntax.slash],
+    ) {
+        double_star_slash_matches(path, pattern, path_index, pattern_index, syntax, memo)
+    } else if starts_with(pattern, pattern_index, &[syntax.star, syntax.star]) {
+        double_star_matches(path, pattern, path_index, pattern_index, syntax, memo)
     } else {
-        match pattern[pattern_index] {
-            b'*' => star_matches(path, pattern, path_index, pattern_index, memo),
-            b'?' if path.get(path_index).is_some_and(|byte| *byte != b'/') => {
-                pathspec_glob_matches_at(path, pattern, path_index + 1, pattern_index + 1, memo)
-            }
-            literal if path.get(path_index).is_some_and(|byte| *byte == literal) => {
-                pathspec_glob_matches_at(path, pattern, path_index + 1, pattern_index + 1, memo)
-            }
-            _ => false,
+        let token = pattern[pattern_index];
+        if token == syntax.star {
+            star_matches(path, pattern, path_index, pattern_index, syntax, memo)
+        } else if path.get(path_index).is_some_and(|unit| {
+            (token == syntax.question && *unit != syntax.slash) || *unit == token
+        }) {
+            glob_matches_at(
+                path,
+                pattern,
+                path_index + 1,
+                pattern_index + 1,
+                syntax,
+                memo,
+            )
+        } else {
+            false
         }
     };
     memo.insert((path_index, pattern_index), result);
     result
 }
 
-fn double_star_slash_matches(
-    path: &[u8],
-    pattern: &[u8],
+fn starts_with<T: Eq>(pattern: &[T], index: usize, tokens: &[T]) -> bool {
+    pattern
+        .get(index..)
+        .is_some_and(|remaining| remaining.starts_with(tokens))
+}
+
+fn double_star_slash_matches<T: Copy + Eq>(
+    path: &[T],
+    pattern: &[T],
     path_index: usize,
     pattern_index: usize,
+    syntax: GlobSyntax<T>,
     memo: &mut HashMap<(usize, usize), bool>,
 ) -> bool {
     let next_pattern = pattern_index + 3;
-    if pathspec_glob_matches_at(path, pattern, path_index, next_pattern, memo) {
+    if glob_matches_at(path, pattern, path_index, next_pattern, syntax, memo) {
         return true;
     }
     for index in path_index..path.len() {
-        if path[index] == b'/'
-            && pathspec_glob_matches_at(path, pattern, index + 1, next_pattern, memo)
+        if path[index] == syntax.slash
+            && glob_matches_at(path, pattern, index + 1, next_pattern, syntax, memo)
         {
             return true;
         }
@@ -167,33 +219,35 @@ fn double_star_slash_matches(
     false
 }
 
-fn double_star_matches(
-    path: &[u8],
-    pattern: &[u8],
+fn double_star_matches<T: Copy + Eq>(
+    path: &[T],
+    pattern: &[T],
     path_index: usize,
     pattern_index: usize,
+    syntax: GlobSyntax<T>,
     memo: &mut HashMap<(usize, usize), bool>,
 ) -> bool {
     let next_pattern = pattern_index + 2;
     (path_index..=path.len())
-        .any(|index| pathspec_glob_matches_at(path, pattern, index, next_pattern, memo))
+        .any(|index| glob_matches_at(path, pattern, index, next_pattern, syntax, memo))
 }
 
-fn star_matches(
-    path: &[u8],
-    pattern: &[u8],
+fn star_matches<T: Copy + Eq>(
+    path: &[T],
+    pattern: &[T],
     path_index: usize,
     pattern_index: usize,
+    syntax: GlobSyntax<T>,
     memo: &mut HashMap<(usize, usize), bool>,
 ) -> bool {
     let next_pattern = pattern_index + 1;
-    if pathspec_glob_matches_at(path, pattern, path_index, next_pattern, memo) {
+    if glob_matches_at(path, pattern, path_index, next_pattern, syntax, memo) {
         return true;
     }
     let mut index = path_index;
-    while index < path.len() && path[index] != b'/' {
+    while index < path.len() && path[index] != syntax.slash {
         index += 1;
-        if pathspec_glob_matches_at(path, pattern, index, next_pattern, memo) {
+        if glob_matches_at(path, pattern, index, next_pattern, syntax, memo) {
             return true;
         }
     }
@@ -207,11 +261,18 @@ fn trim_dot_slash_bytes(mut path: &[u8]) -> &[u8] {
     path
 }
 
+fn trim_dot_slash(mut path: &str) -> &str {
+    while let Some(stripped) = path.strip_prefix("./") {
+        path = stripped;
+    }
+    path
+}
+
 #[cfg(test)]
 mod tests {
     use super::path_bytes_in_scope;
 
-    #[test]
+    #[test] // xpec: 1g
     fn plain_scope_paths_are_literal_even_with_wildcard_bytes() {
         let scope = vec!["src/*".to_string()];
 
@@ -221,7 +282,7 @@ mod tests {
         assert!(!path_bytes_in_scope(b"src/nested/main.rs", &scope).unwrap());
     }
 
-    #[test]
+    #[test] // xpec: 1g
     fn explicit_glob_pathspecs_use_path_segment_wildcards() {
         let one_segment = vec![":(glob)src/*".to_string()];
         let recursive = vec![":(glob)src/**".to_string()];
@@ -234,7 +295,7 @@ mod tests {
         assert!(path_bytes_in_scope(b"foo/a/b/bar", &middle_recursive).unwrap());
     }
 
-    #[test]
+    #[test] // xpec: 1g
     fn invalid_scope_pathspecs_are_not_treated_as_fallback_matches() {
         assert!(path_bytes_in_scope(b"src/main.rs", &[]).is_err());
         assert!(path_bytes_in_scope(b"src/main.rs", &[":(icase)src/main.rs".to_string()]).is_err());

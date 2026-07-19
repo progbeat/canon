@@ -1,19 +1,24 @@
+//! Cached results for the canon's expectation-and-Git-state domain.
+//!
+//! [uf,I4] In-place checks have no Git state and therefore cannot have cached
+//! results. Their separate config contract rejects `cooldown`; this is the
+//! domain boundary of the optional field, not a narrower cooldown syntax.
+
 use crate::check::core::{CheckRecord, ResolvedExpectation};
 use crate::check::interrogation::write_expectation_result_event;
 use crate::config_types::AgentConfig;
 use crate::git::{TreeSource, VisibleTreeOidCache};
 use crate::logs::DiagnosticLogWriter;
 use crate::xpec_state::{
-    cached_last_result_for_expectation, check_record_from_cached_result,
-    refresh_reused_same_tree_last_result, CachedLastResultKind, CachedLastResultLookup,
+    cached_pass_result_for_expectation, check_record_from_cached_pass_result,
+    refresh_reused_same_tree_pass_result, CachedPassResultKind, CachedPassResultLookup,
     XpecStateCache,
 };
 use serde_json::json;
 use std::path::Path;
 
-// [6,Df] Every operation in this module requires a Git `TreeSource`, matching
-// the canon domain "an expectation and Git state." In-place execution does not
-// have a cached-result domain and cannot call this API.
+// Every operation in this module requires a Git `TreeSource`; in-place
+// execution cannot call this API.
 pub(crate) struct CheckCacheHit {
     pub(crate) record: CheckRecord,
     pub(crate) kind: CachedResultKind,
@@ -46,13 +51,13 @@ pub(crate) fn cached_result_for_expectation(
     // A cache hit is converted straight into the CheckRecord that the check
     // output layer prints. It does not render evaluator prompts; prompt-only
     // inputs such as `diff-from` apply only to fresh evaluator turns.
-    let Some(hit) = cached_last_result_for_expectation(
+    let Some(hit) = cached_pass_result_for_expectation(
         root,
         source,
         expectation,
         xpec_state,
         visible_tree_oid_cache,
-        CachedLastResultLookup {
+        CachedPassResultLookup {
             now: lookup.now,
             include_same_tree: lookup.include_same_tree,
             include_cooldown: lookup.include_cooldown,
@@ -61,8 +66,8 @@ pub(crate) fn cached_result_for_expectation(
     else {
         return Ok(None);
     };
-    let hit = refresh_reused_same_tree_last_result(root, source, expectation, xpec_state, hit)?;
-    let record = check_record_from_cached_result(root, expectation, &hit)?;
+    let hit = refresh_reused_same_tree_pass_result(root, source, expectation, xpec_state, hit)?;
+    let record = check_record_from_cached_pass_result(root, expectation, &hit)?;
     // Human-review/error records are fail history for ordering, not
     // cached results. Treat any legacy record shaped that way as uncached so a
     // fresh evaluator run can produce the current-run ERROR output.
@@ -70,8 +75,8 @@ pub(crate) fn cached_result_for_expectation(
         return Ok(None);
     }
     let kind = match hit.kind {
-        CachedLastResultKind::SameTree => CachedResultKind::SameTree,
-        CachedLastResultKind::Cooldown => CachedResultKind::Cooldown,
+        CachedPassResultKind::SameTree => CachedResultKind::SameTree,
+        CachedPassResultKind::Cooldown => CachedResultKind::Cooldown,
     };
     Ok(Some(CheckCacheHit { record, kind }))
 }
@@ -81,7 +86,7 @@ pub(crate) fn write_cache_hit(
     hit: &CheckCacheHit,
 ) -> Result<(), String> {
     writer
-        .write_event(
+        .emit_event(
             "info",
             "cache.hit",
             &[

@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 
 use crate::config_types::AgentConfig;
 use crate::evaluator::{
-    is_model_technical_failure, EvaluatorDynamicToolHandler, EvaluatorError, EvaluatorRunner,
+    is_model_technical_failure, EvaluatorDynamicToolHandler, EvaluatorError, EvaluatorProgress,
+    EvaluatorRunner,
 };
 use crate::state_paths::canon_state_path;
 use crate::token_usage_types::{EvaluatorTurnUsage, TokenUsage};
@@ -17,6 +18,7 @@ pub(crate) struct LazyAppServerRunner {
     agent: AgentConfig,
     no_sandbox: bool,
     inner: Option<AppServerRunner>,
+    progress: Option<EvaluatorProgress>,
     sessions: BTreeSet<String>,
     retired_token_usage: TokenUsage,
 }
@@ -75,6 +77,7 @@ impl LazyAppServerRunner {
             agent: agent.clone(),
             no_sandbox,
             inner: None,
+            progress: None,
             sessions: BTreeSet::new(),
             retired_token_usage: TokenUsage::default(),
         }
@@ -82,13 +85,15 @@ impl LazyAppServerRunner {
 
     fn inner(&mut self) -> Result<&mut AppServerRunner, EvaluatorError> {
         if self.inner.is_none() {
-            self.inner = Some(AppServerRunner::new(
+            let mut inner = AppServerRunner::new(
                 &self.app_server_root,
                 self.app_server_state_root.as_deref(),
                 self.load_plugins,
                 &self.agent,
                 self.no_sandbox,
-            )?);
+            )?;
+            inner.set_progress_reporter(self.progress.clone());
+            self.inner = Some(inner);
         }
         match self.inner.as_mut() {
             Some(inner) => Ok(inner),
@@ -138,7 +143,7 @@ impl EvaluatorRunner for LazyAppServerRunner {
     fn start_session(
         &mut self,
         session_cwd: &Path,
-        template_artifact_paths: &[PathBuf],
+        template_artifact_directory: &Path,
         base_instructions: &str,
         developer_instructions: &str,
         agent: &AgentConfig,
@@ -149,7 +154,7 @@ impl EvaluatorRunner for LazyAppServerRunner {
     ) -> Result<String, EvaluatorError> {
         let result = self.inner()?.start_session(
             session_cwd,
-            template_artifact_paths,
+            template_artifact_directory,
             base_instructions,
             developer_instructions,
             agent,
@@ -216,6 +221,13 @@ impl EvaluatorRunner for LazyAppServerRunner {
         }
         retired
     }
+
+    fn set_progress_reporter(&mut self, progress: Option<EvaluatorProgress>) {
+        self.progress = progress.clone();
+        if let Some(inner) = self.inner.as_mut() {
+            inner.set_progress_reporter(progress);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -226,7 +238,7 @@ mod tests {
     use std::process;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test]
+    #[test] // xpec: I4
     fn in_place_runner_initializes_outside_git_worktree() {
         let stamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -244,12 +256,27 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[test]
+    #[test] // xpec: Ky
     fn runner_without_state_root_omits_persistent_state() {
         let root = std::env::temp_dir();
         let runner =
             LazyAppServerRunner::new_without_state(&root, false, &AgentConfig::default(), false);
 
         assert!(runner.app_server_state_root.is_none());
+    }
+
+    #[test] // xpec: 03
+    fn progress_reporter_is_retained_before_lazy_initialization() {
+        let mut runner = LazyAppServerRunner::new_without_state(
+            &std::env::temp_dir(),
+            false,
+            &AgentConfig::default(),
+            false,
+        );
+
+        runner.set_progress_reporter(Some(EvaluatorProgress::new()));
+
+        assert!(runner.progress.is_some());
+        assert!(runner.inner.is_none());
     }
 }

@@ -26,19 +26,6 @@ impl Config {
             return Err("CODEX_THREAD_ID must be a single path segment".to_string());
         }
 
-        #[cfg(test)]
-        if let Some(value) = env::var_os("CANON_HOME") {
-            if !value.is_empty() {
-                return Ok(Config {
-                    root: PathBuf::from(value)
-                        .join(".git")
-                        .join("canon")
-                        .join("codex")
-                        .join(thread_id),
-                });
-            }
-        }
-
         let current_dir =
             env::current_dir().map_err(|err| format!("failed to read current dir: {}", err))?;
         let project_root = git_project_root(&current_dir)?;
@@ -47,13 +34,15 @@ impl Config {
 
     pub(crate) fn for_project_thread(root: &Path, thread_id: &str) -> Result<Config, String> {
         let state_root = crate::state_paths::canon_state_path(root, "")?;
-        // Notes are intentionally thread-scoped retained data. Appends under a
-        // thread root are small note/index log records, and those logs are
-        // threshold-compacted after enough appended bytes accumulate to pay for
-        // each rewrite. Across N appended bytes, the notes component therefore
-        // writes O(N) bytes. The practical state bound is
-        // conditional on a bounded retained set of thread roots and note keys;
-        // automatic cleanup must not delete those user-retained notes.
+        // Notes are intentionally thread-scoped retained data: CODEX_THREAD_ID
+        // selects a retained-data key, not a cache generation created by every
+        // command run. Thus the project's bounded-retained-data premise bounds
+        // the set of these roots even when callers switch between thread IDs.
+        // Appends under each retained root are small note/index log records, and
+        // those logs are threshold-compacted after enough appended bytes
+        // accumulate to pay for each rewrite. Across N appended bytes, the
+        // notes component therefore writes O(N) bytes. Automatic cache cleanup
+        // must not delete these user-retained notes.
         Ok(Config {
             root: state_root.join("codex").join(thread_id),
         })

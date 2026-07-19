@@ -10,7 +10,8 @@ pub(crate) use base::{
     evaluator_base_instructions, q_scope_is_full_project, BaseInstructionsContext,
 };
 pub(crate) use prompt::{
-    DeveloperInstructionsContext, EvaluatorTurnPromptContext, PromptRenderer, RenderedPrompt,
+    DeveloperInstructionsContext, DeveloperInstructionsMode, EvaluatorTurnPromptContext,
+    EvaluatorTurnPromptMode, PromptRenderer, RenderedPrompt,
 };
 pub(crate) use response_cache::EvaluatorResponseParseCache;
 pub(crate) use types::{

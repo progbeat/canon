@@ -2,16 +2,17 @@ use super::expansion::CheckConfigSource;
 use crate::repo_inspection::RepoInspectionCache;
 use minijinja::Environment;
 use saphyr_parser::{Event, Parser, ScalarStyle, Span, Tag};
-use serde_json::{json, Value};
-use std::collections::HashMap;
+use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 pub(super) fn expand_foreach_yaml(
     root: &Path,
     config_path: &Path,
     content: &str,
     source: &CheckConfigSource,
-    cache: &mut RepoInspectionCache,
+    cache: Arc<Mutex<RepoInspectionCache>>,
 ) -> Result<String, String> {
     let documents = parse_documents(content)?;
     let next_anchor = documents
@@ -30,7 +31,7 @@ pub(super) fn expand_foreach_yaml(
     };
     let documents = documents
         .into_iter()
-        .map(|document| expansion.expand_node(document))
+        .map(|document| expansion.expand_node(document, None))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(render_documents(&documents))
 }
@@ -39,36 +40,61 @@ struct ForeachExpansion<'a> {
     root: &'a Path,
     config_path: &'a Path,
     source: &'a CheckConfigSource,
-    cache: &'a mut RepoInspectionCache,
+    cache: Arc<Mutex<RepoInspectionCache>>,
     next_anchor: usize,
 }
 
 impl ForeachExpansion<'_> {
-    fn expand_node(&mut self, mut node: YamlNode) -> Result<YamlNode, String> {
+    fn expand_node(
+        &mut self,
+        mut node: YamlNode,
+        inherited_bindings: Option<&BTreeMap<String, Value>>,
+    ) -> Result<YamlNode, String> {
         if node.has_local_tag("foreach") {
-            return self.expand_foreach(node);
+            return self.expand_foreach(node, inherited_bindings);
         }
         match &mut node.kind {
             YamlNodeKind::Sequence(items) => {
                 let expanded = std::mem::take(items)
                     .into_iter()
-                    .map(|item| self.expand_node(item))
+                    .map(|item| self.expand_node(item, inherited_bindings))
                     .collect::<Result<Vec<_>, _>>()?;
                 *items = expanded;
             }
             YamlNodeKind::Mapping(entries) => {
                 let expanded = std::mem::take(entries)
                     .into_iter()
-                    .map(|(key, value)| Ok((self.expand_node(key)?, self.expand_node(value)?)))
+                    .map(|(key, value)| {
+                        Ok((
+                            self.expand_node(key, inherited_bindings)?,
+                            self.expand_node(value, inherited_bindings)?,
+                        ))
+                    })
                     .collect::<Result<Vec<_>, String>>()?;
                 *entries = expanded;
             }
-            YamlNodeKind::Scalar(_) | YamlNodeKind::Alias(_) => {}
+            YamlNodeKind::Scalar(YamlScalar::String(value)) => {
+                if let Some(bindings) = inherited_bindings {
+                    render_string_scalar(
+                        value,
+                        bindings,
+                        self.root,
+                        self.config_path,
+                        self.source,
+                        &self.cache,
+                    )?;
+                }
+            }
+            YamlNodeKind::Scalar(YamlScalar::Other(_)) | YamlNodeKind::Alias(_) => {}
         }
         Ok(node)
     }
 
-    fn expand_foreach(&mut self, node: YamlNode) -> Result<YamlNode, String> {
+    fn expand_foreach(
+        &mut self,
+        node: YamlNode,
+        inherited_bindings: Option<&BTreeMap<String, Value>>,
+    ) -> Result<YamlNode, String> {
         let YamlNode {
             anchor,
             kind: YamlNodeKind::Sequence(mut items),
@@ -81,26 +107,69 @@ impl ForeachExpansion<'_> {
             return Err("!foreach must tag a two-item sequence".to_string());
         }
         let template = items.pop().expect("length checked");
-        let binding = items.pop().expect("length checked");
-        let glob = foreach_glob(binding)?;
-        let paths = self
-            .source
-            .foreach_paths(self.cache, self.root, self.config_path, &glob)?;
-        let mut rendered = Vec::with_capacity(paths.len());
-        for path in paths {
-            let content = self
-                .source
-                .file_content(self.cache, self.root, Path::new(&path))?;
+        let binding_node = items.pop().expect("length checked");
+        let bindings = self.foreach_bindings(binding_node)?;
+        let combinations = foreach_combinations(bindings)?;
+        let mut rendered = Vec::with_capacity(combinations.len());
+        for combination in combinations {
+            // xpec: s6
+            // Binding choices stay literal. Inherited and local bindings join
+            // only while rendering this template; local names shadow outer names.
+            let mut bindings = inherited_bindings.cloned().unwrap_or_default();
+            bindings.extend(combination);
             let mut copy = template.clone();
             freshen_anchors(&mut copy, &mut self.next_anchor)?;
-            render_string_scalars(&mut copy, &path, &content)?;
-            rendered.push(self.expand_node(copy)?);
+            rendered.push(self.expand_node(copy, Some(&bindings))?);
         }
         Ok(YamlNode {
             anchor,
             tag: None,
             kind: YamlNodeKind::Sequence(rendered),
         })
+    }
+
+    fn foreach_bindings(&mut self, node: YamlNode) -> Result<Vec<ForeachBinding>, String> {
+        let node = resolve_aliases(node, &mut HashMap::new())?;
+        let YamlNodeKind::Mapping(entries) = node.kind else {
+            return Err("the first !foreach item must be a mapping".to_string());
+        };
+        if entries.is_empty() {
+            return Err("the first !foreach item must contain a binding".to_string());
+        }
+        let mut names = BTreeSet::new();
+        let mut bindings = Vec::with_capacity(entries.len());
+        for (key, value) in entries {
+            let name = key
+                .into_string_scalar()
+                .ok_or_else(|| "!foreach variable names must be strings".to_string())?;
+            if !names.insert(name.clone()) {
+                return Err(format!("duplicate !foreach variable: {name}"));
+            }
+            let choices = match value.kind {
+                YamlNodeKind::Sequence(items) => items,
+                _ => vec![value],
+            };
+            let mut expanded = Vec::new();
+            for choice in choices {
+                if let Some(glob) = choice.string_scalar().filter(|value| is_glob(value)) {
+                    let mut cache = self
+                        .cache
+                        .lock()
+                        .map_err(|_| "!foreach cache lock is poisoned".to_string())?;
+                    let paths =
+                        self.source
+                            .foreach_paths(&mut cache, self.root, self.config_path, glob)?;
+                    expanded.extend(paths.into_iter().map(Value::String));
+                } else {
+                    expanded.push(yaml_literal_value(choice)?);
+                }
+            }
+            bindings.push(ForeachBinding {
+                name,
+                choices: expanded,
+            });
+        }
+        Ok(bindings)
     }
 }
 
@@ -179,60 +248,147 @@ fn replace_anchors(node: &mut YamlNode, replacements: &HashMap<usize, usize>) {
     }
 }
 
-fn foreach_glob(node: YamlNode) -> Result<String, String> {
-    let YamlNodeKind::Mapping(mut entries) = node.kind else {
-        return Err("the first !foreach item must map path to a glob".to_string());
-    };
-    if entries.len() != 1 {
-        return Err("the first !foreach item must map path to a glob".to_string());
-    }
-    let (key, value) = entries.pop().expect("length checked");
-    if key.string_scalar() != Some("path") {
-        return Err("the first !foreach item must map path to a glob".to_string());
-    }
-    value
-        .into_string_scalar()
-        .ok_or_else(|| "the !foreach path glob must be a string".to_string())
+struct ForeachBinding {
+    name: String,
+    choices: Vec<Value>,
 }
 
-fn render_string_scalars(node: &mut YamlNode, path: &str, content: &str) -> Result<(), String> {
-    match &mut node.kind {
-        YamlNodeKind::Scalar(YamlScalar::String(value)) => {
-            let mut environment = Environment::new();
-            environment.set_keep_trailing_newline(true);
-            let readable_path = path.to_string();
-            let readable_content = content.to_string();
-            environment.add_function("read", move |requested: String| {
-                if requested == readable_path {
-                    Ok(readable_content.clone())
-                } else {
-                    Err(minijinja::Error::new(
-                        minijinja::ErrorKind::InvalidOperation,
-                        format!("!foreach may read only its bound path: {requested}"),
-                    ))
-                }
-            });
-            let template = environment
-                .template_from_str(value)
-                .map_err(|err| format!("!foreach template: {err}"))?;
-            *value = template
-                .render(json!({ "path": path }))
-                .map_err(|err| format!("!foreach template: {err}"))?;
+fn is_glob(value: &str) -> bool {
+    value.contains(['*', '?'])
+}
+
+fn foreach_combinations(
+    bindings: Vec<ForeachBinding>,
+) -> Result<Vec<BTreeMap<String, Value>>, String> {
+    let mut combinations = vec![BTreeMap::new()];
+    for binding in bindings {
+        let capacity = combinations
+            .len()
+            .checked_mul(binding.choices.len())
+            .ok_or_else(|| "!foreach combination count exceeds platform limits".to_string())?;
+        let mut expanded = Vec::with_capacity(capacity);
+        for combination in combinations {
+            for choice in &binding.choices {
+                let mut copy = combination.clone();
+                copy.insert(binding.name.clone(), choice.clone());
+                // xpec: s6
+                // Each occurrence in the selected Cartesian product is one
+                // combination and contributes one copy, even when its binding
+                // values equal those of another selected occurrence.
+                expanded.push(copy);
+            }
         }
+        combinations = expanded;
+    }
+    Ok(combinations)
+}
+
+fn yaml_literal_value(node: YamlNode) -> Result<Value, String> {
+    match node.kind {
+        YamlNodeKind::Scalar(YamlScalar::String(value)) => Ok(Value::String(value)),
+        YamlNodeKind::Scalar(YamlScalar::Other(value)) => Ok(value),
+        YamlNodeKind::Sequence(items) => items
+            .into_iter()
+            .map(yaml_literal_value)
+            .collect::<Result<Vec<_>, _>>()
+            .map(Value::Array),
+        YamlNodeKind::Mapping(entries) => {
+            let mut object = serde_json::Map::new();
+            for (key, value) in entries {
+                let key = match key.kind {
+                    YamlNodeKind::Scalar(YamlScalar::String(value)) => value,
+                    YamlNodeKind::Scalar(YamlScalar::Other(value)) => value.to_string(),
+                    _ => return Err("!foreach literal mapping keys must be scalars".to_string()),
+                };
+                object.insert(key, yaml_literal_value(value)?);
+            }
+            Ok(Value::Object(object))
+        }
+        YamlNodeKind::Alias(_) => unreachable!("!foreach binding aliases are resolved first"),
+    }
+}
+
+fn add_foreach_read_function(
+    environment: &mut Environment<'_>,
+    root: &Path,
+    config_path: &Path,
+    source: &CheckConfigSource,
+    read_cache: &Arc<Mutex<RepoInspectionCache>>,
+) {
+    let root = root.to_path_buf();
+    let config_path = config_path.to_path_buf();
+    let source = source.clone();
+    let read_cache = Arc::clone(read_cache);
+    environment.add_function("read", move |requested: String| {
+        let mut cache = read_cache.lock().map_err(|_| {
+            minijinja::Error::new(
+                minijinja::ErrorKind::InvalidOperation,
+                "!foreach read cache lock is poisoned",
+            )
+        })?;
+        source
+            .foreach_literal_file_content(&mut cache, &root, &config_path, &requested)
+            .map_err(|err| {
+                minijinja::Error::new(
+                    minijinja::ErrorKind::InvalidOperation,
+                    format!("!foreach read({requested:?}): {err}"),
+                )
+            })
+    });
+}
+
+fn render_string_scalar(
+    value: &mut String,
+    combination: &BTreeMap<String, Value>,
+    root: &Path,
+    config_path: &Path,
+    source: &CheckConfigSource,
+    read_cache: &Arc<Mutex<RepoInspectionCache>>,
+) -> Result<(), String> {
+    let mut environment = Environment::new();
+    environment.set_keep_trailing_newline(true);
+    add_foreach_read_function(&mut environment, root, config_path, source, read_cache);
+    let template = environment
+        .template_from_str(value)
+        .map_err(|err| format!("!foreach template: {err}"))?;
+    *value = template
+        .render(combination)
+        .map_err(|err| format!("!foreach template: {err}"))?;
+    Ok(())
+}
+
+fn resolve_aliases(
+    mut node: YamlNode,
+    anchors: &mut HashMap<usize, YamlNode>,
+) -> Result<YamlNode, String> {
+    if let YamlNodeKind::Alias(anchor) = &node.kind {
+        return anchors
+            .get(anchor)
+            .cloned()
+            .ok_or_else(|| format!("unknown YAML alias in !foreach bindings: {anchor}"));
+    }
+    match &mut node.kind {
         YamlNodeKind::Sequence(items) => {
             for item in items {
-                render_string_scalars(item, path, content)?;
+                *item = resolve_aliases(item.clone(), anchors)?;
             }
         }
         YamlNodeKind::Mapping(entries) => {
             for (key, value) in entries {
-                render_string_scalars(key, path, content)?;
-                render_string_scalars(value, path, content)?;
+                *key = resolve_aliases(key.clone(), anchors)?;
+                *value = resolve_aliases(value.clone(), anchors)?;
             }
         }
-        YamlNodeKind::Scalar(YamlScalar::Other(_)) | YamlNodeKind::Alias(_) => {}
+        YamlNodeKind::Scalar(_) => {}
+        YamlNodeKind::Alias(_) => unreachable!("aliases return before recursive resolution"),
     }
-    Ok(())
+    if node.anchor > 0 {
+        let anchor = node.anchor;
+        let mut anchored_value = node.clone();
+        anchored_value.anchor = 0;
+        anchors.insert(anchor, anchored_value);
+    }
+    Ok(node)
 }
 
 #[derive(Clone)]
@@ -275,7 +431,7 @@ enum YamlNodeKind {
 #[derive(Clone)]
 enum YamlScalar {
     String(String),
-    Other(String),
+    Other(Value),
 }
 
 fn parse_documents(content: &str) -> Result<Vec<YamlNode>, String> {
@@ -377,9 +533,7 @@ fn classify_scalar(
         .map_err(|err| err.to_string())?
     {
         Value::String(_) => Ok(YamlScalar::String(value.to_string())),
-        other => serde_json::to_string(&other)
-            .map(YamlScalar::Other)
-            .map_err(|err| err.to_string()),
+        other => Ok(YamlScalar::Other(other)),
     }
 }
 
@@ -431,7 +585,7 @@ fn render_node(node: &YamlNode, output: &mut String) {
         YamlNodeKind::Scalar(YamlScalar::String(value)) => {
             output.push_str(&serde_json::to_string(value).expect("strings are serializable"));
         }
-        YamlNodeKind::Scalar(YamlScalar::Other(value)) => output.push_str(value),
+        YamlNodeKind::Scalar(YamlScalar::Other(value)) => output.push_str(&value.to_string()),
         YamlNodeKind::Sequence(items) => {
             output.push('[');
             for (index, item) in items.iter().enumerate() {
@@ -489,7 +643,7 @@ mod tests {
     use std::process::{self, Command};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test] // xpec: Mm
+    #[test] // xpec: s6
     fn foreach_renders_every_string_scalar_in_any_template_node() {
         let root = test_root("foreach-any-node");
         git(&root, &["init"]);
@@ -516,16 +670,85 @@ values:
             value,
             json!({
                 "values": [[[
-                        ".canon/specs/alpha.md",
+                        "specs/alpha.md",
                         7,
-                        {".canon/specs/alpha.md": "Alpha spec"}
+                        {"specs/alpha.md": "Alpha spec"}
                 ]]]
             })
         );
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test] // xpec: Mm
+    #[test] // xpec: s6
+    fn nested_foreach_renders_with_lexically_scoped_bindings() {
+        let root = test_root("foreach-nested-bindings");
+        git(&root, &["init"]);
+
+        let value = parse_yaml_config_with_includes::<Value>(
+            &root,
+            Path::new(".canon/check.yml"),
+            r#"
+values: !foreach
+  - outer: [a, b]
+  - !foreach
+    - inner: ["{{ outer }}", literal]
+    - "{{ outer }}:{{ inner }}"
+"#,
+            CheckConfigSource::Tree(TreeSource::Staged),
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            json!({
+                "values": [
+                    ["a:{{ outer }}", "a:literal"],
+                    ["b:{{ outer }}", "b:literal"]
+                ]
+            })
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test] // xpec: s6
+    fn foreach_read_resolves_every_filename_from_the_document_directory() {
+        let root = test_root("foreach-read-document-relative");
+        git(&root, &["init"]);
+        let file = root.join(".canon/includes/specs/alpha.md");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, "Alpha value").unwrap();
+        git(&root, &["add", ".canon/includes"]);
+
+        let value = parse_yaml_config_with_includes::<Value>(
+            &root,
+            Path::new(".canon/includes/xpecs.yml"),
+            r#"
+value: !foreach
+  - path: "specs/*.md"
+  - from_binding: "{{ read(path) }}"
+    from_expression: "{{ read(path ~ '') }}"
+    from_literal: "{{ read('specs/alpha.md') }}"
+    document_relative_name: "{{ path == 'specs/alpha.md' }}"
+"#,
+            CheckConfigSource::Tree(TreeSource::Staged),
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            json!({
+                "value": [{
+                    "from_binding": "Alpha value",
+                    "from_expression": "Alpha value",
+                    "from_literal": "Alpha value",
+                    "document_relative_name": "true"
+                }]
+            })
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test] // xpec: s6
     fn foreach_gives_each_rendered_copy_distinct_anchors() {
         let root = test_root("foreach-anchors");
         git(&root, &["init"]);
@@ -553,12 +776,12 @@ values:
             json!({
                 "values": [[
                     {
-                        "value": ".canon/specs/alpha.md",
-                        "alias": ".canon/specs/alpha.md"
+                        "value": "specs/alpha.md",
+                        "alias": "specs/alpha.md"
                     },
                     {
-                        "value": ".canon/specs/beta.md",
-                        "alias": ".canon/specs/beta.md"
+                        "value": "specs/beta.md",
+                        "alias": "specs/beta.md"
                     }
                 ]]
             })
@@ -566,7 +789,7 @@ values:
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test] // xpec: Mm,I8,v7
+    #[test] // xpec: s6,I8,3Z
     fn foreach_in_include_uses_including_document_directory_and_source() {
         let root = test_root("foreach-in-include");
         git(&root, &["init"]);
@@ -606,24 +829,88 @@ xpecs:
         .unwrap();
 
         assert_eq!(config.expectations.len(), 1);
+        assert_eq!(config.expectations[0].q, "specs/alpha.md: Alpha spec");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test] // xpec: s6
+    fn foreach_preserves_each_repeated_combination_selection() {
+        let root = test_root("foreach-cartesian");
+        git(&root, &["init"]);
+        fs::create_dir_all(root.join(".canon/specs")).unwrap();
+        fs::write(root.join(".canon/specs/alpha.md"), "Alpha spec").unwrap();
+        fs::write(root.join(".canon/specs/beta.md"), "Beta spec").unwrap();
+        git(&root, &["add", ".canon/specs"]);
+
+        let value = parse_yaml_config_with_includes::<Value>(
+            &root,
+            Path::new(".canon/check.yml"),
+            r#"
+values:
+  - !foreach
+    - path: ["specs/*.md", "specs/a*.md", "specs/alpha.md"]
+      mode: [&brief "brief", *brief]
+    - "{{ mode }} {{ path }}: {{ read(path) }}"
+"#,
+            CheckConfigSource::Tree(TreeSource::Staged),
+        )
+        .unwrap();
+
         assert_eq!(
-            config.expectations[0].q,
-            ".canon/includes/specs/alpha.md: Alpha spec"
+            value,
+            json!({
+                "values": [[
+                    "brief specs/alpha.md: Alpha spec",
+                    "brief specs/alpha.md: Alpha spec",
+                    "brief specs/beta.md: Beta spec",
+                    "brief specs/beta.md: Beta spec",
+                    "brief specs/alpha.md: Alpha spec",
+                    "brief specs/alpha.md: Alpha spec",
+                    "brief specs/alpha.md: Alpha spec",
+                    "brief specs/alpha.md: Alpha spec"
+                ]]
+            })
         );
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test] // xpec: Mm
+    #[test] // xpec: s6
+    fn foreach_scalar_literal_is_one_choice_and_read_resolves_from_document_directory() {
+        let root = test_root("foreach-literal-read");
+        git(&root, &["init"]);
+        fs::create_dir_all(root.join(".canon/includes")).unwrap();
+        fs::write(root.join(".canon/includes/value.txt"), "Included literal").unwrap();
+        git(&root, &["add", ".canon/includes/value.txt"]);
+
+        let value = parse_yaml_config_with_includes::<Value>(
+            &root,
+            Path::new(".canon/includes/xpecs.yml"),
+            r#"
+value: !foreach
+  - file: value.txt
+    enabled: true
+  - "{{ enabled }} {{ file }}: {{ read(file) }}"
+"#,
+            CheckConfigSource::Tree(TreeSource::Staged),
+        )
+        .unwrap();
+
+        assert_eq!(
+            value,
+            json!({"value": ["true value.txt: Included literal"]})
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test] // xpec: s6
     fn foreach_rejects_a_non_two_item_sequence() {
         let root = test_root("foreach-invalid-shape");
-        let mut cache = RepoInspectionCache::new();
-
         let error = expand_foreach_yaml(
             &root,
             Path::new("check.yml"),
             "value: !foreach [path]\n",
             &CheckConfigSource::InPlace,
-            &mut cache,
+            Arc::new(Mutex::new(RepoInspectionCache::new())),
         )
         .unwrap_err();
 
@@ -651,7 +938,7 @@ xpecs:
             .current_dir(root)
             .status()
             .unwrap();
-        // xpec: Mm,I8
+        // xpec: s6,I8
         assert!(status.success(), "git {:?} failed", args);
     }
 }

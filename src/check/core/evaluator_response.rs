@@ -90,7 +90,7 @@ impl EvaluatorResponseSchemaScope {
 pub(crate) struct ParsedAnswer {
     pub(crate) observed: String,
     pub(crate) error: Option<String>,
-    pub(crate) evidence: String,
+    pub(crate) evidence: Option<String>,
     pub(crate) scope: Vec<String>,
     pub(crate) question_scope_suggestion: Option<Vec<String>>,
 }
@@ -104,7 +104,7 @@ impl ParsedAnswer {
         ParsedAnswer {
             observed: answer,
             error: None,
-            evidence,
+            evidence: Some(evidence),
             scope: Vec::new(),
             question_scope_suggestion,
         }
@@ -122,7 +122,20 @@ impl ParsedAnswer {
         ParsedAnswer {
             observed: error.clone(),
             error: Some(error),
-            evidence,
+            evidence: Some(evidence),
+            scope: Vec::new(),
+            question_scope_suggestion,
+        }
+    }
+
+    fn evaluator_error(
+        error: String,
+        question_scope_suggestion: Option<Vec<String>>,
+    ) -> ParsedAnswer {
+        ParsedAnswer {
+            observed: error.clone(),
+            error: Some(error),
+            evidence: None,
             scope: Vec::new(),
             question_scope_suggestion,
         }
@@ -169,13 +182,53 @@ pub(crate) struct EvaluatorResponseJson {
     pub(crate) answer: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_error")]
     pub(crate) error: Option<String>,
-    pub(crate) evidence: String,
+    #[serde(default, deserialize_with = "deserialize_optional_evidence")]
+    pub(crate) evidence: Option<String>,
     #[serde(
         default,
         rename = "qScopeSuggestion",
         deserialize_with = "deserialize_optional_question_scope_suggestion"
     )]
     pub(crate) question_scope_suggestion: Option<Vec<String>>,
+}
+
+struct EvaluatorResponsesJson(BTreeMap<String, EvaluatorResponseJson>);
+
+impl<'de> Deserialize<'de> for EvaluatorResponsesJson {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: de::Deserializer<'de>,
+    {
+        struct ResponsesVisitor;
+
+        impl<'de> de::Visitor<'de> for ResponsesVisitor {
+            type Value = EvaluatorResponsesJson;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("an evaluator response object")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: de::MapAccess<'de>,
+            {
+                let mut responses = BTreeMap::new();
+                while let Some(short_id) = map.next_key::<String>()? {
+                    if responses.contains_key(&short_id) {
+                        return Err(de::Error::custom(format!(
+                            "duplicate evaluator response short ID `{}`",
+                            short_id
+                        )));
+                    }
+                    let response = map.next_value::<EvaluatorResponseJson>()?;
+                    responses.insert(short_id, response);
+                }
+                Ok(EvaluatorResponsesJson(responses))
+            }
+        }
+
+        deserializer.deserialize_map(ResponsesVisitor)
+    }
 }
 
 impl EvaluatorResponseJson {
@@ -190,7 +243,8 @@ impl EvaluatorResponseJson {
             // expectation's current expected answer.
             return Ok(ParsedAnswer::answer(
                 answer,
-                self.evidence,
+                self.evidence
+                    .expect("schema validation ensures answer evidence is present"),
                 question_scope_suggestion,
             ));
         }
@@ -200,9 +254,8 @@ impl EvaluatorResponseJson {
         // Restricted-scope schema permits qScopeSuggestion on an error response
         // too. Preserve it for schema fidelity and diagnostics; narrowing
         // policy still consumes suggestions only from answer responses.
-        Ok(ParsedAnswer::error_with_question_scope_suggestion(
+        Ok(ParsedAnswer::evaluator_error(
             error,
-            self.evidence,
             question_scope_suggestion,
         ))
     }
@@ -217,6 +270,12 @@ impl EvaluatorResponseJson {
             return Err(
                 "evaluator response must contain exactly one of answer or error".to_string(),
             );
+        }
+        if has_answer && self.evidence.is_none() {
+            return Err("evidence is required with answer".to_string());
+        }
+        if has_error && self.evidence.is_some() {
+            return Err("evidence must be omitted with error".to_string());
         }
         if let Some(answer) = self.answer.as_deref() {
             if !matches_answer_pattern(answer) {
@@ -299,14 +358,22 @@ pub(crate) fn parse_evaluator_response_json_for_requested_short_ids(
         ));
     }
     let payload = evaluator_response_json_payload(text)?;
-    let mut raw = serde_json::from_str::<Value>(payload).map_err(|err| {
-        EvaluatorResponseParseError::Schema(format!(
-            "failed to parse evaluator JSON response: {}",
-            err
-        ))
-    })?;
-    let object = raw.as_object_mut().ok_or_else(|| {
-        EvaluatorResponseParseError::Schema("evaluator response must be a JSON object".to_string())
+    // [T] Deserialize the outer map and each typed result in one streaming
+    // pass. The map visitor observes duplicate short IDs, while the derived
+    // result deserializer observes duplicate fields before either can be
+    // collapsed into a generic JSON object.
+    let mut deserializer = serde_json::Deserializer::from_str(payload);
+    let EvaluatorResponsesJson(mut object) = EvaluatorResponsesJson::deserialize(&mut deserializer)
+        .map_err(|err| {
+            EvaluatorResponseParseError::Schema(format!(
+                "failed to parse evaluator JSON response: {}",
+                err
+            ))
+        })?;
+    deserializer.end().map_err(|_| {
+        EvaluatorResponseParseError::Schema(
+            "evaluator response must not contain surrounding prose".to_string(),
+        )
     })?;
     for key in object.keys() {
         if !matches_short_id_pattern(key) {
@@ -344,13 +411,6 @@ pub(crate) fn parse_evaluator_response_json_for_requested_short_ids(
         let response = object
             .remove(*short_id)
             .expect("requested short ID was checked above");
-        let response =
-            serde_json::from_value::<EvaluatorResponseJson>(response).map_err(|err| {
-                EvaluatorResponseParseError::Schema(format!(
-                    "failed to parse evaluator JSON response for short ID `{}`: {}",
-                    short_id, err
-                ))
-            })?;
         responses.insert((*short_id).to_string(), response);
     }
     Ok(responses)
@@ -365,18 +425,6 @@ pub(crate) fn evaluator_response_json_payload(
             "evaluator response must be a JSON object".to_string(),
         ));
     }
-    let mut deserializer = serde_json::Deserializer::from_str(trimmed);
-    serde_json::Value::deserialize(&mut deserializer).map_err(|err| {
-        EvaluatorResponseParseError::Schema(format!(
-            "failed to inspect evaluator JSON response: {}",
-            err
-        ))
-    })?;
-    deserializer.end().map_err(|_| {
-        EvaluatorResponseParseError::Schema(
-            "evaluator response must not contain surrounding prose".to_string(),
-        )
-    })?;
     if !trimmed.starts_with('{') {
         return Err(EvaluatorResponseParseError::Schema(
             "evaluator response must be a JSON object".to_string(),
@@ -415,6 +463,13 @@ where
     D: de::Deserializer<'de>,
 {
     deserialize_optional_string_field(deserializer, "error")
+}
+
+fn deserialize_optional_evidence<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    deserialize_optional_string_field(deserializer, "evidence")
 }
 
 fn deserialize_optional_string_field<'de, D>(

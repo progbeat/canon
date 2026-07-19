@@ -25,7 +25,7 @@ pub(super) fn visible_tree_oid_from_files_if_scope_present(
     // This presence check does not select visible tree entries. It only keeps
     // an explicit include pathspec that matches no checked Git path from being
     // treated as the Git empty tree.
-    if !visible_scope_include_terms_are_present_in_checked_tree(files, scope)? {
+    if !visible_scope_has_present_include_term(files, scope)? {
         return Ok(None);
     }
     visible_tree_oid_from_files(files, scope, object_hash_algorithm).map(Some)
@@ -40,35 +40,28 @@ pub(super) fn visible_tree_oid_from_files(
     visible_tree_oid_from_entries(&entries, object_hash_algorithm)
 }
 
-pub(super) fn visible_scope_include_terms_are_present_in_checked_tree(
+fn visible_scope_has_present_include_term(
     files: &[StagedTrackedFile],
     scope: &[String],
 ) -> Result<bool, String> {
-    let include_pathspecs = scope
-        .iter()
-        .filter_map(|pathspec| match pathspec_is_exclude(pathspec) {
-            Ok(true) => None,
-            Ok(false) => Some(Ok(pathspec)),
-            Err(err) => Some(Err(err)),
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    if include_pathspecs.iter().any(|pathspec| pathspec == &".") {
-        return Ok(true);
-    }
-    for pathspec in include_pathspecs {
-        let pathspec_scope = [pathspec.clone()];
-        let mut matched = false;
+    let mut has_include_term = false;
+    for pathspec in scope {
+        if pathspec_is_exclude(pathspec)? {
+            continue;
+        }
+        has_include_term = true;
+        if pathspec == "." {
+            return Ok(true);
+        }
+        let pathspec_scope = std::slice::from_ref(pathspec);
         for file in files {
-            if path_bytes_in_scope(&file.path, &pathspec_scope)? {
-                matched = true;
-                break;
+            if path_bytes_in_scope(&file.path, pathspec_scope)? {
+                return Ok(true);
             }
         }
-        if !matched {
-            return Ok(false);
-        }
     }
-    Ok(true)
+    // With only exclusions, Git's implicit include set is the whole tree.
+    Ok(!has_include_term)
 }
 
 fn tracked_files_scope_entries(files: &[&StagedTrackedFile]) -> Vec<String> {

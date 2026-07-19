@@ -19,6 +19,7 @@ use scope_entries::{
 // per-expectation result state lives under `xpec_state`.
 type SourceScopeCacheKey = (PathBuf, String, Vec<String>, Vec<String>);
 type SourceFilesCacheKey = (PathBuf, String);
+type SourcePathspecFilesCacheKey = (PathBuf, String, Vec<String>);
 
 macro_rules! cached_clone {
     ($cache:expr, $key:expr, |$cached:ident| $hit:expr, $compute:expr, |$computed:ident| $miss:expr) => {{
@@ -38,6 +39,7 @@ pub(crate) struct VisibleTreeOidCache {
     visible_tree_oids: BTreeMap<SourceScopeCacheKey, Option<String>>,
     visible_scope_entries: BTreeMap<SourceScopeCacheKey, Vec<String>>,
     tree_source_files: BTreeMap<SourceFilesCacheKey, Result<Vec<StagedTrackedFile>, String>>,
+    pathspec_files: BTreeMap<SourcePathspecFilesCacheKey, Result<Vec<StagedTrackedFile>, String>>,
     staged_files: BTreeMap<PathBuf, Result<Vec<StagedTrackedFile>, String>>,
     object_hash_algorithms: BTreeMap<PathBuf, GitObjectHashAlgorithm>,
 }
@@ -133,10 +135,11 @@ impl VisibleTreeOidCache {
         // Used by `canon show -- <pathspec>`. If every tracked file matched by
         // `pathspecs` were changed, the visible tree OID would change exactly
         // when at least one changed tracked file is selected by `visible_scope`.
-        for file in self.files_for_source(root, source)? {
-            if path_bytes_in_scope(&file.path, visible_scope)?
-                && path_bytes_in_scope(&file.path, pathspecs)?
-            {
+        // Let Git select the changed-file set so command pathspecs retain Git's
+        // ordinary wildcard and magic semantics. Visible scopes continue to use
+        // canon's scope matcher because their non-magic terms are literal.
+        for file in self.files_for_pathspecs(root, source, pathspecs)? {
+            if path_bytes_in_scope(&file.path, visible_scope)? {
                 return Ok(true);
             }
         }
@@ -222,7 +225,9 @@ impl VisibleTreeOidCache {
     ) -> Result<Vec<StagedTrackedFile>, String> {
         match source {
             TreeSource::Staged => self.staged_files(root),
-            TreeSource::Git { .. } => self.tree_source_files(root, source),
+            TreeSource::Git { .. } | TreeSource::DefaultAgainstHead { .. } => {
+                self.tree_source_files(root, source)
+            }
         }
     }
 
@@ -250,6 +255,21 @@ impl VisibleTreeOidCache {
         )
     }
 
+    fn files_for_pathspecs(
+        &mut self,
+        root: &Path,
+        source: &TreeSource,
+        pathspecs: &[String],
+    ) -> Result<Vec<StagedTrackedFile>, String> {
+        cached_clone!(
+            self.pathspec_files,
+            (root.to_path_buf(), source.cache_key(), pathspecs.to_vec()),
+            |value| value,
+            source.tracked_files_for_pathspecs(root, pathspecs),
+            |value| value
+        )
+    }
+
     fn object_hash_algorithm(&mut self, root: &Path) -> Result<GitObjectHashAlgorithm, String> {
         cached_clone!(
             self.object_hash_algorithms,
@@ -265,8 +285,8 @@ impl StoredVisibleScopeOidResolver {
     pub(crate) fn oid_for_stored_visible_scope(
         &self,
         stored_visible_scope: &[String],
-    ) -> Result<Option<String>, String> {
-        visible_tree_oid_from_files_if_scope_present(
+    ) -> Result<String, String> {
+        visible_tree_oid_from_files(
             &self.files,
             stored_visible_scope,
             self.object_hash_algorithm,
@@ -297,10 +317,12 @@ fn source_scope_cache_key(
 
 #[cfg(test)]
 mod tests {
-    use super::scope_entries::visible_tree_oid_from_files;
+    use super::scope_entries::{
+        visible_tree_oid_from_files, visible_tree_oid_from_files_if_scope_present,
+    };
     use super::{GitObjectHashAlgorithm, StagedTrackedFile, StoredVisibleScopeOidResolver};
 
-    #[test] // xpec: A8
+    #[test] // xpec: A8,uf
     fn parent_scope_matches_non_utf8_child_entry() {
         let resolver = resolver_with_files(vec![StagedTrackedFile {
             path: b"dir/nonutf8-\xff.txt".to_vec(),
@@ -310,11 +332,10 @@ mod tests {
 
         assert!(resolver
             .oid_for_stored_visible_scope(&["dir".to_string()])
-            .unwrap()
-            .is_some());
+            .is_ok());
     }
 
-    #[test] // xpec: A8
+    #[test] // xpec: A8,uf
     fn visible_scope_hash_accepts_gitlink_entries() {
         let resolver = resolver_with_files(vec![StagedTrackedFile {
             path: b"deps/example".to_vec(),
@@ -324,30 +345,28 @@ mod tests {
 
         assert!(resolver
             .oid_for_stored_visible_scope(&["deps".to_string()])
-            .unwrap()
-            .is_some());
+            .is_ok());
     }
 
-    #[test] // xpec: A8
-    fn explicit_absent_scope_does_not_match_empty_tree() {
+    #[test] // xpec: A8,uf
+    fn explicit_absent_stored_scope_hashes_the_empty_tree() {
         let resolver = resolver_with_files(vec![StagedTrackedFile {
             path: b"src/check/run/run.rs".to_vec(),
             mode: "100644".to_string(),
             object_id: "0123456789012345678901234567890123456789".to_string(),
         }]);
 
+        let absent_scope_oid = resolver
+            .oid_for_stored_visible_scope(&["src/check/run.rs".to_string()])
+            .unwrap();
+        let empty_tree_oid = resolver_with_files(Vec::new())
+            .oid_for_stored_visible_scope(&[".".to_string()])
+            .unwrap();
+
         assert!(resolver
             .oid_for_stored_visible_scope(&["src/check/run".to_string()])
-            .unwrap()
-            .is_some());
-        assert!(resolver
-            .oid_for_stored_visible_scope(&["src/check/run.rs".to_string()])
-            .unwrap()
-            .is_none());
-        assert!(resolver_with_files(Vec::new())
-            .oid_for_stored_visible_scope(&[".".to_string()])
-            .unwrap()
-            .is_some());
+            .is_ok());
+        assert_eq!(absent_scope_oid, empty_tree_oid);
     }
 
     #[test] // xpec: A8
@@ -367,6 +386,30 @@ mod tests {
             GitObjectHashAlgorithm::Sha1,
         )
         .is_ok());
+    }
+
+    #[test] // xpec: bi
+    fn optional_visible_scope_oid_uses_union_presence_semantics() {
+        let files = vec![StagedTrackedFile {
+            path: b"src/check/config/validation.rs".to_vec(),
+            mode: "100644".to_string(),
+            object_id: "0123456789012345678901234567890123456789".to_string(),
+        }];
+
+        assert!(visible_tree_oid_from_files_if_scope_present(
+            &files,
+            &["src/check/config".to_string(), "missing".to_string()],
+            GitObjectHashAlgorithm::Sha1,
+        )
+        .unwrap()
+        .is_some());
+        assert!(visible_tree_oid_from_files_if_scope_present(
+            &files,
+            &["missing".to_string()],
+            GitObjectHashAlgorithm::Sha1,
+        )
+        .unwrap()
+        .is_none());
     }
 
     fn resolver_with_files(files: Vec<StagedTrackedFile>) -> StoredVisibleScopeOidResolver {

@@ -19,7 +19,7 @@ use unix as imp;
 #[cfg(windows)]
 use windows as imp;
 
-pub(crate) use codex_home::prepare_evaluator_codex_home;
+pub(crate) use codex_home::{prepare_evaluator_codex_home, EvaluatorCodexHome};
 pub(crate) use environment::configure_app_server_environment;
 pub(crate) use readers::{spawn_app_server_reader, spawn_app_server_stderr_reader};
 pub(crate) use runner::AppServerRunner;

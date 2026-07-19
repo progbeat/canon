@@ -3,16 +3,18 @@ use crate::check::core::{for_each_unique_report_record, CheckRunReport};
 use std::io::Write;
 use std::time::Duration;
 
-const ALL_CHECKS_PASSED_MESSAGE: &str = "✓ All checks passed. Commit is allowed.";
+const ALL_CHECKS_PASSED_MESSAGE: &str = "✓ All checks passed.";
+const COMMIT_STAGED_CHANGES_MESSAGE: &str = "✓ All checks passed. Commit the staged changes!";
 const VERIFY_EVIDENCE_MESSAGE: &str =
     "❕ Verify that the evidence supports the observed answer and answers the expectation question; treat unsupported evidence as a readability issue.";
 const USE_EXPECTATIONS_MESSAGE: &str =
     "❕ Use the matching expectations to avoid regressions while fixing the issues.";
 const FIX_ISSUES_MESSAGE: &str = "▷ Fix the issues and run `canon check` again!";
 const CONTINUE_EVALUATION_MESSAGE: &str = "▷ Run `canon check` to continue evaluation.";
-const THEN_FIX_REMAINING_MESSAGE: &str =
-    "▷ Then fix the remaining issues and run `canon check` again!";
-const PASS_IMPROVEMENT_COMMIT_SUFFIX: &str = "Commit the staged changes NOW!";
+
+pub(crate) fn continue_evaluation_message() -> String {
+    CONTINUE_EVALUATION_MESSAGE.to_string()
+}
 
 pub(crate) fn write_summary_line(
     result_output: &mut dyn Write,
@@ -48,33 +50,30 @@ fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -> String {
 
 pub(crate) fn render_check_agent_messages(
     failed: &[String],
-    num_new_passes: usize,
-    num_regressions: usize,
     num_pending: usize,
+    need_to_commit: bool,
 ) -> Vec<String> {
-    if num_regressions > 0 || (!failed.is_empty() && num_new_passes == 0) {
+    if !failed.is_empty() {
         let mut messages = repair_instruction_messages(failed);
         messages.push(FIX_ISSUES_MESSAGE.to_string());
         return messages;
     }
-    if failed.is_empty() && num_pending > 0 {
-        return vec![CONTINUE_EVALUATION_MESSAGE.to_string()];
+    if num_pending > 0 {
+        return vec![continue_evaluation_message()];
     }
-    if failed.is_empty() && num_new_passes == 0 {
-        return vec![ALL_CHECKS_PASSED_MESSAGE.to_string()];
-    }
-
-    assert!(num_new_passes > 0);
-    let mut messages =
-        vec![pass_improvement_notice(num_new_passes).expect("positive new-pass count")];
-    if !failed.is_empty() {
-        messages.extend(repair_instruction_messages(failed));
-        messages.push(THEN_FIX_REMAINING_MESSAGE.to_string());
-    }
-    messages
+    vec![if need_to_commit {
+        COMMIT_STAGED_CHANGES_MESSAGE.to_string()
+    } else {
+        ALL_CHECKS_PASSED_MESSAGE.to_string()
+    }]
 }
 
 fn repair_instruction_messages(failed: &[String]) -> Vec<String> {
+    // xpec: 9b
+    assert!(
+        !failed.is_empty(),
+        "repair instructions require at least one failed xpec"
+    );
     vec![
         VERIFY_EVIDENCE_MESSAGE.to_string(),
         plan_repair_message(failed),
@@ -93,17 +92,6 @@ fn plan_repair_message(failed: &[String]) -> String {
     format!(
         "❕ Plan the repair, then run `canon show {selectors} -- <PATHSPEC>...` for the planned edit paths to identify expectations that may be affected."
     )
-}
-
-fn pass_improvement_notice(count: usize) -> Option<String> {
-    match count {
-        0 => None,
-        1 => Some(format!("▷ +1 pass. {}", PASS_IMPROVEMENT_COMMIT_SUFFIX)),
-        count => Some(format!(
-            "▷ +{} passes. {}",
-            count, PASS_IMPROVEMENT_COMMIT_SUFFIX
-        )),
-    }
 }
 
 pub(crate) struct SummaryOutcomeCounts {
@@ -130,9 +118,35 @@ pub(crate) fn summary_outcome_counts(report: &CheckRunReport) -> SummaryOutcomeC
 
 fn pad_summary_line(inner: &str) -> String {
     const WIDTH: usize = 80;
-    let width = WIDTH.max(inner.len() + 2);
-    let padding = width - inner.len();
+    // [hJ] Keep at least two padding characters regardless of the preferred
+    // width, so splitting the padding always leaves an `=` on both sides.
+    let padding = WIDTH.saturating_sub(inner.len()).max(2);
     let left = padding / 2;
     let right = padding - left;
     format!("{}{}{}", "=".repeat(left), inner, "=".repeat(right))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pad_summary_line;
+
+    #[test] // xpec: 7N
+    fn long_summary_still_has_equals_padding_on_both_sides() {
+        let inner = format!(" {} ", "long outcome ".repeat(10));
+
+        let line = pad_summary_line(&inner);
+
+        assert!(line.starts_with('='));
+        assert!(line.ends_with('='));
+        assert_eq!(line.len(), inner.len() + 2);
+    }
+
+    #[test] // xpec: hJ
+    fn summary_one_short_of_preferred_width_has_equals_on_both_sides() {
+        let inner = "x".repeat(79);
+
+        let line = pad_summary_line(&inner);
+
+        assert_eq!(line, format!("={inner}="));
+    }
 }

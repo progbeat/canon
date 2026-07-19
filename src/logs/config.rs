@@ -17,29 +17,56 @@ const DIAGNOSTIC_LOG_FILES: [&str; 8] = [
 ];
 
 #[derive(Clone, Copy)]
-pub(crate) struct DiagnosticLogConfig {
-    // Runtime logging is enabled only with a positive max size. A zero max
-    // size is the configured off switch, not a request to write zero-byte logs.
-    pub(crate) max_bytes: u64,
-    pub(crate) explicitly_disabled: bool,
+pub(crate) enum DiagnosticLogConfig {
+    Disabled,
+    Persistent(PersistentDiagnosticLogConfig),
 }
 
-pub(crate) fn diagnostic_log_config(root: &Path) -> DiagnosticLogResult<DiagnosticLogConfig> {
-    let (max_bytes, explicitly_disabled) = configured_log_max_size(root)?;
-    Ok(DiagnosticLogConfig {
-        max_bytes,
-        explicitly_disabled,
+pub(crate) struct DiagnosticLogPlan(DiagnosticLogResult<DiagnosticLogConfig>);
+
+impl DiagnosticLogPlan {
+    // [B,cg] Capture command-level canon configuration before a check mode is
+    // selected. In-place execution consumes this typed value and has no path
+    // back to Git configuration or repository metadata.
+    pub(crate) fn prepare(command_directory: &Path) -> DiagnosticLogPlan {
+        DiagnosticLogPlan(diagnostic_log_config(command_directory))
+    }
+
+    pub(crate) fn into_config(self) -> DiagnosticLogResult<DiagnosticLogConfig> {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct PersistentDiagnosticLogConfig {
+    pub(crate) max_bytes: u64,
+}
+
+fn diagnostic_log_config(root: &Path) -> DiagnosticLogResult<DiagnosticLogConfig> {
+    diagnostic_log_config_from_value(git_config_get(root, LOG_MAX_SIZE_CONFIG_KEY))
+}
+
+fn diagnostic_log_config_from_value(
+    configured_value: Result<Option<String>, GitConfigGetError>,
+) -> DiagnosticLogResult<DiagnosticLogConfig> {
+    let max_bytes = configured_log_max_size(configured_value)?;
+    // [7N,13,hr,m8] Command code always constructs applicable runtime events
+    // through `DiagnosticLogWriter`. This configuration controls persistent
+    // storage: zero stores none, while a positive bound uses bounded JSONL.
+    Ok(if max_bytes == 0 {
+        DiagnosticLogConfig::Disabled
+    } else {
+        DiagnosticLogConfig::Persistent(PersistentDiagnosticLogConfig { max_bytes })
     })
 }
 
-fn configured_log_max_size(root: &Path) -> DiagnosticLogResult<(u64, bool)> {
-    let value = git_config_get(root, LOG_MAX_SIZE_CONFIG_KEY)
+fn configured_log_max_size(
+    configured_value: Result<Option<String>, GitConfigGetError>,
+) -> DiagnosticLogResult<u64> {
+    let value = configured_value
         .map_err(log_config_get_error)?
         .unwrap_or_else(|| DEFAULT_LOG_MAX_SIZE_CONFIG_VALUE.to_string());
-    let max_bytes = parse_log_max_size(&value)?;
-    // `canon.logs.maxSize=0` is the off switch; the default `0M` follows the
-    // same path so logs stay disabled until a positive size is configured.
-    Ok((max_bytes, max_bytes == 0))
+    parse_log_max_size(&value)
 }
 
 fn log_config_get_error(err: GitConfigGetError) -> DiagnosticLogError {
@@ -101,11 +128,10 @@ pub(crate) fn active_log_file_name() -> &'static str {
     ACTIVE_DIAGNOSTIC_LOG_FILE
 }
 
-pub(crate) fn active_log_max_bytes(config: &DiagnosticLogConfig, file_count: usize) -> u64 {
-    debug_assert!(config.max_bytes > 0);
+pub(crate) fn active_log_rotation_target_bytes(
+    config: &PersistentDiagnosticLogConfig,
+    file_count: usize,
+) -> u64 {
+    // xpec: m8
     (config.max_bytes / file_count as u64).max(1)
-}
-
-pub(crate) fn diagnostic_logs_explicitly_disabled(config: &DiagnosticLogConfig) -> bool {
-    config.explicitly_disabled
 }

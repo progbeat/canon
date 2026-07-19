@@ -6,7 +6,7 @@ use crate::git::{GitBlobReader, StagedTrackedFile};
 use crate::platform;
 use std::fs;
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 impl StagedWorktreeView {
     pub(super) fn unpack_missing_visible_entries(
@@ -41,7 +41,7 @@ impl StagedWorktreeView {
             } else {
                 materialized_non_blob_content(&file)?
             };
-            extract_visible_entry(&self.lazy_tree_dir, &file, &content)?;
+            extract_visible_entry(self, &file, &content)?;
             self.unpacked_paths.borrow_mut().insert(file.path);
         }
         Ok(())
@@ -60,12 +60,12 @@ impl StagedWorktreeView {
 }
 
 fn extract_visible_entry(
-    lazy_tree: &Path,
+    staged_view: &StagedWorktreeView,
     file: &StagedTrackedFile,
     content: &[u8],
 ) -> Result<(), String> {
     let relative = relative_path_from_git_path(&file.path)?;
-    let target = lazy_tree.join(&relative);
+    let target = staged_view.lazy_tree_dir.join(&relative);
     if let Some(parent) = target.parent() {
         platform::create_private_dir_all(parent).map_err(|err| {
             format!(
@@ -75,7 +75,7 @@ fn extract_visible_entry(
             )
         })?;
     }
-    remove_existing_lazy_path(&target)?;
+    staged_view.prepare_lazy_path_for_write(&target)?;
     if file.mode == "120000" {
         platform::create_materialized_symlink(content, &target)?;
     } else {
@@ -88,6 +88,71 @@ fn extract_visible_entry(
         })?;
     }
     remove_write_permissions_from_extracted_file(&target, &file.mode)
+}
+
+impl StagedWorktreeView {
+    fn prepare_lazy_path_for_write(&self, target: &Path) -> Result<(), String> {
+        let Some(journal) = &self.invocation_journal else {
+            return remove_existing_lazy_path(target);
+        };
+        let backup = match fs::symlink_metadata(target) {
+            Ok(_) => Some(move_to_unique_invocation_backup(target)?),
+            Err(err) if err.kind() == ErrorKind::NotFound => None,
+            Err(err) => {
+                return Err(format!(
+                    "failed to inspect evaluator lazy file {}: {}",
+                    target.display(),
+                    err
+                ));
+            }
+        };
+        journal
+            .borrow_mut()
+            .lazy_path_changes
+            .push(super::InvocationLazyPathChange {
+                target: target.to_path_buf(),
+                backup,
+            });
+        Ok(())
+    }
+}
+
+fn move_to_unique_invocation_backup(target: &Path) -> Result<PathBuf, String> {
+    let parent = target
+        .parent()
+        .ok_or_else(|| format!("evaluator lazy path has no parent: {}", target.display()))?;
+    for _ in 0..64 {
+        let random =
+            getrandom::u64().map_err(|err| format!("failed to choose lazy backup path: {err}"))?;
+        let backup = parent.join(format!(
+            ".canon-invocation-backup-{}-{random:016x}",
+            std::process::id()
+        ));
+        match fs::symlink_metadata(&backup) {
+            Ok(_) => continue,
+            Err(err) if err.kind() == ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(format!(
+                    "failed to inspect evaluator lazy backup {}: {}",
+                    backup.display(),
+                    err
+                ));
+            }
+        }
+        fs::rename(target, &backup).map_err(|err| {
+            format!(
+                "failed to preserve evaluator lazy path {} at {}: {}",
+                target.display(),
+                backup.display(),
+                err
+            )
+        })?;
+        return Ok(backup);
+    }
+    Err(format!(
+        "failed to allocate a unique evaluator lazy backup beside {}",
+        target.display()
+    ))
 }
 
 fn remove_existing_lazy_path(target: &Path) -> Result<(), String> {

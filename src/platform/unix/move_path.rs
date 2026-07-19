@@ -20,7 +20,28 @@ pub(crate) fn mirror_evaluator_codex_home_file(source: &Path, target: &Path) -> 
 }
 
 pub(crate) fn move_path(source: &Path, target: &Path) -> PlatformResult<()> {
-    move_path_preserving_directory_permissions(source, target)
+    // This function is the naive isolation policy's abstract `move` operation.
+    // `move` describes the completed filesystem state (source absent, target
+    // present), not one particular syscall. `rename(2)` implements it within a
+    // filesystem; a composite operation is required when EXDEV says that
+    // filesystem move cannot cross the device boundary.
+    let result = move_path_preserving_directory_permissions(source, target);
+    if result.is_ok() {
+        // xpec: 9W
+        assert!(
+            matches!(
+                fs::symlink_metadata(source),
+                Err(err) if err.kind() == io::ErrorKind::NotFound
+            ),
+            "successful filesystem move must remove its source entry"
+        );
+        // xpec: 9W
+        assert!(
+            fs::symlink_metadata(target).is_ok(),
+            "successful filesystem move must create its target entry"
+        );
+    }
+    result
 }
 
 fn move_path_preserving_directory_permissions(source: &Path, target: &Path) -> PlatformResult<()> {
@@ -28,11 +49,16 @@ fn move_path_preserving_directory_permissions(source: &Path, target: &Path) -> P
         return rename_path(source, target).map_err(|err| move_path_error(source, target, err));
     };
     let mode = directory_permissions(source, &directory)?.mode();
+    // Some supported filesystems reject moving canon's read-only materialized
+    // directories. This temporary mode is part of the move implementation and
+    // is restored at the destination before the operation returns.
     fchmod_open_path(source, &directory, 0o700)?;
     match rename_path(source, target) {
         Ok(()) => {}
         Err(rename_err) if rename_err.raw_os_error() == Some(libc::EXDEV) => {
-            if let Err(copy_err) = move_directory_across_devices(source, target, mode) {
+            // Do not return between the copy and removal steps: callers observe
+            // one completed move operation or an error with rollback attempted.
+            if let Err(copy_err) = complete_cross_filesystem_directory_move(source, target, mode) {
                 return Err(restore_source_directory_permissions_after_failed_move(
                     source, &directory, mode, copy_err,
                 ));
@@ -94,10 +120,34 @@ fn rollback_moved_directory_after_restore_failure(
     PlatformError::chain(errors)
 }
 
-fn move_directory_across_devices(source: &Path, target: &Path, mode: u32) -> PlatformResult<()> {
+fn complete_cross_filesystem_directory_move(
+    source: &Path,
+    target: &Path,
+    mode: u32,
+) -> PlatformResult<()> {
     if let Err(copy_err) = copy_directory(source, target) {
         let _ = remove_directory_tree(target);
         return Err(copy_err);
+    }
+    // xpec: 9W
+    // Finish every fallible target-side step while the source is still intact.
+    // After source removal succeeds, the cross-device move is complete.
+    if let Err(permission_err) = fs::set_permissions(target, fs::Permissions::from_mode(mode))
+        .map_err(|err| {
+            PlatformError::io(
+                format!(
+                    "failed to set moved directory permissions {}",
+                    target.display()
+                ),
+                err,
+            )
+        })
+    {
+        let rollback_err = remove_directory_tree(target).err();
+        return Err(match rollback_err {
+            Some(rollback_err) => PlatformError::chain(vec![permission_err, rollback_err]),
+            None => permission_err,
+        });
     }
     if let Err(remove_err) = remove_directory_tree(source) {
         let rollback_err = remove_directory_tree(target).err();
@@ -114,15 +164,6 @@ fn move_directory_across_devices(source: &Path, target: &Path, mode: u32) -> Pla
             None => remove_err,
         });
     }
-    fs::set_permissions(target, fs::Permissions::from_mode(mode)).map_err(|err| {
-        PlatformError::io(
-            format!(
-                "failed to set moved directory permissions {}",
-                target.display()
-            ),
-            err,
-        )
-    })?;
     Ok(())
 }
 
@@ -339,14 +380,14 @@ fn move_path_error(source: &Path, target: &Path, err: io::Error) -> PlatformErro
 
 #[cfg(test)]
 mod tests {
-    use super::make_directory_tree_removable;
+    use super::{complete_cross_filesystem_directory_move, make_directory_tree_removable};
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::process;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test]
+    #[test] // xpec: YY
     fn directory_mode_restorer_restores_nested_modes_after_failed_retry() {
         let root = temp_root("mode-restore");
         let nested = root.join("source").join("nested");
@@ -364,6 +405,26 @@ mod tests {
 
         fs::set_permissions(root.join("source"), fs::Permissions::from_mode(0o700)).unwrap();
         fs::set_permissions(&nested, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test] // xpec: 9W
+    fn cross_filesystem_fallback_completes_the_move_postcondition() {
+        let root = temp_root("cross-filesystem-postcondition");
+        let source = root.join("source");
+        let target = root.join("target");
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("file"), "content").unwrap();
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o500)).unwrap();
+
+        complete_cross_filesystem_directory_move(&source, &target, 0o500).unwrap();
+
+        assert!(fs::symlink_metadata(&source)
+            .is_err_and(|err| { err.kind() == std::io::ErrorKind::NotFound }));
+        assert_eq!(fs::read_to_string(target.join("file")).unwrap(), "content");
+        assert_eq!(mode(&target) & 0o777, 0o500);
+
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o700)).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 

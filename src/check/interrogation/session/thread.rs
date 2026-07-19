@@ -5,27 +5,29 @@ use crate::check::interrogation::dynamic_tool::{
 };
 use crate::check::interrogation::state::{
     evaluator_prerender_thread_reuse_key, evaluator_rendered_thread_reuse_key, CheckRuntime,
-    InterrogationRunState, PrerenderEvaluatorThreadReuseKeyContext,
+    EvaluatorViewIdentity, InterrogationRunState, PrerenderEvaluatorThreadReuseKeyContext,
     RenderedEvaluatorThreadReuseKeyContext,
 };
 use crate::check::interrogation::{
     finalize_interrogation_answer, interrogation_result_from_answer, InterrogationRequestKind,
 };
 use crate::check::{evaluator_response_output_schema_for_scope, EvaluatorResponseSchemaScope};
-use crate::config_types::{AgentConfig, AGAINST_TREE_DIFF_FROM, DEFAULT_DIFF_FROM};
+use crate::config_types::{
+    AgentConfig, ExpectationTarget, AGAINST_TREE_DIFF_FROM, DEFAULT_DIFF_FROM,
+};
 use crate::evaluator::{
     ask_once as ask_evaluator_once, effective_thinking, evaluator_base_instructions,
     is_context_window_failure, q_scope_is_full_project, session_failure_invalidates_thread,
     write_thread_lifecycle_event, write_thread_restart_event, BaseInstructionsContext,
-    DeveloperInstructionsContext, EvaluatorError, EvaluatorRunner, EvaluatorTurnContext,
-    EvaluatorTurnPromptContext, ParsedTurnResponse, PromptRenderer, RenderedPrompt,
-    ThreadLifecycleLog, ThreadReuseLogContext,
+    DeveloperInstructionsContext, DeveloperInstructionsMode, EvaluatorError, EvaluatorRunner,
+    EvaluatorTurnContext, EvaluatorTurnPromptContext, EvaluatorTurnPromptMode, ParsedTurnResponse,
+    PromptRenderer, RenderedPrompt, ThreadLifecycleLog, ThreadReuseLogContext,
 };
 use crate::logs::DiagnosticLogWriter;
 use crate::scope::{effective_ignore_patterns, sanitize_scope};
 use crate::xpec_state::{LastResult, XpecStateCache};
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -39,10 +41,9 @@ pub(crate) struct ThreadTurnRequest<'a> {
     pub(crate) expectation_id: Option<&'a str>,
     pub(crate) short_id: &'a str,
     pub(crate) question_context: &'a str,
-    pub(crate) diff_from_tree_oid: &'a str,
+    pub(crate) diff_from_tree_oid: Option<&'a str>,
     pub(crate) prompt: &'a str,
     pub(crate) prompt_renderer: Arc<PromptRenderer>,
-    pub(crate) template_artifact_paths: &'a [PathBuf],
     pub(crate) last_pass: Option<&'a LastResult>,
     pub(crate) progress: Option<&'a crate::evaluator::EvaluatorProgress>,
 }
@@ -75,7 +76,7 @@ impl ThreadTurnResponseContract {
 }
 
 pub(crate) struct ResolvedDiffFrom<'a> {
-    pub(crate) tree_oid: String,
+    pub(crate) tree_oid: Option<String>,
     pub(crate) last_pass: Option<&'a LastResult>,
 }
 
@@ -104,19 +105,33 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
         .map_err(EvaluatorError::message)?;
     let reuse_visible_tree_oid = request
         .last_pass
-        .and_then(|last_pass| last_pass.visible_tree_oid.as_deref())
-        .unwrap_or("");
+        .and_then(|last_pass| last_pass.visible_tree_oid.as_deref());
     let reuse_context = thread_reuse_log_context(runtime, &request, reuse_visible_tree_oid)?;
+    let view = match (
+        runtime.git_checked_tree_oid(),
+        request.diff_from_tree_oid,
+        runtime.is_in_place(),
+    ) {
+        (Some(checked_tree_oid), Some(diff_base_tree_oid), false) => EvaluatorViewIdentity::Git {
+            visible_tree_oid: reuse_visible_tree_oid,
+            diff_base_tree_oid,
+            checked_tree_oid,
+        },
+        (None, None, true) => EvaluatorViewIdentity::InPlace,
+        _ => {
+            return Err(EvaluatorError::message(
+                "inconsistent evaluator view and Git diff context",
+            ));
+        }
+    };
     let session_key =
         evaluator_prerender_thread_reuse_key(PrerenderEvaluatorThreadReuseKeyContext {
             agent: request.agent,
             scope: request.enforced_scope,
             model: request.model,
             thinking: request.thinking,
-            visible_tree_oid: reuse_visible_tree_oid,
+            view,
             question_context: request.question_context,
-            diff_base_tree_oid: request.diff_from_tree_oid,
-            checked_tree_oid: runtime.checked_tree_oid(),
         })
         .map_err(EvaluatorError::message)?;
     // A restricted retry, q-scope verification, or different rendered diff
@@ -141,7 +156,7 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
             runner,
             state,
             &session_key,
-            &current_visible_tree_oid,
+            current_visible_tree_oid.as_deref(),
             reuse_context.clone(),
             &request,
         )?,
@@ -153,10 +168,11 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
     write_thread_lifecycle_event(
         diagnostic_log,
         &selection.lifecycle_log,
+        request.expectation_id,
         request.enforced_scope,
         request.model,
         request.thinking,
-    );
+    )?;
     let response = match ask_current_session(
         runtime,
         runner,
@@ -184,13 +200,13 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
                 request.enforced_scope,
                 request.model,
                 err.message_str(),
-            );
+            )?;
             let selection = start_or_reuse_thread_session_after_rendering(
                 runtime,
                 runner,
                 state,
                 &session_key,
-                &current_visible_tree_oid,
+                current_visible_tree_oid.as_deref(),
                 reuse_context.clone(),
                 &request,
             )?;
@@ -198,10 +214,11 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
             write_thread_lifecycle_event(
                 diagnostic_log,
                 &selection.lifecycle_log,
+                request.expectation_id,
                 request.enforced_scope,
                 request.model,
                 request.thinking,
-            );
+            )?;
             match ask_current_session(
                 runtime,
                 runner,
@@ -238,13 +255,13 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
                 request.enforced_scope,
                 request.model,
                 err.message_str(),
-            );
+            )?;
             let selection = start_or_reuse_thread_session_after_rendering(
                 runtime,
                 runner,
                 state,
                 &session_key,
-                &current_visible_tree_oid,
+                current_visible_tree_oid.as_deref(),
                 reuse_context.clone(),
                 &request,
             )?;
@@ -252,10 +269,11 @@ pub(crate) fn ask_with_reused_thread<R: EvaluatorRunner>(
             write_thread_lifecycle_event(
                 diagnostic_log,
                 &selection.lifecycle_log,
+                request.expectation_id,
                 request.enforced_scope,
                 request.model,
                 request.thinking,
-            );
+            )?;
             match ask_current_session(
                 runtime,
                 runner,
@@ -294,10 +312,9 @@ fn ask_current_session<R: EvaluatorRunner>(
             session_id
         )));
     };
-    if let Err(err) = state.activate_session_root(session_id) {
-        state.clear_thread_sessions();
-        return Err(EvaluatorError::message(err));
-    }
+    // Isolation moved this root to `session_root` at thread creation and keeps
+    // it there until its restoration guard is dropped. Nothing hides the root
+    // between turns, so the stored cwd is already the active evaluator view.
     ask_in_thread(
         runtime,
         runner,
@@ -404,43 +421,51 @@ fn start_or_reuse_thread_session_after_rendering<R: EvaluatorRunner>(
     runner: &mut R,
     state: &mut InterrogationRunState,
     session_key: &str,
-    visible_tree_oid: &str,
+    visible_tree_oid: Option<&str>,
     reuse_context: ThreadReuseLogContext,
     request: &ThreadTurnRequest<'_>,
 ) -> Result<ThreadSessionSelection, EvaluatorError> {
     let visible_scope = runtime
         .visible_scope(request.agent, request.enforced_scope)
         .map_err(EvaluatorError::message)?;
-    let ignore = effective_ignore_patterns(request.agent).map_err(EvaluatorError::message)?;
-    let visible_file_count = runtime.visible_file_count(
+    let num_invisible_files = runtime.num_invisible_files(
         &mut state.visible_tree_oid_cache,
         request.agent,
         request.enforced_scope,
     )?;
-    let session_root = runtime
-        .session_root_for_scope(request.agent, request.enforced_scope, visible_tree_oid)
-        .map_err(EvaluatorError::message)?;
     // Render the developer-instructions resource template. `question_context`
     // is the value for that template's `xpec.instructions` input slot,
     // not a second prompt or instruction template.
+    let developer_instructions_mode = match (
+        request.diff_from_tree_oid,
+        runtime.git_checked_tree_oid(),
+        runtime.is_in_place(),
+    ) {
+        (Some(base_tree_oid), Some(checked_tree_oid), false) => {
+            DeveloperInstructionsMode::GitDiff {
+                base_tree_oid,
+                checked_tree_oid,
+                git_environment: runtime.prompt_git_environment(),
+            }
+        }
+        (None, None, true) => DeveloperInstructionsMode::InPlace,
+        _ => {
+            return Err(EvaluatorError::message(
+                "inconsistent evaluator prompt and Git diff context",
+            ));
+        }
+    };
     let rendered_developer_instructions: RenderedPrompt = request
         .prompt_renderer
         .developer_instructions(DeveloperInstructionsContext {
             root: runtime.root,
-            in_place: runtime.is_in_place(),
-            diff_from_tree_oid: request.diff_from_tree_oid,
-            checked_tree_oid: runtime.checked_tree_oid(),
+            mode: developer_instructions_mode,
             question_context: request.question_context,
-            q_scope: request.enforced_scope,
-            ignore: &ignore,
             visible_scope: &visible_scope,
-            checked_file_count: runtime.checked_file_count(),
-            visible_file_count,
+            num_invisible_files,
             last_pass: request.last_pass,
         })
         .map_err(EvaluatorError::message)?;
-    let mut template_artifact_paths = request.template_artifact_paths.to_vec();
-    template_artifact_paths.extend(rendered_developer_instructions.artifact_paths);
     let developer_instructions = rendered_developer_instructions.text;
     let base_instructions = evaluator_base_instructions(BaseInstructionsContext {
         in_place: runtime.is_in_place(),
@@ -477,21 +502,29 @@ fn start_or_reuse_thread_session_after_rendering<R: EvaluatorRunner>(
             reused_existing_session: true,
         });
     }
-    let session_isolation = if runtime.is_in_place() {
+    let session_cwd = if runtime.is_in_place() {
         // In-place mode starts the evaluator in the checked directory itself.
         // Moving that directory to an isolation path would make the evaluator
         // cwd a sandbox copy instead of the checked directory required by the
         // in-place canon.
-        None
+        runtime.root.to_path_buf()
     } else {
+        let visible_tree_oid = visible_tree_oid.ok_or_else(|| {
+            EvaluatorError::message("materialized evaluator view has no tree OID")
+        })?;
+        let canonical_root = runtime
+            .materialized_session_root_path(visible_tree_oid)
+            .map_err(EvaluatorError::message)?;
         state
-            .isolate_session_root(&session_root)
+            .prepare_materialized_session_root(&canonical_root, || {
+                runtime.session_root_for_scope(
+                    request.agent,
+                    request.enforced_scope,
+                    Some(visible_tree_oid),
+                )
+            })
             .map_err(EvaluatorError::message)?
     };
-    let session_cwd = session_isolation
-        .as_ref()
-        .map(|isolation| isolation.path())
-        .unwrap_or(session_root.as_path());
     let dynamic_tools = if request.expectation_id.is_some() {
         canon_show_dynamic_tools()
     } else {
@@ -500,9 +533,16 @@ fn start_or_reuse_thread_session_after_rendering<R: EvaluatorRunner>(
     // `start_session` sends thread/start: this is where the evaluator agent is
     // started. Its cwd is `session_cwd`, independently of the cwd of the
     // already-running app-server transport process.
+    // The renderer owns one invocation-local artifact directory. Granting
+    // read-only access to that stable directory at thread creation also covers
+    // artifacts produced by later turns when this evaluator thread is reused.
+    let template_artifact_directory = request
+        .prompt_renderer
+        .artifact_directory()
+        .map_err(EvaluatorError::message)?;
     let created = match runner.start_session(
-        session_cwd,
-        &template_artifact_paths,
+        &session_cwd,
+        &template_artifact_directory,
         &base_instructions,
         &developer_instructions,
         request.agent,
@@ -522,10 +562,7 @@ fn start_or_reuse_thread_session_after_rendering<R: EvaluatorRunner>(
         .insert(created.clone(), developer_instructions.clone());
     state
         .session_roots_by_id
-        .insert(created.clone(), session_cwd.to_path_buf());
-    if let Some(isolation) = session_isolation {
-        state.session_isolations.insert(created.clone(), isolation);
-    }
+        .insert(created.clone(), session_cwd);
     state
         .thread_sessions_by_prerender_key
         .insert(session_key.to_string(), created.clone());
@@ -573,12 +610,13 @@ fn thread_reuse_log(
 fn thread_reuse_log_context(
     runtime: &CheckRuntime<'_>,
     request: &ThreadTurnRequest<'_>,
-    visible_tree_oid: &str,
+    visible_tree_oid: Option<&str>,
 ) -> Result<ThreadReuseLogContext, EvaluatorError> {
     Ok(ThreadReuseLogContext {
-        visible_tree_oid: visible_tree_oid.to_string(),
-        diff_base_tree_oid: request.diff_from_tree_oid.to_string(),
-        checked_tree_oid: runtime.checked_tree_oid().to_string(),
+        in_place: runtime.is_in_place(),
+        visible_tree_oid: visible_tree_oid.map(str::to_string),
+        diff_base_tree_oid: request.diff_from_tree_oid.map(str::to_string),
+        checked_tree_oid: runtime.git_checked_tree_oid().map(str::to_string),
         turn_prompt: request.prompt.to_string(),
         question_context: request.question_context.to_string(),
         plugins: request.agent.plugins.clone(),
@@ -623,9 +661,6 @@ fn retire_thread_sessions_after_turn(
         .retain(|session_id, _| !retired_sessions.contains(session_id));
     state
         .session_dynamic_show_expectation_ids
-        .retain(|session_id, _| !retired_sessions.contains(session_id));
-    state
-        .session_isolations
         .retain(|session_id, _| !retired_sessions.contains(session_id));
     retired_sessions.contains(active_session_id)
 }
@@ -723,6 +758,25 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
     progress: Option<&crate::evaluator::EvaluatorProgress>,
 ) -> Result<InterrogationAnswer, EvaluatorError> {
     let diff_from = resolve_diff_from(runtime, expectation, last_pass)?;
+    let prompt_mode = if runtime.is_in_place() {
+        // xpec: I4,Q
+        assert!(
+            expectation.target.is_none(),
+            "in-place target must be rejected before prompt rendering"
+        );
+        EvaluatorTurnPromptMode::InPlace
+    } else {
+        EvaluatorTurnPromptMode::GitBacked {
+            diff_from: &expectation.diff_from,
+            // [eS] Resolve `target` directly to its only behavioral effect:
+            // whether this turn's rendered prompt includes the diff hint.
+            render_target_diff_hint: matches!(
+                expectation.target.as_ref(),
+                Some(ExpectationTarget::Diff)
+            ),
+            last_pass: diff_from.last_pass,
+        }
+    };
     let prompt_renderer = Arc::clone(&state.prompt_renderer);
     let rendered_prompt: RenderedPrompt = prompt_renderer
         .evaluator_turn_prompt(EvaluatorTurnPromptContext {
@@ -730,14 +784,10 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
             short_id: &expectation.display_id,
             question: &expectation.question,
             expected_answer: &expectation.expected_answer,
-            in_place: runtime.is_in_place(),
-            diff_from: &expectation.diff_from,
-            target: expectation.target.as_ref().map(|target| target.as_str()),
-            last_pass: diff_from.last_pass,
+            mode: prompt_mode,
         })
         .map_err(EvaluatorError::message)?;
     let prompt = rendered_prompt.text;
-    let template_artifact_paths = rendered_prompt.artifact_paths;
     let thinking = effective_thinking(&expectation.agent, expectation);
     let response = ask_with_reused_thread(
         runtime,
@@ -758,10 +808,9 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
             // evaluator instruction source is the template in `resources/prompts/`;
             // this text is only a value embedded by that source.
             question_context: &expectation.question_context,
-            diff_from_tree_oid: &diff_from.tree_oid,
+            diff_from_tree_oid: diff_from.tree_oid.as_deref(),
             prompt: &prompt,
             prompt_renderer,
-            template_artifact_paths: &template_artifact_paths,
             last_pass: diff_from.last_pass,
             progress,
         },
@@ -772,15 +821,14 @@ fn ask_expectation_turn<R: EvaluatorRunner>(
         &expectation.agent,
         enforced_scope,
         response.answer,
-        response.usage,
         response.context_compacted,
     )?;
-    if !runtime.is_in_place() {
+    if let Some(diff_from_tree_oid) = diff_from.tree_oid {
         let diff_from_tree_oid_abbrev =
-            crate::git::abbreviate_git_oid(runtime.root, &diff_from.tree_oid)
+            crate::git::abbreviate_git_oid(runtime.root, &diff_from_tree_oid)
                 .map_err(EvaluatorError::message)?;
         answer.diff_from = Some(expectation.diff_from.clone());
-        answer.diff_from_tree_oid = Some(diff_from.tree_oid);
+        answer.diff_from_tree_oid = Some(diff_from_tree_oid);
         answer.diff_from_tree_oid_abbrev = Some(diff_from_tree_oid_abbrev);
     }
     Ok(answer)
@@ -796,7 +844,7 @@ pub(crate) fn resolve_diff_from<'a>(
         // are validated before interrogation, and prompt rendering clears any
         // diff-only turn inputs for this mode.
         return Ok(ResolvedDiffFrom {
-            tree_oid: runtime.checked_tree_oid().to_string(),
+            tree_oid: None,
             last_pass: None,
         });
     }
@@ -807,16 +855,19 @@ pub(crate) fn resolve_diff_from<'a>(
     // the same TreeSource resolution as check command `<TREE>` options.
     let diff_from = expectation.diff_from.as_str();
     if diff_from == DEFAULT_DIFF_FROM {
-        return checkpoint_diff_base(runtime.root, last_pass, runtime.against_tree_oid());
+        let against_tree_oid = runtime
+            .git_against_tree_oid()
+            .ok_or_else(|| EvaluatorError::message("Git-backed check has no against tree OID"))?;
+        return checkpoint_diff_base(runtime.root, last_pass, against_tree_oid);
     }
     if diff_from == AGAINST_TREE_DIFF_FROM {
         return Ok(ResolvedDiffFrom {
-            tree_oid: runtime.against_tree_oid().to_string(),
+            tree_oid: runtime.git_against_tree_oid().map(str::to_string),
             last_pass,
         });
     }
     Ok(ResolvedDiffFrom {
-        tree_oid: explicit_diff_base_tree_oid(runtime.root, diff_from)?,
+        tree_oid: Some(explicit_diff_base_tree_oid(runtime.root, diff_from)?),
         last_pass,
     })
 }
@@ -834,13 +885,13 @@ fn checkpoint_diff_base<'a>(
                 .map_err(EvaluatorError::message)?
         {
             return Ok(ResolvedDiffFrom {
-                tree_oid: checked_tree_oid.to_string(),
+                tree_oid: Some(checked_tree_oid.to_string()),
                 last_pass,
             });
         }
     }
     Ok(ResolvedDiffFrom {
-        tree_oid: against_tree_oid.to_string(),
+        tree_oid: Some(against_tree_oid.to_string()),
         last_pass: None,
     })
 }
@@ -860,7 +911,7 @@ mod tests {
     use std::process::{self, Command};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test]
+    #[test] // xpec: gO
     fn checkpoint_diff_base_uses_existing_checkpoint_tree() {
         let root = git_project("checkpoint-existing");
         let checked_tree_oid = crate::git::staged_tree_oid(&root).unwrap();
@@ -868,12 +919,12 @@ mod tests {
 
         let resolved = checkpoint_diff_base(&root, Some(&last_pass), "against-tree").unwrap();
 
-        assert_eq!(resolved.tree_oid, checked_tree_oid);
+        assert_eq!(resolved.tree_oid, Some(checked_tree_oid));
         assert!(resolved.last_pass.is_some());
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test]
+    #[test] // xpec: gO
     fn checkpoint_diff_base_ignores_missing_checkpoint_tree() {
         let root = git_project("checkpoint-missing");
         let missing_tree_oid = "ffffffffffffffffffffffffffffffffffffffff";
@@ -881,19 +932,19 @@ mod tests {
 
         let resolved = checkpoint_diff_base(&root, Some(&last_pass), "against-tree").unwrap();
 
-        assert_eq!(resolved.tree_oid, "against-tree");
+        assert_eq!(resolved.tree_oid.as_deref(), Some("against-tree"));
         assert!(resolved.last_pass.is_none());
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test] // xpec: X
+    #[test] // xpec: gO
     fn checkpoint_diff_base_ignores_non_oid_checkpoint_tree() {
         let root = git_project("checkpoint-revspec");
         let last_pass = last_pass_with_checked_tree_oid("HEAD^{tree}");
 
         let resolved = checkpoint_diff_base(&root, Some(&last_pass), "against-tree").unwrap();
 
-        assert_eq!(resolved.tree_oid, "against-tree");
+        assert_eq!(resolved.tree_oid.as_deref(), Some("against-tree"));
         assert!(resolved.last_pass.is_none());
         let _ = fs::remove_dir_all(root);
     }
@@ -938,6 +989,7 @@ mod tests {
             .args(args)
             .output()
             .unwrap();
+        // xpec: gO
         assert!(
             output.status.success(),
             "git {} failed: {}",

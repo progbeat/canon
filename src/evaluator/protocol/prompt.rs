@@ -10,6 +10,7 @@ use crate::xpec_state::LastResult;
 use minijinja::value::Kwargs;
 use minijinja::{Environment, Error};
 use serde_json::{json, Value as JsonValue};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -22,17 +23,22 @@ const EVALUATOR_TURN_PROMPT_TEMPLATE: &str =
 
 pub(crate) struct DeveloperInstructionsContext<'a> {
     pub(crate) root: &'a Path,
-    pub(crate) in_place: bool,
-    pub(crate) diff_from_tree_oid: &'a str,
-    pub(crate) checked_tree_oid: &'a str,
+    pub(crate) mode: DeveloperInstructionsMode<'a>,
     // Data for the resource template's `xpec.instructions` variable.
     pub(crate) question_context: &'a str,
-    pub(crate) q_scope: &'a [String],
-    pub(crate) ignore: &'a [String],
     pub(crate) visible_scope: &'a [String],
-    pub(crate) checked_file_count: usize,
-    pub(crate) visible_file_count: usize,
+    pub(crate) num_invisible_files: usize,
     pub(crate) last_pass: Option<&'a LastResult>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum DeveloperInstructionsMode<'a> {
+    InPlace,
+    GitDiff {
+        base_tree_oid: &'a str,
+        checked_tree_oid: &'a str,
+        git_environment: &'a [(OsString, OsString)],
+    },
 }
 
 pub(crate) struct EvaluatorTurnPromptContext<'a> {
@@ -40,15 +46,22 @@ pub(crate) struct EvaluatorTurnPromptContext<'a> {
     pub(crate) short_id: &'a str,
     pub(crate) question: &'a str,
     pub(crate) expected_answer: &'a str,
-    pub(crate) in_place: bool,
-    pub(crate) diff_from: &'a str,
-    pub(crate) target: Option<&'a str>,
-    pub(crate) last_pass: Option<&'a LastResult>,
+    pub(crate) mode: EvaluatorTurnPromptMode<'a>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum EvaluatorTurnPromptMode<'a> {
+    InPlace,
+    GitBacked {
+        diff_from: &'a str,
+        last_pass: Option<&'a LastResult>,
+        // [eS] This derived flag is turn-prompt input, not evaluation policy.
+        render_target_diff_hint: bool,
+    },
 }
 
 pub(crate) struct RenderedPrompt {
     pub(crate) text: String,
-    pub(crate) artifact_paths: Vec<PathBuf>,
 }
 
 pub(crate) struct PromptRenderer {
@@ -62,6 +75,10 @@ impl PromptRenderer {
         }
     }
 
+    pub(crate) fn artifact_directory(&self) -> Result<PathBuf, String> {
+        self.output_dir_cache.path_for_prompt_artifacts()
+    }
+
     pub(crate) fn developer_instructions(
         &self,
         context: DeveloperInstructionsContext<'_>,
@@ -72,10 +89,7 @@ impl PromptRenderer {
             &mut artifact_paths,
             context,
         )?;
-        Ok(RenderedPrompt {
-            text,
-            artifact_paths,
-        })
+        Ok(RenderedPrompt { text })
     }
 
     pub(crate) fn evaluator_turn_prompt(
@@ -88,10 +102,7 @@ impl PromptRenderer {
             &mut artifact_paths,
             context,
         )?;
-        Ok(RenderedPrompt {
-            text,
-            artifact_paths,
-        })
+        Ok(RenderedPrompt { text })
     }
 }
 
@@ -100,41 +111,48 @@ fn render_developer_instructions(
     template_artifact_paths: &mut Vec<PathBuf>,
     context: DeveloperInstructionsContext<'_>,
 ) -> Result<String, String> {
-    // This count is reporting-only prompt data. File visibility has already
-    // been decided by the visible-tree pathspec selection in
-    // `src/git/visible_tree_oid/`; the template's "likely unnecessary" wording
-    // does not add another hiding rule.
-    let files_not_selected_by_visible_scope_pathspec = context
-        .checked_file_count
-        .checked_sub(context.visible_file_count)
-        .ok_or("visible file count exceeds checked file count")?;
-    // The transcript intentionally has two scoped diff views over
-    // `visible_scope`: `git diff --numstat` for change discovery, then detailed
-    // `git diff` for inspectable content. Template display text omits the
-    // pathspec so developer instructions show the relevant tree OIDs without
-    // repeating noisy scope arguments.
+    // xpec: 8O
+    // Each `sh` block gets the canonical visible scope as positional shell
+    // arguments. The resource can therefore execute its specified `"$@"`
+    // commands even though template filters run independently.
+    let (in_place, git_diff_environment) = match context.mode {
+        DeveloperInstructionsMode::InPlace => (true, Vec::new()),
+        DeveloperInstructionsMode::GitDiff {
+            base_tree_oid,
+            checked_tree_oid,
+            git_environment,
+        } => (
+            false,
+            [
+                (OsString::from("BASE_TREE"), OsString::from(base_tree_oid)),
+                (
+                    OsString::from("CHECKED_TREE"),
+                    OsString::from(checked_tree_oid),
+                ),
+            ]
+            .into_iter()
+            .chain(git_environment.iter().cloned())
+            .collect(),
+        ),
+    };
     render_minijinja_resource_template(
         context.root,
         template_artifact_dir,
         template_artifact_paths,
         DEVELOPER_INSTRUCTIONS_TEMPLATE,
-        &[
-            ("BASE_TREE", context.diff_from_tree_oid),
-            ("CHECKED_TREE", context.checked_tree_oid),
-        ],
+        &git_diff_environment,
+        context.visible_scope,
         json!({
             "xpec": {
                 // [UZ] This is human-authored expectation context rendered by
                 // the resource template, not another implementation-owned
                 // evaluator prompt or instruction source.
                 "instructions": context.question_context,
-                "q_scope": context.q_scope,
-                "ignore": context.ignore,
                 "visible_scope": context.visible_scope,
             },
-            "in_place": context.in_place,
+            "in_place": in_place,
             "last_pass": context.last_pass,
-            "num_invisible_files": files_not_selected_by_visible_scope_pathspec,
+            "num_invisible_files": context.num_invisible_files,
         }),
     )
 }
@@ -144,14 +162,17 @@ fn render_evaluator_turn_prompt(
     template_artifact_paths: &mut Vec<PathBuf>,
     context: EvaluatorTurnPromptContext<'_>,
 ) -> Result<String, String> {
-    let (diff_from, target, last_pass) = if context.in_place {
-        // In-place mode has no Git diff target or checkpoint context. The
-        // caller validates resolved expectations before interrogation; this
-        // clamp keeps the rendered prompt diff-free even if an invalid in-place
-        // expectation reaches this component.
-        ("", None, None)
-    } else {
-        (context.diff_from, context.target, context.last_pass)
+    let (diff_from, target, last_pass) = match context.mode {
+        EvaluatorTurnPromptMode::InPlace => ("", None, None),
+        EvaluatorTurnPromptMode::GitBacked {
+            diff_from,
+            render_target_diff_hint,
+            last_pass,
+        } => (
+            diff_from,
+            render_target_diff_hint.then_some("diff"),
+            last_pass,
+        ),
     };
     // `diff_from` is template input for this fresh evaluator turn only. Cached
     // results are emitted without rendering this prompt. The turn template uses
@@ -171,6 +192,7 @@ fn render_evaluator_turn_prompt(
         template_artifact_dir,
         template_artifact_paths,
         EVALUATOR_TURN_PROMPT_TEMPLATE,
+        &[],
         &[],
         json!({
             "xpec": xpec_context,
@@ -200,7 +222,8 @@ fn render_minijinja_resource_template(
     template_artifact_dir: PromptTemplateArtifactDir,
     template_artifact_paths: &mut Vec<PathBuf>,
     template: &str,
-    template_shell_env: &[(&str, &str)],
+    template_shell_env: &[(OsString, OsString)],
+    template_shell_args: &[String],
     context: JsonValue,
 ) -> Result<String, String> {
     let mut environment = Environment::new();
@@ -208,10 +231,8 @@ fn render_minijinja_resource_template(
     environment.add_filter("shq", shell_quote_filter);
     environment.add_filter("shargs", shell_args_filter);
     let command_root = root.to_path_buf();
-    let command_env = template_shell_env
-        .iter()
-        .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
-        .collect::<Vec<_>>();
+    let command_env = template_shell_env.to_vec();
+    let command_args = template_shell_args.to_vec();
     let command_artifact_paths = Arc::new(Mutex::new(Vec::new()));
     let sh_transcript_markers = ShTranscriptMarkers::new()?;
     let filter_transcript_markers = sh_transcript_markers.clone();
@@ -224,6 +245,7 @@ fn render_minijinja_resource_template(
                 &template_artifact_dir,
                 filter_artifact_paths.as_ref(),
                 &command_env,
+                &command_args,
                 command,
                 kwargs,
             )?;
@@ -257,18 +279,24 @@ mod tests {
     use crate::xpec_state::{LastResultResponse, LastResultStatus};
     use serde_json::json;
     use std::fs;
+    use std::process::Command;
 
-    #[test] // xpec: p
+    #[test] // xpec: 8O
     fn developer_instructions_include_transcript_outside_in_place_mode() {
         let rendered = developer_instructions_for_mode(false);
 
         assert!(rendered.contains("Use the transcript below only for context/navigation"));
-        assert!(rendered.contains("$ git diff --numstat $BASE_TREE $CHECKED_TREE"));
-        assert!(rendered.contains("$ git diff $BASE_TREE $CHECKED_TREE"));
-        assert!(rendered.contains("$ enter-sandbox --scope [\"src\"] --ignore []"));
+        assert!(rendered.contains("$ git diff --shortstat \"$BASE_TREE\" \"$CHECKED_TREE\""));
+        assert!(rendered.contains("$ set -- 'src'"));
+        assert!(
+            rendered.contains("$ git diff --numstat \"$BASE_TREE\" \"$CHECKED_TREE\" -- \"$@\"")
+        );
+        assert!(rendered.contains("$ git diff \"$BASE_TREE\" \"$CHECKED_TREE\" -- \"$@\""));
+        assert!(rendered.contains("$ exec sandbox-sh --read-only --no-git -- \"$@\""));
+        assert!(rendered.contains("5 project files are hidden."));
     }
 
-    #[test] // xpec: p
+    #[test] // xpec: 8O
     fn developer_instructions_omit_transcript_in_in_place_mode() {
         let rendered = developer_instructions_for_mode(true);
 
@@ -276,10 +304,53 @@ mod tests {
         assert!(!rendered.contains("Use the transcript below only for context/navigation"));
         assert!(!rendered.contains("$ git diff --numstat"));
         assert!(!rendered.contains("$ git diff"));
-        assert!(!rendered.contains("$ enter-sandbox"));
+        assert!(!rendered.contains("$ exec sandbox-sh"));
     }
 
-    #[test] // xpec: 38
+    #[test] // xpec: 8O
+    fn developer_instructions_execute_diff_with_visible_scope() {
+        let root = test_output_dir("developer-instructions-scope-repo");
+        run_git(&root, &["init", "--quiet"]);
+        fs::write(root.join("scoped.txt"), "scoped before\n").unwrap();
+        fs::write(root.join("outside.txt"), "outside before\n").unwrap();
+        run_git(&root, &["add", "scoped.txt", "outside.txt"]);
+        let base_tree_oid = run_git(&root, &["write-tree"]);
+
+        fs::write(root.join("scoped.txt"), "scoped after\n").unwrap();
+        fs::write(root.join("outside.txt"), "outside after\n").unwrap();
+        run_git(&root, &["add", "scoped.txt", "outside.txt"]);
+        let checked_tree_oid = run_git(&root, &["write-tree"]);
+        let artifact_dir = root.join("artifacts");
+        create_private_dir(&artifact_dir).unwrap();
+        let mut artifact_paths = Vec::new();
+        let visible_scope = vec!["scoped.txt".to_string()];
+
+        let rendered = render_developer_instructions(
+            PromptTemplateArtifactDir::Fixed(artifact_dir),
+            &mut artifact_paths,
+            DeveloperInstructionsContext {
+                root: &root,
+                mode: DeveloperInstructionsMode::GitDiff {
+                    base_tree_oid: &base_tree_oid,
+                    checked_tree_oid: &checked_tree_oid,
+                    git_environment: &[],
+                },
+                question_context: "",
+                visible_scope: &visible_scope,
+                num_invisible_files: 1,
+                last_pass: None,
+            },
+        )
+        .unwrap();
+
+        assert!(rendered.contains("scoped.txt"));
+        assert!(rendered.contains("scoped after"));
+        assert!(!rendered.contains("outside.txt"));
+        assert!(!rendered.contains("outside after"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test] // xpec: C
     fn sh_transcript_boundary_whitespace_survives_outer_trim() {
         let output_dir = test_output_dir("sh-boundary-trim");
         let mut artifact_paths = Vec::new();
@@ -289,6 +360,7 @@ mod tests {
             PromptTemplateArtifactDir::Fixed(output_dir.clone()),
             &mut artifact_paths,
             " \n{% filter sh(display=\"printf kept\") %}printf '  kept\\n'{% endfilter %}\n ",
+            &[],
             &[],
             json!({}),
         )
@@ -306,21 +378,23 @@ mod tests {
         });
         let mut artifact_paths = Vec::new();
         let visible_scope = vec!["src".to_string()];
-        let ignore = Vec::new();
         let rendered = render_developer_instructions(
             PromptTemplateArtifactDir::Fixed(output_dir.clone()),
             &mut artifact_paths,
             DeveloperInstructionsContext {
                 root: Path::new("."),
-                in_place,
-                diff_from_tree_oid: "HEAD",
-                checked_tree_oid: "HEAD",
+                mode: if in_place {
+                    DeveloperInstructionsMode::InPlace
+                } else {
+                    DeveloperInstructionsMode::GitDiff {
+                        base_tree_oid: "HEAD",
+                        checked_tree_oid: "HEAD",
+                        git_environment: &[],
+                    }
+                },
                 question_context: "Custom expectation instructions.",
-                q_scope: &visible_scope,
-                ignore: &ignore,
                 visible_scope: &visible_scope,
-                checked_file_count: 10,
-                visible_file_count: 5,
+                num_invisible_files: 5,
                 last_pass: None,
             },
         )
@@ -339,7 +413,23 @@ mod tests {
         path
     }
 
-    #[test] // xpec: 2
+    fn run_git(root: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap();
+        if !output.status.success() {
+            panic!(
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    }
+
+    #[test] // xpec: Q
     fn target_diff_prompt_hint_uses_full_q_scope_suggestion() {
         let last_pass = LastResult {
             response_timestamp: "1970-01-01T00:00:01Z".to_string(),
@@ -368,10 +458,11 @@ mod tests {
                 short_id: "e",
                 question: "Does it pass?",
                 expected_answer: "yes",
-                in_place: false,
-                diff_from: crate::config_types::DEFAULT_DIFF_FROM,
-                target: Some("diff"),
-                last_pass: Some(&last_pass),
+                mode: EvaluatorTurnPromptMode::GitBacked {
+                    diff_from: crate::config_types::DEFAULT_DIFF_FROM,
+                    render_target_diff_hint: true,
+                    last_pass: Some(&last_pass),
+                },
             },
         )
         .unwrap();
@@ -390,7 +481,7 @@ mod tests {
         let _ = fs::remove_dir_all(output_dir);
     }
 
-    #[test] // xpec: 2
+    #[test] // xpec: Q
     fn target_diff_prompt_uses_expected_answer_when_diff_from_is_not_checkpoint() {
         let last_pass = LastResult {
             response_timestamp: "1970-01-01T00:00:01Z".to_string(),
@@ -419,10 +510,11 @@ mod tests {
                 short_id: "e",
                 question: "Does it pass?",
                 expected_answer: "yes",
-                in_place: false,
-                diff_from: crate::config_types::AGAINST_TREE_DIFF_FROM,
-                target: Some("diff"),
-                last_pass: Some(&last_pass),
+                mode: EvaluatorTurnPromptMode::GitBacked {
+                    diff_from: crate::config_types::AGAINST_TREE_DIFF_FROM,
+                    render_target_diff_hint: true,
+                    last_pass: Some(&last_pass),
+                },
             },
         )
         .unwrap();
@@ -434,24 +526,8 @@ mod tests {
         let _ = fs::remove_dir_all(output_dir);
     }
 
-    #[test] // xpec: 2
-    fn in_place_turn_prompt_omits_target_diff_hint() {
-        let last_pass = LastResult {
-            response_timestamp: "1970-01-01T00:00:01Z".to_string(),
-            updated_timestamp: "1970-01-01T00:00:01Z".to_string(),
-            status: LastResultStatus::Pass,
-            response: LastResultResponse::answered(
-                "yes",
-                "`src/a.rs`",
-                Some(vec!["src/a.rs".to_string()]),
-            ),
-            q_scope: vec!["src/a.rs".to_string()],
-            visible_scope: vec!["src/a.rs".to_string()],
-            checked_tree_oid: Some("checked-tree".to_string()),
-            visible_tree_oid: Some("visible-tree".to_string()),
-            diff_from: None,
-            diff_from_tree_oid: None,
-        };
+    #[test] // xpec: Q
+    fn in_place_turn_prompt_has_only_the_question() {
         let output_dir = test_output_dir("turn-prompt-in-place");
         let mut artifact_paths = Vec::new();
 
@@ -463,10 +539,7 @@ mod tests {
                 short_id: "e",
                 question: "Does it pass?",
                 expected_answer: "yes",
-                in_place: true,
-                diff_from: crate::config_types::DEFAULT_DIFF_FROM,
-                target: Some("diff"),
-                last_pass: Some(&last_pass),
+                mode: EvaluatorTurnPromptMode::InPlace,
             },
         )
         .unwrap();
@@ -475,7 +548,7 @@ mod tests {
         let _ = fs::remove_dir_all(output_dir);
     }
 
-    #[test] // xpec: 38
+    #[test] // xpec: C
     fn resource_template_rendering_trims_outer_whitespace() {
         let output_dir = test_output_dir("outer-trim");
         let mut artifact_paths = Vec::new();
@@ -485,6 +558,7 @@ mod tests {
             PromptTemplateArtifactDir::Fixed(output_dir.clone()),
             &mut artifact_paths,
             "\n  {{ value }}  \n",
+            &[],
             &[],
             json!({ "value": "answer" }),
         )

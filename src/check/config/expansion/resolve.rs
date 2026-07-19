@@ -2,11 +2,13 @@
 
 use super::presets::{apply_expectation_settings, raw_presets_from_config, resolve_presets};
 use super::rank::resolve_expectation_rank;
+use crate::check::config::in_place::validate_in_place_expectations;
 use crate::check::config::validation::parse_cooldown_config;
 use crate::config_types::{
-    AgentConfig, CheckConfig, Expectation, ExpectationTarget, RawCheckConfig,
-    RawExpectationCommonConfig, RawExpectationFields, RawExpectationItem, RawExpectationSettings,
-    RawGitBackedExpectationConfig, ResolvedPresetConfig, DEFAULT_DIFF_FROM,
+    AgentConfig, CheckConfig, ConfiguredValue, Expectation, ExpectationTarget,
+    InPlaceIncompatibleField, RawCheckConfig, RawExpectationCommonConfig, RawExpectationFields,
+    RawExpectationItem, RawExpectationSettings, RawGitBackedExpectationConfig,
+    ResolvedPresetConfig, DEFAULT_DIFF_FROM,
 };
 use std::collections::BTreeMap;
 
@@ -19,6 +21,7 @@ pub(crate) fn expand_raw_check_config(raw: RawCheckConfig) -> Result<CheckConfig
 pub(crate) struct CheckConfigExpansionOptions<'a> {
     pub(crate) default_agent_preset: Option<&'a str>,
     pub(crate) ask_question: Option<&'a str>,
+    pub(crate) in_place: bool,
 }
 
 #[cfg(test)]
@@ -26,13 +29,13 @@ pub(crate) fn expand_raw_check_config_with_options(
     raw: RawCheckConfig,
     options: CheckConfigExpansionOptions<'_>,
 ) -> Result<CheckConfig, String> {
-    Ok(expand_raw_check_config_with_requirements(raw, options)?.config)
+    expand_raw_check_config_for_command(raw, options)
 }
 
-pub(crate) fn expand_raw_check_config_with_requirements(
+pub(crate) fn expand_raw_check_config_for_command(
     raw: RawCheckConfig,
     options: CheckConfigExpansionOptions<'_>,
-) -> Result<ExpandedCheckConfig, String> {
+) -> Result<CheckConfig, String> {
     let RawCheckConfig {
         version,
         presets,
@@ -45,58 +48,35 @@ pub(crate) fn expand_raw_check_config_with_requirements(
     let raw_presets = raw_presets_from_config(presets, agent)?;
     let resolved_presets = resolve_presets(raw_presets)?;
     let default_agent_preset = options.default_agent_preset.unwrap_or("default");
-    let default_agent = resolved_presets
+    let resolved_default_agent_preset = resolved_presets
         .get(default_agent_preset)
-        .map(ResolvedPresetConfig::agent_config)
         .ok_or_else(|| format!("unknown preset: {}", default_agent_preset))?;
-    let mut expansion = RawExpectationExpansion {
+    let default_agent = resolved_default_agent_preset.agent_config();
+    let expansion = RawExpectationExpansion {
         presets: &resolved_presets,
-        expectations: Vec::new(),
-        in_place_requirements: InPlaceRequirements {
-            config_uses_ignore: !default_agent.ignore.is_empty(),
-            git_backed_only_expectation_fields: Vec::new(),
-        },
     };
+    let configured_expectations = expansion.expand_items(configured_expectations)?;
     // `canon ask` supplies one synthetic explicit item so ordinary preset
     // resolution applies every selected field default at this boundary. Its
     // command-owned to/q/a fields remain higher precedence than the preset,
     // and configured check expectations never enter the ask runtime config.
-    // [T,Df] They still contribute configured in-place prohibitions before
-    // being replaced, so ask validation cannot lose forbidden fields.
-    let raw_expectations = match options.ask_question {
+    // [1r,I4,T] In-place ask validates the canonical configured expectations
+    // before consuming them to construct its single runtime expectation. The
+    // lossy command transformation therefore needs no retained side copy.
+    if options.in_place && options.ask_question.is_some() {
+        validate_in_place_expectations(&configured_expectations)?;
+    }
+    let runtime_expectations = match options.ask_question {
         Some(question) => {
-            expansion.record_configured_in_place_requirements(&configured_expectations);
-            vec![raw_ask_expectation(question, default_agent_preset)]
+            expansion.expand_items(vec![raw_ask_expectation(question, default_agent_preset)])?
         }
         None => configured_expectations,
     };
-    expansion.expand_items(raw_expectations)?;
-    Ok(ExpandedCheckConfig {
-        config: CheckConfig {
-            version,
-            agent: default_agent,
-            expectations: expansion.expectations,
-        },
-        in_place_requirements: expansion.in_place_requirements,
+    Ok(CheckConfig {
+        version,
+        agent: default_agent,
+        expectations: runtime_expectations,
     })
-}
-
-#[derive(Clone)]
-pub(crate) struct ExpandedCheckConfig {
-    pub(crate) config: CheckConfig,
-    pub(crate) in_place_requirements: InPlaceRequirements,
-}
-
-#[derive(Clone, Default)]
-pub(crate) struct InPlaceRequirements {
-    pub(crate) config_uses_ignore: bool,
-    pub(crate) git_backed_only_expectation_fields: Vec<InPlaceExpectationRequirements>,
-}
-
-#[derive(Clone)]
-pub(crate) struct InPlaceExpectationRequirements {
-    pub(crate) item_number: usize,
-    pub(crate) git_backed_only_field_names: Vec<&'static str>,
 }
 
 fn raw_ask_expectation(question: &str, preset: &str) -> RawExpectationItem {
@@ -104,7 +84,7 @@ fn raw_ask_expectation(question: &str, preset: &str) -> RawExpectationItem {
         explicit_q: Some(question.to_string()),
         a: Some(String::new()),
         common: RawExpectationCommonConfig {
-            to: Some(crate::config_types::ExpectationTo::Agent),
+            to: ConfiguredValue::some(crate::config_types::ExpectationTo::Agent),
             settings: RawExpectationSettings {
                 preset: Some(preset.to_string()),
                 ..RawExpectationSettings::default()
@@ -116,44 +96,27 @@ fn raw_ask_expectation(question: &str, preset: &str) -> RawExpectationItem {
 
 struct RawExpectationExpansion<'a> {
     presets: &'a BTreeMap<String, ResolvedPresetConfig>,
-    expectations: Vec<Expectation>,
-    in_place_requirements: InPlaceRequirements,
 }
 
 // This impl is the raw config expansion boundary. It may consume named presets;
 // check execution receives only the resolved `Expectation` values it produces.
 impl RawExpectationExpansion<'_> {
-    fn record_configured_in_place_requirements(&mut self, items: &[RawExpectationItem]) {
-        for (index, item) in items.iter().enumerate() {
-            let mut common = match item {
-                RawExpectationItem::Explicit(item) => item.common.clone(),
-                RawExpectationItem::Unresolved(item) => item.common.clone(),
-            };
-            let preset_name = common.settings.preset.as_deref().unwrap_or("default");
-            if let Some(preset) = self.presets.get(preset_name) {
-                merge_raw_expectation_common_defaults(&mut common, &preset.common);
-            }
-            self.in_place_requirements
-                .record_expectation_common(index + 1, &common);
-        }
-    }
-
-    fn expand_items(&mut self, items: Vec<RawExpectationItem>) -> Result<(), String> {
+    fn expand_items(&self, items: Vec<RawExpectationItem>) -> Result<Vec<Expectation>, String> {
+        let mut expectations = Vec::with_capacity(items.len());
         for (index, item) in items.into_iter().enumerate() {
             let item_number = index + 1;
             let item = self
                 .resolve_raw_expectation_item(item)
                 .map_err(|err| format!("expectation {}: {}", item_number, err))?;
-            // [6,T,Df] Cooldown is an optional cached-result field for
-            // Git-backed xpecs. Preserve it with the other Git-state fields so
-            // the separate in-place contract can reject that execution mode
-            // without narrowing Git-backed cooldown support.
-            self.in_place_requirements
-                .record_expectation(item_number, &item)?;
             match item {
                 RawExpectationItem::Explicit(item) => {
-                    let common = self.resolve_raw_expectation_common(item.common)?;
+                    let common = item.common;
                     let question_answer_only = resolved_common_is_question_answer_only(&common);
+                    let mut in_place_compatibility = common.git_backed.in_place_compatibility();
+                    if common.settings.ignore.configured {
+                        in_place_compatibility = in_place_compatibility
+                            .with_incompatible_field(InPlaceIncompatibleField::Ignore);
+                    }
                     let RawExpectationCommonConfig {
                         question_context,
                         git_backed:
@@ -166,35 +129,34 @@ impl RawExpectationExpansion<'_> {
                         rank,
                         settings,
                     } = common;
-                    let question_context = resolved_question_context(question_context);
-                    // Preserve configured presence as the canonical `Option`.
-                    // Selection applies the implementation default before the
-                    // evaluator path resolves the literal value to a Git tree.
-                    let target = resolve_expectation_target(target)
+                    let question_context = resolved_question_context(question_context.value);
+                    let target = resolve_expectation_target(target.value)
                         .map_err(|err| format!("expectation {} target: {}", item_number, err))?;
                     let cooldown = cooldown
+                        .value
                         .as_ref()
                         .map(parse_cooldown_config)
                         .transpose()
                         .map_err(|err| format!("expectation {} cooldown: {}", item_number, err))?;
                     let agent = self.resolve_expectation_agent(&settings)?;
-                    self.expectations.push(Expectation {
-                        to: to.unwrap_or_default(),
+                    expectations.push(Expectation {
+                        to: to.value.unwrap_or_default(),
                         q: item.q,
                         a: item.a,
-                        rank: resolve_expectation_rank(rank),
+                        rank: resolve_expectation_rank(rank.value),
                         question_context,
-                        diff_from,
+                        diff_from: resolved_expectation_diff_from(diff_from.value),
                         target,
                         question_answer_only,
                         agent,
                         cooldown,
+                        in_place_compatibility,
                     })
                 }
                 RawExpectationItem::Unresolved(_) => unreachable!("resolved item is classified"),
             }
         }
-        Ok(())
+        Ok(expectations)
     }
 
     fn resolve_expectation_agent(
@@ -206,19 +168,6 @@ impl RawExpectationExpansion<'_> {
         Ok(agent)
     }
 
-    fn resolve_raw_expectation_common(
-        &self,
-        mut common: RawExpectationCommonConfig,
-    ) -> Result<RawExpectationCommonConfig, String> {
-        let preset = common.settings.preset.as_deref().unwrap_or("default");
-        let preset = self
-            .presets
-            .get(preset)
-            .ok_or_else(|| format!("unknown preset: {}", preset))?;
-        merge_raw_expectation_common_defaults(&mut common, &preset.common);
-        Ok(common)
-    }
-
     fn resolve_raw_expectation_item(
         &self,
         item: RawExpectationItem,
@@ -226,108 +175,76 @@ impl RawExpectationExpansion<'_> {
         let RawExpectationItem::Unresolved(mut fields) = item else {
             return Ok(item);
         };
-        let preset_name = fields
+        let preset_selection = fields
             .common
             .settings
             .preset
-            .as_deref()
-            .unwrap_or("default");
-        let preset = self
-            .presets
-            .get(preset_name)
-            .ok_or_else(|| format!("unknown preset: {}", preset_name))?;
-        apply_raw_expansion_item_preset_defaults(&mut fields, preset);
+            .take()
+            .unwrap_or_else(|| "default".to_string());
+        // [21] Missing fields are filled once, so visiting the selection from
+        // right to left preserves item > rightmost preset > ... > leftmost
+        // preset > implementation-default precedence.
+        for preset_name in preset_selection.rsplit('+') {
+            let preset = self
+                .presets
+                .get(preset_name)
+                .ok_or_else(|| format!("unknown preset: {}", preset_name))?;
+            apply_raw_expansion_item_preset_defaults(&mut fields, preset);
+        }
+        // [1r] The selection has been consumed into resolved field values. Do
+        // not carry its names into later expansion or recover the presets.
         RawExpectationItem::from_resolved_fields(fields).map_err(str::to_string)
     }
 }
 
-impl InPlaceRequirements {
-    fn record_expectation(
-        &mut self,
-        item_number: usize,
-        item: &RawExpectationItem,
-    ) -> Result<(), String> {
-        let common = match item {
-            RawExpectationItem::Explicit(item) => &item.common,
-            RawExpectationItem::Unresolved(_) => {
-                return Err(
-                    "in-place compatibility tracking requires a resolved expectation item"
-                        .to_string(),
-                )
-            }
-        };
-        self.record_expectation_common(item_number, common);
-        Ok(())
-    }
-
-    fn record_expectation_common(
-        &mut self,
-        item_number: usize,
-        common: &RawExpectationCommonConfig,
-    ) {
-        // [Df] The separate in-place contract rejects configuration whose
-        // semantics require Git state, cached results, or path hiding.
-        let mut git_backed_only_field_names = common.git_backed.configured_field_names();
-        if common.settings.ignore.is_some() {
-            git_backed_only_field_names.push("ignore");
-        }
-        if !git_backed_only_field_names.is_empty() {
-            self.git_backed_only_expectation_fields
-                .push(InPlaceExpectationRequirements {
-                    item_number,
-                    git_backed_only_field_names,
-                });
-        }
-    }
-}
-
 fn resolved_common_is_question_answer_only(common: &RawExpectationCommonConfig) -> bool {
-    common.git_backed.cooldown.is_none()
+    common.git_backed.cooldown.value.is_none()
         && resolved_common_settings_are_empty(&common.settings)
-        && resolved_question_context(common.question_context.clone()).is_empty()
-        && resolved_expectation_diff_from(common.git_backed.diff_from.clone()) == DEFAULT_DIFF_FROM
-        && common.git_backed.target.is_none()
+        && resolved_question_context(common.question_context.value.clone()).is_empty()
+        && resolved_expectation_diff_from(common.git_backed.diff_from.value.clone())
+            == DEFAULT_DIFF_FROM
+        && common.git_backed.target.value.is_none()
 }
 
 fn resolved_common_settings_are_empty(settings: &RawExpectationSettings) -> bool {
-    settings.models.is_none()
-        && settings.thinking.is_none()
-        && settings.ignore.is_none()
-        && settings.plugins.is_none()
+    settings.models.value.is_none()
+        && settings.thinking.value.is_none()
+        && settings.ignore.value.is_none()
+        && settings.plugins.value.is_none()
 }
 
 pub(super) fn merge_raw_expectation_common_defaults(
     common: &mut RawExpectationCommonConfig,
     defaults: &RawExpectationCommonConfig,
 ) {
-    if common.question_context.is_none() {
+    if !common.question_context.configured {
         common.question_context = defaults.question_context.clone();
     }
-    if common.git_backed.diff_from.is_none() {
+    if !common.git_backed.diff_from.configured {
         common.git_backed.diff_from = defaults.git_backed.diff_from.clone();
     }
-    if common.git_backed.target.is_none() {
+    if !common.git_backed.target.configured {
         common.git_backed.target = defaults.git_backed.target.clone();
     }
-    if common.git_backed.cooldown.is_none() {
+    if !common.git_backed.cooldown.configured {
         common.git_backed.cooldown = defaults.git_backed.cooldown.clone();
     }
-    if common.to.is_none() {
-        common.to = defaults.to;
+    if !common.to.configured {
+        common.to = defaults.to.clone();
     }
-    if common.rank.is_none() {
-        common.rank = defaults.rank;
+    if !common.rank.configured {
+        common.rank = defaults.rank.clone();
     }
-    if common.settings.models.is_none() {
+    if !common.settings.models.configured {
         common.settings.models = defaults.settings.models.clone();
     }
-    if common.settings.thinking.is_none() {
+    if !common.settings.thinking.configured {
         common.settings.thinking = defaults.settings.thinking.clone();
     }
-    if common.settings.ignore.is_none() {
+    if !common.settings.ignore.configured {
         common.settings.ignore = defaults.settings.ignore.clone();
     }
-    if common.settings.plugins.is_none() {
+    if !common.settings.plugins.configured {
         common.settings.plugins = defaults.settings.plugins.clone();
     }
 }
@@ -346,9 +263,6 @@ fn merge_raw_expectation_value_defaults(
 ) {
     if fields.a.is_none() {
         fields.a = defaults.a.clone();
-    }
-    if fields.common.settings.preset.is_none() {
-        fields.common.settings.preset = defaults.common.settings.preset.clone();
     }
     merge_raw_expectation_common_defaults(&mut fields.common, &defaults.common);
 }

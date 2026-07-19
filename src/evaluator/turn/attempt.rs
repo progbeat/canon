@@ -74,7 +74,6 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
 
     Ok(ParsedTurnResponse {
         answer: parsed,
-        usage: response.usage,
         context_compacted: response.context_compacted,
         schema_valid,
     })

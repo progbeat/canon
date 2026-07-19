@@ -6,7 +6,7 @@ pub(crate) struct ResolvedExpectation {
     pub(crate) id: String,
     pub(crate) display_id: String,
     pub(crate) to: ExpectationTo,
-    // [cv] Final canon check order uses this ascending before latest fail time.
+    // [IJ] Final canon check order uses this ascending before latest fail time.
     pub(crate) rank: i64,
     pub(crate) question: String,
     pub(crate) expected_answer: String,

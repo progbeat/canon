@@ -9,8 +9,8 @@ use crate::xpec_state::XpecStateCache;
 use std::path::Path;
 
 pub(crate) struct GitBackedCacheFilteredCheckWork {
-    pub(crate) evaluation_queue: Vec<ResolvedExpectation>,
-    pub(crate) cached_hits: Vec<CheckCacheHit>,
+    pub(crate) selected_evaluation_queue: Vec<ResolvedExpectation>,
+    pub(crate) reused_non_selected_results: Vec<CheckCacheHit>,
 }
 
 pub(crate) struct GitBackedCacheFilterContext<'a, 'log> {
@@ -21,12 +21,14 @@ pub(crate) struct GitBackedCacheFilterContext<'a, 'log> {
     pub(crate) diagnostic_log: &'a mut Option<&'log mut DiagnosticLogWriter>,
 }
 
-// [6,Df] This is the complete cached-result selection boundary. Cached Result
-// is defined for an expectation and Git state, so both the public function and
-// its context require a `TreeSource`; there is deliberately no in-place cache
-// lookup API. Explicit Git-backed selections are forced but still ordered;
-// otherwise only collected expectations without a reusable pass result are
-// selected and ordered.
+// [uf,I4,iZ] This is the complete cached-result selection boundary. Cached
+// Result is defined for an expectation and Git state, so both the public
+// function and its context require a `TreeSource`; there is deliberately no
+// in-place cache lookup API. Explicit Git-backed selections are forced but
+// still ordered. In default mode, cache hits become reused, non-selected
+// results; only cache misses become Selected expectations and enter the ordered
+// evaluator queue. The reused results are report bookkeeping, not evaluations,
+// and therefore are not members of the check-order sequence.
 //
 // Selection reads existing xpec state and may emit bounded runtime-log events
 // through the supplied writer, but it does not create a persistent state family
@@ -39,14 +41,15 @@ pub(crate) fn select_and_order_git_backed_expectations(
     options: &CheckOptions,
     now: u64,
 ) -> Result<GitBackedCacheFilteredCheckWork, String> {
-    let (evaluation_queue, cached_hits) = if options.selectors_provided {
-        // Explicit expectation selectors are forced selections. Do not inspect
-        // cached results here: a cache hit must not move an explicit candidate
-        // out of the evaluator queue.
+    let (selected_evaluation_queue, reused_non_selected_results) = if options.selectors_provided {
+        // [E] A forced selection may still have a cached result; Cached Result
+        // defines that result, while Selected Expectations requires evaluation
+        // anyway. Do not reuse the cached result or move the explicitly selected
+        // xpec out of the evaluator queue.
         (options.candidate_expectations.clone(), Vec::new())
     } else {
-        let mut evaluation_queue = Vec::new();
-        let mut cached_hits = Vec::new();
+        let mut selected_evaluation_queue = Vec::new();
+        let mut reused_non_selected_results = Vec::new();
         for expectation in options.candidate_expectations.clone() {
             match cached_result_for_expectation(
                 context.root,
@@ -65,22 +68,22 @@ pub(crate) fn select_and_order_git_backed_expectations(
                     if let Some(writer) = context.diagnostic_log.as_deref_mut() {
                         write_cache_hit(writer, &hit)?;
                     }
-                    cached_hits.push(hit);
+                    reused_non_selected_results.push(hit);
                 }
-                None => evaluation_queue.push(expectation),
+                None => selected_evaluation_queue.push(expectation),
             }
         }
-        (evaluation_queue, cached_hits)
+        (selected_evaluation_queue, reused_non_selected_results)
     };
-    let evaluation_queue = order_selected_by_rank_and_latest_fail(
+    let selected_evaluation_queue = order_selected_by_rank_and_latest_fail(
         context.root,
-        evaluation_queue,
+        selected_evaluation_queue,
         &mut *context.xpec_state,
         |expectation| expectation,
     )?;
     Ok(GitBackedCacheFilteredCheckWork {
-        evaluation_queue,
-        cached_hits,
+        selected_evaluation_queue,
+        reused_non_selected_results,
     })
 }
 
@@ -95,7 +98,7 @@ mod tests {
     use std::process::{self, Command};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test] // xpec: 6,E
+    #[test] // xpec: uf,E
     fn default_runs_reuse_cached_results() {
         let root = git_project("default-reuses-cache");
         fs::create_dir_all(root.join("src")).unwrap();
@@ -112,19 +115,19 @@ mod tests {
         XpecStateCache::default()
             .write_last_result_for_record(
                 &root,
-                &checked_tree_oid,
+                Some(&checked_tree_oid),
                 &expectation,
                 &test_record(&expectation, &scope, "yes", visible_tree_oid),
             )
             .unwrap();
 
         let work = cache_filtered_work(&root, &source, expectation);
-        assert_eq!(work.cached_hits.len(), 1);
-        assert!(work.evaluation_queue.is_empty());
+        assert_eq!(work.reused_non_selected_results.len(), 1);
+        assert!(work.selected_evaluation_queue.is_empty());
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test] // xpec: E,cv
+    #[test] // xpec: E,IJ
     fn selector_mode_forces_evaluation_despite_cached_results() {
         let root = git_project("selector-cache-continues");
         fs::create_dir_all(root.join("src")).unwrap();
@@ -142,7 +145,7 @@ mod tests {
         XpecStateCache::default()
             .write_last_result_for_record(
                 &root,
-                &checked_tree_oid,
+                Some(&checked_tree_oid),
                 &cached_expectation,
                 &test_record(&cached_expectation, &scope, "no", visible_tree_oid),
             )
@@ -154,14 +157,14 @@ mod tests {
             vec![uncached_expectation, cached_expectation],
             true,
         );
-        assert!(work.cached_hits.is_empty());
-        assert_eq!(work.evaluation_queue.len(), 2);
-        assert_eq!(work.evaluation_queue[0].id, "abc123");
-        assert_eq!(work.evaluation_queue[1].id, "def456");
+        assert!(work.reused_non_selected_results.is_empty());
+        assert_eq!(work.selected_evaluation_queue.len(), 2);
+        assert_eq!(work.selected_evaluation_queue[0].id, "abc123");
+        assert_eq!(work.selected_evaluation_queue[1].id, "def456");
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test] // xpec: E,6
+    #[test] // xpec: E,uf
     fn same_tree_fail_history_is_not_a_cached_result() {
         let root = git_project("default-fail-history-does-not-cache");
         fs::create_dir_all(root.join("src")).unwrap();
@@ -179,7 +182,7 @@ mod tests {
         XpecStateCache::default()
             .write_last_result_for_record(
                 &root,
-                &checked_tree_oid,
+                Some(&checked_tree_oid),
                 &cached_expectation,
                 &test_record(&cached_expectation, &scope, "no", visible_tree_oid),
             )
@@ -191,8 +194,8 @@ mod tests {
             vec![cached_expectation, uncached_expectation],
             false,
         );
-        assert!(work.cached_hits.is_empty());
-        assert_eq!(work.evaluation_queue.len(), 2);
+        assert!(work.reused_non_selected_results.is_empty());
+        assert_eq!(work.selected_evaluation_queue.len(), 2);
         let _ = fs::remove_dir_all(root);
     }
 
@@ -225,7 +228,6 @@ mod tests {
                 candidate_expectations: expectations,
                 selectors_provided,
                 keep_going: false,
-                break_after_tokens: None,
             },
             2,
         )
@@ -273,10 +275,10 @@ mod tests {
             expected_answer: Some(expectation.expected_answer.clone()),
             observed: observed.to_string(),
             error: None,
-            evidence: "evidence".to_string(),
+            evidence: Some("evidence".to_string()),
             scope: scope.to_vec(),
             question_scope_suggestion: Some(scope.to_vec()),
-            visible_tree_oid,
+            visible_tree_oid: Some(visible_tree_oid),
             diff_from: Some(crate::config_types::DEFAULT_DIFF_FROM.to_string()),
             diff_from_tree_oid: Some("1234567890abcdef1234567890abcdef12345678".to_string()),
             diff_from_tree_oid_abbrev: Some("1234567".to_string()),
@@ -311,6 +313,7 @@ mod tests {
             .current_dir(root)
             .output()
             .unwrap();
+        // xpec: uf,E
         assert!(
             output.status.success(),
             "git {:?} failed: {}",

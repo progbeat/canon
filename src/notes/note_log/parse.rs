@@ -159,7 +159,7 @@ fn lines_with_starts(text: &str) -> impl Iterator<Item = (usize, &str)> {
 mod tests {
     use super::*;
 
-    #[test]
+    #[test] // xpec: Sx
     fn legacy_note_log_records_are_still_readable() {
         let records = parse_legacy_note_log_records(concat!(
             r#"{"op":"append","timestamp":42,"text":"legacy body"}"#,

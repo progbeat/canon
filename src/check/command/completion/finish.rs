@@ -1,9 +1,7 @@
 use crate::check::command::output::{render_check_agent_messages, write_stdout_record};
 use crate::check::core::{for_each_unique_report_record, CheckRunReport};
 use crate::check::interrogation::write_check_lifecycle_finish_event;
-use crate::check::CheckRunCaches;
 use crate::cli::CommandError;
-use std::collections::BTreeSet;
 use std::io::Write;
 
 // This module is deliberately not the public check-output renderer. The
@@ -18,8 +16,8 @@ use std::io::Write;
 pub(crate) struct CheckReportFinishContext<'b> {
     pub(crate) diagnostic_log: Option<&'b mut crate::logs::DiagnosticLogWriter>,
     pub(crate) result_output: &'b mut dyn Write,
-    pub(crate) check_caches: &'b mut CheckRunCaches,
     pub(crate) write_agent_message: bool,
+    pub(crate) need_to_commit: bool,
 }
 
 pub(crate) fn finish_check_report(
@@ -36,7 +34,7 @@ pub(crate) fn finish_check_report(
     let mut finish_error = error.map(str::to_string);
     if context.write_agent_message {
         if let Err(err) =
-            write_check_agent_message(report, context.result_output, context.check_caches)
+            write_check_agent_message(report, context.result_output, context.need_to_commit)
         {
             finish_error.get_or_insert_with(|| err.to_string());
             post_finish_error.get_or_insert(err);
@@ -54,9 +52,9 @@ pub(crate) fn finish_check_report(
 fn write_check_agent_message(
     report: &CheckRunReport,
     output: &mut dyn Write,
-    caches: &mut CheckRunCaches,
+    need_to_commit: bool,
 ) -> Result<(), CommandError> {
-    let messages = check_agent_messages(report, &caches.run_start_pass_ids);
+    let messages = check_agent_messages(report, need_to_commit);
     for message in messages {
         let mut line = message;
         line.push('\n');
@@ -65,14 +63,9 @@ fn write_check_agent_message(
     Ok(())
 }
 
-pub(crate) fn check_agent_messages(
-    report: &CheckRunReport,
-    run_start_pass_ids: &BTreeSet<String>,
-) -> Vec<String> {
-    let num_new_passes = current_passes_without_prior_pass_count(report, run_start_pass_ids);
-    let num_regressions = current_failures_with_prior_pass_count(report, run_start_pass_ids);
+pub(crate) fn check_agent_messages(report: &CheckRunReport, need_to_commit: bool) -> Vec<String> {
     let issue_ids = report_issue_display_ids(report);
-    render_check_agent_messages(&issue_ids, num_new_passes, num_regressions, report.pending)
+    render_check_agent_messages(&issue_ids, report.pending, need_to_commit)
 }
 
 fn report_issue_display_ids(report: &CheckRunReport) -> Vec<String> {
@@ -83,32 +76,6 @@ fn report_issue_display_ids(report: &CheckRunReport) -> Vec<String> {
         }
     });
     issue_ids
-}
-
-fn current_passes_without_prior_pass_count(
-    report: &CheckRunReport,
-    run_start_pass_ids: &BTreeSet<String>,
-) -> usize {
-    let mut count = 0usize;
-    for_each_unique_report_record(&report.records, &report.cached, |record| {
-        if record.passed() && !run_start_pass_ids.contains(&record.id) {
-            count += 1;
-        }
-    });
-    count
-}
-
-fn current_failures_with_prior_pass_count(
-    report: &CheckRunReport,
-    run_start_pass_ids: &BTreeSet<String>,
-) -> usize {
-    let mut count = 0usize;
-    for_each_unique_report_record(&report.records, &report.cached, |record| {
-        if !record.passed() && run_start_pass_ids.contains(&record.id) {
-            count += 1;
-        }
-    });
-    count
 }
 
 #[cfg(test)]
@@ -125,8 +92,8 @@ mod tests {
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test] // xpec: v1
-    fn new_pass_emits_commit_message() {
+    #[test] // xpec: 9b
+    fn changed_tree_emits_commit_message() {
         let root = git_project("new-pass-emits-commit-message");
         let agent = AgentConfig::default();
         let config = test_config(&agent);
@@ -134,7 +101,7 @@ mod tests {
         let scope = full_scope();
         let report = passing_report_for_staged_scope(&root, &expectation, &scope);
 
-        let messages = check_agent_messages(&report, &BTreeSet::new());
+        let messages = check_agent_messages(&report, true);
 
         assert!(messages
             .iter()
@@ -145,17 +112,15 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test] // xpec: v1
-    fn prior_pass_is_not_a_new_pass() {
+    #[test] // xpec: 9b
+    fn unchanged_tree_emits_plain_success_message() {
         let root = git_project("prior-pass-is-not-a-new-pass");
         let agent = AgentConfig::default();
         let config = test_config(&agent);
         let expectation = test_expectation_from_config(&config);
         let scope = full_scope();
         let report = passing_report_for_staged_scope(&root, &expectation, &scope);
-        let run_start_pass_ids = BTreeSet::from([expectation.id.clone()]);
-
-        let messages = check_agent_messages(&report, &run_start_pass_ids);
+        let messages = check_agent_messages(&report, false);
 
         assert!(messages
             .iter()
@@ -166,8 +131,8 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test] // xpec: v1
-    fn prior_pass_regression_agent_message_repairs_instead_of_commits() {
+    #[test] // xpec: 9b
+    fn failed_report_repairs_instead_of_committing() {
         let root = git_project("prior-pass-regression-agent-message");
         let agent = AgentConfig::default();
         let config = test_config(&agent);
@@ -178,9 +143,7 @@ mod tests {
             cached: Vec::new(),
             pending: 0,
         };
-        let run_start_pass_ids = BTreeSet::from([expectation.id.clone()]);
-
-        let messages = check_agent_messages(&report, &run_start_pass_ids);
+        let messages = check_agent_messages(&report, true);
 
         assert!(messages
             .iter()
@@ -222,10 +185,10 @@ mod tests {
             expected_answer: Some(expectation.expected_answer.clone()),
             observed: observed.to_string(),
             error: None,
-            evidence: "test evidence".to_string(),
+            evidence: Some("test evidence".to_string()),
             scope: scope.to_vec(),
             question_scope_suggestion: None,
-            visible_tree_oid,
+            visible_tree_oid: Some(visible_tree_oid),
             diff_from: None,
             diff_from_tree_oid: None,
             diff_from_tree_oid_abbrev: None,
@@ -244,11 +207,12 @@ mod tests {
                 q: "Does it pass?".to_string(),
                 a: "yes".to_string(),
                 question_context: String::new(),
-                diff_from: None,
+                diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
                 target: None,
                 question_answer_only: false,
                 agent: agent.clone(),
                 cooldown: None,
+                in_place_compatibility: Default::default(),
             }],
         }
     }
@@ -288,6 +252,7 @@ mod tests {
             .current_dir(root)
             .output()
             .unwrap();
+        // xpec: 9b
         assert!(
             output.status.success(),
             "git {} failed: {}",

@@ -3,20 +3,22 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 
 pub(crate) struct CheckOptions {
-    // CLI-expanded candidates before cache filtering determines the final
-    // evaluator queue.
+    // CLI-expanded candidates are not yet Canon's Selected set. In default
+    // Git-backed mode, cache classification removes reusable results before
+    // the remaining candidates become the selected evaluator queue. In-place
+    // mode has no Git state and therefore no Cached Result domain, so every
+    // candidate is selected. Explicit selectors force every matching candidate
+    // into the queue in either mode.
     pub(crate) candidate_expectations: Vec<ResolvedExpectation>,
     pub(crate) selectors_provided: bool,
     // `--keep-going` continues evaluator work after failed results; it does
     // not bypass default cache-based selection.
     pub(crate) keep_going: bool,
-    pub(crate) break_after_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RawCheckOptions {
     pub(crate) keep_going: bool,
-    pub(crate) break_after_tokens: Option<u64>,
     pub(crate) selectors: Vec<OsString>,
 }
 
@@ -24,7 +26,9 @@ pub(crate) struct CheckCommandArgs {
     pub(crate) config_path: PathBuf,
     pub(crate) tree: String,
     pub(crate) against_tree: String,
-    pub(crate) against_tree_explicit: bool,
+    // [7N] Feedback eligibility is defined by these resolved values, not by
+    // whether the caller spelled an equal value explicitly.
+    pub(crate) sources_have_command_default_values: bool,
     pub(crate) in_place: bool,
     pub(crate) no_sandbox: bool,
     pub(crate) options: RawCheckOptions,
@@ -35,11 +39,7 @@ pub(crate) struct AskCommandArgs {
     pub(crate) config_explicit: bool,
     pub(crate) tree: String,
     pub(crate) against_tree: String,
-    pub(crate) against_tree_explicit: bool,
     pub(crate) in_place: bool,
-    pub(crate) no_sandbox: bool,
     pub(crate) question: String,
     pub(crate) default_agent_preset: Option<String>,
-    pub(crate) query_scope: Vec<String>,
-    pub(crate) query_scope_provided: bool,
 }
