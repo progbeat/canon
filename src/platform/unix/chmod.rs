@@ -4,7 +4,6 @@ use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
-use std::sync::Arc;
 
 pub(crate) fn make_hook_executable(path: &Path) -> PlatformResult<()> {
     let Some(file) = open_file_for_chmod(path, ChmodSymlink::Reject)? else {
@@ -43,33 +42,43 @@ pub(crate) fn set_private_dir_permissions(path: &Path) -> PlatformResult<()> {
     set_directory_permissions(path, 0o700)
 }
 
-pub(crate) fn set_private_file_permissions(path: &Path) -> PlatformResult<()> {
-    let Some(file) = open_file_for_chmod(path, ChmodSymlink::Ignore)? else {
-        return Ok(());
-    };
-    fchmod_open_path(path, &file, 0o600)
-}
-
 #[derive(Clone)]
 pub(crate) struct SecretDirMode {
     permissions: fs::Permissions,
-    directory: Arc<fs::File>,
 }
 
 pub(crate) fn secret_dir_mode(path: &Path) -> PlatformResult<SecretDirMode> {
-    let directory = open_directory_for_chmod(path)?;
-    Ok(SecretDirMode {
-        permissions: directory_permissions(path, &directory)?,
-        directory: Arc::new(directory),
-    })
+    fs::metadata(path)
+        .map(|metadata| SecretDirMode {
+            permissions: metadata.permissions(),
+        })
+        .map_err(|err| {
+            PlatformError::io(
+                format!("failed to inspect secret directory {}", path.display()),
+                err,
+            )
+        })
 }
 
 pub(crate) fn chmod_secret_dir_no_access(path: &Path) -> PlatformResult<()> {
-    set_directory_permissions(path, 0o000)
+    fs::set_permissions(path, fs::Permissions::from_mode(0o000)).map_err(|err| {
+        PlatformError::io(
+            format!("failed to chmod secret directory {}", path.display()),
+            err,
+        )
+    })
 }
 
 pub(crate) fn restore_secret_dir_mode(path: &Path, mode: &SecretDirMode) -> PlatformResult<()> {
-    fchmod_open_path(path, &mode.directory, mode.permissions.mode())
+    fs::set_permissions(path, mode.permissions.clone()).map_err(|err| {
+        PlatformError::io(
+            format!(
+                "failed to restore secret directory permissions {}",
+                path.display()
+            ),
+            err,
+        )
+    })
 }
 
 fn set_directory_permissions(path: &Path, mode: u32) -> PlatformResult<()> {

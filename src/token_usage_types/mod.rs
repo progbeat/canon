@@ -19,6 +19,7 @@ pub(crate) fn reference_token_cost(
     cached_input_tokens: u64,
     output_tokens: u64,
 ) -> f64 {
+    // xpec: 8J
     assert!(
         cached_input_tokens <= input_tokens,
         "cached_input_tokens cannot exceed input_tokens"

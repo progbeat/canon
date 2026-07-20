@@ -29,7 +29,9 @@ pub(super) fn maybe_compact_note_log(note: &Note, previous_size: u64) -> Result<
     };
     let log_bytes = content.len().saturating_sub(log_start);
     // Compact only after the appended log is at least as large as the retained
-    // materialized prefix, so the rewrite is amortized by accumulated appends.
+    // materialized prefix. The rewrite is therefore at most twice the new log
+    // bytes that pay for it; charging each rewrite to those distinct appended
+    // bytes makes total note-log write volume O(N) over N appended bytes.
     if log_bytes < log_start {
         return Ok(());
     }

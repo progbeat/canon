@@ -2,10 +2,6 @@
 
 ## Default Policy
 
-`canon check` evaluates selected expectations in descending order by the timestamp of their latest non-pass result.
-
-A non-pass result includes both failed results and human-review/error results.
-
-By default, once `canon check` starts evaluating selected expectations, it stops after the first evaluated non-pass result.
-
-If an expectation has no non-pass results, use the Unix epoch timestamp.
+`canon check` evaluates selected expectations in ascending order by `rank`.
+Expectations with the same `rank` are evaluated in descending order by the timestamp of their latest fail result.
+Use rank `0` when unset and the Unix epoch when an expectation has no fail results.

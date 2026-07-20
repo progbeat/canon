@@ -30,7 +30,7 @@ mod tests {
     use crate::evaluator::{EvaluatorProgress, EvaluatorProgressMarker};
     use std::time::{Duration, Instant};
 
-    #[test]
+    #[test] // xpec: 03,fc
     fn non_initial_request_kinds_record_dedicated_markers() {
         assert_eq!(
             marker_after(InterrogationRequestKind::FullScopeRetry),
@@ -42,7 +42,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[test] // xpec: 03
     fn initial_request_kind_keeps_default_marker() {
         assert_eq!(
             marker_after(InterrogationRequestKind::Initial),

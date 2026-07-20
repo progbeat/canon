@@ -15,7 +15,7 @@ pub(super) use completion::{
     CheckReportFinishContext,
 };
 pub(super) use execution::{
-    prepare_git_backed_check_execution, GitBackedCheckStorage,
-    PrepareGitBackedCheckExecutionOptions,
+    prepare_git_backed_check_execution, resolve_git_backed_check_tree_context,
+    GitBackedCheckResources, PrepareGitBackedCheckExecutionOptions,
 };
 pub(crate) use execution::{run_ask_command, run_check_command};

@@ -39,7 +39,7 @@ pub(super) fn ask_and_log<R: EvaluatorRunner>(
                 thinking: request.turn.thinking,
             },
         )
-    });
+    })?;
     let response = match runner.ask(
         request.turn.session_id,
         request.prompt,
@@ -51,7 +51,7 @@ pub(super) fn ask_and_log<R: EvaluatorRunner>(
         Ok(response) => response,
         Err(err) => {
             let turn_usage = runner.take_last_turn_usage();
-            write_optional_diagnostic_log(diagnostic_log, |writer| {
+            if let Err(log_error) = write_optional_diagnostic_log(diagnostic_log, |writer| {
                 write_agent_turn_failure_event(
                     writer,
                     request.expectation_id,
@@ -61,12 +61,17 @@ pub(super) fn ask_and_log<R: EvaluatorRunner>(
                     err.message_str(),
                     turn_usage.as_ref(),
                 )
-            });
+            }) {
+                return Err(EvaluatorError::message(format!(
+                    "{}; failed to write evaluator failure runtime log: {}",
+                    err.message_str(),
+                    log_error
+                )));
+            }
             return Err(err);
         }
     };
     let turn_usage = runner.take_last_turn_usage();
-    let response_usage = turn_usage.as_ref().map(|turn_usage| turn_usage.usage);
     let missing_turn_usage = turn_usage.is_none();
     if missing_turn_usage {
         // A response without usage violates the app-server turn contract, so
@@ -80,7 +85,7 @@ pub(super) fn ask_and_log<R: EvaluatorRunner>(
                 request.turn.session_id,
                 &response,
             )
-        });
+        })?;
     } else {
         let turn_usage = turn_usage
             .as_ref()
@@ -95,7 +100,7 @@ pub(super) fn ask_and_log<R: EvaluatorRunner>(
                 &response,
                 turn_usage,
             )
-        });
+        })?;
     }
     if missing_turn_usage {
         return Err(EvaluatorError::failure(
@@ -108,7 +113,6 @@ pub(super) fn ask_and_log<R: EvaluatorRunner>(
         .is_some_and(|turn_usage| !turn_usage.context_compaction_events.is_empty());
     Ok(RawTurnResponse {
         text: response,
-        usage: response_usage,
         context_compacted,
     })
 }
@@ -116,27 +120,32 @@ pub(super) fn ask_and_log<R: EvaluatorRunner>(
 fn write_optional_diagnostic_log(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     write: impl FnOnce(&mut DiagnosticLogWriter) -> DiagnosticLogResult<()>,
-) {
-    // Diagnostic logs are observability data; write failures must not replace
-    // the evaluator result, evaluator error, or app-server contract error.
+) -> Result<(), EvaluatorError> {
+    // [7N] A configured runtime log is part of the check observability
+    // contract. Its write failures must become command errors rather than
+    // silently omitting evaluator communication. When an evaluator failure
+    // already exists, `ask_and_log` reports both errors above.
     if let Some(writer) = diagnostic_log.as_deref_mut() {
-        let _ = write(writer);
+        write(writer)?;
     }
+    Ok(())
 }
 
 pub(crate) fn write_thread_lifecycle_event(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     lifecycle_log: &ThreadLifecycleLog,
+    expectation_id: Option<&str>,
     enforced_scope: &[String],
     model: Option<&str>,
     thinking: &str,
-) {
+) -> Result<(), EvaluatorError> {
     write_optional_diagnostic_log(diagnostic_log, |writer| {
         crate::logs::write_thread_lifecycle_event(
             writer,
             &ThreadLifecycleEventFields {
                 event: lifecycle_log.event,
                 session_id: &lifecycle_log.session_id,
+                expectation_id,
                 scope: enforced_scope,
                 model,
                 thinking,
@@ -145,7 +154,7 @@ pub(crate) fn write_thread_lifecycle_event(
                 reuse_context: &lifecycle_log.reuse_context,
             },
         )
-    });
+    })
 }
 
 pub(crate) fn write_thread_restart_event(
@@ -155,7 +164,7 @@ pub(crate) fn write_thread_restart_event(
     enforced_scope: &[String],
     model: Option<&str>,
     reason: &str,
-) {
+) -> Result<(), EvaluatorError> {
     write_optional_diagnostic_log(diagnostic_log, |writer| {
         crate::logs::write_thread_restart_event(
             writer,
@@ -169,5 +178,5 @@ pub(crate) fn write_thread_restart_event(
                 reason,
             },
         )
-    });
+    })
 }

@@ -369,7 +369,7 @@ pub(crate) fn append_content_text_parts(parts: &[Value], output: &mut String) {
 mod tests {
     use super::*;
 
-    #[test]
+    #[test] // xpec: w
     fn context_compaction_event_requires_exact_method_or_item_type() {
         let unrelated = json!({
             "method": "thread/compactDisc/updated",
@@ -400,7 +400,7 @@ mod tests {
         assert!(context_compaction_event(&item_event).is_some());
     }
 
-    // xpec: G6
+    // xpec: F
     #[test]
     fn dynamic_tool_call_parses_namespaced_tool_request() {
         let call = dynamic_tool_call(&json!({
@@ -423,7 +423,7 @@ mod tests {
         assert_eq!(call.arguments["selectors"], json!(["abc"]));
     }
 
-    // xpec: G6
+    // xpec: F
     #[test]
     fn dynamic_tool_call_response_uses_app_server_content_items() {
         let response =
@@ -443,7 +443,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[test] // xpec: w
     fn assistant_message_item_type_uses_exact_names() {
         assert!(is_assistant_message_item(&json!({"type": "agentMessage"})));
         assert!(is_assistant_message_item(&json!({"role": "assistant"})));
@@ -452,7 +452,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[test] // xpec: w
     fn completed_agent_text_keeps_last_assistant_message() {
         let mut output = String::new();
         append_completed_agent_text(
@@ -483,7 +483,7 @@ mod tests {
         assert_eq!(output, "{\"answer\":\"no\"}");
     }
 
-    #[test]
+    #[test] // xpec: w
     fn turn_text_prefers_completed_message_over_delta_stream() {
         assert_eq!(
             turn_text(
@@ -494,7 +494,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[test] // xpec: w
     fn retrying_app_server_error_notification_is_not_final_error() {
         let message = json!({
             "method": "error",
@@ -510,7 +510,7 @@ mod tests {
         assert_eq!(app_server_error_value(&message), None);
     }
 
-    #[test]
+    #[test] // xpec: w
     fn non_retry_app_server_error_notification_is_final_error() {
         let message = json!({
             "method": "error",

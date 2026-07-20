@@ -2,6 +2,15 @@ use serde::{de, Deserialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
+mod contract;
+
+pub(crate) use contract::evaluator_response_output_schema_for_scope;
+#[cfg(test)]
+pub(crate) use contract::{
+    evaluator_response_json_schema, evaluator_response_output_schema_for_requested_short_ids,
+    evaluator_response_output_schema_for_schema_scope,
+};
+
 pub(crate) const ERROR_SCOPE_TOO_NARROW: &str = "ScopeTooNarrow";
 pub(crate) const ERROR_INVALID_QUESTION: &str = "InvalidQuestion";
 pub(crate) const ANSWER_PATTERN: &str = "^[-_a-z0-9]+$";
@@ -81,7 +90,7 @@ impl EvaluatorResponseSchemaScope {
 pub(crate) struct ParsedAnswer {
     pub(crate) observed: String,
     pub(crate) error: Option<String>,
-    pub(crate) evidence: String,
+    pub(crate) evidence: Option<String>,
     pub(crate) scope: Vec<String>,
     pub(crate) question_scope_suggestion: Option<Vec<String>>,
 }
@@ -95,7 +104,7 @@ impl ParsedAnswer {
         ParsedAnswer {
             observed: answer,
             error: None,
-            evidence,
+            evidence: Some(evidence),
             scope: Vec::new(),
             question_scope_suggestion,
         }
@@ -113,7 +122,20 @@ impl ParsedAnswer {
         ParsedAnswer {
             observed: error.clone(),
             error: Some(error),
-            evidence,
+            evidence: Some(evidence),
+            scope: Vec::new(),
+            question_scope_suggestion,
+        }
+    }
+
+    fn evaluator_error(
+        error: String,
+        question_scope_suggestion: Option<Vec<String>>,
+    ) -> ParsedAnswer {
+        ParsedAnswer {
+            observed: error.clone(),
+            error: Some(error),
+            evidence: None,
             scope: Vec::new(),
             question_scope_suggestion,
         }
@@ -142,11 +164,6 @@ impl EvaluatorResponseParseError {
     pub(crate) fn is_short_id_response_error(&self) -> bool {
         matches!(self, EvaluatorResponseParseError::ShortIdResponse(_))
     }
-
-    #[cfg(test)]
-    fn contains(&self, value: &str) -> bool {
-        self.to_string().contains(value)
-    }
 }
 
 impl std::fmt::Display for EvaluatorResponseParseError {
@@ -158,155 +175,6 @@ impl std::fmt::Display for EvaluatorResponseParseError {
     }
 }
 
-#[cfg(test)]
-fn evaluator_response_json_schema(schema_scope: EvaluatorResponseSchemaScope) -> Value {
-    json!({
-        "type": "object",
-        "propertyNames": {
-            "pattern": "^[A-Za-z0-9]+$",
-        },
-        "additionalProperties": evaluator_response_result_json_schema(schema_scope),
-    })
-}
-
-fn evaluator_response_result_json_schema(schema_scope: EvaluatorResponseSchemaScope) -> Value {
-    let mut schema = json!({
-        "type": "object",
-        "properties": {
-            "answer": {
-                "type": "string",
-                "pattern": ANSWER_PATTERN,
-            },
-            "error": {
-                "type": "string",
-                "enum": schema_scope.error_enum(),
-            },
-            "evidence": {
-                "type": "string",
-            },
-        },
-        "required": ["evidence"],
-        "oneOf": [
-            {"required": ["answer"], "not": { "required": ["error"] }},
-            {"required": ["error"], "not": { "required": ["answer"] }},
-        ],
-        "additionalProperties": false,
-    });
-    if schema_scope.allows_question_scope_suggestion() {
-        // Interrogations that may hide files outside the visible scope require
-        // qScopeSuggestion, even when the q-scope is full project before
-        // configured ignore exclusions. A full-scope first turn can still
-        // propose a narrower reusable q-scope. Check modes that never hide
-        // files use WithoutQuestionScopeSuggestion.
-        schema["properties"]["qScopeSuggestion"] = json!({
-            "type": "array",
-            "minItems": 1,
-            "items": {
-                "type": "string",
-                // Interrogation Policy's qScopeSuggestion item schema requires
-                // non-empty path strings in addition to rejecting CR/LF.
-                "minLength": 1,
-                "pattern": "^[^\\r\\n]*$",
-            },
-        });
-        if schema_scope.requires_question_scope_suggestion() {
-            schema["required"] = json!(["evidence", "qScopeSuggestion"]);
-        }
-    }
-    schema
-}
-
-pub(crate) fn evaluator_response_output_schema_for_scope(
-    schema_scope: EvaluatorResponseSchemaScope,
-    short_id: &str,
-) -> Value {
-    evaluator_response_output_schema_for_requested_short_ids(schema_scope, &[short_id])
-}
-
-fn evaluator_response_output_schema_for_requested_short_ids(
-    schema_scope: EvaluatorResponseSchemaScope,
-    short_ids: &[&str],
-) -> Value {
-    assert!(!short_ids.is_empty(), "requested short IDs are required");
-    assert!(
-        short_ids
-            .iter()
-            .all(|short_id| matches_short_id_pattern(short_id)),
-        "requested short IDs must match the evaluator response pattern"
-    );
-    let result_schema = evaluator_response_output_result_json_schema(schema_scope);
-    let required = short_ids.to_vec();
-    let mut properties = serde_json::Map::new();
-    for short_id in short_ids {
-        properties.insert((*short_id).to_string(), result_schema.clone());
-    }
-    json!({
-        "type": "object",
-        "properties": Value::Object(properties),
-        "required": required,
-        "additionalProperties": false,
-    })
-}
-
-fn evaluator_response_output_result_json_schema(
-    schema_scope: EvaluatorResponseSchemaScope,
-) -> Value {
-    let schema = evaluator_response_result_json_schema(schema_scope);
-    let properties = schema["properties"]
-        .as_object()
-        .expect("evaluator response schema has properties");
-    // The app-server structured-output subset rejects `oneOf`. Two strict
-    // `anyOf` branches preserve the same accepted shape without null transport
-    // placeholders: one branch has `answer`, the other has `error`.
-    json!({
-        "anyOf": [
-            evaluator_response_output_branch_schema(properties, schema_scope, "answer"),
-            evaluator_response_output_branch_schema(properties, schema_scope, "error"),
-        ],
-    })
-}
-
-fn evaluator_response_output_branch_schema(
-    properties: &serde_json::Map<String, Value>,
-    schema_scope: EvaluatorResponseSchemaScope,
-    result_field: &str,
-) -> Value {
-    let mut branch_properties = serde_json::Map::new();
-    for key in ["evidence", result_field] {
-        branch_properties.insert(
-            key.to_string(),
-            properties
-                .get(key)
-                .expect("evaluator response schema property exists")
-                .clone(),
-        );
-    }
-    let mut required = vec!["evidence", result_field];
-    if schema_scope.requires_question_scope_suggestion() {
-        branch_properties.insert(
-            "qScopeSuggestion".to_string(),
-            properties
-                .get("qScopeSuggestion")
-                .expect("evaluator response schema property exists")
-                .clone(),
-        );
-        required.push("qScopeSuggestion");
-    }
-    json!({
-        "type": "object",
-        "properties": branch_properties,
-        "required": required,
-        "additionalProperties": false,
-    })
-}
-
-#[cfg(test)]
-fn evaluator_response_output_schema_for_schema_scope(
-    schema_scope: EvaluatorResponseSchemaScope,
-) -> Value {
-    evaluator_response_output_schema_for_scope(schema_scope, "q")
-}
-
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EvaluatorResponseJson {
@@ -314,13 +182,53 @@ pub(crate) struct EvaluatorResponseJson {
     pub(crate) answer: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_error")]
     pub(crate) error: Option<String>,
-    pub(crate) evidence: String,
+    #[serde(default, deserialize_with = "deserialize_optional_evidence")]
+    pub(crate) evidence: Option<String>,
     #[serde(
         default,
         rename = "qScopeSuggestion",
         deserialize_with = "deserialize_optional_question_scope_suggestion"
     )]
     pub(crate) question_scope_suggestion: Option<Vec<String>>,
+}
+
+struct EvaluatorResponsesJson(BTreeMap<String, EvaluatorResponseJson>);
+
+impl<'de> Deserialize<'de> for EvaluatorResponsesJson {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: de::Deserializer<'de>,
+    {
+        struct ResponsesVisitor;
+
+        impl<'de> de::Visitor<'de> for ResponsesVisitor {
+            type Value = EvaluatorResponsesJson;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("an evaluator response object")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: de::MapAccess<'de>,
+            {
+                let mut responses = BTreeMap::new();
+                while let Some(short_id) = map.next_key::<String>()? {
+                    if responses.contains_key(&short_id) {
+                        return Err(de::Error::custom(format!(
+                            "duplicate evaluator response short ID `{}`",
+                            short_id
+                        )));
+                    }
+                    let response = map.next_value::<EvaluatorResponseJson>()?;
+                    responses.insert(short_id, response);
+                }
+                Ok(EvaluatorResponsesJson(responses))
+            }
+        }
+
+        deserializer.deserialize_map(ResponsesVisitor)
+    }
 }
 
 impl EvaluatorResponseJson {
@@ -335,7 +243,8 @@ impl EvaluatorResponseJson {
             // expectation's current expected answer.
             return Ok(ParsedAnswer::answer(
                 answer,
-                self.evidence,
+                self.evidence
+                    .expect("schema validation ensures answer evidence is present"),
                 question_scope_suggestion,
             ));
         }
@@ -345,9 +254,8 @@ impl EvaluatorResponseJson {
         // Restricted-scope schema permits qScopeSuggestion on an error response
         // too. Preserve it for schema fidelity and diagnostics; narrowing
         // policy still consumes suggestions only from answer responses.
-        Ok(ParsedAnswer::error_with_question_scope_suggestion(
+        Ok(ParsedAnswer::evaluator_error(
             error,
-            self.evidence,
             question_scope_suggestion,
         ))
     }
@@ -362,6 +270,12 @@ impl EvaluatorResponseJson {
             return Err(
                 "evaluator response must contain exactly one of answer or error".to_string(),
             );
+        }
+        if has_answer && self.evidence.is_none() {
+            return Err("evidence is required with answer".to_string());
+        }
+        if has_error && self.evidence.is_some() {
+            return Err("evidence must be omitted with error".to_string());
         }
         if let Some(answer) = self.answer.as_deref() {
             if !matches_answer_pattern(answer) {
@@ -415,7 +329,7 @@ pub(crate) fn parse_evaluator_response_json(
         .expect("requested short ID was checked above"))
 }
 
-fn parse_evaluator_response_json_for_requested_short_ids(
+pub(crate) fn parse_evaluator_response_json_for_requested_short_ids(
     text: &str,
     requested_short_ids: &[&str],
     answered_short_ids: &[String],
@@ -444,14 +358,22 @@ fn parse_evaluator_response_json_for_requested_short_ids(
         ));
     }
     let payload = evaluator_response_json_payload(text)?;
-    let mut raw = serde_json::from_str::<Value>(payload).map_err(|err| {
-        EvaluatorResponseParseError::Schema(format!(
-            "failed to parse evaluator JSON response: {}",
-            err
-        ))
-    })?;
-    let object = raw.as_object_mut().ok_or_else(|| {
-        EvaluatorResponseParseError::Schema("evaluator response must be a JSON object".to_string())
+    // [T] Deserialize the outer map and each typed result in one streaming
+    // pass. The map visitor observes duplicate short IDs, while the derived
+    // result deserializer observes duplicate fields before either can be
+    // collapsed into a generic JSON object.
+    let mut deserializer = serde_json::Deserializer::from_str(payload);
+    let EvaluatorResponsesJson(mut object) = EvaluatorResponsesJson::deserialize(&mut deserializer)
+        .map_err(|err| {
+            EvaluatorResponseParseError::Schema(format!(
+                "failed to parse evaluator JSON response: {}",
+                err
+            ))
+        })?;
+    deserializer.end().map_err(|_| {
+        EvaluatorResponseParseError::Schema(
+            "evaluator response must not contain surrounding prose".to_string(),
+        )
     })?;
     for key in object.keys() {
         if !matches_short_id_pattern(key) {
@@ -489,13 +411,6 @@ fn parse_evaluator_response_json_for_requested_short_ids(
         let response = object
             .remove(*short_id)
             .expect("requested short ID was checked above");
-        let response =
-            serde_json::from_value::<EvaluatorResponseJson>(response).map_err(|err| {
-                EvaluatorResponseParseError::Schema(format!(
-                    "failed to parse evaluator JSON response for short ID `{}`: {}",
-                    short_id, err
-                ))
-            })?;
         responses.insert((*short_id).to_string(), response);
     }
     Ok(responses)
@@ -510,18 +425,6 @@ pub(crate) fn evaluator_response_json_payload(
             "evaluator response must be a JSON object".to_string(),
         ));
     }
-    let mut deserializer = serde_json::Deserializer::from_str(trimmed);
-    serde_json::Value::deserialize(&mut deserializer).map_err(|err| {
-        EvaluatorResponseParseError::Schema(format!(
-            "failed to inspect evaluator JSON response: {}",
-            err
-        ))
-    })?;
-    deserializer.end().map_err(|_| {
-        EvaluatorResponseParseError::Schema(
-            "evaluator response must not contain surrounding prose".to_string(),
-        )
-    })?;
     if !trimmed.starts_with('{') {
         return Err(EvaluatorResponseParseError::Schema(
             "evaluator response must be a JSON object".to_string(),
@@ -562,6 +465,13 @@ where
     deserialize_optional_string_field(deserializer, "error")
 }
 
+fn deserialize_optional_evidence<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: de::Deserializer<'de>,
+{
+    deserialize_optional_string_field(deserializer, "evidence")
+}
+
 fn deserialize_optional_string_field<'de, D>(
     deserializer: D,
     field_name: &'static str,
@@ -595,6 +505,3 @@ where
         .map(Some)
         .map_err(de::Error::custom)
 }
-
-#[cfg(test)]
-mod tests;

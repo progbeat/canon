@@ -38,7 +38,7 @@ pub(crate) fn error_record_from_visible_tree_oid(
     expectation: &ResolvedExpectation,
     scope: &[String],
     error: &str,
-    visible_tree_oid: String,
+    visible_tree_oid: Option<String>,
 ) -> Result<CheckRecord, String> {
     error_record_from_visible_tree_oid_with_diff_provenance(
         expectation,
@@ -53,7 +53,7 @@ pub(crate) fn error_record_from_visible_tree_oid_with_diff_provenance(
     expectation: &ResolvedExpectation,
     scope: &[String],
     error: &str,
-    visible_tree_oid: String,
+    visible_tree_oid: Option<String>,
     diff_provenance: Option<InterrogationDiffProvenance>,
 ) -> Result<CheckRecord, String> {
     let timestamp = format_record_timestamp(unix_timestamp()?);
@@ -71,7 +71,7 @@ pub(crate) fn error_record_from_visible_tree_oid_at(
     expectation: &ResolvedExpectation,
     scope: &[String],
     error: &str,
-    visible_tree_oid: String,
+    visible_tree_oid: Option<String>,
     diff_provenance: Option<InterrogationDiffProvenance>,
     timestamp: String,
 ) -> CheckRecord {
@@ -88,11 +88,12 @@ pub(crate) fn error_record_from_visible_tree_oid_at(
         timestamp,
         number: expectation.number,
         result: CheckResult::Fail,
+        to: expectation.to,
         question: Some(expectation.question.clone()),
         expected_answer: Some(expectation.expected_answer.clone()),
         observed: INTERNAL_ERROR_UNPARSABLE.to_string(),
         error: Some(INTERNAL_ERROR_UNPARSABLE.to_string()),
-        evidence: error.to_string(),
+        evidence: Some(error.to_string()),
         scope: scope.to_vec(),
         question_scope_suggestion: None,
         visible_tree_oid,

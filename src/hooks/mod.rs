@@ -1,13 +1,12 @@
 mod fs;
 mod git;
 
-// This module manages Git pre-commit hook installation only. Configured
-// `canon check` lifecycle hooks are parsed into `CheckConfig.hooks` and
-// executed from `src/check/command/execution/hooks.rs`.
+// This module manages Git pre-commit hook installation only.
 use self::fs::make_executable;
+use self::fs::HookFile;
 use self::git::{
-    configure_git_hooks_path, git_hooks_path_matches, has_canon_git_hooks_path,
-    unset_git_hooks_path, uses_canon_git_hooks_path, HookInstallPreflight,
+    configure_git_hooks_path, git_hooks_path_matches, unset_git_hooks_path,
+    uses_canon_git_hooks_path, HookInstallPreflight,
 };
 use crate::fs_util::{ensure_dir_without_symlinks, remove_optional_file, replace_file};
 use crate::output::{write_stderr, write_stdout, write_stdout_line};
@@ -16,18 +15,16 @@ use clap::Command as ClapCommand;
 use std::ffi::OsString;
 use std::path::Path;
 
-// User-facing output names the repository's pre-commit hook role at Git's
-// default hook path. The managed script is stored under Canon's git-path state
-// directory, and `core.hooksPath` points Git at that resolved hook directory.
+// Canon installs the hook at Git's default repository hook path and reports
+// that same path through the public command output.
+pub(super) const DEFAULT_GIT_HOOKS_PATH: &str = ".git/hooks";
 pub(super) const DEFAULT_GIT_PRE_COMMIT_HOOK_PATH: &str = ".git/hooks/pre-commit";
 pub(super) const DEFAULT_PRE_COMMIT_GIT_PATH: &str = "hooks/pre-commit";
-// `${CANON_STATE_DIR}/hooks`, resolved through `git rev-parse --git-path`.
-pub(super) const GIT_HOOKS_PATH: &str = "canon/hooks";
-// `${CANON_STATE_DIR}/hooks/pre-commit`, resolved through `git rev-parse --git-path`.
-pub(super) const PRE_COMMIT_HOOK_PATH: &str = "canon/hooks/pre-commit";
 const DEFAULT_PRE_COMMIT_HOOK: &str = include_str!("../../resources/git-hooks/pre-commit");
 const PRE_COMMIT_HOOK_MANUAL_ADVICE: &str =
     "Can't safely install pre-commit hook.\n▷ Add `canon gate` manually to the existing pre-commit setup or ask a human to handle it.";
+const PRE_COMMIT_HOOK_UNINSTALL_MANUAL_ADVICE: &str =
+    "Can't safely uninstall pre-commit hook because it is not Canon's hook.\n▷ Remove it manually only if intended, or ask a human to handle it.";
 pub(super) const GIT_WORKTREE_REQUIRED_FOR_HOOK_INSTALL: &str =
     "Can't safely install pre-commit hook: canon pre-commit install requires a Git worktree.";
 
@@ -92,7 +89,7 @@ fn write_clap_display_error(err: &clap::Error) -> Result<(), String> {
 pub(crate) fn run_hook_install(root: &Path) -> Result<(), String> {
     let preflight = HookInstallPreflight::load(root)?;
     preflight_git_worktree(&preflight)?;
-    preflight_default_git_pre_commit_hook(&preflight)?;
+    preflight_pre_commit_hook_ownership(&preflight, HookAction::Install)?;
     preflight_git_hooks_path(&preflight)?;
     install_pre_commit_hook(root, &preflight)
 }
@@ -104,25 +101,29 @@ fn preflight_git_worktree(preflight: &HookInstallPreflight) -> Result<(), String
     Err(GIT_WORKTREE_REQUIRED_FOR_HOOK_INSTALL.to_string())
 }
 
-fn preflight_default_git_pre_commit_hook(preflight: &HookInstallPreflight) -> Result<(), String> {
-    if uses_canon_git_hooks_path(preflight) {
-        return Ok(());
+fn preflight_pre_commit_hook_ownership(
+    preflight: &HookInstallPreflight,
+    action: HookAction,
+) -> Result<(), String> {
+    // The default Git hook path is user-owned whenever Git is not already
+    // Canon's exact hook. A matching `core.hooksPath` identifies the directory,
+    // not ownership of a file already present in that directory.
+    match &preflight.default_pre_commit_hook {
+        HookFile::Missing => Ok(()),
+        HookFile::Regular(contents) if contents == DEFAULT_PRE_COMMIT_HOOK => Ok(()),
+        HookFile::Regular(_) | HookFile::Unverifiable => match action {
+            HookAction::Install => Err(pre_commit_hook_manual_advice()),
+            HookAction::Uninstall => Err(PRE_COMMIT_HOOK_UNINSTALL_MANUAL_ADVICE.to_string()),
+        },
     }
-    // Canon-managed reusable hooks live under `PRE_COMMIT_HOOK_PATH` with
-    // `core.hooksPath` pointing at `GIT_HOOKS_PATH`. The default Git hook path
-    // is user-owned whenever Git is not already configured for Canon, even if a
-    // file there happens to look compatible.
-    if preflight.default_pre_commit_hook.is_some() {
-        return Err(pre_commit_hook_manual_advice());
-    }
-    Ok(())
 }
 
 fn preflight_git_hooks_path(preflight: &HookInstallPreflight) -> Result<(), String> {
-    // Canon owns the hook directory only when Git has no custom hook manager or
-    // already points at Canon's hook directory. Any other `core.hooksPath`
-    // belongs to existing project Git integration and needs manual handling.
-    for existing in &preflight.current_git_hooks_paths {
+    // [Y8] Canon owns the hook directory only when effective Git configuration
+    // has no custom hook manager or already points at Canon's hook directory.
+    // `git config` precedence includes system, global, worktree, and local
+    // sources; any effective non-Canon value needs manual handling.
+    if let Some(existing) = &preflight.current_git_hooks_path {
         if !git_hooks_path_matches(&preflight.root, &preflight.git_hooks_path, existing) {
             return Err(pre_commit_hook_manual_advice());
         }
@@ -131,28 +132,22 @@ fn preflight_git_hooks_path(preflight: &HookInstallPreflight) -> Result<(), Stri
 }
 
 fn install_pre_commit_hook(root: &Path, preflight: &HookInstallPreflight) -> Result<(), String> {
-    // The hook script is canon-owned persistent state, so it lives under the
-    // repository's git-path state area. The local `core.hooksPath` value is Git
-    // configuration: it points Git at that hook directory.
     let hook_path = preflight.pre_commit_hook_path.as_path();
     if let Some(parent) = hook_path.parent() {
         ensure_dir_without_symlinks(parent)?;
     }
     replace_file(hook_path, DEFAULT_PRE_COMMIT_HOOK)?;
-    // The managed hook file exists now. Emit that user-visible fact before the
-    // remaining install steps so the line is not held until command completion.
-    write_stdout_line(&format!("Installed {}", DEFAULT_GIT_PRE_COMMIT_HOOK_PATH))?;
     make_executable(hook_path)?;
     configure_git_hooks_path(root, preflight)?;
-    Ok(())
+    write_stdout_line(&format!("Installed {}", DEFAULT_GIT_PRE_COMMIT_HOOK_PATH))
 }
 
 pub(crate) fn run_hook_uninstall(root: &Path) -> Result<(), String> {
     let preflight = HookInstallPreflight::load(root)?;
+    // [Y8] Verify file ownership before changing either Git configuration or
+    // the hook path. A foreign hook must leave both states untouched.
+    preflight_pre_commit_hook_ownership(&preflight, HookAction::Uninstall)?;
     let uses_canon_hooks_path = uses_canon_git_hooks_path(&preflight);
-    if !uses_canon_hooks_path && has_canon_git_hooks_path(&preflight) {
-        return Err(pre_commit_hook_manual_advice());
-    }
     if uses_canon_hooks_path {
         unset_git_hooks_path(root)?;
     }
@@ -164,4 +159,54 @@ pub(crate) fn run_hook_uninstall(root: &Path) -> Result<(), String> {
 
 fn pre_commit_hook_manual_advice() -> String {
     PRE_COMMIT_HOOK_MANUAL_ADVICE.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn preflight(
+        default_pre_commit_hook: HookFile,
+        current_git_hooks_path: Option<&str>,
+    ) -> HookInstallPreflight {
+        let root = PathBuf::from("repo");
+        HookInstallPreflight {
+            current_git_hooks_path: current_git_hooks_path.map(str::to_string),
+            default_pre_commit_hook,
+            is_git_worktree: true,
+            git_hooks_path: root.join(DEFAULT_GIT_HOOKS_PATH),
+            pre_commit_hook_path: root.join(DEFAULT_GIT_PRE_COMMIT_HOOK_PATH),
+            root,
+        }
+    }
+
+    #[test] // xpec: Y8
+    fn foreign_pre_commit_hook_requires_documented_manual_setup() {
+        let preflight = preflight(HookFile::Unverifiable, None);
+
+        let error =
+            preflight_pre_commit_hook_ownership(&preflight, HookAction::Install).unwrap_err();
+
+        assert_eq!(error, PRE_COMMIT_HOOK_MANUAL_ADVICE);
+    }
+
+    #[test] // xpec: Y8
+    fn external_hook_manager_requires_documented_manual_setup() {
+        let preflight = preflight(HookFile::Missing, Some("global-hooks"));
+
+        let error = preflight_git_hooks_path(&preflight).unwrap_err();
+
+        assert_eq!(error, PRE_COMMIT_HOOK_MANUAL_ADVICE);
+    }
+
+    #[test] // xpec: Y8
+    fn install_requires_a_git_worktree() {
+        let mut preflight = preflight(HookFile::Missing, None);
+        preflight.is_git_worktree = false;
+
+        let error = preflight_git_worktree(&preflight).unwrap_err();
+
+        assert_eq!(error, GIT_WORKTREE_REQUIRED_FOR_HOOK_INSTALL);
+    }
 }

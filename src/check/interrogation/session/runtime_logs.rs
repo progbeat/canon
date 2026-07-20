@@ -12,7 +12,8 @@ use crate::token_usage_types::EvaluatorTurnUsage;
 // `check::command::completion`; this module keeps those events routed through
 // the interrogation logging boundary alongside evaluator communication events.
 // Agent request/response/failure wrappers below preserve turn usage data for
-// `logs::events`, which records either tokenUsageUpdates or tokenUsage.
+// `logs::events`, which emits a separate `agent.token_usage` event with the
+// normalized counters for that evaluator turn.
 pub(crate) fn write_check_lifecycle_start_event(
     diagnostic_log: &mut DiagnosticLogWriter,
     query: Option<bool>,

@@ -1,8 +1,10 @@
+//! Resolves named preset inheritance and expectation field defaults.
+
 use crate::check::config::validation::{
     normalize_agent_ignore_pattern_for_config, validate_agent_config,
 };
 use crate::config_types::{
-    AgentConfig, RawExpectationSettings, RawLegacyAgentConfig, RawPresetConfig,
+    AgentConfig, ConfiguredValue, RawExpectationSettings, RawLegacyAgentConfig, RawPresetConfig,
     ResolvedPresetConfig,
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -44,16 +46,15 @@ pub(super) fn apply_expectation_settings(
     agent: &mut AgentConfig,
     settings: &RawExpectationSettings,
 ) -> Result<(), String> {
-    if let Some(models) = &settings.models {
+    if let Some(models) = &settings.models.value {
         agent.models = models.clone();
     }
-    if let Some(thinking) = &settings.thinking {
+    if let Some(thinking) = &settings.thinking.value {
         agent.thinking = thinking.clone();
     }
-    if let Some(ignore) = &settings.ignore {
-        agent.ignore = ignore.clone();
-    }
-    if let Some(plugins) = &settings.plugins {
+    agent.ignore = settings.ignore.value.clone();
+    agent.ignore_configured = settings.ignore.configured;
+    if let Some(plugins) = &settings.plugins.value {
         agent.plugins = plugins.clone();
     }
     normalize_agent_config(agent)
@@ -67,19 +68,18 @@ fn raw_preset_from_legacy_agent(agent: RawLegacyAgentConfig) -> RawPresetConfig 
     models.extend(agent.model.fallbacks);
     RawPresetConfig {
         q: None,
-        q_template: None,
         a: None,
-        path: None,
-        include: None,
-        question_context: None,
-        diff_from: None,
-        target: None,
-        cooldown: None,
+        to: Default::default(),
+        rank: Default::default(),
+        question_context: Default::default(),
+        diff_from: Default::default(),
+        target: Default::default(),
+        cooldown: Default::default(),
         preset: None,
-        models: (!models.is_empty()).then_some(models),
-        thinking: agent.thinking,
+        models: ConfiguredValue::from_option((!models.is_empty()).then_some(models)),
+        thinking: ConfiguredValue::from_option(agent.thinking),
         ignore: agent.ignore,
-        plugins: agent.plugins,
+        plugins: ConfiguredValue::from_option(agent.plugins),
     }
 }
 
@@ -114,47 +114,44 @@ fn apply_raw_preset(preset: &mut ResolvedPresetConfig, raw: &RawPresetConfig) {
     if let Some(q) = &raw.q {
         preset.q = Some(q.clone());
     }
-    if let Some(q_template) = &raw.q_template {
-        preset.q_template = Some(q_template.clone());
-    }
     if let Some(a) = &raw.a {
         preset.a = Some(a.clone());
     }
-    if let Some(path) = &raw.path {
-        preset.path = Some(path.clone());
-    }
-    if let Some(include) = &raw.include {
-        preset.include = Some(include.clone());
-    }
     let common = &mut preset.common;
-    if let Some(context) = &raw.question_context {
-        common.question_context = Some(context.clone());
+    if raw.question_context.configured {
+        common.question_context = raw.question_context.clone();
     }
-    if let Some(diff_from) = &raw.diff_from {
-        common.diff_from = Some(diff_from.clone());
+    if raw.diff_from.configured {
+        common.git_backed.diff_from = raw.diff_from.clone();
     }
-    if let Some(target) = &raw.target {
-        common.target = Some(target.clone());
+    if raw.target.configured {
+        common.git_backed.target = raw.target.clone();
     }
-    if let Some(cooldown) = &raw.cooldown {
-        common.cooldown = Some(cooldown.clone());
+    if raw.cooldown.configured {
+        common.git_backed.cooldown = raw.cooldown.clone();
     }
-    if let Some(models) = &raw.models {
-        common.settings.models = Some(models.clone());
+    if raw.to.configured {
+        common.to = raw.to.clone();
     }
-    if let Some(thinking) = &raw.thinking {
-        common.settings.thinking = Some(thinking.clone());
+    if raw.rank.configured {
+        common.rank = raw.rank.clone();
     }
-    if let Some(ignore) = &raw.ignore {
-        common.settings.ignore = Some(ignore.clone());
+    if raw.models.configured {
+        common.settings.models = raw.models.clone();
     }
-    if let Some(plugins) = &raw.plugins {
-        common.settings.plugins = Some(plugins.clone());
+    if raw.thinking.configured {
+        common.settings.thinking = raw.thinking.clone();
+    }
+    if raw.ignore.configured {
+        common.settings.ignore = raw.ignore.clone();
+    }
+    if raw.plugins.configured {
+        common.settings.plugins = raw.plugins.clone();
     }
 }
 
 fn normalize_preset_config(name: &str, preset: &mut ResolvedPresetConfig) -> Result<(), String> {
-    if let Some(ignore) = &mut preset.common.settings.ignore {
+    if let Some(ignore) = &mut preset.common.settings.ignore.value {
         for pattern in ignore {
             *pattern = normalize_agent_ignore_pattern_for_config(pattern)?;
         }
@@ -164,8 +161,10 @@ fn normalize_preset_config(name: &str, preset: &mut ResolvedPresetConfig) -> Res
 }
 
 fn normalize_agent_config(agent: &mut AgentConfig) -> Result<(), String> {
-    for pattern in &mut agent.ignore {
-        *pattern = normalize_agent_ignore_pattern_for_config(pattern)?;
+    if let Some(ignore) = &mut agent.ignore {
+        for pattern in ignore {
+            *pattern = normalize_agent_ignore_pattern_for_config(pattern)?;
+        }
     }
     Ok(())
 }

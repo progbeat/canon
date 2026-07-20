@@ -2,14 +2,73 @@ use crate::check::core::{
     contains_line_break, is_line_break_char, matches_answer_pattern, ANSWER_PATTERN,
     ERROR_INVALID_QUESTION, ERROR_SCOPE_TOO_NARROW, INTERNAL_ERROR_UNPARSABLE,
 };
-use crate::check::run::selection::{minimal_unique_expectation_prefix, parse_cooldown};
-use crate::config_types::{AgentConfig, CheckConfig, Expectation};
+use crate::check::run::selection::minimal_unique_expectation_prefix;
+use crate::config_types::{AgentConfig, CheckConfig, Cooldown, CooldownConfig, Expectation};
 use crate::hash::expectation_id;
 use crate::logs::push_json_control_escape;
 use crate::scope::normalize_repo_path;
 use std::collections::BTreeSet;
 
+pub(crate) fn parse_cooldown_config(value: &CooldownConfig) -> Result<Cooldown, String> {
+    // Raw compact-duration validation belongs to the config boundary. The
+    // expansion path calls this before constructing canonical expectations,
+    // whose cooldown is already represented as seconds.
+    Ok(Cooldown {
+        seconds: parse_cooldown_duration(&value.0)?,
+    })
+}
+
+fn parse_cooldown_duration(value: &str) -> Result<u64, String> {
+    if value.trim() != value {
+        return Err("must use compact duration syntax without surrounding whitespace".to_string());
+    }
+    let Some((unit_index, unit)) = value.char_indices().next_back() else {
+        return Err("must use integer duration with unit s, m, h, d, or w".to_string());
+    };
+    if unit_index == 0 {
+        return Err("must use integer duration with unit s, m, h, d, or w".to_string());
+    }
+    let digits = &value[..unit_index];
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("must start with an integer".to_string());
+    }
+    let amount = digits
+        .parse::<u64>()
+        .map_err(|_| "duration integer is too large".to_string())?;
+    if amount == 0 {
+        return Err("must be greater than zero".to_string());
+    }
+    let multiplier = match unit {
+        's' => 1,
+        'm' => 60,
+        'h' => 60 * 60,
+        'd' => 24 * 60 * 60,
+        'w' => 7 * 24 * 60 * 60,
+        _ => return Err("unit must be one of s, m, h, d, or w".to_string()),
+    };
+    amount
+        .checked_mul(multiplier)
+        .ok_or_else(|| "duration is too large".to_string())
+}
+
 pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> {
+    validate_config(config, false)
+}
+
+pub(crate) fn validate_ask_config(config: &CheckConfig) -> Result<(), String> {
+    let [expectation] = config.expectations.as_slice() else {
+        return Err("ask config must contain exactly one temporary expectation".to_string());
+    };
+    if expectation.to != crate::config_types::ExpectationTo::Agent {
+        return Err("ask temporary expectation must address the agent".to_string());
+    }
+    if !expectation.a.is_empty() {
+        return Err("ask temporary expectation must have an empty expected answer".to_string());
+    }
+    validate_config(config, true)
+}
+
+fn validate_config(config: &CheckConfig, allow_empty_expected_answer: bool) -> Result<(), String> {
     if config.version != 1 {
         return Err("check.yml version must be 1".to_string());
     }
@@ -28,10 +87,6 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
                 number
             ));
         }
-        validate_expected_answer_matches_interrogation_response_schema_answer_pattern(
-            &display_ids[index],
-            expectation,
-        )?;
         // Expected answers cannot collide with either evaluator schema errors
         // or Canon's internal unparsable-response marker.
         if matches!(
@@ -48,62 +103,15 @@ pub(crate) fn validate_check_config(config: &CheckConfig) -> Result<(), String> 
                 ),
             ));
         }
-        if let Some(cooldown) = expectation.cooldown.as_ref() {
-            // Config validation checks the cooldown syntax. Command modes apply
-            // their own compatibility rules after config expansion.
-            parse_cooldown(cooldown)
-                .map_err(|err| format!("expectation {} cooldown: {}", number, err))?;
+        if !(allow_empty_expected_answer && expectation.a.is_empty()) {
+            validate_expected_answer_matches_interrogation_response_schema_answer_pattern(
+                &display_ids[index],
+                expectation,
+            )?;
         }
         validate_agent_config(&expectation.agent, &format!("expectation {}", number))?;
     }
     Ok(())
-}
-
-pub(crate) fn validate_in_place_check_config(config: &CheckConfig) -> Result<(), String> {
-    validate_in_place_global_config(&config.agent)?;
-    validate_in_place_expectation_config(&config.agent, &config.expectations)
-}
-
-pub(crate) fn validate_in_place_global_config(config_agent: &AgentConfig) -> Result<(), String> {
-    if config_agent.ignore.is_empty() {
-        return Ok(());
-    }
-    Err("configured Git-backed-only ignore invalid in in-place mode".to_string())
-}
-
-fn validate_in_place_expectation_config(
-    config_agent: &AgentConfig,
-    expectations: &[Expectation],
-) -> Result<(), String> {
-    for (index, expectation) in expectations.iter().enumerate() {
-        let unsupported = in_place_unsupported_fields(config_agent, expectation);
-        if !unsupported.is_empty() {
-            return Err(format!(
-                "expectation {} has Git-backed-only config: {}",
-                index + 1,
-                unsupported.join(", ")
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn in_place_unsupported_fields(
-    config_agent: &AgentConfig,
-    expectation: &Expectation,
-) -> Vec<&'static str> {
-    [
-        (expectation.diff_from_configured, "diff-from"),
-        (expectation.target.is_some(), "target"),
-        (expectation.cooldown.is_some(), "cooldown"),
-        (
-            !config_agent.ignore.is_empty() || !expectation.agent.ignore.is_empty(),
-            "ignore",
-        ),
-    ]
-    .into_iter()
-    .filter_map(|(configured, name)| configured.then_some(name))
-    .collect()
 }
 
 fn validate_expected_answer_matches_interrogation_response_schema_answer_pattern(
@@ -131,6 +139,7 @@ pub(crate) fn render_expectation_validation_error(
     error: &str,
     evidence: &str,
 ) -> String {
+    // xpec: RC
     assert_ne!(
         error, ERROR_SCOPE_TOO_NARROW,
         "public expectation error blocks must not expose ScopeTooNarrow"
@@ -151,6 +160,7 @@ fn expectation_ids(config: &CheckConfig) -> Vec<String> {
         .map(|expectation| {
             expectation_id(
                 &expectation.q,
+                expectation.to.as_str(),
                 &expectation.a,
                 &expectation.question_context,
             )
@@ -209,8 +219,10 @@ pub(crate) fn validate_agent_config(agent: &AgentConfig, label: &str) -> Result<
         )?;
     }
     validate_thinking(&agent.thinking).map_err(|err| format!("{}: {}", label, err))?;
-    for path in &agent.ignore {
-        normalize_agent_ignore_pattern_for_config(path)?;
+    if let Some(ignore) = &agent.ignore {
+        for path in ignore {
+            normalize_agent_ignore_pattern_for_config(path)?;
+        }
     }
     for plugin in &agent.plugins {
         validate_plugin_config_key(plugin)?;
@@ -366,12 +378,6 @@ pub(crate) fn check_config_loads_plugins(config: &CheckConfig) -> bool {
             .any(|expectation| !expectation.agent.plugins.is_empty())
 }
 
-pub(crate) fn validate_relative_config_path(value: &str, label: &str) -> Result<(), String> {
-    normalize_repo_path(value)
-        .map(|_| ())
-        .map_err(|err| format!("{}: {}", label, err))
-}
-
 pub(crate) fn normalize_agent_ignore_pattern_for_config(value: &str) -> Result<String, String> {
     if value.trim().is_empty() {
         return Err("agent ignore pattern: path must not be empty".to_string());
@@ -381,32 +387,49 @@ pub(crate) fn normalize_agent_ignore_pattern_for_config(value: &str) -> Result<S
 
 #[cfg(test)]
 mod tests {
+    use super::parse_cooldown_config;
     use super::push_config_error_unicode_escape;
     use super::render_expectation_validation_error;
-    use super::{validate_check_config, validate_in_place_check_config};
+    use super::validate_check_config;
     use crate::check::core::ERROR_SCOPE_TOO_NARROW;
     use crate::config_types::{
-        AgentConfig, CheckConfig, CooldownConfig, Expectation, ExpectationTarget,
+        AgentConfig, CheckConfig, Cooldown, CooldownConfig, Expectation, ExpectationTarget,
+        DEFAULT_DIFF_FROM,
     };
 
-    #[test]
+    #[test] // xpec: uf
+    fn cooldown_config_accepts_compact_positive_duration() {
+        assert_eq!(
+            parse_cooldown_config(&CooldownConfig("30m".to_string())).unwrap(),
+            Cooldown { seconds: 30 * 60 }
+        );
+    }
+
+    #[test] // xpec: uf
+    fn cooldown_config_rejects_mapping_and_fail_specific_forms() {
+        assert!(serde_saphyr::from_str::<CooldownConfig>("fail: 1h").is_err());
+        assert!(serde_saphyr::from_str::<CooldownConfig>("pass: 7d").is_err());
+    }
+
+    #[test] // xpec: aw,9b
     fn invalid_expected_answer_error_uses_expectation_block_format() {
         let question = "What is this project implemented in?";
         let agent = AgentConfig::default();
         let config = CheckConfig {
             version: 1,
             agent: agent.clone(),
-            hooks: Default::default(),
             expectations: vec![Expectation {
+                to: crate::config_types::ExpectationTo::Agent,
+                rank: 0,
                 q: question.to_string(),
                 a: "Rust".to_string(),
                 question_context: String::new(),
-                diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
-                diff_from_configured: false,
+                diff_from: DEFAULT_DIFF_FROM.to_string(),
                 target: None,
                 question_answer_only: false,
                 agent,
                 cooldown: None,
+                in_place_compatibility: Default::default(),
             }],
         };
 
@@ -425,7 +448,21 @@ mod tests {
         assert_eq!(lines.next(), None);
     }
 
-    #[test]
+    #[test] // xpec: T
+    fn evaluator_error_token_uses_specific_validation_path() {
+        let agent = AgentConfig::default();
+        let mut item = expectation(&agent, None);
+        item.a = ERROR_SCOPE_TOO_NARROW.to_string();
+
+        let error = validate_check_config(&config_with(&agent, item)).unwrap_err();
+
+        assert!(
+            error.contains("Error: expected answer must not be an evaluator error token"),
+            "{error}"
+        );
+    }
+
+    #[test] // xpec: 9b
     fn expectation_validation_error_escapes_all_public_fields() {
         let rendered =
             render_expectation_validation_error("A", "Question\ntext", "bad\terror", "line\rbreak");
@@ -436,30 +473,31 @@ mod tests {
         );
     }
 
-    #[test]
+    #[test] // xpec: RC
     #[should_panic(expected = "public expectation error blocks must not expose ScopeTooNarrow")]
     fn expectation_validation_error_rejects_scope_too_narrow() {
         render_expectation_validation_error("A", "Question", ERROR_SCOPE_TOO_NARROW, "scope");
     }
 
-    #[test]
+    #[test] // xpec: 3Z
     fn duplicate_expectation_ids_are_rejected_even_when_targets_differ() {
         let agent = AgentConfig::default();
         let expectation = |target| Expectation {
+            to: crate::config_types::ExpectationTo::Agent,
+            rank: 0,
             q: "Does this behavior work?".to_string(),
             a: "yes".to_string(),
             question_context: String::new(),
-            diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
-            diff_from_configured: false,
+            diff_from: DEFAULT_DIFF_FROM.to_string(),
             target,
             question_answer_only: false,
             agent: agent.clone(),
             cooldown: None,
+            in_place_compatibility: Default::default(),
         };
         let config = CheckConfig {
             version: 1,
             agent: agent.clone(),
-            hooks: Default::default(),
             expectations: vec![
                 expectation(None),
                 expectation(Some(ExpectationTarget::Project)),
@@ -472,31 +510,21 @@ mod tests {
         assert!(error.starts_with("duplicate expectation ID: "), "{error}");
     }
 
-    #[test]
-    // xpec: 6
-    fn in_place_rejects_git_backed_only_config_after_expansion() {
+    #[test] // xpec: uf
+    fn git_backed_config_accepts_canonical_cooldown() {
         let agent = AgentConfig::default();
         let mut item = expectation(&agent, None);
-        item.diff_from_configured = true;
-        assert!(validate_in_place_check_config(&config_with(&agent, item)).is_err());
+        item.cooldown = Some(Cooldown {
+            seconds: 24 * 60 * 60,
+        });
 
-        let item = expectation(&agent, Some(ExpectationTarget::Diff));
-        assert!(validate_in_place_check_config(&config_with(&agent, item)).is_err());
-
-        let mut item = expectation(&agent, None);
-        item.cooldown = Some(CooldownConfig::Compact("1d".to_string()));
-        assert!(validate_in_place_check_config(&config_with(&agent, item)).is_err());
-
-        let mut check_config = config_with(&agent, expectation(&agent, None));
-        check_config.agent.ignore = vec!["target".to_string()];
-        assert!(validate_in_place_check_config(&check_config).is_err());
-
-        let mut item = expectation(&agent, None);
-        item.agent.ignore = vec!["target".to_string()];
-        assert!(validate_in_place_check_config(&config_with(&agent, item)).is_err());
+        assert!(
+            validate_check_config(&config_with(&agent, item)).is_ok(),
+            "a canonical cooldown must be valid in Git-backed check config"
+        );
     }
 
-    #[test]
+    #[test] // xpec: 9b
     fn unicode_escape_uses_surrogate_pairs_for_non_bmp_codepoints() {
         let mut escaped = String::new();
 
@@ -507,15 +535,17 @@ mod tests {
 
     fn expectation(agent: &AgentConfig, target: Option<ExpectationTarget>) -> Expectation {
         Expectation {
+            to: crate::config_types::ExpectationTo::Agent,
+            rank: 0,
             q: "Does this behavior work?".to_string(),
             a: "yes".to_string(),
             question_context: String::new(),
-            diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
-            diff_from_configured: false,
+            diff_from: DEFAULT_DIFF_FROM.to_string(),
             target,
             question_answer_only: false,
             agent: agent.clone(),
             cooldown: None,
+            in_place_compatibility: Default::default(),
         }
     }
 
@@ -523,7 +553,6 @@ mod tests {
         CheckConfig {
             version: 1,
             agent: agent.clone(),
-            hooks: Default::default(),
             expectations: vec![expectation],
         }
     }

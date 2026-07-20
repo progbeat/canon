@@ -8,7 +8,7 @@ use crate::evaluator::{
 use crate::token_usage_types::EvaluatorTurnUsage;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const EVALUATOR_SESSION_START_SOURCE: &str = "clear";
 const LOCAL_ENVIRONMENT_ID: &str = "local";
@@ -17,7 +17,7 @@ impl EvaluatorRunner for AppServerRunner {
     fn start_session(
         &mut self,
         session_cwd: &Path,
-        template_artifact_paths: &[PathBuf],
+        template_artifact_directory: &Path,
         base_instructions: &str,
         developer_instructions: &str,
         agent: &AgentConfig,
@@ -27,10 +27,11 @@ impl EvaluatorRunner for AppServerRunner {
         dynamic_tools: &[Value],
     ) -> Result<String, EvaluatorError> {
         let session_cwd_json = path_to_json_string(session_cwd, "thread/start cwd")?;
-        // `session_cwd` is the staged Git snapshot root supplied by
-        // `check_interrogation`; it is distinct from `LazyAppServerRunner`'s
-        // app-server startup root, which is the real project root used for
-        // Canon runtime state and app-server configuration.
+        // thread/start creates the evaluator agent, and `session_cwd` is that
+        // agent's working directory. In Git-backed mode it is the materialized
+        // checked tree; in in-place mode it is the checked directory itself.
+        // The already-running app-server transport process has its own inert
+        // temporary cwd, configured independently in `environment.rs`.
         let params = ThreadStartParams {
             cwd: session_cwd_json,
             base_instructions,
@@ -45,7 +46,7 @@ impl EvaluatorRunner for AppServerRunner {
                 thinking,
                 self.app_server_state_root(),
                 session_cwd,
-                template_artifact_paths,
+                template_artifact_directory,
                 self.no_sandbox(),
             )
             .map_err(|err| EvaluatorError::message(err.to_string()))?,

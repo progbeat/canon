@@ -26,7 +26,7 @@ impl Drop for DiagnosticLogLock {
 pub(crate) fn acquire_diagnostic_log_lock(
     log_dir: &Path,
 ) -> DiagnosticLogResult<DiagnosticLogLock> {
-    let path = log_dir.join(".lock");
+    let path = diagnostic_log_lock_path(log_dir);
     match create_diagnostic_log_lock(&path) {
         Ok((token, file)) => Ok(diagnostic_log_lock(path, token, file)),
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
@@ -41,6 +41,10 @@ pub(crate) fn acquire_diagnostic_log_lock(
         }
         Err(err) => Err(log_io_error("lock", &path, err)),
     }
+}
+
+fn diagnostic_log_lock_path(log_dir: &Path) -> PathBuf {
+    log_dir.with_extension("lock")
 }
 
 fn diagnostic_log_lock(path: PathBuf, token: String, file: fs::File) -> DiagnosticLogLock {
@@ -103,4 +107,19 @@ fn diagnostic_log_lock_is_stale(path: &Path) -> DiagnosticLogResult<bool> {
 
 pub(crate) fn stale_diagnostic_log_lock_age(age: Duration) -> bool {
     age >= Duration::from_secs(DIAGNOSTIC_LOG_LOCK_STALE_AFTER_SECS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::diagnostic_log_lock_path;
+    use std::path::Path;
+
+    #[test] // xpec: 13
+    fn diagnostic_log_lock_is_outside_log_dir() {
+        let log_dir = Path::new("state").join("logs");
+        assert_eq!(
+            diagnostic_log_lock_path(&log_dir),
+            Path::new("state").join("logs.lock")
+        );
+    }
 }

@@ -17,6 +17,13 @@ pub(crate) fn escape_check_output_text(value: &str) -> String {
     output
 }
 
+pub(crate) fn push_escaped_check_output_line(output: &mut String, label: &str, value: &str) {
+    output.push_str(label);
+    output.push_str(": ");
+    output.push_str(&escape_check_output_text(value));
+    output.push('\n');
+}
+
 fn push_check_output_unicode_escape(output: &mut String, ch: char) {
     if (ch as u32) <= 0xff {
         push_json_control_escape(output, ch as u8);

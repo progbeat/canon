@@ -1,8 +1,7 @@
-use crate::platform::path_from_git_stdout;
 use crate::project::command_output_trimmed;
 use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 #[derive(Clone)]
@@ -20,25 +19,6 @@ impl StagedTrackedFile {
         // commit objects, so they are not file entries for this policy.
         matches!(self.mode.as_str(), "100644" | "100755" | "120000")
     }
-}
-
-pub(crate) fn resolve_git_path(root: &Path, path: &str) -> Result<PathBuf, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .arg("rev-parse")
-        .arg("--git-path")
-        .arg(path)
-        .output()
-        .map_err(|err| format!("failed to run git rev-parse: {}", err))?;
-    if !output.status.success() {
-        return Err(format!(
-            "failed to resolve git path {}: {}",
-            path,
-            command_output_trimmed(&output.stderr, "git rev-parse stderr")?
-        ));
-    }
-    Ok(root.join(path_from_git_stdout(output.stdout)?))
 }
 
 pub(crate) fn git_head_tree_exists(root: &Path) -> Result<bool, String> {
@@ -67,7 +47,9 @@ pub(crate) fn staged_tree_oid(root: &Path) -> Result<String, String> {
     command_output_trimmed(&output.stdout, "git write-tree stdout").map(str::to_string)
 }
 
-pub(crate) fn empty_tree_oid(root: &Path) -> Result<String, String> {
+pub(crate) fn compute_empty_tree_oid(root: &Path) -> Result<String, String> {
+    // [Ky] Deliberately omit `-w`: `hash-object` computes the repository's
+    // format-specific empty-tree OID without writing the object to its ODB.
     let mut child = Command::new("git")
         .arg("-C")
         .arg(root)
@@ -91,6 +73,13 @@ pub(crate) fn empty_tree_oid(root: &Path) -> Result<String, String> {
 
 pub(crate) fn staged_tracked_files(root: &Path) -> Result<Vec<StagedTrackedFile>, String> {
     tracked_files_for_pathspecs(root, None, &[])
+}
+
+pub(crate) fn staged_tracked_files_for_pathspecs(
+    root: &Path,
+    pathspecs: &[String],
+) -> Result<Vec<StagedTrackedFile>, String> {
+    tracked_files_for_pathspecs(root, None, pathspecs)
 }
 
 pub(crate) fn resolve_tree_oid(root: &Path, treeish: &str) -> Result<String, String> {
@@ -161,14 +150,7 @@ fn git_cat_file_reports_unusable_tree_object(stderr: &str, tree_oid: &str) -> bo
         ))
 }
 
-pub(crate) fn tree_tracked_files(
-    root: &Path,
-    treeish: &str,
-) -> Result<Vec<StagedTrackedFile>, String> {
-    tree_tracked_files_for_pathspecs(root, treeish, &[])
-}
-
-pub(super) fn tree_tracked_files_for_pathspecs(
+pub(crate) fn tree_tracked_files_for_pathspecs(
     root: &Path,
     treeish: &str,
     pathspecs: &[String],
@@ -397,7 +379,7 @@ impl GitBlobReader {
                 actual_id
             )
         })?;
-        if delimiter != [b'\n'] {
+        if delimiter != *b"\n" {
             return Err(format!(
                 "git cat-file output missing object delimiter for {}",
                 actual_id
@@ -526,7 +508,7 @@ fn parse_git_blob_batch(output: &[u8], object_ids: &[String]) -> Result<Vec<Vec<
 
 #[cfg(test)]
 mod tests {
-    use super::tree_object_exists;
+    use super::{compute_empty_tree_oid, tree_object_exists};
     use crate::project::command_output_trimmed;
     use std::fs;
     use std::io::Write;
@@ -534,7 +516,21 @@ mod tests {
     use std::process::{self, Command, Stdio};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test]
+    #[test] // xpec: Ky
+    fn computing_empty_tree_oid_does_not_write_to_repository_object_database() {
+        let repo = temp_root("compute-empty-tree");
+        run_git(&repo, &["init"]).unwrap();
+        let objects = repo.join(".git").join("objects");
+        let files_before = files_below(&objects);
+
+        let oid = compute_empty_tree_oid(&repo).unwrap();
+
+        assert!(!oid.is_empty());
+        assert_eq!(files_below(&objects), files_before);
+        fs::remove_dir_all(repo).unwrap();
+    }
+
+    #[test] // xpec: gO
     fn tree_object_exists_reports_missing_tree_without_masking_git_failures() {
         let repo = temp_root("tree-object-exists");
         run_git(&repo, &["init"]).unwrap();
@@ -562,6 +558,7 @@ mod tests {
             .unwrap();
         child.stdin.as_mut().unwrap().write_all(b"").unwrap();
         let output = child.wait_with_output().unwrap();
+        // xpec: gO
         assert!(output.status.success());
         command_output_trimmed(&output.stdout, "git hash-object stdout")
             .unwrap()
@@ -582,6 +579,23 @@ mod tests {
                 .unwrap_or("git failed")
                 .to_string())
         }
+    }
+
+    fn files_below(root: &Path) -> Vec<PathBuf> {
+        let mut pending = vec![root.to_path_buf()];
+        let mut files = Vec::new();
+        while let Some(directory) = pending.pop() {
+            for entry in fs::read_dir(directory).unwrap() {
+                let entry = entry.unwrap();
+                if entry.file_type().unwrap().is_dir() {
+                    pending.push(entry.path());
+                } else {
+                    files.push(entry.path().strip_prefix(root).unwrap().to_path_buf());
+                }
+            }
+        }
+        files.sort();
+        files
     }
 
     fn temp_root(name: &str) -> PathBuf {

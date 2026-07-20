@@ -3,9 +3,11 @@ use crate::config_types::AgentConfig;
 
 pub(crate) fn effective_ignore_patterns(agent: &AgentConfig) -> Result<Vec<String>, String> {
     let mut patterns = Vec::new();
-    for pattern in &agent.ignore {
-        let pattern = normalized_ignore_pattern(pattern)?;
-        push_unique_pattern(&mut patterns, pattern);
+    if let Some(ignore) = &agent.ignore {
+        for pattern in ignore {
+            let pattern = normalized_ignore_pattern(pattern)?;
+            push_unique_pattern(&mut patterns, pattern);
+        }
     }
     Ok(patterns)
 }

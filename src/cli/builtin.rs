@@ -9,6 +9,7 @@ use crate::check::{
 use crate::gate::run_gate_command;
 use crate::hooks::run_pre_commit_command;
 use crate::init::run_init;
+use crate::logs::DiagnosticLogPlan;
 use crate::project::{git_project_root, project_root_or_current};
 use clap::Command as ClapCommand;
 use std::env;
@@ -89,12 +90,31 @@ impl BuiltinCommand {
                 run_pre_commit_command(&root, args).map_err(CommandError::from)
             }
             BuiltinCommand::Ask => {
+                let diagnostic_log_plan = DiagnosticLogPlan::prepare(Path::new("."));
                 let (root, default_in_place) = check_like_root(args)?;
-                run_ask_command(&root, args, default_in_place)
+                run_ask_command(&root, args, default_in_place, diagnostic_log_plan)
             }
             BuiltinCommand::Check => {
+                // [B,cg] Command diagnostics capture their configuration before
+                // `check_like_root` chooses Git-backed or in-place evaluation.
+                let diagnostic_log_plan = DiagnosticLogPlan::prepare(Path::new("."));
                 let (root, default_in_place) = check_like_root(args)?;
-                run_check_command(&root, args, default_in_place)
+                let in_place =
+                    default_in_place || args_include_option_before_separator(args, "--in-place");
+                // [1g,I4,cg] In-place may use an explicit output namespace, but
+                // never discovers one from repository metadata.
+                let command_persistent_state_root = if in_place {
+                    crate::state_paths::CanonStateRoot::resolve_explicit_if_configured()?
+                } else {
+                    crate::state_paths::CanonStateRoot::resolve_if_available(&root)?
+                };
+                run_check_command(
+                    &root,
+                    args,
+                    default_in_place,
+                    command_persistent_state_root,
+                    diagnostic_log_plan,
+                )
             }
             BuiltinCommand::Show => {
                 let root = git_project_root(Path::new("."))?;
@@ -113,8 +133,13 @@ impl BuiltinCommand {
 fn check_like_root(args: &[OsString]) -> Result<(std::path::PathBuf, bool), CommandError> {
     let current_dir =
         env::current_dir().map_err(|err| format!("failed to read current dir: {err}"))?;
-    let git_root = git_project_root(&current_dir).ok();
     let explicit_in_place = args_include_option_before_separator(args, "--in-place");
+    // [I4] An explicit in-place invocation selects the checked directory
+    // without Git-backed check-root discovery.
+    if explicit_in_place {
+        return Ok((current_dir, false));
+    }
+    let git_root = git_project_root(&current_dir).ok();
     let default_in_place = git_root.is_none();
     // This is only the in-place root-selection rule. The rest of the in-place
     // contract is split across command parsing (`src/check/command/args.rs`),
@@ -122,7 +147,7 @@ fn check_like_root(args: &[OsString]) -> Result<(std::path::PathBuf, bool), Comm
     // (`src/check/command/execution/run.rs`), runtime
     // scope/session behavior (`src/check/interrogation/state.rs`), and config
     // expansion (`src/repo_inspection/mod.rs`).
-    let root = if explicit_in_place || default_in_place {
+    let root = if default_in_place {
         current_dir
     } else {
         git_root.expect("git_root is present when default_in_place is false")
@@ -145,7 +170,7 @@ mod tests {
         args.iter().map(OsString::from).collect()
     }
 
-    #[test]
+    #[test] // xpec: 9b
     fn option_scan_stops_at_separator() {
         assert!(!args_include_option_before_separator(
             &os_args(&["--", "--in-place"]),
@@ -153,7 +178,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[test] // xpec: 9b
     fn option_scan_finds_option_before_separator() {
         assert!(args_include_option_before_separator(
             &os_args(&["--in-place", "--", "--ignored"]),

@@ -1,20 +1,20 @@
 use super::shared::write_stdout_record;
-use crate::check::core::{
-    for_each_unique_report_record_with_source, report_record_counts_as_error, CheckRecord,
-    CheckRunReport, ReportRecordSource,
-};
+use crate::check::core::{for_each_unique_report_record, CheckRunReport};
 use std::io::Write;
 use std::time::Duration;
 
-const ALL_CHECKS_PASSED_MESSAGE: &str = "✓ All checks passed. Commit is allowed.";
+const ALL_CHECKS_PASSED_MESSAGE: &str = "✓ All checks passed.";
+const COMMIT_STAGED_CHANGES_MESSAGE: &str = "✓ All checks passed. Commit the staged changes!";
 const VERIFY_EVIDENCE_MESSAGE: &str =
     "❕ Verify that the evidence supports the observed answer and answers the expectation question; treat unsupported evidence as a readability issue.";
 const USE_EXPECTATIONS_MESSAGE: &str =
     "❕ Use the matching expectations to avoid regressions while fixing the issues.";
 const FIX_ISSUES_MESSAGE: &str = "▷ Fix the issues and run `canon check` again!";
-const THEN_FIX_REMAINING_MESSAGE: &str =
-    "▷ Then fix the remaining issues and run `canon check` again!";
-const PASS_IMPROVEMENT_COMMIT_SUFFIX: &str = "Commit the staged changes NOW!";
+const CONTINUE_EVALUATION_MESSAGE: &str = "▷ Run `canon check` to continue evaluation.";
+
+pub(crate) fn continue_evaluation_message() -> String {
+    CONTINUE_EVALUATION_MESSAGE.to_string()
+}
 
 pub(crate) fn write_summary_line(
     result_output: &mut dyn Write,
@@ -27,32 +27,19 @@ pub(crate) fn write_summary_line(
 
 fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -> String {
     let SummaryOutcomeCounts {
-        blocked,
-        passed,
         failed,
-        errors,
+        passed,
+        pending,
     } = summary_outcome_counts(report);
     let mut outcomes = Vec::new();
-    // Blocked hooks are check outcomes even though they are not expectation
-    // records, so they lead the summary independently of record counts.
-    if blocked > 0 {
-        outcomes.push(format!("{} blocked", blocked));
-    }
     if failed > 0 {
         outcomes.push(format!("{} failed", failed));
-    }
-    if errors > 0 {
-        outcomes.push(format!(
-            "{} {}",
-            errors,
-            if errors == 1 { "error" } else { "errors" }
-        ));
     }
     if passed > 0 {
         outcomes.push(format!("{} passed", passed));
     }
-    if report.skipped > 0 {
-        outcomes.push(format!("{} pending", report.skipped));
+    if pending > 0 {
+        outcomes.push(format!("{} pending", pending));
     }
     if outcomes.is_empty() {
         outcomes.push("0 passed".to_string());
@@ -63,103 +50,77 @@ fn render_check_summary(report: &CheckRunReport, elapsed: Duration) -> String {
 
 pub(crate) fn render_check_agent_messages(
     failed: &[String],
-    errors: &[String],
-    num_new_passes: usize,
-    num_regressions: usize,
     num_pending: usize,
+    need_to_commit: bool,
 ) -> Vec<String> {
-    let num_issues = failed.len() + errors.len();
-    if num_regressions > 0 || (num_issues > 0 && num_new_passes == 0) {
-        let mut messages = repair_instruction_messages(failed, errors);
+    if !failed.is_empty() {
+        let mut messages = repair_instruction_messages(failed);
         messages.push(FIX_ISSUES_MESSAGE.to_string());
         return messages;
     }
-    if num_issues == 0 && num_new_passes == 0 {
-        assert_eq!(num_pending, 0);
-        return vec![ALL_CHECKS_PASSED_MESSAGE.to_string()];
+    if num_pending > 0 {
+        return vec![continue_evaluation_message()];
     }
-
-    assert!(num_new_passes > 0);
-    let mut messages =
-        vec![pass_improvement_notice(num_new_passes).expect("positive new-pass count")];
-    if num_issues > 0 {
-        messages.extend(repair_instruction_messages(failed, errors));
-        messages.push(THEN_FIX_REMAINING_MESSAGE.to_string());
+    vec![if need_to_commit {
+        COMMIT_STAGED_CHANGES_MESSAGE.to_string()
     } else {
-        assert_eq!(num_pending, 0);
-    }
-    messages
+        ALL_CHECKS_PASSED_MESSAGE.to_string()
+    }]
 }
 
-fn repair_instruction_messages(failed: &[String], errors: &[String]) -> Vec<String> {
+fn repair_instruction_messages(failed: &[String]) -> Vec<String> {
+    // xpec: 9b
+    assert!(
+        !failed.is_empty(),
+        "repair instructions require at least one failed xpec"
+    );
     vec![
         VERIFY_EVIDENCE_MESSAGE.to_string(),
-        plan_repair_message(failed, errors),
+        plan_repair_message(failed),
         USE_EXPECTATIONS_MESSAGE.to_string(),
     ]
 }
 
-fn plan_repair_message(failed: &[String], errors: &[String]) -> String {
+fn plan_repair_message(failed: &[String]) -> String {
+    // [AL] Mirror `_repair_instructions` literally: render one `not:<short ID>`
+    // selector for every failed xpec, with no placeholder selectors.
     let selectors = failed
         .iter()
-        .chain(errors)
         .map(|id| format!("not:{id}"))
         .collect::<Vec<_>>()
         .join(" ");
     format!(
-        "❕ Plan the repair, then run `canon show {selectors} [not:<ALREADY_IN_CONTEXT_EXPECTATION>]... -- <PATHSPEC>...` for the planned edit paths to identify expectations that may be affected."
+        "❕ Plan the repair, then run `canon show {selectors} -- <PATHSPEC>...` for the planned edit paths to identify expectations that may be affected."
     )
 }
 
-fn pass_improvement_notice(count: usize) -> Option<String> {
-    match count {
-        0 => None,
-        1 => Some(format!("▷ +1 pass. {}", PASS_IMPROVEMENT_COMMIT_SUFFIX)),
-        count => Some(format!(
-            "▷ +{} passes. {}",
-            count, PASS_IMPROVEMENT_COMMIT_SUFFIX
-        )),
-    }
-}
-
 pub(crate) struct SummaryOutcomeCounts {
-    pub(crate) blocked: usize,
-    pub(crate) passed: usize,
     pub(crate) failed: usize,
-    pub(crate) errors: usize,
+    pub(crate) passed: usize,
+    pub(crate) pending: usize,
 }
 
 pub(crate) fn summary_outcome_counts(report: &CheckRunReport) -> SummaryOutcomeCounts {
     let mut counts = SummaryOutcomeCounts {
-        blocked: report.blocked_hooks.len(),
-        passed: 0,
         failed: 0,
-        errors: 0,
+        passed: 0,
+        pending: report.pending,
     };
-    for_each_unique_report_record_with_source(&report.records, &report.cached, |source, record| {
-        add_summary_record(&mut counts, source, record);
+    for_each_unique_report_record(&report.records, &report.cached, |record| {
+        if record.passed() {
+            counts.passed += 1;
+        } else {
+            counts.failed += 1;
+        }
     });
     counts
 }
 
-fn add_summary_record(
-    counts: &mut SummaryOutcomeCounts,
-    source: ReportRecordSource,
-    record: &CheckRecord,
-) {
-    if record.passed() {
-        counts.passed += 1;
-    } else if report_record_counts_as_error(source, record) {
-        counts.errors += 1;
-    } else {
-        counts.failed += 1;
-    }
-}
-
 fn pad_summary_line(inner: &str) -> String {
     const WIDTH: usize = 80;
-    let width = WIDTH.max(inner.len() + 2);
-    let padding = width - inner.len();
+    // [hJ] Keep at least two padding characters regardless of the preferred
+    // width, so splitting the padding always leaves an `=` on both sides.
+    let padding = WIDTH.saturating_sub(inner.len()).max(2);
     let left = padding / 2;
     let right = padding - left;
     format!("{}{}{}", "=".repeat(left), inner, "=".repeat(right))
@@ -167,22 +128,25 @@ fn pad_summary_line(inner: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::check::core::BlockedCheckHook;
+    use super::pad_summary_line;
 
-    #[test] // xpec: HW
-    fn summary_includes_blocked_before_pending() {
-        let report = CheckRunReport {
-            records: Vec::new(),
-            cached: Vec::new(),
-            blocked_hooks: vec![BlockedCheckHook {
-                repair_instruction: "repair".to_string(),
-            }],
-            skipped: 1,
-        };
+    #[test] // xpec: 7N
+    fn long_summary_still_has_equals_padding_on_both_sides() {
+        let inner = format!(" {} ", "long outcome ".repeat(10));
 
-        let rendered = render_check_summary(&report, Duration::from_millis(500));
+        let line = pad_summary_line(&inner);
 
-        assert!(rendered.contains(" 1 blocked, 1 pending in 0.50s "));
+        assert!(line.starts_with('='));
+        assert!(line.ends_with('='));
+        assert_eq!(line.len(), inner.len() + 2);
+    }
+
+    #[test] // xpec: hJ
+    fn summary_one_short_of_preferred_width_has_equals_on_both_sides() {
+        let inner = "x".repeat(79);
+
+        let line = pad_summary_line(&inner);
+
+        assert_eq!(line, format!("={inner}="));
     }
 }

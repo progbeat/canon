@@ -12,11 +12,8 @@ Default selected expectation logic is:
 ```
 if expectation selectors are provided:
     selected = select expectations matching the selectors  # explicit user request
-elif every cached result is a pass:
-    # Cached results are insufficient to determine the final result, so evaluation is needed.
-    selected = collected - cached
 else:
-    selected = empty  # cached failures must be fixed first
+    selected = collected - cached
 ```
 
 Expectations matched by explicit selectors are forced selections. They must not be deselected by cached results or by later selection logic.

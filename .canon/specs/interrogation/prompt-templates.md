@@ -15,7 +15,7 @@ It does not show the rendered block body.
 If `display` is omitted, the command line shows the trimmed rendered block body.
 
 When command output exceeds 8 KiB, the complete command stdout is saved to a temporary file. Within a single `canon check` invocation, the path is deterministic from the complete stdout content, so identical output is saved once and referenced by the same path.
-The file must be readable by the evaluator that receives the path for the lifetime of the thread.
+The file must be readable by the evaluator agent that receives the path for the lifetime of the evaluator thread.
 The rendered transcript shows only the output head, followed by exactly one truncation line in this format:
 
 ```

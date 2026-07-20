@@ -1,11 +1,9 @@
 use crate::check::{CheckRecord, CheckResult, ResolvedExpectation};
 use crate::fs_util::{ensure_dir_without_symlinks, reject_symlink, write_temp_file_then_replace};
 use crate::git::{TreeSource, VisibleTreeOidCache};
-use crate::hash::hash_60;
 use crate::scope::visible_scope;
 use crate::time::{format_record_timestamp, parse_record_timestamp, unix_timestamp};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -21,7 +19,6 @@ static LAST_RESULT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 pub(crate) enum LastResultStatus {
     Pass,
     Fail,
-    Error,
 }
 
 impl LastResultStatus {
@@ -29,7 +26,6 @@ impl LastResultStatus {
         match self {
             LastResultStatus::Pass => "pass",
             LastResultStatus::Fail => "fail",
-            LastResultStatus::Error => "error",
         }
     }
 
@@ -37,35 +33,40 @@ impl LastResultStatus {
         match self {
             LastResultStatus::Pass => "last-pass.json",
             LastResultStatus::Fail => "last-fail.json",
-            LastResultStatus::Error => "last-error.json",
         }
     }
 
     fn check_result(self) -> CheckResult {
         match self {
             LastResultStatus::Pass => CheckResult::Pass,
-            LastResultStatus::Fail | LastResultStatus::Error => CheckResult::Fail,
+            LastResultStatus::Fail => CheckResult::Fail,
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct LastResult {
-    // This struct is the persisted last-result schema. Git-backed evaluator
-    // interrogation responses store the prompt-rendered diff base as
-    // `diffFrom` and `diffFromTreeOid`; records from paths without such an
-    // interrogation leave those fields absent. The containing xpec directory
-    // is keyed by the full expectation ID; the JSON body does not persist the
-    // expectation ID or human display prefix.
+    // [g2,gD] This is deliberate cross-invocation xpec history, not
+    // invocation-local execution state. Git-backed evaluator interrogation
+    // responses store the prompt-rendered diff base as `diffFrom` and
+    // `diffFromTreeOid`; records from paths without such an interrogation leave
+    // those fields absent. An in-place status result also omits checkedTreeOid,
+    // so a pass there does not define a Git-tree checkpoint. The containing
+    // xpec directory is keyed by the full expectation ID; the JSON body does not
+    // persist the expectation ID or human display prefix.
     #[serde(rename = "responseTimestamp")]
     pub(crate) response_timestamp: String,
     #[serde(rename = "updatedTimestamp")]
     pub(crate) updated_timestamp: String,
     pub(crate) status: LastResultStatus,
-    pub(crate) response: Value,
-    #[serde(rename = "qScope")]
+    pub(crate) response: LastResultResponse,
+    #[serde(rename = "qScope", default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) q_scope: Vec<String>,
-    #[serde(rename = "visibleScope")]
+    #[serde(
+        rename = "visibleScope",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub(crate) visible_scope: Vec<String>,
     #[serde(
         rename = "checkedTreeOid",
@@ -89,32 +90,92 @@ pub(crate) struct LastResult {
     pub(crate) diff_from_tree_oid: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct LastResultResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    answer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    evidence: Option<String>,
+    #[serde(
+        rename = "qScopeSuggestion",
+        default,
+        deserialize_with = "deserialize_present_question_scope_suggestion",
+        skip_serializing_if = "Option::is_none"
+    )]
+    question_scope_suggestion: Option<Vec<String>>,
+}
+
+fn deserialize_present_question_scope_suggestion<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Vec::<String>::deserialize(deserializer).map(Some)
+}
+
+impl LastResultResponse {
+    pub(crate) fn answered(
+        answer: impl Into<String>,
+        evidence: impl Into<String>,
+        question_scope_suggestion: Option<Vec<String>>,
+    ) -> Self {
+        Self {
+            answer: Some(answer.into()),
+            error: None,
+            evidence: Some(evidence.into()),
+            question_scope_suggestion,
+        }
+    }
+
+    fn from_record(record: &CheckRecord) -> Self {
+        let question_scope_suggestion = record.question_scope_suggestion.clone();
+        if let Some(suggestion) = question_scope_suggestion.as_deref() {
+            // xpec: w
+            assert!(
+                !suggestion.is_empty(),
+                "qScopeSuggestion must be non-empty when present"
+            );
+        }
+        if let Some(error) = record.error.clone() {
+            Self {
+                answer: None,
+                error: Some(error),
+                evidence: record.evidence.clone(),
+                question_scope_suggestion,
+            }
+        } else if let Some(evidence) = record.evidence.clone() {
+            Self::answered(record.observed.clone(), evidence, question_scope_suggestion)
+        } else {
+            Self {
+                answer: Some(record.observed.clone()),
+                error: None,
+                evidence: None,
+                question_scope_suggestion,
+            }
+        }
+    }
+}
+
 impl LastResult {
     pub(crate) fn answer(&self) -> Option<&str> {
-        self.response.get("answer").and_then(Value::as_str)
+        self.response.answer.as_deref()
     }
 
     fn error(&self) -> Option<&str> {
-        self.response.get("error").and_then(Value::as_str)
+        self.response.error.as_deref()
     }
 
-    fn evidence(&self) -> String {
-        self.response
-            .get("evidence")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string()
+    fn evidence(&self) -> Option<String> {
+        self.response.evidence.clone()
     }
 
     fn question_scope_suggestion(&self) -> Option<Vec<String>> {
         // Last-result `response` is the normalized evaluator response; the
         // applied q-scope is stored separately in `qScope`.
-        self.response
-            .get("qScopeSuggestion")?
-            .as_array()?
-            .iter()
-            .map(|value| value.as_str().map(str::to_string))
-            .collect()
+        self.response.question_scope_suggestion.clone()
     }
 }
 
@@ -126,7 +187,8 @@ impl XpecStateCache {
     ) -> Result<Option<Vec<String>>, String> {
         Ok(self
             .read_last_pass(root, expectation)?
-            .map(|result| result.q_scope))
+            .map(|result| result.q_scope)
+            .filter(|scope| !scope.is_empty()))
     }
 
     pub(crate) fn read_last_pass(
@@ -145,14 +207,6 @@ impl XpecStateCache {
         self.read_last_result(root, expectation, LastResultStatus::Fail)
     }
 
-    pub(crate) fn read_last_error(
-        &mut self,
-        root: &Path,
-        expectation: &ResolvedExpectation,
-    ) -> Result<Option<LastResult>, String> {
-        self.read_last_result(root, expectation, LastResultStatus::Error)
-    }
-
     pub(crate) fn read_last_result(
         &mut self,
         root: &Path,
@@ -169,32 +223,10 @@ impl XpecStateCache {
         Ok(result)
     }
 
-    pub(crate) fn read_same_tree_records(
-        &mut self,
-        root: &Path,
-        expectation: &ResolvedExpectation,
-        status: LastResultStatus,
-    ) -> Result<Vec<LastResult>, String> {
-        assert!(matches!(
-            status,
-            LastResultStatus::Pass | LastResultStatus::Fail
-        ));
-        let key = (root.to_path_buf(), expectation.id.clone(), status);
-        if let Some(cached) = self.same_tree_records.get(&key) {
-            return Ok(cached.clone());
-        }
-        let results = read_same_tree_records_dir(
-            &self.same_tree_records_dir(root, expectation, status)?,
-            status,
-        )?;
-        self.same_tree_records.insert(key, results.clone());
-        Ok(results)
-    }
-
     pub(crate) fn write_last_result_for_record(
         &mut self,
         root: &Path,
-        checked_tree_oid: &str,
+        checked_tree_oid: Option<&str>,
         expectation: &ResolvedExpectation,
         record: &CheckRecord,
     ) -> Result<LastResult, String> {
@@ -204,7 +236,7 @@ impl XpecStateCache {
     pub(crate) fn write_interrogation_last_result_for_record_or_absent_history(
         &mut self,
         root: Option<&Path>,
-        checked_tree_oid: &str,
+        checked_tree_oid: Option<&str>,
         expectation: &ResolvedExpectation,
         record: &CheckRecord,
     ) -> Result<Option<LastResult>, String> {
@@ -218,10 +250,12 @@ impl XpecStateCache {
         // interrogation-only writer requires the resolved diff provenance.
         // Lower-level writers still accept absent provenance for refreshed or
         // synthetic records that did not come from such an interrogation.
-        require_git_backed_diff_provenance(
-            record.diff_from.as_deref(),
-            record.diff_from_tree_oid.as_deref(),
-        )?;
+        if checked_tree_oid.is_some() {
+            require_git_backed_diff_provenance(
+                record.diff_from.as_deref(),
+                record.diff_from_tree_oid.as_deref(),
+            )?;
+        }
         self.write_last_result_for_record(root, checked_tree_oid, expectation, record)
             .map(Some)
     }
@@ -229,7 +263,7 @@ impl XpecStateCache {
     pub(crate) fn write_last_result_for_record_or_absent_history(
         &mut self,
         root: Option<&Path>,
-        checked_tree_oid: &str,
+        checked_tree_oid: Option<&str>,
         expectation: &ResolvedExpectation,
         record: &CheckRecord,
     ) -> Result<Option<LastResult>, String> {
@@ -246,42 +280,57 @@ impl XpecStateCache {
     fn write_last_result_for_record_inner(
         &mut self,
         root: &Path,
-        checked_tree_oid: &str,
+        checked_tree_oid: Option<&str>,
         expectation: &ResolvedExpectation,
         record: &CheckRecord,
     ) -> Result<LastResult, String> {
         let status = last_result_status_for_record(expectation, record);
         let now = format_record_timestamp(unix_timestamp()?);
         let q_scope = record.scope.clone();
-        let visible_scope = visible_scope(&expectation.agent, &q_scope)?;
+        let visible_scope = checked_tree_oid
+            .is_some()
+            .then(|| visible_scope(&expectation.agent, &q_scope))
+            .transpose()?;
+        // [I4] In-place results persist pass/fail history but have no Git diff
+        // context. Enforce that at the persistence boundary so their
+        // status-specific files cannot leak tree OIDs.
+        let (diff_from, diff_from_tree_oid) = if checked_tree_oid.is_some() {
+            (record.diff_from.clone(), record.diff_from_tree_oid.clone())
+        } else {
+            (None, None)
+        };
         let result = LastResult {
             response_timestamp: record.timestamp.clone(),
             updated_timestamp: now,
             status,
-            response: normalized_response_from_record(record),
-            q_scope: q_scope.clone(),
-            visible_scope,
-            checked_tree_oid: (status == LastResultStatus::Pass)
-                .then(|| checked_tree_oid.to_string()),
-            visible_tree_oid: matches!(status, LastResultStatus::Pass | LastResultStatus::Fail)
-                .then(|| {
-                    visible_tree_oid_for_persisted_scope(
+            response: LastResultResponse::from_record(record),
+            q_scope: if checked_tree_oid.is_some() {
+                q_scope.clone()
+            } else {
+                Vec::new()
+            },
+            visible_scope: visible_scope.unwrap_or_default(),
+            checked_tree_oid: checked_tree_oid.map(str::to_string),
+            visible_tree_oid: match (checked_tree_oid, status) {
+                (Some(checked_tree_oid), LastResultStatus::Pass) => {
+                    Some(visible_tree_oid_for_persisted_scope(
                         root,
                         checked_tree_oid,
                         expectation,
                         record,
                         &q_scope,
-                    )
-                })
-                .transpose()?,
-            diff_from: record.diff_from.clone(),
-            diff_from_tree_oid: record.diff_from_tree_oid.clone(),
+                    )?)
+                }
+                _ => None,
+            },
+            diff_from,
+            diff_from_tree_oid,
         };
         self.write_last_result(root, expectation, &result)?;
         Ok(result)
     }
 
-    pub(crate) fn refresh_last_result_for_checked_tree(
+    pub(crate) fn refresh_git_backed_last_result_for_checked_tree(
         &mut self,
         root: &Path,
         current_checked_tree_oid: &str,
@@ -305,10 +354,12 @@ impl XpecStateCache {
         validate_last_result(result.status, result)?;
         let path = self.last_result_path(root, expectation, result.status)?;
         let temp_path = temp_path_for(&path)?;
-        self.save_replaced_same_tree_record(root, expectation, result.status, &path, result)?;
         // Last-result files are whole-record snapshots. Refreshing a result
         // writes one complete newly persisted status record plus the `last.json`
         // alias below; it never rewrites an accumulated log or state prefix.
+        // For serialized snapshot payloads totaling N bytes, the primary files
+        // total N and the alias adds at most one copy of each payload, so this
+        // path writes at most 2N bytes.
         write_temp_file_then_replace(&temp_path, &path, |file| {
             serde_json::to_writer(&mut *file, result)
                 .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
@@ -330,53 +381,6 @@ impl XpecStateCache {
         status: LastResultStatus,
     ) -> Result<PathBuf, String> {
         Ok(self.xpec_dir(root, expectation)?.join(status.file_name()))
-    }
-
-    fn same_tree_records_dir(
-        &mut self,
-        root: &Path,
-        expectation: &ResolvedExpectation,
-        status: LastResultStatus,
-    ) -> Result<PathBuf, String> {
-        Ok(self
-            .xpec_dir(root, expectation)?
-            .join("same-tree-records")
-            .join(status.as_str()))
-    }
-
-    fn save_replaced_same_tree_record(
-        &mut self,
-        root: &Path,
-        expectation: &ResolvedExpectation,
-        status: LastResultStatus,
-        status_path: &Path,
-        replacement: &LastResult,
-    ) -> Result<(), String> {
-        if !matches!(status, LastResultStatus::Pass | LastResultStatus::Fail) {
-            return Ok(());
-        }
-        let Some(previous) = read_last_result_path(status_path, status)? else {
-            return Ok(());
-        };
-        if !should_save_same_tree_record(&previous, replacement) {
-            return Ok(());
-        }
-        let dir = self.same_tree_records_dir(root, expectation, status)?;
-        ensure_dir_without_symlinks(&dir)?;
-        let path = dir.join(same_tree_record_file_name(&previous)?);
-        if !same_tree_record_is_newer_than_existing(&path, status, &previous)? {
-            return Ok(());
-        }
-        let temp_path = temp_path_for(&path)?;
-        write_temp_file_then_replace(&temp_path, &path, |file| {
-            serde_json::to_writer(&mut *file, &previous)
-                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))?;
-            std::io::Write::write_all(file, b"\n")
-                .map_err(|err| format!("failed to write {}: {}", temp_path.display(), err))
-        })?;
-        let key = (root.to_path_buf(), expectation.id.clone(), status);
-        self.same_tree_records.remove(&key);
-        Ok(())
     }
 }
 
@@ -426,14 +430,19 @@ pub(super) fn check_record_from_last_result(
         timestamp: result.response_timestamp.clone(),
         number: expectation.number,
         result: result.status.check_result(),
+        to: expectation.to,
         question: Some(expectation.question.clone()),
         expected_answer: Some(expectation.expected_answer.clone()),
         observed,
         error,
         evidence: result.evidence(),
-        scope: result.q_scope.clone(),
+        scope: if result.q_scope.is_empty() {
+            crate::hash::full_scope()
+        } else {
+            result.q_scope.clone()
+        },
         question_scope_suggestion: response_question_scope_suggestion,
-        visible_tree_oid: result.visible_tree_oid.clone().unwrap_or_default(),
+        visible_tree_oid: result.visible_tree_oid.clone(),
         diff_from: result.diff_from.clone(),
         diff_from_tree_oid: result.diff_from_tree_oid.clone(),
         diff_from_tree_oid_abbrev: diff_from_tree_oid_abbrev(root, result),
@@ -452,14 +461,19 @@ pub(super) fn pass_record_from_cooldown_result(
         timestamp: result.response_timestamp.clone(),
         number: expectation.number,
         result: CheckResult::Pass,
+        to: expectation.to,
         question: Some(expectation.question.clone()),
         expected_answer: Some(expectation.expected_answer.clone()),
         observed: expectation.expected_answer.clone(),
         error: None,
         evidence: result.evidence(),
-        scope: result.q_scope.clone(),
+        scope: if result.q_scope.is_empty() {
+            crate::hash::full_scope()
+        } else {
+            result.q_scope.clone()
+        },
         question_scope_suggestion: response_question_scope_suggestion,
-        visible_tree_oid: result.visible_tree_oid.clone().unwrap_or_default(),
+        visible_tree_oid: result.visible_tree_oid.clone(),
         diff_from: result.diff_from.clone(),
         diff_from_tree_oid: result.diff_from_tree_oid.clone(),
         diff_from_tree_oid_abbrev: diff_from_tree_oid_abbrev(root, result),
@@ -483,33 +497,11 @@ fn last_result_status_for_record(
     expectation: &ResolvedExpectation,
     record: &CheckRecord,
 ) -> LastResultStatus {
-    // Last-result status follows the final response shape: error responses and
-    // technical failures have `error`; every present answer is pass or fail.
-    if record.error.is_some() {
-        LastResultStatus::Error
-    } else if record.observed == expectation.expected_answer {
+    if record.error.is_none() && record.observed == expectation.expected_answer {
         LastResultStatus::Pass
     } else {
         LastResultStatus::Fail
     }
-}
-
-fn normalized_response_from_record(record: &CheckRecord) -> Value {
-    let mut response = serde_json::Map::new();
-    if let Some(error) = record.error.as_deref() {
-        response.insert("error".to_string(), json!(error));
-    } else {
-        response.insert("answer".to_string(), json!(record.observed));
-    }
-    response.insert("evidence".to_string(), json!(record.evidence));
-    if let Some(suggestion) = record.question_scope_suggestion.as_deref() {
-        assert!(
-            !suggestion.is_empty(),
-            "qScopeSuggestion must be non-empty when present"
-        );
-        response.insert("qScopeSuggestion".to_string(), json!(suggestion));
-    }
-    Value::Object(response)
 }
 
 fn visible_tree_oid_for_persisted_scope(
@@ -520,10 +512,12 @@ fn visible_tree_oid_for_persisted_scope(
     q_scope: &[String],
 ) -> Result<String, String> {
     if q_scope == record.scope.as_slice() {
-        return Ok(record.visible_tree_oid.clone());
+        return record
+            .visible_tree_oid
+            .clone()
+            .ok_or("Git-backed pass record is missing visible tree OID".to_string());
     }
     let checked_source = TreeSource::Git {
-        treeish: checked_tree_oid.to_string(),
         tree_oid: checked_tree_oid.to_string(),
     };
     VisibleTreeOidCache::new()
@@ -570,25 +564,26 @@ fn validate_last_result(
     if parse_record_timestamp(&result.updated_timestamp).is_none() {
         return Err("updatedTimestamp must be UTC in YYYY-MM-DDTHH:MM:SSZ form".to_string());
     }
-    if result
-        .response
-        .get("evidence")
-        .and_then(Value::as_str)
-        .is_none()
-    {
-        return Err("response must contain evidence".to_string());
-    }
-    if let Some(suggestion) = result.response.get("qScopeSuggestion") {
-        validate_response_question_scope_suggestion(suggestion)?;
-    }
-    // Reads of existing state and generic last-result writes can observe
-    // optional diff provenance independently of the stricter Git-backed
-    // interrogation writer, so schema validation rejects malformed partial
-    // pairs while still allowing the pair to be absent.
+    // [iR] A Git-backed result may omit diff provenance when its response did
+    // not come from a diff-rendered evaluator interrogation. The inverse is
+    // not true: a diff provenance pair proves Git backing and therefore
+    // requires the complete Git-tree context.
     validate_optional_diff_provenance_pair(
         result.diff_from.as_deref(),
         result.diff_from_tree_oid.as_deref(),
     )?;
+    let git_backed = result.checked_tree_oid.is_some();
+    if result.diff_from.is_some() && !git_backed {
+        return Err("diffFrom and diffFromTreeOid require checkedTreeOid".to_string());
+    }
+    if git_backed == result.q_scope.is_empty() || git_backed == result.visible_scope.is_empty() {
+        return Err(
+            "qScope and visibleScope are required exactly for Git-backed results".to_string(),
+        );
+    }
+    if let Some(suggestion) = result.response.question_scope_suggestion.as_deref() {
+        validate_response_question_scope_suggestion(suggestion)?;
+    }
     match expected_status {
         LastResultStatus::Pass => {
             if result.answer().is_none() {
@@ -597,56 +592,30 @@ fn validate_last_result(
             if result.error().is_some() {
                 return Err("pass response must omit error".to_string());
             }
-            if result.checked_tree_oid.is_none() {
-                return Err("pass must contain checkedTreeOid".to_string());
-            }
-            if result.visible_tree_oid.is_none() {
+            if git_backed && result.visible_tree_oid.is_none() {
                 return Err("pass must contain visibleTreeOid".to_string());
+            }
+            if !git_backed && result.visible_tree_oid.is_some() {
+                return Err("in-place pass must omit visibleTreeOid".to_string());
             }
         }
         LastResultStatus::Fail => {
-            if result.answer().is_none() {
-                return Err("fail response must contain answer".to_string());
-            }
-            if result.error().is_some() {
-                return Err("fail response must omit error".to_string());
-            }
-            if result.checked_tree_oid.is_some() {
-                return Err("fail must omit checkedTreeOid".to_string());
-            }
-            if result.visible_tree_oid.is_none() {
-                return Err("fail must contain visibleTreeOid".to_string());
-            }
-        }
-        LastResultStatus::Error => {
-            if result.answer().is_some() {
-                return Err("error response must not contain answer".to_string());
-            }
-            if result.error().is_none() {
-                return Err("error response must contain error".to_string());
-            }
-            if result.checked_tree_oid.is_some() {
-                return Err("error must omit checkedTreeOid".to_string());
+            if result.answer().is_some() == result.error().is_some() {
+                return Err("fail response must contain exactly one of answer or error".to_string());
             }
             if result.visible_tree_oid.is_some() {
-                return Err("error must omit visibleTreeOid".to_string());
+                return Err("fail must omit visibleTreeOid".to_string());
             }
         }
     }
     Ok(())
 }
 
-fn validate_response_question_scope_suggestion(value: &Value) -> Result<(), String> {
-    let Some(items) = value.as_array() else {
-        return Err("response qScopeSuggestion must be an array".to_string());
-    };
+fn validate_response_question_scope_suggestion(items: &[String]) -> Result<(), String> {
     if items.is_empty() {
         return Err("response qScopeSuggestion must be non-empty".to_string());
     }
-    for item in items {
-        let Some(path) = item.as_str() else {
-            return Err("response qScopeSuggestion items must be strings".to_string());
-        };
+    for path in items {
         if path.is_empty() || path.contains(['\r', '\n']) {
             return Err(
                 "response qScopeSuggestion items must be non-empty single-line strings".to_string(),
@@ -654,82 +623,6 @@ fn validate_response_question_scope_suggestion(value: &Value) -> Result<(), Stri
         }
     }
     Ok(())
-}
-
-fn should_save_same_tree_record(previous: &LastResult, replacement: &LastResult) -> bool {
-    previous.status != replacement.status
-        || previous.response_timestamp != replacement.response_timestamp
-        || previous.response != replacement.response
-        || previous.q_scope != replacement.q_scope
-        || previous.visible_scope != replacement.visible_scope
-        || previous.visible_tree_oid != replacement.visible_tree_oid
-        || previous.diff_from != replacement.diff_from
-        || previous.diff_from_tree_oid != replacement.diff_from_tree_oid
-}
-
-fn same_tree_record_file_name(result: &LastResult) -> Result<String, String> {
-    let Some(visible_tree_oid) = result.visible_tree_oid.as_deref() else {
-        return Err("same-tree record must contain visibleTreeOid".to_string());
-    };
-    // Same-tree history keeps the latest record for each retained visible
-    // tree/scope/provenance tuple instead of appending one file per
-    // replacement.
-    let key = serde_json::to_vec(&json!({
-        "visibleScope": result.visible_scope,
-        "visibleTreeOid": visible_tree_oid,
-        "diffFrom": result.diff_from,
-        "diffFromTreeOid": result.diff_from_tree_oid,
-    }))
-    .map_err(|err| format!("failed to serialize same-tree record key: {}", err))?;
-    Ok(format!(
-        "{}-{}.json",
-        path_safe_timestamp(visible_tree_oid),
-        hash_60(&key)
-    ))
-}
-
-fn path_safe_timestamp(timestamp: &str) -> String {
-    timestamp
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-        .collect()
-}
-
-fn read_same_tree_records_dir(
-    dir: &Path,
-    status: LastResultStatus,
-) -> Result<Vec<LastResult>, String> {
-    reject_symlink(dir)?;
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => return Err(format!("failed to read {}: {}", dir.display(), err)),
-    };
-    let mut results = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(|err| format!("failed to read {}: {}", dir.display(), err))?;
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-            continue;
-        }
-        if let Some(result) = read_last_result_path(&path, status)? {
-            results.push(result);
-        }
-    }
-    Ok(results)
-}
-
-fn same_tree_record_is_newer_than_existing(
-    path: &Path,
-    status: LastResultStatus,
-    candidate: &LastResult,
-) -> Result<bool, String> {
-    let Some(existing) = read_last_result_path(path, status)? else {
-        return Ok(true);
-    };
-    let existing_time = parse_record_timestamp(&existing.response_timestamp).unwrap_or(0);
-    let candidate_time = parse_record_timestamp(&candidate.response_timestamp).unwrap_or(0);
-    Ok(candidate_time > existing_time)
 }
 
 fn refresh_last_json_link(status_path: &Path, last_path: &Path) -> Result<(), String> {
@@ -764,4 +657,55 @@ fn temp_path_for(path: &Path) -> Result<PathBuf, String> {
     let sequence = LAST_RESULT_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     temp_name.push(format!(".tmp.{}.{}", process::id(), sequence));
     Ok(path.with_file_name(temp_name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test] // xpec: I4,gD
+    fn in_place_fail_serialization_omits_git_tree_fields() {
+        let result = in_place_fail_result();
+
+        validate_last_result(LastResultStatus::Fail, &result).unwrap();
+        let json = serde_json::to_value(result).unwrap();
+        assert_eq!(json["status"], "fail");
+        assert_eq!(
+            [
+                json.get("qScope"),
+                json.get("visibleScope"),
+                json.get("checkedTreeOid"),
+                json.get("visibleTreeOid"),
+                json.get("diffFrom"),
+                json.get("diffFromTreeOid"),
+            ],
+            [None, None, None, None, None, None]
+        );
+    }
+
+    #[test] // xpec: iR
+    fn diff_provenance_requires_git_backed_tree_context() {
+        let mut result = in_place_fail_result();
+        result.diff_from = Some(":checkpoint".to_string());
+        result.diff_from_tree_oid = Some("0123456789abcdef".to_string());
+
+        let error = validate_last_result(LastResultStatus::Fail, &result).unwrap_err();
+
+        assert_eq!(error, "diffFrom and diffFromTreeOid require checkedTreeOid");
+    }
+
+    fn in_place_fail_result() -> LastResult {
+        LastResult {
+            response_timestamp: "2026-01-01T00:00:00Z".to_string(),
+            updated_timestamp: "2026-01-01T00:00:01Z".to_string(),
+            status: LastResultStatus::Fail,
+            response: LastResultResponse::answered("3", "shell transcript", None),
+            q_scope: Vec::new(),
+            visible_scope: Vec::new(),
+            checked_tree_oid: None,
+            visible_tree_oid: None,
+            diff_from: None,
+            diff_from_tree_oid: None,
+        }
+    }
 }

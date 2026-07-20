@@ -1,8 +1,8 @@
 # Glossary
 
-**xpec** (**expectation**) is the basic unit of the canon: a formalized human expectation expressed as a question and expected-answer pair.
+**xpec** (**expectation**) is the basic unit of the canon: a formalized human expectation consisting of a question `q`, its addressee `to`, and its expected answer `a`.
 
-**ID** is a 20-character base62 hash derived from the tuple of the rendered expectation question, the expected answer, and a deterministic hash of the expectation instructions.
+**ID** is a 20-character base62 hash derived from the tuple of the rendered `q`, `to`, `a`, and a deterministic hash of the expectation instructions.
 
 **short ID** is the shortest prefix of an expectation's **ID** that uniquely identifies that expectation among the collected expectations.
 
@@ -13,6 +13,10 @@
 **checkpoint** is the checked Git tree from an xpec's most recent pass result.
 
 **evaluator thread** is an ephemeral evaluator interaction context with no persisted history.
+
+**turn** is one request to an evaluator agent and the evaluator agent's returned message.
+
+**interrogation** is the sequence of turns performed during the evaluation of one xpec with `to: agent`.
 
 ---
 
@@ -41,7 +45,8 @@ It may or may not be a valid q-scope.
 
 ---
 
-**CANON_STATE_DIR** is `$(git rev-parse --git-path canon)`: the root directory for all canon-owned non-temporary persistent state.
+**CANON_STATE_DIR** is the root directory for all canon-owned non-temporary persistent state.
+It is set by the `CANON_STATE_DIR` environment variable. If the variable is unset, it defaults to `$(git rev-parse --git-path canon)`.
 Every canon command stores canon-owned non-temporary persistent state only under `CANON_STATE_DIR`.
 
 **XPECS_DIR** is `${CANON_STATE_DIR}/xpecs`.

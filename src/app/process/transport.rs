@@ -6,6 +6,7 @@ use crate::app::protocol::{
 use crate::app::APP_SERVER_TURN_TIMEOUT_SECS;
 use crate::evaluator::{
     EvaluatorDynamicToolHandler, EvaluatorDynamicToolResult, EvaluatorError, EvaluatorFailureKind,
+    EvaluatorProgress,
 };
 use crate::platform::check_interrupted;
 use serde_json::Value;
@@ -23,6 +24,27 @@ impl AppServerTurnRequest {
         AppServerTurnRequest {
             thread_id: thread_id.into(),
             params,
+        }
+    }
+}
+
+struct ActiveTurnProgress {
+    progress: Option<EvaluatorProgress>,
+}
+
+impl ActiveTurnProgress {
+    fn start(progress: Option<EvaluatorProgress>) -> ActiveTurnProgress {
+        if let Some(progress) = &progress {
+            progress.record_turn_attempt_started();
+        }
+        ActiveTurnProgress { progress }
+    }
+}
+
+impl Drop for ActiveTurnProgress {
+    fn drop(&mut self) {
+        if let Some(progress) = &self.progress {
+            progress.record_turn_attempt_finished();
         }
     }
 }
@@ -88,6 +110,7 @@ impl AppServerRunner {
             Ok(id) => id,
             Err(err) => return fail_without_turn_timeout_progress_marker(err),
         };
+        let _active_turn_progress = ActiveTurnProgress::start(self.progress.clone());
         let thread_id = request.thread_id;
 
         let mut saw_response = false;
@@ -126,9 +149,6 @@ impl AppServerRunner {
                         ),
                     ));
                 }
-                // A turn attempt is active here, so time is accumulating
-                // toward the no-progress timeout and owns the timeline `~`.
-                self.record_no_progress_timeout_accumulating_progress();
                 continue;
             };
             last_activity = Instant::now();
@@ -284,6 +304,7 @@ fn handle_dynamic_tool_call(
 fn fail_without_turn_timeout_progress_marker(
     err: EvaluatorError,
 ) -> Result<String, EvaluatorError> {
+    // xpec: 03,Od
     assert_ne!(
         err.kind(),
         Some(EvaluatorFailureKind::TurnTimeout),

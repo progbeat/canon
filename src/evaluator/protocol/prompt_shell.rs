@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::io;
 use std::path::Path;
 use std::process::Output;
@@ -16,9 +17,10 @@ use windows as imp;
 pub(crate) fn run_prompt_template_shell_command(
     root: &Path,
     command: &str,
-    env: &[(&str, &str)],
+    env: &[(OsString, OsString)],
+    args: &[String],
 ) -> io::Result<Output> {
-    imp::run_prompt_template_shell_command(root, command, env)
+    imp::run_prompt_template_shell_command(root, command, env, args)
 }
 
 pub(crate) fn quote_prompt_template_shell_arg(value: &str) -> Result<String, String> {

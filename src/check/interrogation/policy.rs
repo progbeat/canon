@@ -113,9 +113,7 @@ pub(crate) fn interrogate_or_error_record<R: EvaluatorRunner>(
                     diff_provenance,
                     visible_tree_oid_cache,
                 )?,
-                turn_usage: None,
                 context_compacted: false,
-                stop_after_current_expectation: false,
                 interrupted,
             })
         }
@@ -137,11 +135,14 @@ pub(crate) fn git_backed_interrogation_diff_provenance(
     };
     let diff_from = resolve_diff_from(runtime, expectation, last_pass.as_ref())
         .map_err(|err| err.to_string())?;
+    let diff_from_tree_oid = diff_from
+        .tree_oid
+        .ok_or("Git-backed interrogation has no diff base tree OID")?;
     let diff_from_tree_oid_abbrev =
-        crate::git::abbreviate_git_oid(runtime.root, &diff_from.tree_oid)?;
+        crate::git::abbreviate_git_oid(runtime.root, &diff_from_tree_oid)?;
     Ok(Some(InterrogationDiffProvenance {
         diff_from: expectation.diff_from.clone(),
-        diff_from_tree_oid: diff_from.tree_oid,
+        diff_from_tree_oid,
         diff_from_tree_oid_abbrev,
     }))
 }
@@ -201,23 +202,11 @@ pub(crate) fn interrogate_or_error_answer<R: EvaluatorRunner>(
                 diff_from,
                 diff_from_tree_oid,
                 diff_from_tree_oid_abbrev,
-                turn_usage: None,
                 context_compacted: false,
-                stop_after_current_expectation: false,
                 interrupted,
             })
         }
     }
-}
-
-pub(crate) fn turn_exceeds_break_after_tokens(
-    interrogation: &InterrogationResult,
-    break_after_tokens: Option<u64>,
-) -> bool {
-    let (Some(limit), Some(usage)) = (break_after_tokens, interrogation.turn_usage) else {
-        return false;
-    };
-    usage.input_tokens.saturating_add(usage.output_tokens) > limit
 }
 
 pub(crate) fn turn_has_context_compaction(interrogation: &InterrogationResult) -> bool {
@@ -310,10 +299,10 @@ pub(crate) fn question_scope_suggestion_scope_for_independent_verification(
     if !scope_is_within(&suggested_scope, current_scope) {
         return Ok(None);
     }
-    if runtime
-        .visible_tree_oid(visible_tree_oid_cache, agent, &suggested_scope)
-        .is_err()
-    {
+    if !matches!(
+        runtime.visible_tree_oid_if_scope_present(visible_tree_oid_cache, agent, &suggested_scope),
+        Ok(Some(_))
+    ) {
         return Ok(None);
     }
     let current_count = runtime.visible_file_count(visible_tree_oid_cache, agent, current_scope)?;
@@ -357,7 +346,7 @@ pub(crate) fn write_scope_narrowing_event(
         return Ok(());
     };
     writer
-        .write_event(
+        .emit_event(
             "info",
             "scope.narrowing",
             &scope_narrowing_log_fields(id, enforced_scope, record_scope, accepted),
@@ -390,12 +379,12 @@ mod tests {
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test]
+    #[test] // xpec: w
     fn equal_zero_file_scope_is_not_smaller() {
         assert!(!suggested_scope_is_at_least_25_percent_smaller(0, 0));
     }
 
-    #[test]
+    #[test] // xpec: w,gD
     fn initial_scope_uses_last_pass_q_scope_or_full_scope() {
         let q_scope = vec!["src/main.rs".to_string()];
 
@@ -409,7 +398,7 @@ mod tests {
         );
     }
 
-    #[test] // xpec: YD
+    #[test] // xpec: w
     fn unused_follow_up_q_scope_verification_requires_initial_pass() {
         let pass = test_policy_result(test_record("yes", CheckResult::Pass, None), false);
         let fail = test_policy_result(test_record("no", CheckResult::Fail, None), false);
@@ -430,7 +419,7 @@ mod tests {
         assert!(!unused_follow_up_can_verify_q_scope(&already_followed_up));
     }
 
-    #[test] // xpec: YD
+    #[test] // xpec: w
     fn narrowed_scope_acceptance_requires_verification_answer() {
         let pass = test_record("yes", CheckResult::Pass, None);
         let fail = test_record("no", CheckResult::Fail, None);
@@ -444,8 +433,8 @@ mod tests {
         assert!(!narrowed_scope_is_accepted(&error));
     }
 
-    #[test]
-    fn absent_suggestion_path_is_not_verified_for_narrowing() {
+    #[test] // xpec: w
+    fn fully_absent_suggestion_is_not_verified_for_narrowing() {
         let root = git_project("absent-q-scope-suggestion");
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src/present.rs"), "present\n").unwrap();
@@ -456,7 +445,6 @@ mod tests {
         let config = CheckConfig {
             version: 1,
             agent: agent.clone(),
-            hooks: Default::default(),
             expectations: Vec::new(),
         };
         let staged_view = StagedWorktreeView::apply_for_tree_source(&root, source.clone()).unwrap();
@@ -465,11 +453,15 @@ mod tests {
             checked_tree_oid: source.tree_oid_for_prompt_diff(&root).unwrap(),
             against_tree_oid: source.tree_oid_for_prompt_diff(&root).unwrap(),
             checked_file_count: cache.checked_file_count(&root, &source).unwrap(),
+            prompt_git_environment: Vec::new(),
         };
         let runtime =
             CheckRuntime::materialized(&root, &staged_view, &source, tree_context, &config, false);
         let current_scope = vec![".".to_string()];
-        let suggestion = vec!["src/present.rs".to_string(), "src/missing.rs".to_string()];
+        let suggestion = vec![
+            "src/missing.rs".to_string(),
+            "src/also-missing.rs".to_string(),
+        ];
 
         let proposed = question_scope_suggestion_scope_for_independent_verification(
             &runtime,
@@ -484,7 +476,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test] // xpec: YD
+    #[test] // xpec: w
     fn disjoint_suggestion_path_is_not_verified_for_narrowing() {
         let root = git_project("disjoint-q-scope-suggestion");
         fs::create_dir_all(root.join("src")).unwrap();
@@ -498,7 +490,6 @@ mod tests {
         let config = CheckConfig {
             version: 1,
             agent: agent.clone(),
-            hooks: Default::default(),
             expectations: Vec::new(),
         };
         let staged_view = StagedWorktreeView::apply_for_tree_source(&root, source.clone()).unwrap();
@@ -507,6 +498,7 @@ mod tests {
             checked_tree_oid: source.tree_oid_for_prompt_diff(&root).unwrap(),
             against_tree_oid: source.tree_oid_for_prompt_diff(&root).unwrap(),
             checked_file_count: cache.checked_file_count(&root, &source).unwrap(),
+            prompt_git_environment: Vec::new(),
         };
         let runtime =
             CheckRuntime::materialized(&root, &staged_view, &source, tree_context, &config, false);
@@ -526,17 +518,16 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test] // xpec: YD
+    #[test] // xpec: w
     fn no_hide_runtime_never_verifies_q_scope_suggestion() {
         let root = PathBuf::from("/tmp/canon-in-place-policy");
         let agent = AgentConfig::default();
         let config = CheckConfig {
             version: 1,
             agent: agent.clone(),
-            hooks: Default::default(),
             expectations: Vec::new(),
         };
-        let runtime = CheckRuntime::in_place(&root, &config, false);
+        let runtime = CheckRuntime::in_place(&root, &config, true);
         let suggestion = vec!["src".to_string()];
         let mut cache = VisibleTreeOidCache::new();
 
@@ -552,7 +543,7 @@ mod tests {
         assert!(proposed.is_none());
     }
 
-    #[test] // xpec: 8m,et
+    #[test] // xpec: gD
     fn git_backed_interrogation_error_record_preserves_diff_provenance() {
         let root = git_project("interrogation-error-diff-provenance");
         fs::write(root.join("subject.txt"), "subject\n").unwrap();
@@ -562,7 +553,6 @@ mod tests {
         let config = CheckConfig {
             version: 1,
             agent: agent.clone(),
-            hooks: Default::default(),
             expectations: Vec::new(),
         };
         let staged_view = StagedWorktreeView::apply_for_tree_source(&root, source.clone()).unwrap();
@@ -573,6 +563,7 @@ mod tests {
             checked_file_count: visible_tree_oid_cache
                 .checked_file_count(&root, &source)
                 .unwrap(),
+            prompt_git_environment: Vec::new(),
         };
         let against_tree_oid = tree_context.against_tree_oid.clone();
         let runtime =
@@ -642,6 +633,7 @@ mod tests {
             .current_dir(root)
             .output()
             .unwrap();
+        // xpec: w
         assert!(
             output.status.success(),
             "git {:?} failed: {}",
@@ -655,14 +647,15 @@ mod tests {
             timestamp: "1970-01-01T00:00:00Z".to_string(),
             number: 0,
             result,
+            to: crate::config_types::ExpectationTo::Agent,
             question: Some("question".to_string()),
             expected_answer: Some("yes".to_string()),
             observed: observed.to_string(),
             error: error.map(str::to_string),
-            evidence: "evidence".to_string(),
+            evidence: Some("evidence".to_string()),
             scope: full_scope(),
             question_scope_suggestion: None,
-            visible_tree_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+            visible_tree_oid: Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()),
             diff_from: None,
             diff_from_tree_oid: None,
             diff_from_tree_oid_abbrev: None,
@@ -676,6 +669,8 @@ mod tests {
             number: 0,
             id: "expectation-id".to_string(),
             display_id: "e".to_string(),
+            to: crate::config_types::ExpectationTo::Agent,
+            rank: 0,
             question: "Does this fail technically?".to_string(),
             expected_answer: "yes".to_string(),
             question_context: String::new(),
@@ -691,9 +686,7 @@ mod tests {
         PolicyInterrogationResult::new(
             InterrogationResult {
                 record,
-                turn_usage: None,
                 context_compacted: false,
-                stop_after_current_expectation: false,
                 interrupted: false,
             },
             follow_up_used,

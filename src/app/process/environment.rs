@@ -7,11 +7,14 @@ pub(crate) fn configure_app_server_environment(
     isolated_codex_home: &Path,
 ) -> Result<(), String> {
     let path = env::var_os("PATH");
-    let temp_root = evaluator_temp_root()?;
+    let temp_root = app_server_process_temp_root()?;
     command.env_clear();
     if let Some(path) = path {
         command.env("PATH", path);
     }
+    // This is the cwd of the app-server transport/control process, not an
+    // evaluator agent. Each evaluator agent is started later by thread/start,
+    // whose cwd is supplied independently from the checked runtime.
     command.current_dir(&temp_root);
     command.env("CODEX_HOME", isolated_codex_home);
     if let Some(home) = isolated_codex_home.parent() {
@@ -23,7 +26,7 @@ pub(crate) fn configure_app_server_environment(
     Ok(())
 }
 
-fn evaluator_temp_root() -> Result<PathBuf, String> {
+fn app_server_process_temp_root() -> Result<PathBuf, String> {
     env::temp_dir()
         .canonicalize()
         .map_err(|err| format!("failed to canonicalize temp dir: {}", err))
@@ -34,7 +37,7 @@ mod tests {
     use super::*;
     use std::ffi::{OsStr, OsString};
 
-    #[test]
+    #[test] // xpec: A8,mf
     fn app_server_environment_uses_isolated_codex_home() {
         let mut command = Command::new("codex");
         let codex_home = Path::new("/tmp/canon-evaluator-home/.codex");

@@ -77,7 +77,7 @@ fn command_error_has_public_diagnostic(err: &CommandError) -> bool {
     )
 }
 
-fn write_command_error_line(err: &CommandError) -> Result<(), String> {
+pub(crate) fn write_command_error_line(err: &CommandError) -> Result<(), String> {
     let stderr = io::stderr();
     let mut stderr = stderr.lock();
     stderr
@@ -109,7 +109,7 @@ fn is_expectation_diagnostic_block(message: &str) -> bool {
 mod tests {
     use super::{render_command_error, CommandError};
 
-    #[test]
+    #[test] // xpec: 9b
     fn expectation_diagnostic_block_is_not_prefixed_with_generic_error() {
         let rendered = render_command_error(&CommandError::from(
             "x. ERROR\nQuestion?\nError: detail\nEvidence: value".to_string(),
@@ -121,14 +121,14 @@ mod tests {
         );
     }
 
-    #[test]
+    #[test] // xpec: 9b
     fn ordinary_error_keeps_generic_error_prefix() {
         let rendered = render_command_error(&CommandError::from("ordinary failure".to_string()));
 
         assert_eq!(rendered, "Error: ordinary failure\n");
     }
 
-    #[test] // xpec: 5
+    #[test] // xpec: Ky
     fn ask_failed_has_no_extra_public_diagnostic() {
         assert!(!super::command_error_has_public_diagnostic(
             &CommandError::AskFailed(super::AskFailure::Query)

@@ -1,11 +1,13 @@
 use super::answer::{default_check_result, CheckResult};
 use super::expectation::ResolvedExpectation;
+use crate::config_types::ExpectationTo;
 use crate::time::{format_record_timestamp, unix_timestamp};
 use serde::Deserialize;
 
 // In-memory check record used by cache reuse, runtime logs, gate diagnostics,
 // and check output. Runtime records created from evaluator responses receive a
-// repository-native `visibleTreeOid` before they reach last-result storage.
+// repository-native `visibleTreeOid` before they reach last-result storage;
+// in-place records have no tree identity.
 // The type deliberately does not implement `Serialize`; persisted history and
 // runtime-log records must go through dedicated render structs, which write the
 // full expectation ID and never the human display/selector prefix.
@@ -20,6 +22,8 @@ pub(crate) struct CheckRecord {
     pub(crate) number: usize,
     #[serde(default = "default_check_result")]
     pub(crate) result: CheckResult,
+    #[serde(default, skip)]
+    pub(crate) to: ExpectationTo,
     #[serde(default)]
     #[serde(alias = "prompt")]
     pub(crate) question: Option<String>,
@@ -29,13 +33,18 @@ pub(crate) struct CheckRecord {
     pub(crate) observed: String,
     #[serde(default)]
     pub(crate) error: Option<String>,
-    pub(crate) evidence: String,
+    pub(crate) evidence: Option<String>,
     #[serde(rename = "visibleScope", alias = "qScope", alias = "scope")]
     pub(crate) scope: Vec<String>,
     #[serde(default, rename = "qScopeSuggestion", alias = "suggestedQScope")]
     pub(crate) question_scope_suggestion: Option<Vec<String>>,
-    #[serde(rename = "visibleTreeOid", alias = "scopeTreeOid", alias = "scopeHash")]
-    pub(crate) visible_tree_oid: String,
+    #[serde(
+        default,
+        rename = "visibleTreeOid",
+        alias = "scopeTreeOid",
+        alias = "scopeHash"
+    )]
+    pub(crate) visible_tree_oid: Option<String>,
     // Git-backed evaluator turns attach the resolved diff base used for the
     // prompt-rendered diff so failed/error stdout can print the public
     // `Diff-from:` line. Persistent state stores the full OID; stdout uses the
@@ -56,13 +65,13 @@ pub(crate) struct CheckRecordOutcome {
     pub(crate) result: CheckResult,
     pub(crate) observed: String,
     pub(crate) error: Option<String>,
-    pub(crate) evidence: String,
+    pub(crate) evidence: Option<String>,
     pub(crate) scope: Vec<String>,
     // Invocation-local evaluator feedback used by q-scope verification and
     // optional stdout hints. Persistent last-result state stores the q-scope
     // actually used, not this transient suggestion.
     pub(crate) question_scope_suggestion: Option<Vec<String>>,
-    pub(crate) visible_tree_oid: String,
+    pub(crate) visible_tree_oid: Option<String>,
     pub(crate) diff_from: Option<String>,
     pub(crate) diff_from_tree_oid: Option<String>,
     pub(crate) diff_from_tree_oid_abbrev: Option<String>,
@@ -94,6 +103,7 @@ impl CheckRecord {
             display_id: expectation.display_id.clone(),
             number: expectation.number,
             result: outcome.result,
+            to: expectation.to,
             question: Some(expectation.question.clone()),
             expected_answer: Some(expectation.expected_answer.clone()),
             observed: outcome.observed,

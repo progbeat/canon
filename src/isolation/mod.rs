@@ -4,48 +4,118 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const CANON_SECRET_DIR: &str = "CANON_SECRET_DIR";
 const CANON_SANDBOX_DIR: &str = "CANON_SANDBOX_DIR";
 
+pub(crate) fn prepare_evaluator_isolation_environment() -> Result<(), String> {
+    let Some(path) = configured_dir(CANON_SANDBOX_DIR) else {
+        return Ok(());
+    };
+    platform::create_private_dir_all(&path).map_err(|err| {
+        format!(
+            "failed to prepare {} {}: {}",
+            CANON_SANDBOX_DIR,
+            path.display(),
+            err
+        )
+    })
+}
+
 pub(crate) struct NaiveIsolationPolicy {
-    secret_dir: Option<PathBuf>,
-    sandbox_dir: PathBuf,
-    remove_sandbox_dir_on_drop: bool,
+    secret_dir: SecretDirConfig,
+    sandbox_dir: Arc<SandboxDir>,
     counter: u64,
-    secret_dir_mode: Option<platform::SecretDirMode>,
+}
+
+struct SandboxDir {
+    path: PathBuf,
+    remove_on_drop: bool,
+}
+
+impl Drop for SandboxDir {
+    fn drop(&mut self) {
+        if self.remove_on_drop {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+#[derive(Clone)]
+enum SecretDirConfig {
+    Absent,
+    // `os.environ.get` returns the configured empty string, so it is not
+    // `None` for the boundary assertion. Python's `if self.secret_dir` is
+    // nevertheless false for that value, so it has no permission callback.
+    Empty,
+    Present {
+        path: PathBuf,
+        mode: platform::SecretDirMode,
+    },
+}
+
+#[derive(Clone)]
+struct SecretDirModeRestoration {
+    path: PathBuf,
+    mode: platform::SecretDirMode,
+}
+
+impl SecretDirConfig {
+    fn from_path(path: Option<PathBuf>) -> Result<SecretDirConfig, String> {
+        match path {
+            None => Ok(SecretDirConfig::Absent),
+            // Preserve presence and Python string truthiness as separate
+            // properties instead of collapsing an empty value into `None`.
+            Some(path) if path.as_os_str().is_empty() => Ok(SecretDirConfig::Empty),
+            Some(path) => {
+                let mode = stat_mode(&path)?;
+                Ok(SecretDirConfig::Present { path, mode })
+            }
+        }
+    }
+
+    fn boundary(&self) -> Option<&Path> {
+        match self {
+            SecretDirConfig::Absent => None,
+            SecretDirConfig::Empty => Some(Path::new("")),
+            SecretDirConfig::Present { path, .. } => Some(path),
+        }
+    }
+
+    fn permission_restoration(&self) -> Option<SecretDirModeRestoration> {
+        match self {
+            SecretDirConfig::Present { path, mode } => Some(SecretDirModeRestoration {
+                path: path.clone(),
+                mode: mode.clone(),
+            }),
+            // These are exactly the two cases where
+            // `if self.secret_dir` is false in the policy pseudocode.
+            SecretDirConfig::Absent | SecretDirConfig::Empty => None,
+        }
+    }
 }
 
 impl NaiveIsolationPolicy {
     pub(crate) fn from_env() -> Result<NaiveIsolationPolicy, String> {
-        let secret_dir = configured_secret_dir();
+        let secret_dir = SecretDirConfig::from_path(configured_secret_dir())?;
         let (sandbox_dir, remove_sandbox_dir_on_drop) = match configured_dir(CANON_SANDBOX_DIR) {
-            Some(path) => {
-                platform::create_private_dir_all(&path).map_err(|err| {
-                    format!(
-                        "failed to create {} {}: {}",
-                        CANON_SANDBOX_DIR,
-                        path.display(),
-                        err
-                    )
-                })?;
-                (path, false)
-            }
+            Some(path) => (path, false),
             None => (make_temp_dir()?, true),
         };
-        let secret_dir_mode = secret_dir.as_deref().map(stat_mode).transpose()?;
         Ok(NaiveIsolationPolicy {
             secret_dir,
-            sandbox_dir,
-            remove_sandbox_dir_on_drop,
+            sandbox_dir: Arc::new(SandboxDir {
+                path: sandbox_dir,
+                remove_on_drop: remove_sandbox_dir_on_drop,
+            }),
             counter: 0,
-            secret_dir_mode,
         })
     }
 
     #[cfg(test)]
-    fn with_dirs(
+    pub(crate) fn with_dirs(
         secret_dir: Option<PathBuf>,
         sandbox_dir: PathBuf,
     ) -> Result<NaiveIsolationPolicy, String> {
@@ -56,40 +126,37 @@ impl NaiveIsolationPolicy {
                 err
             )
         })?;
-        let secret_dir_mode = secret_dir.as_deref().map(stat_mode).transpose()?;
         Ok(NaiveIsolationPolicy {
-            secret_dir,
-            sandbox_dir,
-            remove_sandbox_dir_on_drop: false,
+            secret_dir: SecretDirConfig::from_path(secret_dir)?,
+            sandbox_dir: Arc::new(SandboxDir {
+                path: sandbox_dir,
+                remove_on_drop: false,
+            }),
             counter: 0,
-            secret_dir_mode,
         })
     }
 
     pub(crate) fn isolate(&mut self, path: &Path) -> Result<NaiveIsolationGuard, String> {
         let original_path = path.to_path_buf();
-        if let Some(secret_dir) = &self.secret_dir {
-            if !is_subpath(&original_path, secret_dir)? {
-                return Err(format!(
-                    "cannot isolate path {} outside of secret dir {}",
-                    original_path.display(),
-                    secret_dir.display()
-                ));
-            }
+        if let Some(secret_dir) = self.secret_dir.boundary() {
+            assert!(
+                is_subpath(&original_path, secret_dir)?,
+                "cannot isolate path {} outside of secret dir {}",
+                original_path.display(),
+                secret_dir.display()
+            );
         }
-        let isolated_path = self.next_isolated_path()?;
+        let isolated_path = self.next_isolated_path();
         platform::move_path(&original_path, &isolated_path)?;
-        let guard = NaiveIsolationGuard {
+        let mut guard = NaiveIsolationGuard {
             original_path,
             isolated_path,
-            secret_dir: self.secret_dir.clone(),
-            secret_dir_mode: self.secret_dir_mode.clone(),
-            hidden_root_mode: None,
+            _sandbox_dir: Arc::clone(&self.sandbox_dir),
+            secret_dir_mode_restoration: None,
             active: true,
         };
-        if let Some(secret_dir) = &guard.secret_dir {
-            if let Err(err) = chmod_secret_dir_no_access(secret_dir) {
-                let mut guard = guard;
+        if let Some(restoration) = self.secret_dir.permission_restoration() {
+            if let Err(err) = chmod_secret_dir_no_access(&restoration.path) {
                 let restore_err = guard.restore().err();
                 return Err(match restore_err {
                     Some(restore_err) => {
@@ -98,41 +165,34 @@ impl NaiveIsolationPolicy {
                     None => err,
                 });
             }
+            guard.secret_dir_mode_restoration = Some(restoration);
         }
         Ok(guard)
     }
 
-    fn next_isolated_path(&mut self) -> Result<PathBuf, String> {
-        let isolated_path = self.sandbox_dir.join(format!("{:X}", self.counter));
+    fn next_isolated_path(&mut self) -> PathBuf {
+        let isolated_path = self.sandbox_dir.path.join(format!("{:X}", self.counter));
         // Match the policy order: derive the destination from the current
         // counter, increment it, then assert that the destination does not
-        // already exist.
+        // already exist. Rust's `Path::exists`, like the policy's
+        // `os.path.exists`, follows symlinks: a dangling destination symlink is
+        // therefore absent to this assertion, leaving the subsequent move to
+        // apply its ordinary platform behavior.
         self.counter += 1;
-        if isolated_path.exists() {
-            Err(format!(
-                "counter collision in sandbox isolation: {}",
-                isolated_path.display()
-            ))
-        } else {
-            Ok(isolated_path)
-        }
-    }
-}
-
-impl Drop for NaiveIsolationPolicy {
-    fn drop(&mut self) {
-        if self.remove_sandbox_dir_on_drop {
-            let _ = fs::remove_dir_all(&self.sandbox_dir);
-        }
+        assert!(
+            !isolated_path.exists(),
+            "counter collision in sandbox isolation: {}",
+            isolated_path.display()
+        );
+        isolated_path
     }
 }
 
 pub(crate) struct NaiveIsolationGuard {
     original_path: PathBuf,
     isolated_path: PathBuf,
-    secret_dir: Option<PathBuf>,
-    secret_dir_mode: Option<platform::SecretDirMode>,
-    hidden_root_mode: Option<platform::SecretDirMode>,
+    _sandbox_dir: Arc<SandboxDir>,
+    secret_dir_mode_restoration: Option<SecretDirModeRestoration>,
     active: bool,
 }
 
@@ -141,46 +201,18 @@ impl NaiveIsolationGuard {
         &self.isolated_path
     }
 
-    pub(crate) fn hide(&mut self) -> Result<(), String> {
-        if !self.active || self.hidden_root_mode.is_some() {
-            return Ok(());
-        }
-        let mode = dir_mode(&self.isolated_path)?;
-        chmod_dir_no_access(&self.isolated_path)?;
-        self.hidden_root_mode = Some(mode);
-        Ok(())
-    }
-
-    pub(crate) fn reveal(&mut self) -> Result<(), String> {
-        let Some(mode) = self.hidden_root_mode.take() else {
-            return Ok(());
-        };
-        match restore_dir_mode(&self.isolated_path, &mode) {
-            Ok(()) => Ok(()),
-            Err(err) => {
-                self.hidden_root_mode = Some(mode);
-                Err(err)
-            }
-        }
-    }
-
     fn restore(&mut self) -> Result<(), String> {
         if !self.active {
             return Ok(());
         }
         let mut errors = Vec::new();
-        if let Err(err) = self.reveal() {
-            errors.push(format!(
-                "failed to reveal isolated path {} before restore: {}",
-                self.isolated_path.display(),
-                err
-            ));
-        }
-        if let (Some(secret_dir), Some(mode)) = (&self.secret_dir, self.secret_dir_mode.clone()) {
-            if let Err(err) = platform::restore_secret_dir_mode(secret_dir, &mode) {
+        if let Some(restoration) = &self.secret_dir_mode_restoration {
+            if let Err(err) =
+                platform::restore_secret_dir_mode(&restoration.path, &restoration.mode)
+            {
                 errors.push(format!(
                     "failed to restore secret dir permissions {}: {}",
-                    secret_dir.display(),
+                    restoration.path.display(),
                     err
                 ));
             }
@@ -191,13 +223,6 @@ impl NaiveIsolationGuard {
             }
             Err(err) => {
                 errors.push(err);
-                if let Err(hide_err) = self.hide() {
-                    errors.push(format!(
-                        "failed to hide unrestored isolated path {}: {}",
-                        self.isolated_path.display(),
-                        hide_err
-                    ));
-                }
             }
         }
         if errors.is_empty() {
@@ -210,18 +235,14 @@ impl NaiveIsolationGuard {
 
 impl Drop for NaiveIsolationGuard {
     fn drop(&mut self) {
-        let _ = self.restore();
+        if let Err(err) = self.restore() {
+            panic!("failed to restore naive isolation: {err}");
+        }
     }
 }
 
 fn configured_secret_dir() -> Option<PathBuf> {
-    let value = env::var_os(CANON_SECRET_DIR)?;
-    // Match the policy's `if self.secret_dir` branches: an empty environment
-    // value is falsey and therefore behaves like no configured secret dir.
-    if value.is_empty() {
-        return None;
-    }
-    Some(PathBuf::from(value))
+    env::var_os(CANON_SECRET_DIR).map(PathBuf::from)
 }
 
 fn configured_dir(name: &str) -> Option<PathBuf> {
@@ -269,27 +290,106 @@ fn chmod_secret_dir_no_access(path: &Path) -> Result<(), String> {
     platform::chmod_secret_dir_no_access(path)
 }
 
-fn dir_mode(path: &Path) -> Result<platform::SecretDirMode, String> {
-    platform::secret_dir_mode(path)
-}
-
-fn chmod_dir_no_access(path: &Path) -> Result<(), String> {
-    platform::chmod_secret_dir_no_access(path)
-}
-
-fn restore_dir_mode(path: &Path, mode: &platform::SecretDirMode) -> Result<(), String> {
-    platform::restore_secret_dir_mode(path, mode)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
     #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::panic::{catch_unwind, AssertUnwindSafe};
+
+    #[test] // xpec: YY
+    fn empty_secret_dir_is_present_for_boundary_only() {
+        let secret_dir = SecretDirConfig::from_path(Some(PathBuf::new())).unwrap();
+
+        assert_eq!(secret_dir.boundary(), Some(Path::new("")));
+        assert!(secret_dir.permission_restoration().is_none());
+    }
+
+    #[test] // xpec: YY
+    fn naive_isolation_asserts_destination_collision() {
+        let root = test_root("naive-isolation-destination-collision");
+        let sandbox = root.join("sandbox");
+        platform::create_private_dir_all(&sandbox.join("0")).unwrap();
+        let mut policy = NaiveIsolationPolicy::with_dirs(None, sandbox).unwrap();
+
+        let collision = catch_unwind(AssertUnwindSafe(|| policy.next_isolated_path()));
+
+        assert!(collision.is_err());
+        assert_eq!(policy.counter, 1);
+        let _ = fs::remove_dir_all(root);
+    }
 
     #[cfg(unix)]
-    #[test]
+    #[test] // xpec: YY
+    fn naive_isolation_collision_check_treats_dangling_symlink_as_absent() {
+        let root = test_root("naive-isolation-dangling-destination");
+        let sandbox = root.join("sandbox");
+        let project = root.join("repository");
+        platform::create_private_dir_all(&project).unwrap();
+        let mut policy = NaiveIsolationPolicy::with_dirs(None, sandbox.clone()).unwrap();
+        symlink(root.join("missing"), sandbox.join("0")).unwrap();
+
+        let err = match policy.isolate(&project) {
+            Ok(_) => panic!("moving a directory over a dangling symlink should fail"),
+            Err(err) => err,
+        };
+
+        assert!(!err.contains("counter collision in sandbox isolation"));
+        assert!(err.contains("failed to move isolated path"));
+        assert!(project.is_dir());
+        assert!(fs::symlink_metadata(sandbox.join("0"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test] // xpec: YY
+    fn temporary_sandbox_outlives_policy_while_guard_is_active() {
+        let root = test_root("naive-isolation-sandbox-owner");
+        let sandbox = root.join("sandbox");
+        let project = root.join("repository");
+        platform::create_private_dir_all(&project).unwrap();
+        let mut policy = NaiveIsolationPolicy::with_dirs(None, sandbox.clone()).unwrap();
+        policy.sandbox_dir = Arc::new(SandboxDir {
+            path: sandbox.clone(),
+            remove_on_drop: true,
+        });
+
+        let guard = policy.isolate(&project).unwrap();
+        drop(policy);
+
+        assert!(guard.path().is_dir());
+        assert!(sandbox.is_dir());
+        drop(guard);
+        assert!(project.is_dir());
+        assert!(!sandbox.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test] // xpec: YY
+    fn restoration_failure_propagates_from_guard_drop() {
+        let root = test_root("naive-isolation-restore-failure");
+        let sandbox = root.join("sandbox");
+        let project = root.join("repository");
+        platform::create_private_dir_all(&project).unwrap();
+        let mut policy = NaiveIsolationPolicy::with_dirs(None, sandbox).unwrap();
+        let guard = policy.isolate(&project).unwrap();
+        let isolated_path = guard.path().to_path_buf();
+        platform::create_private_dir_all(&project).unwrap();
+        fs::write(project.join("replacement"), "occupied").unwrap();
+
+        let restore_failure = catch_unwind(AssertUnwindSafe(|| drop(guard)));
+
+        assert!(restore_failure.is_err());
+        assert!(isolated_path.is_dir());
+        let _ = platform::set_private_dir_permissions(&isolated_path);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test] // xpec: YY
     fn naive_isolation_moves_path_to_sandbox_and_restores_on_drop() {
         let root = test_root("naive-isolation-restore");
         let secret = root.join("secret");
@@ -316,7 +416,59 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
+    #[test] // xpec: YY
+    fn naive_isolation_secret_dir_operations_follow_symlink() {
+        let root = test_root("naive-isolation-secret-symlink");
+        let secret_target = root.join("secret-target");
+        let secret_link = root.join("secret-link");
+        let sandbox = root.join("sandbox");
+        let project = secret_link.join("repository");
+        platform::create_private_dir_all(&secret_target.join("repository")).unwrap();
+        symlink(&secret_target, &secret_link).unwrap();
+        let mut policy =
+            NaiveIsolationPolicy::with_dirs(Some(secret_link), sandbox.clone()).unwrap();
+
+        {
+            let guard = policy.isolate(&project).unwrap();
+            assert_eq!(guard.path(), sandbox.join("0"));
+            assert_eq!(dir_mode(&secret_target), 0o000);
+        }
+
+        assert!(project.is_dir());
+        assert_eq!(dir_mode(&secret_target), 0o700);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test] // xpec: YY
+    fn secret_dir_restoration_resolves_retargeted_symlink() {
+        let root = test_root("naive-isolation-secret-retarget");
+        let first_target = root.join("first-target");
+        let second_target = root.join("second-target");
+        let secret_link = root.join("secret-link");
+        let sandbox = root.join("sandbox");
+        let project = secret_link.join("repository");
+        platform::create_private_dir_all(&first_target.join("repository")).unwrap();
+        platform::create_private_dir_all(&second_target).unwrap();
+        fs::set_permissions(&second_target, fs::Permissions::from_mode(0o500)).unwrap();
+        symlink(&first_target, &secret_link).unwrap();
+        let mut policy =
+            NaiveIsolationPolicy::with_dirs(Some(secret_link.clone()), sandbox).unwrap();
+        let guard = policy.isolate(&project).unwrap();
+
+        fs::remove_file(&secret_link).unwrap();
+        symlink(&second_target, &secret_link).unwrap();
+        drop(guard);
+
+        assert_eq!(dir_mode(&first_target), 0o000);
+        assert_eq!(dir_mode(&second_target), 0o700);
+        assert!(second_target.join("repository").is_dir());
+        fs::set_permissions(&first_target, fs::Permissions::from_mode(0o700)).unwrap();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test] // xpec: YY
     fn naive_isolation_preserves_read_only_root_permissions() {
         let root = test_root("naive-isolation-read-only-root");
         let sandbox = root.join("sandbox");
@@ -340,73 +492,8 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn naive_isolation_can_hide_and_reveal_parked_roots() {
-        let root = test_root("naive-isolation-hide-parked-root");
-        let sandbox = root.join("sandbox");
-        let first_project = root.join("first");
-        let second_project = root.join("second");
-        platform::create_private_dir_all(&first_project).unwrap();
-        platform::create_private_dir_all(&second_project).unwrap();
-        fs::write(first_project.join("file.txt"), "first").unwrap();
-        fs::write(second_project.join("file.txt"), "second").unwrap();
-        platform::set_materialized_dir_permissions(&first_project).unwrap();
-        platform::set_materialized_dir_permissions(&second_project).unwrap();
-        let mut policy = NaiveIsolationPolicy::with_dirs(None, sandbox).unwrap();
-
-        {
-            let mut first = policy.isolate(&first_project).unwrap();
-            let second = policy.isolate(&second_project).unwrap();
-
-            first.hide().unwrap();
-            assert_eq!(dir_mode(first.path()), 0o000);
-            assert_eq!(dir_mode(second.path()), 0o555);
-
-            first.reveal().unwrap();
-            assert_eq!(dir_mode(first.path()), 0o555);
-            assert_eq!(
-                fs::read_to_string(first.path().join("file.txt")).unwrap(),
-                "first"
-            );
-        }
-
-        assert_eq!(dir_mode(&first_project), 0o555);
-        assert_eq!(dir_mode(&second_project), 0o555);
-        let _ = platform::set_private_dir_permissions(&first_project);
-        let _ = platform::set_private_dir_permissions(&second_project);
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn naive_isolation_hides_unrestored_path_when_original_reappears() {
-        let root = test_root("naive-isolation-hide-unrestored");
-        let sandbox = root.join("sandbox");
-        let project = root.join("repository");
-        platform::create_private_dir_all(&project).unwrap();
-        fs::write(project.join("file.txt"), "isolated").unwrap();
-        let mut policy = NaiveIsolationPolicy::with_dirs(None, sandbox.clone()).unwrap();
-        let isolated_path;
-
-        {
-            let guard = policy.isolate(&project).unwrap();
-            isolated_path = guard.path().to_path_buf();
-            platform::create_private_dir_all(&project).unwrap();
-            fs::write(project.join("file.txt"), "replacement").unwrap();
-        }
-
-        assert_eq!(dir_mode(&isolated_path), 0o000);
-        assert_eq!(
-            fs::read_to_string(project.join("file.txt")).unwrap(),
-            "replacement"
-        );
-        fs::set_permissions(&isolated_path, fs::Permissions::from_mode(0o700)).unwrap();
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn naive_isolation_rejects_paths_outside_secret_dir() {
+    #[test] // xpec: YY
+    fn naive_isolation_asserts_paths_are_inside_secret_dir() {
         let root = test_root("naive-isolation-secret-boundary");
         let secret = root.join("secret");
         let sandbox = root.join("sandbox");
@@ -415,12 +502,9 @@ mod tests {
         platform::create_private_dir_all(&outside).unwrap();
         let mut policy = NaiveIsolationPolicy::with_dirs(Some(secret), sandbox).unwrap();
 
-        let err = match policy.isolate(&outside) {
-            Ok(_) => panic!("outside path should be rejected"),
-            Err(err) => err,
-        };
+        let boundary_violation = catch_unwind(AssertUnwindSafe(|| policy.isolate(&outside)));
 
-        assert!(err.contains("outside of secret dir"), "{err}");
+        assert!(boundary_violation.is_err());
         assert!(outside.exists());
         let _ = fs::remove_dir_all(root);
     }

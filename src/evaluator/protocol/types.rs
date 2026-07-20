@@ -4,7 +4,7 @@ use crate::evaluator::EvaluatorProgress;
 use crate::logs::DiagnosticLogError;
 use crate::token_usage_types::EvaluatorTurnUsage;
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub(crate) struct EvaluatorDynamicToolCall {
     pub(crate) namespace: Option<String>,
@@ -49,7 +49,7 @@ pub(crate) trait EvaluatorRunner {
     fn start_session(
         &mut self,
         session_cwd: &Path,
-        template_artifact_paths: &[PathBuf],
+        template_artifact_directory: &Path,
         base_instructions: &str,
         developer_instructions: &str,
         agent: &AgentConfig,
@@ -77,7 +77,7 @@ pub(crate) trait EvaluatorRunner {
         Vec::new()
     }
 
-    fn set_progress_reporter(&mut self, _progress: Option<EvaluatorProgress>) {}
+    fn set_progress_reporter(&mut self, progress: Option<EvaluatorProgress>);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

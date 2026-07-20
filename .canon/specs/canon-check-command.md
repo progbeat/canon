@@ -36,127 +36,82 @@ Examples:
 wrapping, spacing, and option order, while preserving the same command usage,
 options, defaults, and common examples.*
 
-## Expectation Result Output
+The behavior of `canon check` follows this shape:
 
-When a check run reports expectation results, each reported passing evaluated
-expectation, failed expectation, or errored expectation is emitted as one stdout
-result entry.
+```python
+def canon_check():
+    ... # do everything needed to prepare for evaluation
+    try:
+        for xpec in check_order_policy(selected_expectations):
+            evaluation = evaluate(xpec)
+            ...
+            if evaluation["status"] == FAIL and not keep_going:
+                break
+    finally:
+        emit_token_usage()
+        emit_summary()
+        if (
+            not in_place
+            and config has its command-default value
+            and tree has its command-default value
+            and against_tree has its command-default value
+        ):
+            emit_feedback(...)
 
-For each passing evaluated expectation, the result entry is exactly one line:
+def emit_feedback(failed, num_pending):
+    """
+    :param failed: Short IDs of failed expectations.
+    :param num_pending: Number of pending expectations.
+    """
+    assert against_tree_oid == head_tree_oid
+    if len(failed) > 0:
+        _repair_instructions(failed)
+        return print(f"▷ Fix the issues and run `canon check` again!")
+    if num_pending > 0:
+        return print("▷ Run `canon check` to continue evaluation.")
+    need_to_commit = (checked_tree_oid != against_tree_oid)
+    print(
+        "✓ All checks passed." +
+        (" Commit the staged changes!" if need_to_commit else "")
+    )
 
+def _repair_instructions(failed):
+    assert len(failed) > 0
+    # These failures were already shown in `canon check` output, so don't show them again to save tokens.
+    selectors = ' '.join(f'not:{x}' for x in failed)
+    print("❕ Verify that the evidence supports the observed answer and answers the expectation question; treat unsupported evidence as a readability issue.")
+    print(f"❕ Plan the repair, then run `canon show {selectors} -- <PATHSPEC>...` for the planned edit paths to identify expectations that may be affected.")
+    print("❕ Use the matching expectations to avoid regressions while fixing the issues.")
 ```
-<short ID><progress timeline> OK
-```
-
-For each failed expectation, evaluated or cached, the result entry is exactly one block.
-The block has these lines in order:
-
-```
-<short ID><progress timeline> FAILED
-<escaped question>
-[Diff-from: <Git-abbreviated resolved diff-from tree OID> (<configured diff-from>)]
-Expected: <escaped expected>
-Observed: <escaped observed>
-Evidence: <escaped evidence>
-[Suggested q-scope: <compact JSON array>]
-```
-
-Bracketed lines are optional and are not written with brackets.
-
-The `Diff-from` line is included only when the result entry has the resolved `diff-from` tree OID used by the evaluator interrogation.
-
-The `Suggested q-scope` line is included only when a q-scope suggestion is available.
-
-For each errored expectation, the result entry is exactly one block of lines:
-
-```
-<short ID><progress timeline> ERROR
-<escaped question>
-[Diff-from: <Git-abbreviated resolved diff-from tree OID> (<configured diff-from>)]
-Error: <escaped error>
-Evidence: <escaped evidence>
-```
-
-Embedded control characters in the question, expected answer, observed answer, error, and evidence are escaped before writing to stdout.
-Escaping prevents evaluator-provided text from injecting additional stdout lines.
-
-`Suggested q-scope` is rendered as a compact JSON array on one line.
 
 ## Token Usage Line
 
-The check run emits exactly one token usage line to stderr:
+The token usage line is written to stderr as:
 
 ```
-Token usage: total=<n> input=<n> (+ <n> cached) output=<n> (reasoning <n>)
+token-usage: ref-cost={:.2}$ total={} input={} (+ {} cached) output={} (reasoning {})
 ```
 
 If token usage data is unavailable, every numeric field is `0`.
 
 ## Summary Line
 
-The check run emits one stdout summary line:
+The summary line is written to stdout as:
 
 ```
 ============================= <outcome-list> in <duration>s =============================
 ```
 
-`outcome-list` is a comma-separated list of non-zero outcome counts in this order: blocked, failed, error/errors, passed, pending. If every count is zero, the outcome list is `0 passed`.
+`outcome-list` is a comma-separated list of non-zero outcome counts in this order: failed, passed, pending. If every count is zero, the outcome list is `0 passed`.
 The outcome text is surrounded by spaces and padded with `=` characters on both sides.
 
-Outcome labels follow pytest pluralization: `failed`, `blocked`, `passed`, and `pending` are used for both singular and plural counts; `error` is used for one error and `errors` for every other error count.
+Outcome labels `failed`, `passed`, and `pending` are used for both singular and plural counts.
 
-`blocked` is the number of hooks that blocked completion.
-`passed` is the number of expectations whose result is pass.
-`failed` is the number of expectations whose result is fail.
-`errors` is the number of expectations that encountered errors during evaluation in this run.
-`pending` is the number of expectations that do not yet have an evaluated or cached result.
+`passed` is the number of expectations whose status is `PASS`.
+`failed` is the number of expectations whose status is `FAIL`.
+`pending` is the number of expectations for which the check run has no result.
 
-Each collected expectation is counted exactly once in passed, failed, errors, or pending.
-
-## Instructions to Agent
-
-Assuming no Ctrl-C or other interruption, when `canon check` runs without expectation selectors, with the default config, on the `:staged` tree, and against `HEAD`, it may emit instructions for the agent that ran it like this:
-
-```python
-def print_agent_messages(blocked, failed, errors, num_new_passes, num_regressions, num_pending):
-    """
-    :param blocked: Blocked hooks.
-    :param failed: Short IDs of failed expectations.
-    :param errors: Short IDs of expectations that encountered errors in this run.
-    :param num_new_passes: Number of xpecs classified as **new pass**.
-    :param num_regressions: Number of xpecs classified as **regression**.
-    :param num_pending: Number of pending expectations.
-    """
-    if blocked:
-        assert len(blocked) == 1
-        print(blocked[0].repair_instruction)
-        return
-    issues = failed + errors
-    if num_regressions > 0 or (len(issues) > 0 and num_new_passes == 0):
-        _repair_instructions(issues)
-        print(f"▷ Fix the issues and run `canon check` again!")
-        return
-    if len(issues) == 0 and num_new_passes == 0:
-        assert num_pending == 0
-        print("✓ All checks passed. Commit is allowed.")
-        return
-    assert num_new_passes > 0
-    passes_msg = f'1 pass' if num_new_passes == 1 else f'{num_new_passes} passes'
-    print(f"▷ +{passes_msg}. Commit the staged changes NOW!")
-    if len(issues) > 0:
-        _repair_instructions(issues)
-        print(f"▷ Then fix the remaining issues and run `canon check` again!")
-    else:
-        assert num_pending == 0
-
-def _repair_instructions(issues):
-    assert len(issues) > 0
-    # These issues were already shown in `canon check` output, so don't show them again to save tokens.
-    selectors = ' '.join(f'not:{x}' for x in issues)
-    print("❕ Verify that the evidence supports the observed answer and answers the expectation question; treat unsupported evidence as a readability issue.")
-    print(f"❕ Plan the repair, then run `canon show {selectors} [not:<ALREADY_IN_CONTEXT_EXPECTATION>]... -- <PATHSPEC>...` for the planned edit paths to identify expectations that may be affected.")
-    print("❕ Use the matching expectations to avoid regressions while fixing the issues.")
-```
+Each collected expectation is counted exactly once in passed, failed, or pending.
 
 ## Runtime Logs
 
@@ -169,9 +124,9 @@ def _repair_instructions(issues):
 - review-required diagnostics;
 - token usage when available.
 
-Evaluator communication events include tasks and responses before interpretation or repair, with context linking each exchange to the check run.
+Evaluator communication events include tasks and returned messages before interpretation or repair, with context linking each exchange to the check run.
 
-Evaluator communication events identify the boundary between the command and the evaluator.
+Evaluator communication events identify the boundary between the command and the evaluator agent.
 
 Evaluator thread events include creation, reuse, and the effective evaluator instructions used for each thread.
 

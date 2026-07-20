@@ -9,15 +9,24 @@ pub(crate) fn full_scope() -> Vec<String> {
 
 pub(crate) fn expectation_id(
     question: &str,
+    to: &str,
     expected_answer: &str,
     question_context: &str,
 ) -> String {
     // Expectation IDs are 20-character base62 IDs derived from the question,
-    // expected answer, and a deterministic hash of the resolved question
-    // context.
+    // addressee, expected answer, and a deterministic hash of the resolved
+    // question context.
     let context_hash = hash_60(question_context.as_bytes());
     let mut input = Vec::new();
     push_expectation_id_frame(&mut input, "question", question.as_bytes());
+    // `to` is encoded as a tagged union: absence of a `to` frame is the
+    // canonical discriminant for `agent`; every other addressee uses a frame
+    // containing its name. Thus every addressee value affects the tuple while
+    // the established agent encoding—and canon references to those IDs—stays
+    // stable.
+    if to != "agent" {
+        push_expectation_id_frame(&mut input, "to", to.as_bytes());
+    }
     push_expectation_id_frame(&mut input, "expectedAnswer", expected_answer.as_bytes());
     push_expectation_id_frame(&mut input, "instructionsHash", context_hash.as_bytes());
     expectation_id_base62_20(&input)
@@ -75,11 +84,28 @@ fn encode_base62_20(mut value: u128) -> String {
 mod tests {
     use super::expectation_id;
 
-    #[test]
+    #[test] // xpec: 1g
     fn expectation_id_changes_when_expected_answer_changes() {
-        let yes = expectation_id("Does it pass?", "yes", "");
-        let no = expectation_id("Does it pass?", "no", "");
+        let yes = expectation_id("Does it pass?", "agent", "yes", "");
+        let no = expectation_id("Does it pass?", "agent", "no", "");
 
         assert_ne!(yes, no);
+    }
+
+    #[test] // xpec: 1g
+    fn expectation_id_changes_when_addressee_changes() {
+        let agent = expectation_id("Does it pass?", "agent", "yes", "");
+        let caller = expectation_id("Does it pass?", "caller", "yes", "");
+
+        assert_ne!(agent, caller, "the xpec ID must distinguish addressees");
+    }
+
+    #[test] // xpec: AB,1g
+    fn agent_addressee_uses_stable_implicit_discriminant() {
+        assert_eq!(
+            expectation_id("2+2=?", "agent", "4", ""),
+            "3nSMjraHbFW7BMLJ4AcO",
+            "the default-agent xpec ID must preserve existing canon references"
+        );
     }
 }

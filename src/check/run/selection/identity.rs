@@ -1,4 +1,3 @@
-use super::cooldown::parse_cooldown;
 use crate::check::core::ResolvedExpectation;
 use crate::config_types::CheckConfig;
 use crate::hash::expectation_id;
@@ -60,9 +59,7 @@ pub(crate) fn select_expectations_with_identities(
                 }
             }
         }
-        if !has_include {
-            selected_indexes.retain(|index| !excluded_indexes.contains(index));
-        }
+        selected_indexes.retain(|index| !excluded_indexes.contains(index));
     }
 
     selected_indexes
@@ -113,15 +110,12 @@ pub(crate) fn selected_expectation_at(
         .expectations
         .get(index)
         .ok_or_else(|| "expectation identity count mismatch".to_string())?;
-    let cooldown = expectation
-        .cooldown
-        .as_ref()
-        .map(parse_cooldown)
-        .transpose()?;
     Ok(ResolvedExpectation {
         number: index + 1,
         id: identity.id.clone(),
         display_id: identity.display_id.clone(),
+        to: expectation.to,
+        rank: expectation.rank,
         question: expectation.q.clone(),
         expected_answer: expectation.a.clone(),
         question_context: expectation.question_context.clone(),
@@ -129,7 +123,7 @@ pub(crate) fn selected_expectation_at(
         target: expectation.target.clone(),
         question_answer_only: expectation.question_answer_only,
         agent: expectation.agent.clone(),
-        cooldown,
+        cooldown: expectation.cooldown,
     })
 }
 
@@ -143,7 +137,12 @@ pub(crate) fn expectation_identities(
             let rendered_question = &expectation.q;
             let expected_answer = &expectation.a;
             let resolved_instructions = &expectation.question_context;
-            expectation_id(rendered_question, expected_answer, resolved_instructions)
+            expectation_id(
+                rendered_question,
+                expectation.to.as_str(),
+                expected_answer,
+                resolved_instructions,
+            )
         })
         .collect::<Vec<_>>();
     let mut seen = BTreeSet::new();
@@ -190,7 +189,7 @@ mod tests {
     use super::*;
     use crate::config_types::{AgentConfig, CheckConfig, Expectation};
 
-    #[test]
+    #[test] // xpec: sw,ri
     fn include_selector_selects_matching_unique_id_prefix() {
         let config = two_expectation_config();
         let identities = expectation_identities(&config).unwrap();
@@ -203,7 +202,7 @@ mod tests {
         assert_eq!(selected[0].id, identities[0].id);
     }
 
-    #[test]
+    #[test] // xpec: sw,ri
     fn include_selector_accepts_full_id() {
         let config = two_expectation_config();
         let identities = expectation_identities(&config).unwrap();
@@ -216,7 +215,7 @@ mod tests {
         assert_eq!(selected[0].id, identities[1].id);
     }
 
-    #[test]
+    #[test] // xpec: sw,ri
     fn exclusion_selector_selects_all_except_matching_prefix() {
         let config = two_expectation_config();
         let identities = expectation_identities(&config).unwrap();
@@ -229,8 +228,8 @@ mod tests {
         assert_eq!(selected[0].id, identities[1].id);
     }
 
-    #[test]
-    fn exclusion_selector_does_not_filter_explicit_includes() {
+    #[test] // xpec: nK,sw,ri
+    fn exclusion_selector_filters_explicit_includes() {
         let config = two_expectation_config();
         let identities = expectation_identities(&config).unwrap();
         let selectors = [
@@ -242,12 +241,11 @@ mod tests {
         let selected =
             select_expectations_with_identities(&config, &identities, &selectors).unwrap();
 
-        assert_eq!(selected.len(), 2);
-        assert_eq!(selected[0].id, identities[0].id);
-        assert_eq!(selected[1].id, identities[1].id);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].id, identities[1].id);
     }
 
-    #[test]
+    #[test] // xpec: sw
     fn empty_exclusion_selector_is_rejected() {
         let config = two_expectation_config();
         let identities = expectation_identities(&config).unwrap();
@@ -259,11 +257,29 @@ mod tests {
         assert_eq!(err, "expectation selector must not be empty");
     }
 
+    #[test] // xpec: DI
+    fn duplicate_appended_exclusion_is_rejected() {
+        let config = two_expectation_config();
+        let identities = expectation_identities(&config).unwrap();
+        let selector = OsString::from(format!("not:{}", identities[0].id));
+
+        let err = select_expectations_with_identities(
+            &config,
+            &identities,
+            &[selector.clone(), selector],
+        )
+        .unwrap_err();
+
+        assert_eq!(
+            err,
+            format!("duplicate expectation selector: not:{}", identities[0].id)
+        );
+    }
+
     fn two_expectation_config() -> CheckConfig {
         CheckConfig {
             version: 1,
             agent: AgentConfig::implementation_default(),
-            hooks: Default::default(),
             expectations: vec![
                 expectation("Does alpha pass?"),
                 expectation("Does beta pass?"),
@@ -273,15 +289,17 @@ mod tests {
 
     fn expectation(question: &str) -> Expectation {
         Expectation {
+            to: crate::config_types::ExpectationTo::Agent,
+            rank: 0,
             q: question.to_string(),
             a: "yes".to_string(),
             question_context: String::new(),
             diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
-            diff_from_configured: false,
             target: None,
             question_answer_only: true,
             agent: AgentConfig::implementation_default(),
             cooldown: None,
+            in_place_compatibility: Default::default(),
         }
     }
 }

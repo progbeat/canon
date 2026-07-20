@@ -173,7 +173,7 @@ pub(crate) fn write_model_fallback_events(
     let Some(writer) = diagnostic_log.as_deref_mut() else {
         return Ok(());
     };
-    writer.write_event(
+    writer.emit_event(
         "warn",
         "model.failure",
         &[
@@ -183,7 +183,7 @@ pub(crate) fn write_model_fallback_events(
         ],
     )?;
     if let Some(next_model) = next_model {
-        writer.write_event(
+        writer.emit_event(
             "warn",
             "model.fallback",
             &[
@@ -209,7 +209,7 @@ mod tests {
     use std::process::{self, Command};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test]
+    #[test] // xpec: w
     fn model_fallback_tries_configured_models_in_order() {
         let agent = AgentConfig {
             models: vec!["first".to_string(), "second".to_string()],
@@ -246,7 +246,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[test] // xpec: w,m8
     fn model_fallback_defers_diagnostic_log_error_until_after_retry() {
         let root = temp_git_repo("model-fallback-log-error");
         git(&root, &["config", "canon.logs.maxSize", "1"]);
@@ -299,6 +299,7 @@ mod tests {
             .args(args)
             .output()
             .unwrap();
+        // xpec: w
         assert!(
             output.status.success(),
             "git {:?} failed: {}",

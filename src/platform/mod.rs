@@ -1,4 +1,11 @@
+//! Portable facade and shared ownership types for platform services.
+//!
+//! Operating-system behavior is implemented under `platform/unix/` and
+//! `platform/windows/`; this module only selects and delegates to those
+//! implementations or combines their platform-neutral results.
+
 use std::ffi::OsString;
+use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -77,30 +84,12 @@ fn set_materialized_permissions(path: &Path, file_mode: Option<&str>) -> Result<
 }
 
 pub(crate) fn set_private_dir_permissions(path: &Path) -> Result<(), String> {
-    set_private_permissions(path, PrivatePathKind::Directory)
-}
-
-pub(crate) fn set_private_file_permissions(path: &Path) -> Result<(), String> {
-    set_private_permissions(path, PrivatePathKind::File)
-}
-
-enum PrivatePathKind {
-    Directory,
-    File,
-}
-
-fn set_private_permissions(path: &Path, kind: PrivatePathKind) -> Result<(), String> {
     #[cfg(unix)]
     {
-        match kind {
-            PrivatePathKind::Directory => imp::set_private_dir_permissions(path),
-            PrivatePathKind::File => imp::set_private_file_permissions(path),
-        }
-        .map_err(platform_error)
+        imp::set_private_dir_permissions(path).map_err(platform_error)
     }
     #[cfg(windows)]
     {
-        let _ = kind;
         imp::set_private_permissions(path)
     }
 }
@@ -146,6 +135,53 @@ pub(crate) fn memory_backed_temporary_parent_candidates() -> Vec<PathBuf> {
 
 pub(crate) fn ordinary_temporary_parent_candidates() -> Vec<PathBuf> {
     imp::ordinary_staged_snapshot_parent_candidates()
+}
+
+pub(crate) struct OwnedPrivateTemporaryDirectory {
+    path: PathBuf,
+}
+
+impl OwnedPrivateTemporaryDirectory {
+    pub(crate) fn create(prefix: &str) -> Result<OwnedPrivateTemporaryDirectory, String> {
+        let mut errors = Vec::new();
+        for parent in memory_backed_temporary_parent_candidates()
+            .into_iter()
+            .chain(ordinary_temporary_parent_candidates())
+        {
+            if !parent.is_dir() {
+                errors.push(format!("{} is not a directory", parent.display()));
+                continue;
+            }
+            for _ in 0..64 {
+                let random = getrandom::u64().map_err(|err| {
+                    format!("failed to choose private temporary directory: {err}")
+                })?;
+                let path = parent.join(format!("{prefix}-{}-{random:016x}", std::process::id()));
+                match create_private_dir(&path) {
+                    Ok(()) => return Ok(OwnedPrivateTemporaryDirectory { path }),
+                    Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+                    Err(err) => {
+                        errors.push(format!("failed to create {}: {}", path.display(), err));
+                        break;
+                    }
+                }
+            }
+        }
+        Err(format!(
+            "failed to allocate private temporary directory: {}",
+            errors.join("; ")
+        ))
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for OwnedPrivateTemporaryDirectory {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.path);
+    }
 }
 
 pub(crate) fn memory_backed_staged_snapshot_parent_candidates() -> Vec<PathBuf> {

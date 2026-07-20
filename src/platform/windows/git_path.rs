@@ -129,14 +129,14 @@ fn utf16_unit_to_char(unit: u16, path: &Path) -> Result<char, String> {
 mod tests {
     use super::*;
 
-    #[test]
+    #[test] // xpec: 1g
     fn git_path_bytes_round_trips_surrogate_escaped_git_bytes() {
         let original = b"dir/\xFF/name with spaces/\x80.bin".to_vec();
         let path = path_from_git_bytes(original.clone()).unwrap();
         assert_eq!(git_path_bytes(&path).unwrap(), original);
     }
 
-    #[test]
+    #[test] // xpec: 1g
     fn git_path_bytes_uses_git_separators() {
         let path = PathBuf::from(r"dir\file.txt");
         assert_eq!(git_path_bytes(&path).unwrap(), b"dir/file.txt");

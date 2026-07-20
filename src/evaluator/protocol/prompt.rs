@@ -1,25 +1,18 @@
-use super::prompt_artifact_permissions::{
-    set_template_artifact_create_mode, set_template_artifact_file_permissions,
-};
-use super::prompt_shell::{quote_prompt_template_shell_arg, run_prompt_template_shell_command};
-use crate::platform::{
-    create_private_dir, memory_backed_temporary_parent_candidates,
-    ordinary_temporary_parent_candidates,
-};
-use crate::process_cwd::with_current_dir;
-use crate::xpec_state::LastResult;
-use minijinja::value::{Kwargs, Value as MiniValue};
-use minijinja::{Environment, Error, ErrorKind};
-use serde_json::{json, Value as JsonValue};
-use sha2::{Digest, Sha256};
-use std::fs;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+mod runtime;
 
-const TEMPLATE_OUTPUT_HEAD_BYTES: usize = 8 * 1024;
-const PROMPT_TEMPLATE_ARTIFACT_DIR_PREFIX: &str = "canon-template-output";
-const PROMPT_TEMPLATE_ARTIFACT_DIR_CREATE_ATTEMPTS: usize = 64;
+use runtime::{
+    json_filter, render_with_repository_cwd, shell_args_filter, shell_quote_filter,
+    shell_transcript_filter, trim_rendered_prompt_template_output, PromptTemplateArtifactDir,
+    PromptTemplateOutputDirCache, ShTranscriptMarkers,
+};
+
+use crate::xpec_state::LastResult;
+use minijinja::value::Kwargs;
+use minijinja::{Environment, Error};
+use serde_json::{json, Value as JsonValue};
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 // Canon-owned evaluator templates are loaded from `resources/prompts/`; this
 // module only renders those resource files with runtime check data.
@@ -30,87 +23,156 @@ const EVALUATOR_TURN_PROMPT_TEMPLATE: &str =
 
 pub(crate) struct DeveloperInstructionsContext<'a> {
     pub(crate) root: &'a Path,
-    pub(crate) template_artifact_dir: PromptTemplateArtifactDir,
-    pub(crate) template_artifact_paths: &'a mut Vec<PathBuf>,
-    pub(crate) in_place: bool,
-    pub(crate) diff_from_tree_oid: &'a str,
-    pub(crate) checked_tree_oid: &'a str,
+    pub(crate) mode: DeveloperInstructionsMode<'a>,
     // Data for the resource template's `xpec.instructions` variable.
     pub(crate) question_context: &'a str,
-    pub(crate) q_scope: &'a [String],
-    pub(crate) ignore: &'a [String],
     pub(crate) visible_scope: &'a [String],
-    pub(crate) checked_file_count: usize,
-    pub(crate) visible_file_count: usize,
+    pub(crate) num_invisible_files: usize,
     pub(crate) last_pass: Option<&'a LastResult>,
 }
 
-pub(crate) fn developer_instructions(
+#[derive(Clone, Copy)]
+pub(crate) enum DeveloperInstructionsMode<'a> {
+    InPlace,
+    GitDiff {
+        base_tree_oid: &'a str,
+        checked_tree_oid: &'a str,
+        git_environment: &'a [(OsString, OsString)],
+    },
+}
+
+pub(crate) struct EvaluatorTurnPromptContext<'a> {
+    pub(crate) root: &'a Path,
+    pub(crate) short_id: &'a str,
+    pub(crate) question: &'a str,
+    pub(crate) expected_answer: &'a str,
+    pub(crate) mode: EvaluatorTurnPromptMode<'a>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum EvaluatorTurnPromptMode<'a> {
+    InPlace,
+    GitBacked {
+        diff_from: &'a str,
+        last_pass: Option<&'a LastResult>,
+        // [eS] This derived flag is turn-prompt input, not evaluation policy.
+        render_target_diff_hint: bool,
+    },
+}
+
+pub(crate) struct RenderedPrompt {
+    pub(crate) text: String,
+}
+
+pub(crate) struct PromptRenderer {
+    output_dir_cache: Arc<PromptTemplateOutputDirCache>,
+}
+
+impl PromptRenderer {
+    pub(crate) fn new() -> PromptRenderer {
+        PromptRenderer {
+            output_dir_cache: Arc::new(PromptTemplateOutputDirCache::new()),
+        }
+    }
+
+    pub(crate) fn artifact_directory(&self) -> Result<PathBuf, String> {
+        self.output_dir_cache.path_for_prompt_artifacts()
+    }
+
+    pub(crate) fn developer_instructions(
+        &self,
+        context: DeveloperInstructionsContext<'_>,
+    ) -> Result<RenderedPrompt, String> {
+        let mut artifact_paths = Vec::new();
+        let text = render_developer_instructions(
+            PromptTemplateArtifactDir::Lazy(Arc::clone(&self.output_dir_cache)),
+            &mut artifact_paths,
+            context,
+        )?;
+        Ok(RenderedPrompt { text })
+    }
+
+    pub(crate) fn evaluator_turn_prompt(
+        &self,
+        context: EvaluatorTurnPromptContext<'_>,
+    ) -> Result<RenderedPrompt, String> {
+        let mut artifact_paths = Vec::new();
+        let text = render_evaluator_turn_prompt(
+            PromptTemplateArtifactDir::Lazy(Arc::clone(&self.output_dir_cache)),
+            &mut artifact_paths,
+            context,
+        )?;
+        Ok(RenderedPrompt { text })
+    }
+}
+
+fn render_developer_instructions(
+    template_artifact_dir: PromptTemplateArtifactDir,
+    template_artifact_paths: &mut Vec<PathBuf>,
     context: DeveloperInstructionsContext<'_>,
 ) -> Result<String, String> {
-    // This count is reporting-only prompt data. File visibility has already
-    // been decided by the visible-tree pathspec selection in
-    // `src/git/visible_tree_oid/`; the template's "likely unnecessary" wording
-    // does not add another hiding rule.
-    let files_not_selected_by_visible_scope_pathspec = context
-        .checked_file_count
-        .checked_sub(context.visible_file_count)
-        .ok_or("visible file count exceeds checked file count")?;
-    // The transcript intentionally has two scoped diff views over
-    // `visible_scope`: `git diff --numstat` for change discovery, then detailed
-    // `git diff` for inspectable content. Template display text omits the
-    // pathspec so developer instructions show the relevant tree OIDs without
-    // repeating noisy scope arguments.
+    // xpec: 8O
+    // Each `sh` block gets the canonical visible scope as positional shell
+    // arguments. The resource can therefore execute its specified `"$@"`
+    // commands even though template filters run independently.
+    let (in_place, git_diff_environment) = match context.mode {
+        DeveloperInstructionsMode::InPlace => (true, Vec::new()),
+        DeveloperInstructionsMode::GitDiff {
+            base_tree_oid,
+            checked_tree_oid,
+            git_environment,
+        } => (
+            false,
+            [
+                (OsString::from("BASE_TREE"), OsString::from(base_tree_oid)),
+                (
+                    OsString::from("CHECKED_TREE"),
+                    OsString::from(checked_tree_oid),
+                ),
+            ]
+            .into_iter()
+            .chain(git_environment.iter().cloned())
+            .collect(),
+        ),
+    };
     render_minijinja_resource_template(
         context.root,
-        context.template_artifact_dir,
-        context.template_artifact_paths,
+        template_artifact_dir,
+        template_artifact_paths,
         DEVELOPER_INSTRUCTIONS_TEMPLATE,
-        &[
-            ("BASE_TREE", context.diff_from_tree_oid),
-            ("CHECKED_TREE", context.checked_tree_oid),
-        ],
+        &git_diff_environment,
+        context.visible_scope,
         json!({
             "xpec": {
                 // [UZ] This is human-authored expectation context rendered by
                 // the resource template, not another implementation-owned
                 // evaluator prompt or instruction source.
                 "instructions": context.question_context,
-                "q_scope": context.q_scope,
-                "ignore": context.ignore,
                 "visible_scope": context.visible_scope,
             },
-            "in_place": context.in_place,
+            "in_place": in_place,
             "last_pass": context.last_pass,
-            "num_invisible_files": files_not_selected_by_visible_scope_pathspec,
+            "num_invisible_files": context.num_invisible_files,
         }),
     )
 }
 
-pub(crate) struct EvaluatorTurnPromptContext<'a> {
-    pub(crate) root: &'a Path,
-    pub(crate) template_artifact_dir: PromptTemplateArtifactDir,
-    pub(crate) template_artifact_paths: &'a mut Vec<PathBuf>,
-    pub(crate) short_id: &'a str,
-    pub(crate) question: &'a str,
-    pub(crate) expected_answer: &'a str,
-    pub(crate) in_place: bool,
-    pub(crate) diff_from: &'a str,
-    pub(crate) target: Option<&'a str>,
-    pub(crate) last_pass: Option<&'a LastResult>,
-}
-
-pub(crate) fn evaluator_turn_prompt(
+fn render_evaluator_turn_prompt(
+    template_artifact_dir: PromptTemplateArtifactDir,
+    template_artifact_paths: &mut Vec<PathBuf>,
     context: EvaluatorTurnPromptContext<'_>,
 ) -> Result<String, String> {
-    let (diff_from, target, last_pass) = if context.in_place {
-        // In-place mode has no Git diff target or checkpoint context. The
-        // caller validates resolved expectations before interrogation; this
-        // clamp keeps the rendered prompt diff-free even if an invalid in-place
-        // expectation reaches this component.
-        ("", None, None)
-    } else {
-        (context.diff_from, context.target, context.last_pass)
+    let (diff_from, target, last_pass) = match context.mode {
+        EvaluatorTurnPromptMode::InPlace => ("", None, None),
+        EvaluatorTurnPromptMode::GitBacked {
+            diff_from,
+            render_target_diff_hint,
+            last_pass,
+        } => (
+            diff_from,
+            render_target_diff_hint.then_some("diff"),
+            last_pass,
+        ),
     };
     // `diff_from` is template input for this fresh evaluator turn only. Cached
     // results are emitted without rendering this prompt. The turn template uses
@@ -127,9 +189,10 @@ pub(crate) fn evaluator_turn_prompt(
     );
     render_minijinja_resource_template(
         context.root,
-        context.template_artifact_dir,
-        context.template_artifact_paths,
+        template_artifact_dir,
+        template_artifact_paths,
         EVALUATOR_TURN_PROMPT_TEMPLATE,
+        &[],
         &[],
         json!({
             "xpec": xpec_context,
@@ -159,7 +222,8 @@ fn render_minijinja_resource_template(
     template_artifact_dir: PromptTemplateArtifactDir,
     template_artifact_paths: &mut Vec<PathBuf>,
     template: &str,
-    template_shell_env: &[(&str, &str)],
+    template_shell_env: &[(OsString, OsString)],
+    template_shell_args: &[String],
     context: JsonValue,
 ) -> Result<String, String> {
     let mut environment = Environment::new();
@@ -167,10 +231,8 @@ fn render_minijinja_resource_template(
     environment.add_filter("shq", shell_quote_filter);
     environment.add_filter("shargs", shell_args_filter);
     let command_root = root.to_path_buf();
-    let command_env = template_shell_env
-        .iter()
-        .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
-        .collect::<Vec<_>>();
+    let command_env = template_shell_env.to_vec();
+    let command_args = template_shell_args.to_vec();
     let command_artifact_paths = Arc::new(Mutex::new(Vec::new()));
     let sh_transcript_markers = ShTranscriptMarkers::new()?;
     let filter_transcript_markers = sh_transcript_markers.clone();
@@ -183,6 +245,7 @@ fn render_minijinja_resource_template(
                 &template_artifact_dir,
                 filter_artifact_paths.as_ref(),
                 &command_env,
+                &command_args,
                 command,
                 kwargs,
             )?;
@@ -209,504 +272,31 @@ fn render_minijinja_resource_template(
     ))
 }
 
-#[derive(Clone)]
-struct ShTranscriptMarkers {
-    start: String,
-    end: String,
-    escape: String,
-}
-
-impl ShTranscriptMarkers {
-    fn new() -> Result<ShTranscriptMarkers, String> {
-        let nonce = getrandom::u64()
-            .map_err(|err| format!("failed to choose prompt template sentinel: {err}"))?;
-        Ok(ShTranscriptMarkers {
-            start: format!("\x1Fcanon-sh-transcript-start-{nonce:016x}\x1F"),
-            end: format!("\x1Fcanon-sh-transcript-end-{nonce:016x}\x1F"),
-            escape: format!("\x1Fcanon-sh-transcript-escape-{nonce:016x}\x1F"),
-        })
-    }
-
-    fn wrap_transcript(&self, transcript: &str) -> String {
-        format!(
-            "{}{}{}",
-            self.start,
-            encode_sh_transcript_marker_text(transcript, self),
-            self.end
-        )
-    }
-}
-
-fn trim_rendered_prompt_template_output(
-    rendered: &str,
-    sh_transcript_markers: &ShTranscriptMarkers,
-) -> String {
-    let mut output = String::new();
-    let mut rest = rendered.trim();
-    while let Some(start_index) = rest.find(&sh_transcript_markers.start) {
-        output.push_str(&rest[..start_index]);
-        let after_start = &rest[start_index + sh_transcript_markers.start.len()..];
-        let Some(end_index) = after_start.find(&sh_transcript_markers.end) else {
-            output.push_str(&rest[start_index..]);
-            return output;
-        };
-        output.push_str(&decode_sh_transcript_marker_text(
-            &after_start[..end_index],
-            sh_transcript_markers,
-        ));
-        rest = &after_start[end_index + sh_transcript_markers.end.len()..];
-    }
-    output.push_str(rest);
-    output
-}
-
-fn encode_sh_transcript_marker_text(transcript: &str, markers: &ShTranscriptMarkers) -> String {
-    transcript
-        .replace(&markers.escape, &(markers.escape.clone() + "e"))
-        .replace(&markers.start, &(markers.escape.clone() + "s"))
-        .replace(&markers.end, &(markers.escape.clone() + "n"))
-}
-
-fn decode_sh_transcript_marker_text(encoded: &str, markers: &ShTranscriptMarkers) -> String {
-    let mut output = String::new();
-    let mut rest = encoded;
-    while let Some(index) = rest.find(&markers.escape) {
-        output.push_str(&rest[..index]);
-        rest = &rest[index + markers.escape.len()..];
-        let Some(code) = rest.chars().next() else {
-            output.push_str(&markers.escape);
-            return output;
-        };
-        match code {
-            'e' => output.push_str(&markers.escape),
-            's' => output.push_str(&markers.start),
-            'n' => output.push_str(&markers.end),
-            _ => {
-                output.push_str(&markers.escape);
-                output.push(code);
-            }
-        }
-        rest = &rest[code.len_utf8()..];
-    }
-    output.push_str(rest);
-    output
-}
-
-fn render_with_repository_cwd<F>(root: &Path, render: F) -> Result<String, Error>
-where
-    F: FnOnce() -> Result<String, Error>,
-{
-    with_current_dir(root, render).map_err(template_error)?
-}
-
-pub(crate) struct PromptTemplateOutputDirCache {
-    dir: OnceLock<PromptTemplateOutputDir>,
-}
-
-#[derive(Clone)]
-pub(crate) enum PromptTemplateArtifactDir {
-    Lazy(Arc<PromptTemplateOutputDirCache>),
-    #[cfg(test)]
-    Fixed(PathBuf),
-}
-
-impl PromptTemplateArtifactDir {
-    fn path(&self) -> Result<PathBuf, String> {
-        match self {
-            PromptTemplateArtifactDir::Lazy(cache) => cache.path_for_prompt_artifacts(),
-            #[cfg(test)]
-            PromptTemplateArtifactDir::Fixed(path) => Ok(path.clone()),
-        }
-    }
-}
-
-impl PromptTemplateOutputDirCache {
-    pub(crate) fn new() -> PromptTemplateOutputDirCache {
-        PromptTemplateOutputDirCache {
-            dir: OnceLock::new(),
-        }
-    }
-
-    pub(crate) fn path_for_prompt_artifacts(&self) -> Result<PathBuf, String> {
-        if let Some(dir) = self.dir.get() {
-            return Ok(dir.path().to_path_buf());
-        }
-        let dir = allocate_prompt_template_artifact_dir()?;
-        let path = dir.path().to_path_buf();
-        if self.dir.set(dir).is_err() {
-            return Ok(self
-                .dir
-                .get()
-                .expect("prompt template output dir is set")
-                .path()
-                .to_path_buf());
-        }
-        Ok(path)
-    }
-}
-
-struct PromptTemplateOutputDir {
-    path: PathBuf,
-}
-
-impl PromptTemplateOutputDir {
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for PromptTemplateOutputDir {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.path);
-    }
-}
-
-fn allocate_prompt_template_artifact_dir() -> Result<PromptTemplateOutputDir, String> {
-    // Prompt Templates require oversized command output to be exposed through
-    // evaluator-readable temp files. This allocator returns a private artifact
-    // directory; `PromptTemplateOutputDirCache` shares one directory across the
-    // prompt renders that may need to reference those transcript artifacts.
-    let memory_backed_candidates = memory_backed_temporary_parent_candidates();
-    let fallback_candidates = ordinary_temporary_parent_candidates();
-    allocate_prompt_template_artifact_dir_from_candidates(
-        &memory_backed_candidates,
-        &fallback_candidates,
-    )
-}
-
-fn allocate_prompt_template_artifact_dir_from_candidates(
-    memory_backed_candidates: &[PathBuf],
-    fallback_candidates: &[PathBuf],
-) -> Result<PromptTemplateOutputDir, String> {
-    // Canon-owned temporary directories prefer memory-backed parents when the
-    // host provides one; ordinary temporary parents are only the fallback path.
-    let mut errors = Vec::new();
-    for parent in memory_backed_candidates
-        .iter()
-        .chain(fallback_candidates.iter())
-    {
-        match allocate_prompt_template_artifact_dir_in(parent) {
-            Ok(dir) => return Ok(dir),
-            Err(err) => errors.push(err),
-        }
-    }
-    Err(format!(
-        "failed to allocate a unique prompt template output directory: {}",
-        errors.join("; ")
-    ))
-}
-
-fn allocate_prompt_template_artifact_dir_in(
-    parent: &Path,
-) -> Result<PromptTemplateOutputDir, String> {
-    if !parent.is_dir() {
-        return Err(format!("{} is not a directory", parent.display()));
-    }
-    for _ in 0..PROMPT_TEMPLATE_ARTIFACT_DIR_CREATE_ATTEMPTS {
-        let random = getrandom::u64()
-            .map_err(|err| format!("failed to choose prompt template output directory: {err}"))?;
-        let path = parent.join(format!(
-            "{}-{}-{random:016x}",
-            PROMPT_TEMPLATE_ARTIFACT_DIR_PREFIX,
-            std::process::id()
-        ));
-        match create_private_dir(&path) {
-            Ok(()) => return Ok(PromptTemplateOutputDir { path }),
-            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(err) => return Err(format!("failed to create {}: {}", path.display(), err)),
-        }
-    }
-    Err(format!(
-        "failed to allocate a unique prompt template output directory under {}",
-        parent.display()
-    ))
-}
-
-fn json_filter(value: MiniValue) -> Result<String, Error> {
-    serde_json::to_string(&value).map_err(|err| template_error(err.to_string()))
-}
-
-fn shell_quote_filter(value: String) -> Result<String, Error> {
-    quote_prompt_template_shell_arg(&value).map_err(template_error)
-}
-
-fn shell_args_filter(value: MiniValue) -> Result<String, Error> {
-    value
-        .try_iter()
-        .map_err(|err| template_error(format!("shargs requires an iterable: {err}")))?
-        .map(|arg| {
-            let arg = arg
-                .as_str()
-                .ok_or_else(|| template_error("shargs requires string arguments".to_string()))?;
-            quote_prompt_template_shell_arg(arg).map_err(template_error)
-        })
-        .collect::<Result<Vec<_>, Error>>()
-        .map(|args| args.join(" "))
-}
-
-fn shell_transcript_filter(
-    root: &Path,
-    template_artifact_dir: &PromptTemplateArtifactDir,
-    template_artifact_paths: &Mutex<Vec<PathBuf>>,
-    template_shell_env: &[(String, String)],
-    command: String,
-    kwargs: Kwargs,
-) -> Result<String, Error> {
-    let command = command.trim().to_string();
-    let display = kwargs
-        .get::<Option<String>>("display")
-        .map_err(|err| template_error(err.to_string()))?
-        .unwrap_or_else(|| command.clone());
-    kwargs
-        .assert_all_used()
-        .map_err(|err| template_error(err.to_string()))?;
-    // The prompt-template `sh` filter is defined to run the rendered block body
-    // as a shell command. That CWD-sensitive template operation runs from the
-    // repository root without mutating the parent process cwd.
-    let env_refs = template_shell_env
-        .iter()
-        .map(|(key, value)| (key.as_str(), value.as_str()))
-        .collect::<Vec<_>>();
-    let output = run_prompt_template_shell_command(root, &command, &env_refs)
-        .map_err(|err| template_error(format!("failed to run prompt template command: {err}")))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(template_error(format!(
-            "prompt template command failed: {}",
-            stderr.trim()
-        )));
-    }
-    let mut transcript = String::new();
-    transcript.push_str("$ ");
-    transcript.push_str(&display);
-    transcript.push('\n');
-    // The transcript shape is exactly command line, command stdout, and
-    // optionally the single truncation marker appended below; no extra
-    // begin/end sentinel lines are part of the Prompt Templates contract.
-    transcript.push_str(&truncated_template_command_output(
-        &output.stdout,
-        template_artifact_dir,
-        template_artifact_paths,
-    )?);
-    if !transcript.ends_with('\n') {
-        transcript.push('\n');
-    }
-    Ok(transcript)
-}
-
-fn truncated_template_command_output(
-    stdout: &[u8],
-    template_artifact_dir: &PromptTemplateArtifactDir,
-    template_artifact_paths: &Mutex<Vec<PathBuf>>,
-) -> Result<String, Error> {
-    if stdout.len() <= TEMPLATE_OUTPUT_HEAD_BYTES {
-        return Ok(String::from_utf8_lossy(stdout).into_owned());
-    }
-    // Prompt-template truncation is a token-budget mechanism, not a visibility
-    // boundary. The Prompt Templates spec deliberately exposes a readable file
-    // containing the same command stdout so the evaluator can inspect more of
-    // an already-visible transcript when the head is insufficient. Canon never
-    // reads this artifact back as check-run state.
-    let template_output_dir = template_artifact_dir.path().map_err(template_error)?;
-    let path = write_full_template_command_stdout_artifact(&template_output_dir, stdout)?;
-    template_artifact_paths.lock().unwrap().push(path.clone());
-    let (mut head, head_lines) = template_command_stdout_head(stdout);
-    if !head.ends_with('\n') {
-        head.push('\n');
-    }
-    let total_lines = output_line_count(stdout);
-    head.push_str(&format!(
-        "[truncated: showing first {} of {} lines; full output: {}]\n",
-        head_lines,
-        total_lines,
-        path.display()
-    ));
-    Ok(head)
-}
-
-fn template_command_stdout_head(stdout: &[u8]) -> (String, usize) {
-    let mut end = 0usize;
-    let mut head_lines = 0usize;
-    for line in stdout.split_inclusive(|byte| *byte == b'\n') {
-        if end.saturating_add(line.len()) > TEMPLATE_OUTPUT_HEAD_BYTES {
-            break;
-        }
-        end += line.len();
-        head_lines += 1;
-    }
-    if head_lines > 0 {
-        return (
-            String::from_utf8_lossy(&stdout[..end]).into_owned(),
-            head_lines,
-        );
-    }
-
-    let end = TEMPLATE_OUTPUT_HEAD_BYTES.min(stdout.len());
-    let head = String::from_utf8_lossy(&stdout[..end]).into_owned();
-    let head_lines = output_line_count(&stdout[..end]);
-    (head, head_lines)
-}
-
-fn output_line_count(output: &[u8]) -> usize {
-    if output.is_empty() {
-        return 0;
-    }
-    let lines = output.iter().filter(|byte| **byte == b'\n').count();
-    if output.ends_with(b"\n") {
-        lines
-    } else {
-        lines + 1
-    }
-}
-
-fn write_full_template_command_stdout_artifact(
-    template_output_dir: &Path,
-    stdout: &[u8],
-) -> Result<PathBuf, Error> {
-    let path = template_command_stdout_artifact_path(template_output_dir, stdout);
-    // This artifact is part of the evaluator-readable prompt transcript, not
-    // canon check state. The implementation writes it so the truncation line's
-    // path is readable by the evaluator, and never reads it back to make
-    // check-run decisions.
-    match create_template_command_stdout_artifact_file(&path, stdout) {
-        Ok(()) => Ok(path),
-        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
-            let existing = fs::read(&path).map_err(|read_err| {
-                template_error(format!(
-                    "failed to read existing prompt template output file {}: {}",
-                    path.display(),
-                    read_err
-                ))
-            })?;
-            if existing == stdout {
-                return Ok(path);
-            }
-            Err(template_error(format!(
-                "prompt template output hash collision or stale file at {}",
-                path.display()
-            )))
-        }
-        Err(err) => Err(template_error(format!(
-            "failed to write {}: {}",
-            path.display(),
-            err
-        ))),
-    }
-}
-
-fn template_command_stdout_artifact_path(template_output_dir: &Path, stdout: &[u8]) -> PathBuf {
-    // `template_output_dir` is stable for one check run, and the file name is
-    // content-addressed by complete stdout bytes. Identical stdout therefore
-    // maps to the same full path within that check run.
-    template_output_dir.join(format!(
-        "canon-template-output-sha256-{}.txt",
-        sha256_hex(stdout)
-    ))
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut output = String::with_capacity(digest.len() * 2);
-    for byte in digest {
-        output.push(hex_digit(byte >> 4));
-        output.push(hex_digit(byte & 0x0f));
-    }
-    output
-}
-
-fn hex_digit(value: u8) -> char {
-    match value {
-        0..=9 => (b'0' + value) as char,
-        10..=15 => (b'a' + value - 10) as char,
-        _ => unreachable!("hex digit nibble is always in range"),
-    }
-}
-
-fn create_template_command_stdout_artifact_file(path: &Path, stdout: &[u8]) -> io::Result<()> {
-    for _ in 0..16 {
-        let temp_path = template_stdout_artifact_temp_path(path)?;
-        match write_template_stdout_artifact_temp_file(&temp_path, stdout) {
-            Ok(()) => {
-                // Publish only after the temp sibling contains the complete
-                // stdout. A concurrent process can then observe either no
-                // content-addressed artifact or a complete one, never a
-                // partially-written target file.
-                let link_result = fs::hard_link(&temp_path, path);
-                let _ = fs::remove_file(&temp_path);
-                return link_result;
-            }
-            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(err) => return Err(err),
-        }
-    }
-    Err(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        "failed to choose a unique prompt template stdout artifact temp path",
-    ))
-}
-
-fn template_stdout_artifact_temp_path(path: &Path) -> io::Result<PathBuf> {
-    let parent = path.parent().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "prompt template stdout artifact path has no parent",
-        )
-    })?;
-    let file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "prompt template stdout artifact path has no UTF-8 file name",
-            )
-        })?;
-    let random = getrandom::u64().map_err(|err| {
-        io::Error::other(format!("failed to choose stdout artifact temp path: {err}"))
-    })?;
-    Ok(parent.join(format!(".{file_name}.{}.{}", std::process::id(), random)))
-}
-
-fn write_template_stdout_artifact_temp_file(path: &Path, stdout: &[u8]) -> io::Result<()> {
-    let mut file = template_artifact_open_options().open(path)?;
-    let result = set_template_artifact_file_permissions(&file)
-        .and_then(|()| file.write_all(stdout))
-        .and_then(|()| file.flush());
-    if result.is_err() {
-        let _ = fs::remove_file(path);
-    }
-    result
-}
-
-fn template_artifact_open_options() -> fs::OpenOptions {
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    set_template_artifact_create_mode(&mut options);
-    options
-}
-
-fn template_error(message: String) -> Error {
-    Error::new(ErrorKind::InvalidOperation, message)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::xpec_state::LastResultStatus;
+    use crate::platform::create_private_dir;
+    use crate::xpec_state::{LastResultResponse, LastResultStatus};
     use serde_json::json;
-    use std::path::Path;
+    use std::fs;
+    use std::process::Command;
 
-    #[test]
+    #[test] // xpec: 8O
     fn developer_instructions_include_transcript_outside_in_place_mode() {
         let rendered = developer_instructions_for_mode(false);
 
         assert!(rendered.contains("Use the transcript below only for context/navigation"));
-        assert!(rendered.contains("$ git diff --numstat $BASE_TREE $CHECKED_TREE"));
-        assert!(rendered.contains("$ git diff $BASE_TREE $CHECKED_TREE"));
-        assert!(rendered.contains("$ enter-sandbox --scope [\"src\"] --ignore []"));
+        assert!(rendered.contains("$ git diff --shortstat \"$BASE_TREE\" \"$CHECKED_TREE\""));
+        assert!(rendered.contains("$ set -- 'src'"));
+        assert!(
+            rendered.contains("$ git diff --numstat \"$BASE_TREE\" \"$CHECKED_TREE\" -- \"$@\"")
+        );
+        assert!(rendered.contains("$ git diff \"$BASE_TREE\" \"$CHECKED_TREE\" -- \"$@\""));
+        assert!(rendered.contains("$ exec sandbox-sh --read-only --no-git -- \"$@\""));
+        assert!(rendered.contains("5 project files are hidden."));
     }
 
-    #[test]
+    #[test] // xpec: 8O
     fn developer_instructions_omit_transcript_in_in_place_mode() {
         let rendered = developer_instructions_for_mode(true);
 
@@ -714,69 +304,53 @@ mod tests {
         assert!(!rendered.contains("Use the transcript below only for context/navigation"));
         assert!(!rendered.contains("$ git diff --numstat"));
         assert!(!rendered.contains("$ git diff"));
-        assert!(!rendered.contains("$ enter-sandbox"));
+        assert!(!rendered.contains("$ exec sandbox-sh"));
     }
 
-    #[test]
-    fn template_command_output_truncates_large_output() {
-        let output = (0..6000)
-            .map(|index| format!("line {index}\n"))
-            .collect::<String>();
-        let output_dir = test_output_dir("truncate");
-        let artifact_paths = Mutex::new(Vec::new());
-        let rendered = truncated_template_command_output(
-            output.as_bytes(),
-            &PromptTemplateArtifactDir::Fixed(output_dir.clone()),
-            &artifact_paths,
+    #[test] // xpec: 8O
+    fn developer_instructions_execute_diff_with_visible_scope() {
+        let root = test_output_dir("developer-instructions-scope-repo");
+        run_git(&root, &["init", "--quiet"]);
+        fs::write(root.join("scoped.txt"), "scoped before\n").unwrap();
+        fs::write(root.join("outside.txt"), "outside before\n").unwrap();
+        run_git(&root, &["add", "scoped.txt", "outside.txt"]);
+        let base_tree_oid = run_git(&root, &["write-tree"]);
+
+        fs::write(root.join("scoped.txt"), "scoped after\n").unwrap();
+        fs::write(root.join("outside.txt"), "outside after\n").unwrap();
+        run_git(&root, &["add", "scoped.txt", "outside.txt"]);
+        let checked_tree_oid = run_git(&root, &["write-tree"]);
+        let artifact_dir = root.join("artifacts");
+        create_private_dir(&artifact_dir).unwrap();
+        let mut artifact_paths = Vec::new();
+        let visible_scope = vec!["scoped.txt".to_string()];
+
+        let rendered = render_developer_instructions(
+            PromptTemplateArtifactDir::Fixed(artifact_dir),
+            &mut artifact_paths,
+            DeveloperInstructionsContext {
+                root: &root,
+                mode: DeveloperInstructionsMode::GitDiff {
+                    base_tree_oid: &base_tree_oid,
+                    checked_tree_oid: &checked_tree_oid,
+                    git_environment: &[],
+                },
+                question_context: "",
+                visible_scope: &visible_scope,
+                num_invisible_files: 1,
+                last_pass: None,
+            },
         )
         .unwrap();
 
-        assert!(rendered.contains("[truncated: showing first "));
-        assert!(rendered.contains("; full output: "));
-        assert!(!rendered.contains("[begin untrusted command output"));
-        assert!(!rendered.contains("[end untrusted command output"));
-        assert_eq!(artifact_paths.lock().unwrap().len(), 1);
-        let _ = fs::remove_dir_all(output_dir);
+        assert!(rendered.contains("scoped.txt"));
+        assert!(rendered.contains("scoped after"));
+        assert!(!rendered.contains("outside.txt"));
+        assert!(!rendered.contains("outside after"));
+        let _ = fs::remove_dir_all(root);
     }
 
-    #[test]
-    fn template_command_output_file_is_content_addressed_and_deduplicated() {
-        let output = (0..1200)
-            .map(|index| format!("line {index}\n"))
-            .collect::<String>();
-        let output_dir = test_output_dir("dedupe");
-        let artifact_paths = Mutex::new(Vec::new());
-
-        let first = truncated_template_command_output(
-            output.as_bytes(),
-            &PromptTemplateArtifactDir::Fixed(output_dir.clone()),
-            &artifact_paths,
-        )
-        .unwrap();
-        let second = truncated_template_command_output(
-            output.as_bytes(),
-            &PromptTemplateArtifactDir::Fixed(output_dir.clone()),
-            &artifact_paths,
-        )
-        .unwrap();
-        let first_path = PathBuf::from(full_output_path_from_rendered(&first));
-        let second_path = PathBuf::from(full_output_path_from_rendered(&second));
-
-        assert_eq!(first_path, second_path);
-        assert_eq!(
-            artifact_paths.lock().unwrap().as_slice(),
-            &[first_path.clone(), first_path.clone()]
-        );
-        assert!(first_path
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .starts_with("canon-template-output-sha256-"));
-        assert_eq!(fs::read(&first_path).unwrap(), output.as_bytes());
-        let _ = fs::remove_dir_all(output_dir);
-    }
-
-    #[test]
+    #[test] // xpec: C
     fn sh_transcript_boundary_whitespace_survives_outer_trim() {
         let output_dir = test_output_dir("sh-boundary-trim");
         let mut artifact_paths = Vec::new();
@@ -787,176 +361,13 @@ mod tests {
             &mut artifact_paths,
             " \n{% filter sh(display=\"printf kept\") %}printf '  kept\\n'{% endfilter %}\n ",
             &[],
+            &[],
             json!({}),
         )
         .unwrap();
 
         assert_eq!(rendered, "$ printf kept\n  kept\n");
         let _ = fs::remove_dir_all(output_dir);
-    }
-
-    #[test]
-    fn prompt_template_output_dir_allocations_are_fresh() {
-        let first = allocate_prompt_template_artifact_dir().unwrap();
-        let second = allocate_prompt_template_artifact_dir().unwrap();
-
-        assert_ne!(first.path(), second.path());
-        assert!(first.path().is_dir());
-        assert!(second.path().is_dir());
-        for path in [first.path(), second.path()] {
-            assert!(path
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .starts_with(PROMPT_TEMPLATE_ARTIFACT_DIR_PREFIX));
-        }
-    }
-
-    #[test]
-    fn prompt_template_output_dir_does_not_reuse_fixed_temp_path() {
-        let fixed = std::env::temp_dir().join(PROMPT_TEMPLATE_ARTIFACT_DIR_PREFIX);
-
-        let output = allocate_prompt_template_artifact_dir().unwrap();
-
-        assert_ne!(output.path(), fixed);
-        assert!(output.path().is_dir());
-    }
-
-    #[test]
-    fn prompt_template_output_dir_prefers_memory_backed_parent() {
-        let memory_backed_parent = test_output_dir("memory-backed-parent");
-        let fallback_parent = test_output_dir("fallback-parent");
-        let memory_backed_candidates = vec![memory_backed_parent.clone()];
-        let fallback_candidates = vec![fallback_parent.clone()];
-
-        let output = allocate_prompt_template_artifact_dir_from_candidates(
-            &memory_backed_candidates,
-            &fallback_candidates,
-        )
-        .unwrap();
-        let output_path = output.path().to_path_buf();
-
-        assert!(output_path.starts_with(&memory_backed_parent));
-        assert!(!output_path.starts_with(&fallback_parent));
-        drop(output);
-        let _ = fs::remove_dir_all(memory_backed_parent);
-        let _ = fs::remove_dir_all(fallback_parent);
-    }
-
-    #[test]
-    fn prompt_template_output_dir_falls_back_when_memory_backed_parent_is_unavailable() {
-        let missing_parent = std::env::temp_dir().join(format!(
-            "canon-missing-memory-backed-parent-{}",
-            std::process::id()
-        ));
-        let fallback_parent = test_output_dir("fallback-parent");
-        let memory_backed_candidates = vec![missing_parent];
-        let fallback_candidates = vec![fallback_parent.clone()];
-
-        let output = allocate_prompt_template_artifact_dir_from_candidates(
-            &memory_backed_candidates,
-            &fallback_candidates,
-        )
-        .unwrap();
-        let output_path = output.path().to_path_buf();
-
-        assert!(output_path.starts_with(&fallback_parent));
-        drop(output);
-        let _ = fs::remove_dir_all(fallback_parent);
-    }
-
-    #[test]
-    fn prompt_template_output_dir_cache_reuses_artifact_dir() {
-        let first;
-        {
-            let cache = PromptTemplateOutputDirCache::new();
-
-            first = cache.path_for_prompt_artifacts().unwrap();
-            let second = cache.path_for_prompt_artifacts().unwrap();
-
-            assert_eq!(first, second);
-            assert!(first.is_dir());
-        }
-        assert!(!first.exists());
-    }
-
-    #[test]
-    fn prompt_template_output_dir_caches_use_distinct_artifact_dirs() {
-        let first;
-        let second;
-        {
-            let first_cache = PromptTemplateOutputDirCache::new();
-            let second_cache = PromptTemplateOutputDirCache::new();
-
-            first = first_cache.path_for_prompt_artifacts().unwrap();
-            second = second_cache.path_for_prompt_artifacts().unwrap();
-
-            assert_ne!(first, second);
-            assert!(first.is_dir());
-            assert!(second.is_dir());
-        }
-        assert!(!first.exists());
-        assert!(!second.exists());
-    }
-
-    #[test]
-    fn template_command_stdout_path_is_deterministic_within_run_output_dir() {
-        let output_dir = test_output_dir("same-run-content-addressed");
-        let stdout = b"same complete stdout";
-
-        let first = template_command_stdout_artifact_path(&output_dir, stdout);
-        let second = template_command_stdout_artifact_path(&output_dir, stdout);
-
-        assert_eq!(first, second);
-        assert_eq!(first.parent(), Some(output_dir.as_path()));
-        assert!(first
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .starts_with("canon-template-output-sha256-"));
-        let _ = fs::remove_dir_all(output_dir);
-    }
-
-    #[test]
-    fn template_command_output_file_preserves_raw_stdout_bytes() {
-        // The saved file is raw command stdout. The full rendered prompt string
-        // is trimmed separately after all `sh` filters return.
-        let mut output = (0..1200)
-            .flat_map(|index| format!("line {index}\n").into_bytes())
-            .collect::<Vec<_>>();
-        output.extend_from_slice(&[0xff, 0xfe, b'\n']);
-        let output_dir = test_output_dir("raw-bytes");
-        let artifact_paths = Mutex::new(Vec::new());
-
-        let rendered = truncated_template_command_output(
-            &output,
-            &PromptTemplateArtifactDir::Fixed(output_dir.clone()),
-            &artifact_paths,
-        )
-        .unwrap();
-        let path = full_output_path_from_rendered(&rendered);
-        let saved = fs::read(path).unwrap();
-
-        assert_eq!(saved, output);
-        assert_eq!(
-            artifact_paths.lock().unwrap().as_slice(),
-            &[PathBuf::from(path)]
-        );
-        let saved_path = Path::new(path);
-        assert_eq!(saved_path.parent(), Some(output_dir.as_path()));
-        let _ = fs::remove_dir_all(output_dir);
-    }
-
-    fn full_output_path_from_rendered(rendered: &str) -> &str {
-        rendered
-            .lines()
-            .find(|line| line.starts_with("[truncated: "))
-            .unwrap()
-            .strip_suffix(']')
-            .unwrap()
-            .rsplit_once("full output: ")
-            .unwrap()
-            .1
     }
 
     fn developer_instructions_for_mode(in_place: bool) -> String {
@@ -967,22 +378,26 @@ mod tests {
         });
         let mut artifact_paths = Vec::new();
         let visible_scope = vec!["src".to_string()];
-        let ignore = Vec::new();
-        let rendered = developer_instructions(DeveloperInstructionsContext {
-            root: Path::new("."),
-            template_artifact_dir: PromptTemplateArtifactDir::Fixed(output_dir.clone()),
-            template_artifact_paths: &mut artifact_paths,
-            in_place,
-            diff_from_tree_oid: "HEAD",
-            checked_tree_oid: "HEAD",
-            question_context: "Custom expectation instructions.",
-            q_scope: &visible_scope,
-            ignore: &ignore,
-            visible_scope: &visible_scope,
-            checked_file_count: 10,
-            visible_file_count: 5,
-            last_pass: None,
-        })
+        let rendered = render_developer_instructions(
+            PromptTemplateArtifactDir::Fixed(output_dir.clone()),
+            &mut artifact_paths,
+            DeveloperInstructionsContext {
+                root: Path::new("."),
+                mode: if in_place {
+                    DeveloperInstructionsMode::InPlace
+                } else {
+                    DeveloperInstructionsMode::GitDiff {
+                        base_tree_oid: "HEAD",
+                        checked_tree_oid: "HEAD",
+                        git_environment: &[],
+                    }
+                },
+                question_context: "Custom expectation instructions.",
+                visible_scope: &visible_scope,
+                num_invisible_files: 5,
+                last_pass: None,
+            },
+        )
         .unwrap();
         let _ = fs::remove_dir_all(output_dir);
         rendered
@@ -998,17 +413,33 @@ mod tests {
         path
     }
 
-    #[test] // xpec: 2
+    fn run_git(root: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap();
+        if !output.status.success() {
+            panic!(
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    }
+
+    #[test] // xpec: Q
     fn target_diff_prompt_hint_uses_full_q_scope_suggestion() {
         let last_pass = LastResult {
             response_timestamp: "1970-01-01T00:00:01Z".to_string(),
             updated_timestamp: "1970-01-01T00:00:01Z".to_string(),
             status: LastResultStatus::Pass,
-            response: json!({
-                "answer": "yes",
-                "evidence": "`src/a.rs`",
-                "qScopeSuggestion": ["src/a.rs"],
-            }),
+            response: LastResultResponse::answered(
+                "yes",
+                "`src/a.rs`",
+                Some(vec!["src/a.rs".to_string()]),
+            ),
             q_scope: vec!["src/a.rs".to_string()],
             visible_scope: vec!["src/a.rs".to_string()],
             checked_tree_oid: Some("checked-tree".to_string()),
@@ -1019,18 +450,21 @@ mod tests {
         let output_dir = test_output_dir("turn-prompt");
         let mut artifact_paths = Vec::new();
 
-        let prompt = evaluator_turn_prompt(EvaluatorTurnPromptContext {
-            root: Path::new("."),
-            template_artifact_dir: PromptTemplateArtifactDir::Fixed(output_dir.clone()),
-            template_artifact_paths: &mut artifact_paths,
-            short_id: "e",
-            question: "Does it pass?",
-            expected_answer: "yes",
-            in_place: false,
-            diff_from: crate::config_types::DEFAULT_DIFF_FROM,
-            target: Some("diff"),
-            last_pass: Some(&last_pass),
-        })
+        let prompt = render_evaluator_turn_prompt(
+            PromptTemplateArtifactDir::Fixed(output_dir.clone()),
+            &mut artifact_paths,
+            EvaluatorTurnPromptContext {
+                root: Path::new("."),
+                short_id: "e",
+                question: "Does it pass?",
+                expected_answer: "yes",
+                mode: EvaluatorTurnPromptMode::GitBacked {
+                    diff_from: crate::config_types::DEFAULT_DIFF_FROM,
+                    render_target_diff_hint: true,
+                    last_pass: Some(&last_pass),
+                },
+            },
+        )
         .unwrap();
 
         assert!(prompt.contains("This question targets the Git diff."));
@@ -1047,17 +481,17 @@ mod tests {
         let _ = fs::remove_dir_all(output_dir);
     }
 
-    #[test] // xpec: 2
+    #[test] // xpec: Q
     fn target_diff_prompt_uses_expected_answer_when_diff_from_is_not_checkpoint() {
         let last_pass = LastResult {
             response_timestamp: "1970-01-01T00:00:01Z".to_string(),
             updated_timestamp: "1970-01-01T00:00:01Z".to_string(),
             status: LastResultStatus::Pass,
-            response: json!({
-                "answer": "no",
-                "evidence": "`src/a.rs`",
-                "qScopeSuggestion": ["src/a.rs"],
-            }),
+            response: LastResultResponse::answered(
+                "no",
+                "`src/a.rs`",
+                Some(vec!["src/a.rs".to_string()]),
+            ),
             q_scope: vec!["src/a.rs".to_string()],
             visible_scope: vec!["src/a.rs".to_string()],
             checked_tree_oid: Some("checked-tree".to_string()),
@@ -1068,18 +502,21 @@ mod tests {
         let output_dir = test_output_dir("turn-prompt-against-tree");
         let mut artifact_paths = Vec::new();
 
-        let prompt = evaluator_turn_prompt(EvaluatorTurnPromptContext {
-            root: Path::new("."),
-            template_artifact_dir: PromptTemplateArtifactDir::Fixed(output_dir.clone()),
-            template_artifact_paths: &mut artifact_paths,
-            short_id: "e",
-            question: "Does it pass?",
-            expected_answer: "yes",
-            in_place: false,
-            diff_from: crate::config_types::AGAINST_TREE_DIFF_FROM,
-            target: Some("diff"),
-            last_pass: Some(&last_pass),
-        })
+        let prompt = render_evaluator_turn_prompt(
+            PromptTemplateArtifactDir::Fixed(output_dir.clone()),
+            &mut artifact_paths,
+            EvaluatorTurnPromptContext {
+                root: Path::new("."),
+                short_id: "e",
+                question: "Does it pass?",
+                expected_answer: "yes",
+                mode: EvaluatorTurnPromptMode::GitBacked {
+                    diff_from: crate::config_types::AGAINST_TREE_DIFF_FROM,
+                    render_target_diff_hint: true,
+                    last_pass: Some(&last_pass),
+                },
+            },
+        )
         .unwrap();
 
         assert!(prompt.contains("This question targets the Git diff."));
@@ -1089,46 +526,29 @@ mod tests {
         let _ = fs::remove_dir_all(output_dir);
     }
 
-    #[test] // xpec: 2
-    fn in_place_turn_prompt_omits_target_diff_hint() {
-        let last_pass = LastResult {
-            response_timestamp: "1970-01-01T00:00:01Z".to_string(),
-            updated_timestamp: "1970-01-01T00:00:01Z".to_string(),
-            status: LastResultStatus::Pass,
-            response: json!({
-                "answer": "yes",
-                "evidence": "`src/a.rs`",
-                "qScopeSuggestion": ["src/a.rs"],
-            }),
-            q_scope: vec!["src/a.rs".to_string()],
-            visible_scope: vec!["src/a.rs".to_string()],
-            checked_tree_oid: Some("checked-tree".to_string()),
-            visible_tree_oid: Some("visible-tree".to_string()),
-            diff_from: None,
-            diff_from_tree_oid: None,
-        };
+    #[test] // xpec: Q
+    fn in_place_turn_prompt_has_only_the_question() {
         let output_dir = test_output_dir("turn-prompt-in-place");
         let mut artifact_paths = Vec::new();
 
-        let prompt = evaluator_turn_prompt(EvaluatorTurnPromptContext {
-            root: Path::new("."),
-            template_artifact_dir: PromptTemplateArtifactDir::Fixed(output_dir.clone()),
-            template_artifact_paths: &mut artifact_paths,
-            short_id: "e",
-            question: "Does it pass?",
-            expected_answer: "yes",
-            in_place: true,
-            diff_from: crate::config_types::DEFAULT_DIFF_FROM,
-            target: Some("diff"),
-            last_pass: Some(&last_pass),
-        })
+        let prompt = render_evaluator_turn_prompt(
+            PromptTemplateArtifactDir::Fixed(output_dir.clone()),
+            &mut artifact_paths,
+            EvaluatorTurnPromptContext {
+                root: Path::new("."),
+                short_id: "e",
+                question: "Does it pass?",
+                expected_answer: "yes",
+                mode: EvaluatorTurnPromptMode::InPlace,
+            },
+        )
         .unwrap();
 
         assert_eq!(prompt, r#"{"e":"Does it pass?"}"#);
         let _ = fs::remove_dir_all(output_dir);
     }
 
-    #[test]
+    #[test] // xpec: C
     fn resource_template_rendering_trims_outer_whitespace() {
         let output_dir = test_output_dir("outer-trim");
         let mut artifact_paths = Vec::new();
@@ -1139,44 +559,12 @@ mod tests {
             &mut artifact_paths,
             "\n  {{ value }}  \n",
             &[],
+            &[],
             json!({ "value": "answer" }),
         )
         .unwrap();
 
         assert_eq!(rendered, "answer");
         let _ = fs::remove_dir_all(output_dir);
-    }
-
-    #[test]
-    fn outer_trim_preserves_shell_transcript_edges() {
-        let markers = test_markers();
-        let transcript = "$ cmd\n  output  \n";
-        let rendered = format!("\n  {}  \n", markers.wrap_transcript(transcript));
-
-        let trimmed = trim_rendered_prompt_template_output(&rendered, &markers);
-
-        assert_eq!(trimmed, transcript);
-    }
-
-    #[test]
-    fn shell_transcript_markers_are_preserved_inside_transcript_text() {
-        let markers = test_markers();
-        let transcript = format!(
-            "$ cmd\n{}{}{}\n",
-            markers.start, markers.end, markers.escape
-        );
-        let rendered = markers.wrap_transcript(&transcript);
-
-        let trimmed = trim_rendered_prompt_template_output(&rendered, &markers);
-
-        assert_eq!(trimmed, transcript);
-    }
-
-    fn test_markers() -> ShTranscriptMarkers {
-        ShTranscriptMarkers {
-            start: "<start>".to_string(),
-            end: "<end>".to_string(),
-            escape: "<escape>".to_string(),
-        }
     }
 }

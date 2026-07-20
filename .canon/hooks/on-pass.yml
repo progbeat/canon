@@ -1,6 +1,0 @@
-- exec: [".canon/scripts/check-q-scope"]
-  cases:
-    0: !ok
-    1: !block "▷ Fix evaluator base instructions so q-scope suggestions/verification converge to the expected scope class, then run `canon check` again."
-    2: !block "▷ Ask the human to fix the canon/state."
-    _: !block "▷ Unknown exit code. Ask the human to fix the script."

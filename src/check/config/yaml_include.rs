@@ -1,4 +1,5 @@
-use super::config_expansion::CheckConfigSource;
+use super::expansion::CheckConfigSource;
+use super::foreach::expand_foreach_yaml;
 use crate::repo_inspection::RepoInspectionCache;
 use crate::scope::normalize_repo_path;
 use serde::de::DeserializeOwned;
@@ -6,6 +7,7 @@ use serde_saphyr::{
     from_str_with_options, IncludeRequest, IncludeResolveError, InputSource, ResolvedInclude,
 };
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 // Shared by top-level check config loading and recursive expectation includes;
 // both paths need the same source-aware YAML `!include` resolver.
@@ -21,21 +23,28 @@ where
     let mut resolver = CheckConfigIncludeResolver {
         root: root.to_path_buf(),
         root_config_path: config_path.to_path_buf(),
-        source,
-        cache: RepoInspectionCache::new(),
+        source: source.clone(),
+        cache: Arc::new(Mutex::new(RepoInspectionCache::new())),
     };
+    let content = expand_foreach_yaml(
+        root,
+        config_path,
+        content,
+        &source,
+        Arc::clone(&resolver.cache),
+    )?;
     let options = serde_saphyr::options! {
         strict_booleans: true,
     }
     .with_include_resolver(move |request: IncludeRequest<'_>| resolver.resolve(request));
-    from_str_with_options(content, options).map_err(|err| err.to_string())
+    from_str_with_options(&content, options).map_err(|err| err.to_string())
 }
 
 struct CheckConfigIncludeResolver {
     root: PathBuf,
     root_config_path: PathBuf,
     source: CheckConfigSource,
-    cache: RepoInspectionCache,
+    cache: Arc<Mutex<RepoInspectionCache>>,
 }
 
 impl CheckConfigIncludeResolver {
@@ -48,10 +57,22 @@ impl CheckConfigIncludeResolver {
         // `ResolvedInclude.id` against the active include IDs. The root input
         // has no ID in that stack, so `resolve_include_path` rejects only the
         // root-file cycle that the parser cannot observe itself.
-        let content = self
-            .cache
-            .config_source_file_content(&self.root, &self.source, Path::new(&path))
-            .map_err(IncludeResolveError::Message)?;
+        let content = {
+            let mut cache = self.cache.lock().map_err(|_| {
+                IncludeResolveError::Message("config source cache lock is poisoned".to_string())
+            })?;
+            self.source
+                .file_content(&mut cache, &self.root, Path::new(&path))
+                .map_err(IncludeResolveError::Message)?
+        };
+        let content = expand_foreach_yaml(
+            &self.root,
+            Path::new(&path),
+            &content,
+            &self.source,
+            Arc::clone(&self.cache),
+        )
+        .map_err(IncludeResolveError::Message)?;
         Ok(ResolvedInclude {
             id: path.clone(),
             name: path,
@@ -118,11 +139,69 @@ mod tests {
         normalize_include_spec, parse_yaml_config_with_includes, reject_root_include,
         resolve_include_path,
     };
-    use crate::check::config::CheckConfigSource;
+    use crate::check::config::expansion::CheckConfigSource;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test] // xpec: I8,3Z
+    fn expectation_sequence_includes_are_flattened() {
+        let root = test_root("expectation-sequence-include");
+        fs::write(
+            root.join("included.yml"),
+            "- q: Included one\n  a: yes\n- q: Included two\n  a: yes\n",
+        )
+        .unwrap();
+
+        let raw = parse_yaml_config_with_includes::<crate::config_types::RawCheckConfig>(
+            &root,
+            Path::new("check.yml"),
+            "presets:\n  default: {}\nxpecs:\n  - !include included.yml\n  - q: Local\n    a: yes\n",
+            CheckConfigSource::InPlace,
+        )
+        .unwrap();
+
+        assert_eq!(raw.expectations.len(), 3);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test] // xpec: 3Z
+    fn xpecs_and_expectations_are_exclusive_aliases() {
+        for key in ["xpecs", "expectations"] {
+            let content = format!("presets:\n  default: {{}}\n{key}:\n  - q: Local\n    a: yes\n");
+            let raw = parse_yaml_config_with_includes::<crate::config_types::RawCheckConfig>(
+                Path::new("."),
+                Path::new("check.yml"),
+                &content,
+                CheckConfigSource::InPlace,
+            )
+            .unwrap();
+            assert_eq!(raw.expectations.len(), 1);
+        }
+
+        let error = parse_yaml_config_with_includes::<crate::config_types::RawCheckConfig>(
+            Path::new("."),
+            Path::new("check.yml"),
+            "presets:\n  default: {}\nxpecs: []\nexpectations: []\n",
+            CheckConfigSource::InPlace,
+        )
+        .unwrap_err();
+        assert!(error.contains("duplicate field"));
+    }
+
+    #[test] // xpec: 3Z
+    fn nested_xpec_sequences_are_recursively_flattened() {
+        let raw = parse_yaml_config_with_includes::<crate::config_types::RawCheckConfig>(
+            Path::new("."),
+            Path::new("check.yml"),
+            "presets:\n  default: {}\nxpecs:\n  - - q: One\n      a: yes\n    - - q: Two\n        a: yes\n",
+            CheckConfigSource::InPlace,
+        )
+        .unwrap();
+
+        assert_eq!(raw.expectations.len(), 2);
+    }
 
     // xpec: I8
     #[test]
@@ -187,38 +266,6 @@ mod tests {
             err.contains("cyclic include detected: child.yml"),
             "unexpected include error: {err}"
         );
-    }
-
-    // xpec: uY
-    #[test]
-    fn hook_case_key_y_stays_text() {
-        let raw: crate::config_types::RawCheckConfig = parse_yaml_config_with_includes(
-            Path::new("."),
-            Path::new("check.yml"),
-            r#"
-version: 1
-presets:
-  default: {}
-hooks:
-  on-start:
-    input: "Continue? "
-    cases:
-      y: !ok
-      _: !block "Stop."
-expectations:
-  - q: "Does hook config parse?"
-    a: "yes"
-"#,
-            crate::check::config::CheckConfigSource::InPlace,
-        )
-        .expect("parse hook config");
-
-        let hooks = raw.hooks.unwrap().resolve().unwrap();
-
-        // xpec: uY
-        assert!(hooks.on_start[0].cases.contains_key("y"));
-        // xpec: uY
-        assert!(!hooks.on_start[0].cases.contains_key("true"));
     }
 
     fn test_root(name: &str) -> PathBuf {

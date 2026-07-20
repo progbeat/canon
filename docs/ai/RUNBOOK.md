@@ -116,6 +116,29 @@ survive selector reruns.
 For reproducible global diff-quality q-scope cases, use
 `research/qscope-diff-quality/README.md`.
 
+## Scope Retry Can Lose The Useful Finding
+
+A restricted turn can correctly return `ScopeTooNarrow` with evidence naming a
+missing production edge, then a fresh full-scope retry can ignore that finding
+and return an unsupported answer. Inspect both `agent.response` events. Treat
+model/token comparisons as noisy unless repeated, and do not count a final
+answer as correct when its evidence proves a different property. A possible
+future improvement is to pass the restricted turn's evidence and needed paths
+to the full-scope retry.
+
+## Missing Progress Timeline Timeout Markers
+
+When an app-server no-progress timeout is logged but the live timeline contains
+only `.`, trace the progress reporter through the concrete production runner.
+Calls in the transport and tests that inject progress events directly do not
+prove wrapper forwarding; a trait default no-op can silently drop the reporter.
+
+A trailing `~` is always a bug: once evaluation is ready to report, timeout
+accumulation is no longer active. An elapsed `~` requires one uninterrupted
+no-progress interval to cover that whole minute; message activity splits the
+interval. A timeout-ending timeline keeps the `~×` suffix even at an exact
+minute boundary.
+
 ## Preset Evidence
 
 `RawCheckConfig` is the check.yml schema with `presets`; `CheckConfig` is the
@@ -130,8 +153,41 @@ as `q`, `a`, `q_template`, `path`, and `include`.
 ## `canon check --in-place`
 
 It still follows normal selected-expectation ordering, but it does not use
-persistent state for cache reuse, last-pass q-scope seeding, follow-up
-interrogations, or last-result writes.
+persistent state for cache reuse, last-pass q-scope seeding, or follow-up
+interrogations. It does persist completed status-specific last results without
+Git-tree fields and reads latest-fail history for ordering when the canonical
+state namespace exists. These records are status history, not checkpoints:
+without `checkedTreeOid`, an in-place pass cannot define the glossary's
+Git-tree checkpoint. The CLI resolves the command-wide canon-owned output
+namespace before selecting Git-backed or in-place execution and passes the
+resolved value into the command. Git may resolve the glossary-defined default
+pathname, but that opaque path describes no checked files. In-place itself
+never performs repository discovery: the supplied namespace is used only for
+status history, never as tree information, cache eligibility, scope, diff, or
+evaluator context. Outside Git with no explicit `CANON_STATE_DIR`, ordering
+uses the Unix epoch and completed results stay in the current in-memory report.
+
+Do not confuse invocation-local execution state with intentional
+cross-invocation project history. Runtime logs and xpec last results are
+bounded non-temporary state under `CANON_STATE_DIR`; invocation-local caches and
+reports stay in memory.
+
+Filesystem-shaped evaluator inputs are temporary artifacts, not execution
+state. Materialized read-only trees, oversized prompt-command output, and a
+staged tree object exposed to evaluator-run Git commands require paths.
+Canon-owned directories follow the common memory-backed-preferred/fallback
+policy and disappear with their owners. An invocation-local materialization in
+an existing caller-selected tree-cache root journals its replacements in
+memory, removes its new trees, and restores prior lazy entries on drop. These
+artifacts never enter repository or `CANON_STATE_DIR` state.
+
+For the project-wide persistent-state bound, treat `CANON_STATE_DIR` as the
+caller-selected storage namespace, not as a project configuration generation
+that canon retains when the environment points elsewhere. Within the selected
+namespace, bounded retained data covers `CODEX_THREAD_ID` roots and note keys.
+Changes to project-owned configuration do not create cache generations: logs
+rotate to the current size limit, xpec history prunes uncollected identities,
+and retained note logs compact in place.
 
 ## Evaluator Cites Unrelated Files
 

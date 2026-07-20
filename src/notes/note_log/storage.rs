@@ -59,10 +59,9 @@ fn parse_note_log_marker(line: &str) -> Option<(&str, u64)> {
     for part in content.split_ascii_whitespace() {
         if let Some(value) = part.strip_prefix("hash=") {
             hash = Some(value);
-        } else if let Some(value) = part.strip_prefix("offset=") {
-            offset = value.parse::<u64>().ok();
         } else {
-            return None;
+            let value = part.strip_prefix("offset=")?;
+            offset = value.parse::<u64>().ok();
         }
     }
     Some((hash?, offset?))

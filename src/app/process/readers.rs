@@ -71,7 +71,7 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    #[test]
+    #[test] // xpec: 1h
     fn stderr_reader_forwards_before_eof() {
         let (reader, mut writer) = UnixStream::pair().unwrap();
         let (forwarded_tx, forwarded_rx) = mpsc::channel();

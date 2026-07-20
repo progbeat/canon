@@ -1,82 +1,83 @@
-version: 1
+presets: !include presets.yml
 
-presets:
-  default: &default_preset
-    models: ["gpt-5.4-mini", "gpt-5.3-codex-spark"]
-    thinking: medium  # minimal | low | medium | high | xhigh
-    ignore:
-      - ".canon/**"  # prevents evaluator agents from reading expected answers and avoids reevaluating full-scope expectations when canon changes
-      - ".github/**"
-      - "docker/**"
-      - "docs/ai/**"
-      - "skills/**"
-      - ".dockerignore"
-      - "AGENTS.md"
-      - "Cargo.lock"
-      - "Dockerfile"
-      - "LICENSE"
-  smart:
-    <<: *default_preset
-    models: ["gpt-5.5"]
-    thinking: xhigh
-  spark:
-    <<: *default_preset
-    models: ["gpt-5.3-codex-spark"]
-    thinking: high
-  docker:
-    <<: *default_preset
-    ignore:  # overrides default_preset.ignore
-      - ".canon/**"
-      - ".github/**"
-      - "docs/ai/**"
-      - "skills/**"
-      - "src/**"
-      - "AGENTS.md"
-      - "Cargo.lock"
-      - "LICENSE"
-  pr-review:
-    <<: *default_preset
-    target: diff
-    diff-from: master
-    models: ["gpt-5.5"]
-    ignore:
-      - "docs/ai/**"
-      - "skills/**"
-      - "AGENTS.md"
-      - "Cargo.lock"
-      - "LICENSE"
+xpecs:
+  # on-start checks
+  - to: caller
+    q: "Did you stage all the changes you intended to evaluate? [y/n]"
+    a: y
+    rank: -10
+    cooldown: 1h
 
-hooks:
-  on-start: !include hooks/on-start.yml
-  on-pass: !include hooks/on-pass.yml
+  - to: caller
+    q: "Do you acknowledge that, if a subsequent review finds that you disregarded instructions in `AGENTS.md` or feedback from `canon check`, your changes will be reverted and you will have to start over? [y/n]"
+    a: y
+    rank: -10
+    cooldown: 30m
 
-expectations:
-  - include: expects/*.yml
+  - to: caller
+    q: |-
+      Run the checks:
+      ```
+      cargo fmt --check
+      cargo clippy --all-targets -- -D warnings
+      cargo test
+      ```
+      Consider `cargo build --release` or `cargo audit --deny warnings` when relevant.
+      Have the checks passed? [y/n]
+    a: y
+    rank: -10
+    cooldown: 20m
+
+  # on-pass checks
+  # - to: shell
+  #   q: ".canon/scripts/check-q-scope"
+  #   rank: +10
+
+  - !include expects/canon-gate.yml
+  - !include expects/efficiency.yml
+  - !include expects/init-and-hooks.yml
+  - !include expects/interrogation.yml
+  - !include expects/isolation.yml
+  - !include expects/project-quality.yml
+  - !include expects/sanity-checks.yml
 
   # Glossary
-  - path: "glossary.md"
-    q_template: |
-      {{content}}
-      ---
-      Is the implementation consistent with this glossary definition?
-    a: "yes"
-    target: diff
+  - !foreach
+    - _: [0]
+    - q: |-
+        {{ read("glossary.md") }}
+        ---
+        Can you find any inconsistency between the implementation and this glossary definition?
+      a: "no"
+      target: diff
 
   # Specs
-  - path: "specs/**.md"
-    q_template: |
-      {{content}}
-      ---
-      Does the implementation fully satisfy this specification?
-    a: "yes"
+  - !foreach
+    - path: "specs/**.md"
+    - q: |-
+        {{ read(path) }}
+        ---
+        Can you find any high-confidence violation of this specification in the implementation?
+      a: no
+
+  - !foreach
+    - path: ["specs/**.py"]
+    - q: |-
+        --- # {{ path }}
+        {{ read(path) }}
+        ---
+        The implementation may differ from the pseudocode in internal structure and control flow, but it must:
+        - preserve every specified behavior;
+        - preserve every pseudocode assertion as an explicit assertion.
+        Can you find any high-confidence violation?
+      a: no
 
   # Docker
-  - include: "docker/*.yml"
-    preset: docker
+  - !include docker/general.yml
 
   # Documentation
   - q: "Can you find any inconsistencies between `docs/GLOSSARY.md` and the codebase?"
-    a: "no"
+    a: no
     cooldown: 1d
 
   # FS side effects
@@ -98,14 +99,11 @@ expectations:
   - q: "Does every `canon` command flush stdout and stderr incrementally once output becomes eligible to be emitted, without holding it until unrelated later work or command completion?"
     a: "yes"
 
-  - q: "Does generator path `specs/**.md` match Markdown files in nested `specs/` subdirectories?"
-    a: "yes"
-
   - q: "Does canon validate each expectation's expected answer using the `answer` pattern defined by the interrogation response schema?"
     a: "yes"
 
-  - q: "Can you find any check execution path after raw config expansion that looks up a named preset or copies fields from a preset instead of consuming the already-resolved fields of the question or expectation being evaluated?"
-    a: "no"
+  - q: "Can you find any check execution path after raw config expansion that looks up a named preset or copies fields from a preset instead of consuming the already-resolved fields of the xpec being evaluated?"
+    a: no
 
   # Features
   - q: "Does check config YAML support `!include <relative-yaml-path>` resolving it relative to the including YAML file and reading included YAML from the same config source as the root check config?"

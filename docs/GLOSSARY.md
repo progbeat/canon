@@ -10,8 +10,8 @@ of being selected from the configured expectations.
 
 ## Cache
 
-Stored last-result history that lets `canon` avoid asking the evaluator again
-when a previous answer still applies to the current staged project state.
+Stored pass history that lets `canon` avoid evaluating an expectation again
+when a previous pass still applies to the current staged project state.
 
 ## Cached result
 
@@ -38,15 +38,14 @@ The YAML file that defines evaluator settings and expectations. By default,
 
 ## Cooldown
 
-A time window during which a recent pass/fail last result can avoid being
+A time window during which a recent pass result can avoid being
 re-proven for every small staged change. Cooldown is useful for broad review
 expectations that are expensive to recheck on every commit.
 
 ## Cooldown result
 
-A pass cached result derived from the latest pass/fail last result when that
-result has a configured cooldown duration and its timestamp is still inside that
-window.
+A pass cached result derived from `last-pass.json` when the expectation has a
+configured cooldown duration and the pass timestamp is still inside that window.
 
 ## Evidence
 
@@ -64,9 +63,9 @@ does not make the config file an evaluator prompt source.
 
 ## Expectation ID
 
-A 20-character base62 hash derived from the rendered expectation question, the
-expected answer, and a deterministic hash of the resolved expectation
-instructions.
+A 20-character base62 hash derived from the rendered expectation question, its
+addressee, the expected answer, and a deterministic hash of the resolved
+expectation instructions.
 
 ## Expected answer
 
@@ -75,9 +74,11 @@ to the observed answer using exact string equality.
 
 ## Expectation
 
-A question and expected answer that the project should satisfy. In
-`.canon/check.yml`, a basic expectation has a `q` field and an `a` field. An
-expectation may also provide an `instructions` config value.
+A question, addressee, and expected answer that the project should satisfy. In
+`.canon/check.yml`, a basic expectation has a `q` field and normally an `a`
+field; shell expectations default `a` to `"0"`. An expectation may select
+`to: agent`, `to: caller`, or `to: shell`, and may also provide an
+`instructions` config value.
 
 ## Evaluator thread
 
@@ -95,18 +96,21 @@ resource files under `resources/prompts/`. Config values such as expectation
 `instructions` are human-authored canon data passed into those templates, not
 additional implementation-owned prompt templates or instruction sources.
 
-## Generator item
+## YAML expansion
 
-A config entry that expands into additional expectations. Generator items
-include `include` entries and path-generator entries. A path-generator entry
-uses a path pattern, a question template, and an expected answer, and expands
-matching checked files.
+`!include <relative-yaml-path>` inserts YAML read from the same config source,
+relative to the including document. `!foreach` applies to a two-item sequence
+of variable bindings and a YAML template. It renders one template copy for
+every combination of binding values; binding strings containing `*` or `?`
+select matching paths from the same source. `read(filename)` returns UTF-8 file
+contents relative to the document containing the expansion.
 
 ## Observed answer
 
-The answer returned by the evaluator for an expectation or ad-hoc question.
-For configured expectations, `canon` compares the observed answer to the
-expected answer.
+The answer produced by an expectation's addressee. Agent answers come from an
+evaluator turn, caller answers come from one stdin line, and shell answers are
+decimal exit-code strings. `canon` compares the observed answer to the expected
+answer.
 
 ## Pre-commit hook
 
@@ -116,11 +120,12 @@ history.
 
 ## `canon check`
 
-The command that evaluates expectations against the staged project state. It
-collects configured expectations, computes cached results, and selects only the
-expectations that require evaluator work. With no selectors, cached failures are
-reported without fresh evaluation; if every cached result is a pass, uncached
-expectations are evaluated.
+The command that evaluates expectations against the staged project state by
+default inside a Git worktree. Outside a Git worktree it selects in-place mode
+automatically. An explicit Git tree may be selected, and in-place mode evaluates
+the current directory directly. It collects configured expectations, computes
+cached pass results, and selects the uncached expectations for evaluation.
+Explicit selectors force evaluation even when a cached result exists.
 
 ## `canon gate`
 
@@ -156,21 +161,32 @@ that verification produces a valid evaluator response with an answer.
 
 ## Same-tree result
 
-A pass or fail last result for an expectation whose stored `visibleTreeOid`
-matches the current `visibleTreeOid` for that result's visible scope.
+The expectation's last pass result when its stored `visibleTreeOid` matches the
+current `visibleTreeOid` for that result's visible scope.
+
+## Runtime log history
+
+Every applicable runtime event is constructed through the command's diagnostic
+writer. A positive `canon.logs.maxSize` and a persistent state namespace retain
+JSON Lines copies as bounded cross-invocation history under `LOGS_DIR`
+(`${CANON_STATE_DIR}/logs`).
+Otherwise, the writer keeps the current invocation's events in memory. The
+zero-size configuration also removes previously retained runtime log files when
+a persistent state namespace is available. Persistent history is intentional
+command output, not invocation-local working state.
 
 ## Selected expectations
 
-The expectations that require evaluator work in the current `canon check` run.
+The expectations that require evaluation work in the current `canon check` run.
 Explicit selectors select matching expectations directly; the default
-no-selector check subtracts cached passing expectations and evaluates none while
-cached failures are present.
+no-selector check subtracts cached expectations from collected expectations.
 
 ## Staged snapshot
 
-The temporary Git-tracked project state that `canon check` evaluates. It comes
-from the Git index, so unstaged and untracked working tree files are not part of
-the snapshot.
+The temporary Git-tracked project state that `canon check` evaluates by default
+inside a Git worktree. It comes from the Git index, so unstaged and untracked
+working tree files are not part of the snapshot. Explicit tree selection creates
+an analogous snapshot; in-place checks do not use one.
 
 ## `visibleTreeOid`
 
@@ -192,9 +208,20 @@ The scoped tree induced by a visible scope.
 
 ## Implementation Map
 
-`config_types::Expectation` and `check::core::SelectedExpectation` carry
-expectation questions, expected answers, the resolved `instructions` config
-text, and target metadata from config loading into check runs.
+### In-place check boundary
+
+An in-place check treats the current directory as filesystem contents, not as
+a Git-backed checked tree. Repository-derived evaluation inputs—tree and object
+IDs, refs, rendered diffs, tracking state, Git-root discovery, and file
+hiding—are therefore absent from its evaluator context. Command-wide canon
+configuration and canon-owned output paths are control-plane inputs; using them
+for runtime-event retention does not make repository information part of the
+checked subject or evaluator context.
+
+`config_types::Expectation` and `check::core::ResolvedExpectation` carry
+expectation questions, addressees, ranks, expected answers, the resolved
+`instructions` config text, and target metadata from config loading into check
+runs.
 
 `scope` keeps scopes as Git pathspec lists: it normalizes repository paths,
 forms visible scopes by appending configured ignore patterns as excluding
@@ -214,13 +241,14 @@ when no last pass result exists. `xpec_state::last_result` reads and writes the
 status-specific last-result files. `staged::worktree::StagedWorktreeView::materialize_visible_scope`
 then applies the visible scope before creating the evaluator working tree.
 
-`check::core::EvaluatorResponseJson` parses evaluator evidence and the required
-`qScopeSuggestion` value. `check::interrogation::policy` treats suggestions as
-unverified claims until an independent verification turn accepts them.
-`xpec_state` persists status-specific last-result files with `qScope`,
-`visibleScope`, and status-dependent tree OIDs. It reads last-pass `qScope`
-when seeding future interrogations and reads pass/fail last results when
-checking same-tree cached results.
+`check::core::EvaluatorResponseJson` parses evaluator evidence and any
+schema-appropriate `qScopeSuggestion` value. `check::interrogation::policy`
+treats suggestions as unverified claims until an independent verification turn
+accepts them.
+`xpec_state` persists pass/fail last-result files, with `qScope`, `visibleScope`,
+and tree OIDs for Git-backed results. It reads last-pass `qScope` when seeding
+future interrogations and uses only the last pass when checking same-tree or
+cooldown cached results.
 
 `evaluator::protocol::prompt` renders the prompt templates stored under
 `resources/prompts/` with MiniJinja. The developer-instructions template is

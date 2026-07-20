@@ -1,3 +1,4 @@
+use crate::app::process::EvaluatorCodexHome;
 use crate::evaluator::{AppServerArgs, EvaluatorProgress};
 use crate::token_usage_types::{
     ContextCompactionEvent, EvaluatorTurnUsage, TokenUsage, TokenUsageUpdate,
@@ -11,6 +12,9 @@ use std::thread::JoinHandle;
 
 pub(crate) struct AppServerRunner {
     pub(super) app_server_state_root: Option<PathBuf>,
+    // Ownership keeps the isolated home alive through child termination and
+    // removes it when the runner is dropped.
+    pub(super) _evaluator_codex_home: EvaluatorCodexHome,
     pub(super) child: Child,
     pub(super) stdin: ChildStdin,
     pub(super) messages: Receiver<Result<Value, String>>,
@@ -73,12 +77,6 @@ impl AppServerRunner {
     pub(crate) fn record_turn_timeout_progress(&self) {
         if let Some(progress) = &self.progress {
             progress.record_turn_timeout();
-        }
-    }
-
-    pub(crate) fn record_no_progress_timeout_accumulating_progress(&self) {
-        if let Some(progress) = &self.progress {
-            progress.record_no_progress_timeout_accumulating();
         }
     }
 }

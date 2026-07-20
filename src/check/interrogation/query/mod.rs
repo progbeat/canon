@@ -84,9 +84,8 @@ pub(crate) fn query_human_review_reason(result: &QueryResult) -> Option<&'static
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::check::core::Cooldown;
     use crate::check::interrogation::state::{CheckRuntime, CheckTreeContext};
-    use crate::config_types::{AgentConfig, CheckConfig, CheckHooksConfig, DEFAULT_DIFF_FROM};
+    use crate::config_types::{AgentConfig, CheckConfig, DEFAULT_DIFF_FROM};
     use crate::git::{staged_tree_oid, TreeSource};
     use crate::hash::full_scope;
     use crate::staged::StagedWorktreeView;
@@ -96,13 +95,12 @@ mod tests {
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test]
+    #[test] // xpec: Ky
     fn ask_temporary_expectation_reports_answer_without_result_record() {
         let root = temp_root("ask-temporary-expectation");
         let config = CheckConfig {
             version: 1,
             agent: AgentConfig::implementation_default(),
-            hooks: CheckHooksConfig::default(),
             expectations: Vec::new(),
         };
         let runtime = CheckRuntime::in_place(&root, &config, true);
@@ -110,6 +108,8 @@ mod tests {
             number: 0,
             id: String::new(),
             display_id: "q".to_string(),
+            to: crate::config_types::ExpectationTo::Agent,
+            rank: 0,
             question: "Does ask use a temporary xpec?".to_string(),
             expected_answer: String::new(),
             question_context: String::new(),
@@ -117,10 +117,7 @@ mod tests {
             target: None,
             question_answer_only: true,
             agent: config.agent.clone(),
-            cooldown: Some(Cooldown {
-                pass_seconds: None,
-                fail_seconds: None,
-            }),
+            cooldown: None,
         };
         let enforced_scope = full_scope();
         let request = QueryRequest {
@@ -149,16 +146,18 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         assert_eq!(runner.ask_count, 1);
         assert_eq!(result.answer.observed, "yes");
-        assert_eq!(result.answer.evidence, "checked visible files");
+        assert_eq!(
+            result.answer.evidence.as_deref(),
+            Some("checked visible files")
+        );
     }
 
-    #[test]
+    #[test] // xpec: Ky
     fn ask_temporary_expectation_does_not_write_git_backed_xpec_state() {
         let root = temp_git_root("ask-no-xpec-state");
         let config = CheckConfig {
             version: 1,
             agent: AgentConfig::implementation_default(),
-            hooks: CheckHooksConfig::default(),
             expectations: Vec::new(),
         };
         let tree_source = TreeSource::Staged;
@@ -169,6 +168,7 @@ mod tests {
             against_tree_oid: checked_tree_oid.clone(),
             checked_tree_oid,
             checked_file_count: 0,
+            prompt_git_environment: Vec::new(),
         };
         let runtime = CheckRuntime::materialized(
             &root,
@@ -182,6 +182,8 @@ mod tests {
             number: 0,
             id: String::new(),
             display_id: "q".to_string(),
+            to: crate::config_types::ExpectationTo::Agent,
+            rank: 0,
             question: "Does ask avoid xpec state?".to_string(),
             expected_answer: String::new(),
             question_context: String::new(),
@@ -217,7 +219,11 @@ mod tests {
         .unwrap();
 
         let xpec_state_dir = root.join(".git").join("canon").join("xpecs");
-        assert_eq!(result.answer.observed, "yes", "{}", result.answer.evidence);
+        assert_eq!(
+            result.answer.observed, "yes",
+            "{:?}",
+            result.answer.evidence
+        );
         assert!(!xpec_state_dir.exists());
         let _ = fs::remove_dir_all(&root);
     }
@@ -240,7 +246,7 @@ mod tests {
         fn start_session(
             &mut self,
             _session_cwd: &Path,
-            _template_artifact_paths: &[PathBuf],
+            _template_artifact_directory: &Path,
             _base_instructions: &str,
             _developer_instructions: &str,
             _agent: &AgentConfig,
@@ -274,6 +280,12 @@ mod tests {
                 context_compaction_events: Vec::new(),
             })
         }
+
+        fn set_progress_reporter(
+            &mut self,
+            _progress: Option<crate::evaluator::EvaluatorProgress>,
+        ) {
+        }
     }
 
     fn temp_root(label: &str) -> PathBuf {
@@ -302,6 +314,7 @@ mod tests {
             .current_dir(root)
             .output()
             .unwrap();
+        // xpec: Ky
         assert!(
             output.status.success(),
             "git {:?} failed: {}",

@@ -70,13 +70,14 @@
   a: no
   target: diff
 
-- q: 'Can you find tests that assert incidental implementation details instead of stable observable behavior through a public or component interface?'
+- q: "Can you find tests that assert incidental implementation details instead of stable observable behavior through a public or component interface?"
   a: no
   target: diff
 
-- q: |-
-    Can you find any assert invocation whose effective `xpec: <shortID>(,<shortID>)*` source-comment marker is missing, whose checked behavior does not logically follow from the cited xpecs, or whose assert failure message does not name the claim from the cited xpecs that is broken by that failure?
-    A test declaration marker covers assert invocations in that test unless an assert has its own marker.
+- q: >-
+    Every test declaration and assert invocation must have an applicable `xpec: <shortID>(,<shortID>)*` source-comment marker that cites only existing xpecs. Within a test, an assertion inherits the test marker unless it has its own.
+    Any test or assertion failure necessarily means that at least one xpec in its applicable marker is violated.
+    Can you find any violation of these requirements?
   a: no
   target: diff
 
@@ -96,6 +97,10 @@
 
 - q: "Is any invocation-local state written to disk instead of being kept in memory?"
   a: no
+  target: diff
+
+- q: "Can you find any user-facing output that misrepresents what happened, why it happened, current progress, or what the user should do next?"
+  a: "no"
   target: diff
 
 - q: |-

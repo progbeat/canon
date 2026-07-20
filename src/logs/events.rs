@@ -17,7 +17,7 @@ pub(crate) fn write_check_start_event(
         fields.push(("query", json!(query)));
     }
     fields.push(("selected", json!(selected)));
-    diagnostic_log.write_event("info", "check.start", &fields)
+    diagnostic_log.emit_event("info", "check.start", &fields)
 }
 
 pub(crate) fn write_query_start_event(
@@ -42,17 +42,17 @@ pub(crate) fn write_check_finish_event(
     if let Some(error) = error {
         fields.push(("error", json!(error)));
     }
-    diagnostic_log.write_event("info", "check.finish", &fields)
+    diagnostic_log.emit_event("info", "check.finish", &fields)
 }
 
-pub(crate) fn write_cache_cleanup_event(
+pub(crate) fn write_xpec_state_retention_event(
     diagnostic_log: &mut DiagnosticLogWriter,
     removed: usize,
     kept: usize,
 ) -> DiagnosticLogResult<()> {
-    diagnostic_log.write_event(
+    diagnostic_log.emit_event(
         "info",
-        "cache.cleanup",
+        "xpec_state.retention",
         &[("removed", json!(removed)), ("kept", json!(kept))],
     )
 }
@@ -64,11 +64,14 @@ pub(crate) fn write_agent_request_event(
     reason: &str,
     request: AgentTurnLogRequest<'_>,
 ) -> DiagnosticLogResult<()> {
+    // [7N,g2,m8,R1] The common JSONL renderer adds primary `processId` and
+    // `invocationId` correlation fields. These raw expectation and evaluator
+    // session IDs then identify the exchange within that command run.
     let raw_request = serde_json::to_value(request).map_err(|source| DiagnosticLogError::Json {
         description: "evaluator turn request log",
         source,
     })?;
-    diagnostic_log.write_event(
+    diagnostic_log.emit_event(
         "info",
         "agent.request",
         &[
@@ -99,14 +102,12 @@ pub(crate) fn write_agent_failure_event(
         ("reason", json!(reason)),
         ("response", raw_response),
     ];
-    append_turn_usage_fields(&mut fields, turn_usage);
-    let event = if turn_usage.is_some() {
-        "agent.response"
-    } else {
+    let Some(turn_usage) = turn_usage else {
         append_missing_turn_usage_fields(&mut fields, session_id);
-        "agent.turn_error"
+        return diagnostic_log.emit_event("error", "agent.turn_error", &fields);
     };
-    diagnostic_log.write_event("error", event, &fields)
+    diagnostic_log.emit_event("error", "agent.response", &fields)?;
+    write_agent_token_usage_event(diagnostic_log, expectation_id, attempt, reason, turn_usage)
 }
 
 pub(crate) fn write_agent_response_event(
@@ -122,14 +123,14 @@ pub(crate) fn write_agent_response_event(
         "sessionId": session_id,
         "text": response,
     });
-    let mut fields: Vec<(&'static str, Value)> = vec![
+    let fields: Vec<(&'static str, Value)> = vec![
         ("id", json!(expectation_id)),
         ("attempt", json!(attempt)),
         ("reason", json!(reason)),
         ("response", raw_response),
     ];
-    append_turn_usage_fields(&mut fields, Some(turn_usage));
-    diagnostic_log.write_event("info", "agent.response", &fields)
+    diagnostic_log.emit_event("info", "agent.response", &fields)?;
+    write_agent_token_usage_event(diagnostic_log, expectation_id, attempt, reason, turn_usage)
 }
 
 pub(crate) fn write_agent_missing_usage_event(
@@ -152,18 +153,25 @@ pub(crate) fn write_agent_missing_usage_event(
         ("error", json!("missing evaluator turn usage")),
     ];
     append_missing_turn_usage_fields(&mut fields, session_id);
-    diagnostic_log.write_event("error", "agent.turn_error", &fields)
+    diagnostic_log.emit_event("error", "agent.turn_error", &fields)
 }
 
 pub(crate) fn write_thread_lifecycle_event(
     diagnostic_log: &mut DiagnosticLogWriter,
     event: &ThreadLifecycleEventFields<'_>,
 ) -> DiagnosticLogResult<()> {
-    diagnostic_log.write_event(
+    if !matches!(event.event, "thread.start" | "thread.reuse") {
+        return Err(DiagnosticLogError::InvalidRuntimeField {
+            key: "event".to_string(),
+            reason: "thread lifecycle helper accepts only thread.start or thread.reuse",
+        });
+    }
+    diagnostic_log.emit_event(
         "info",
         event.event,
         &[
             ("threadId", json!(event.session_id)),
+            ("id", json!(event.expectation_id)),
             ("scope", json!(event.scope)),
             ("model", json!(event.model)),
             ("thinking", json!(event.thinking)),
@@ -178,19 +186,55 @@ pub(crate) fn write_thread_restart_event(
     diagnostic_log: &mut DiagnosticLogWriter,
     event: &ThreadRestartEventFields<'_>,
 ) -> DiagnosticLogResult<()> {
-    diagnostic_log.write_event(
-        "warn",
-        "thread.restart",
-        &[
-            ("threadId", json!(event.session_id)),
-            ("id", json!(event.expectation_id)),
-            ("scope", json!(event.scope)),
-            ("model", json!(event.model)),
-            ("baseInstructions", json!(event.base_instructions)),
-            ("developerInstructions", json!(event.developer_instructions)),
-            ("reason", json!(event.reason)),
-        ],
-    )
+    let fields = thread_restart_event_fields(event);
+    diagnostic_log.emit_event("warn", "thread.restart", &fields)
+}
+
+fn thread_restart_event_fields(event: &ThreadRestartEventFields<'_>) -> [(&'static str, Value); 7] {
+    // [7N] Restart is a distinct event from the following fresh-thread start.
+    // Its effective instruction pair is assembled exactly once here.
+    [
+        ("threadId", json!(event.session_id)),
+        ("id", json!(event.expectation_id)),
+        ("scope", json!(event.scope)),
+        ("model", json!(event.model)),
+        ("baseInstructions", json!(event.base_instructions)),
+        ("developerInstructions", json!(event.developer_instructions)),
+        ("reason", json!(event.reason)),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{thread_restart_event_fields, ThreadRestartEventFields};
+
+    #[test] // xpec: 7N
+    fn thread_restart_has_one_effective_instruction_pair() {
+        let fields = thread_restart_event_fields(&ThreadRestartEventFields {
+            session_id: "thread",
+            expectation_id: Some("xpec"),
+            scope: &[".".to_string()],
+            model: Some("model"),
+            base_instructions: "base",
+            developer_instructions: "developer",
+            reason: "restart",
+        });
+
+        assert_eq!(
+            fields
+                .iter()
+                .filter(|(key, _)| *key == "baseInstructions")
+                .count(),
+            1
+        );
+        assert_eq!(
+            fields
+                .iter()
+                .filter(|(key, _)| *key == "developerInstructions")
+                .count(),
+            1
+        );
+    }
 }
 
 #[derive(Serialize)]
@@ -205,6 +249,7 @@ pub(crate) struct AgentTurnLogRequest<'a> {
 pub(crate) struct ThreadLifecycleEventFields<'a> {
     pub(crate) event: &'a str,
     pub(crate) session_id: &'a str,
+    pub(crate) expectation_id: Option<&'a str>,
     pub(crate) scope: &'a [String],
     pub(crate) model: Option<&'a str>,
     pub(crate) thinking: &'a str,
@@ -223,31 +268,34 @@ pub(crate) struct ThreadRestartEventFields<'a> {
     pub(crate) reason: &'a str,
 }
 
-fn append_turn_usage_fields(
-    fields: &mut Vec<(&'static str, Value)>,
-    turn_usage: Option<&EvaluatorTurnUsage>,
-) {
-    let Some(EvaluatorTurnUsage {
+fn write_agent_token_usage_event(
+    diagnostic_log: &mut DiagnosticLogWriter,
+    expectation_id: Option<&str>,
+    attempt: usize,
+    reason: &str,
+    turn_usage: &EvaluatorTurnUsage,
+) -> DiagnosticLogResult<()> {
+    let EvaluatorTurnUsage {
         thread_id,
         turn_id,
         usage,
-        token_usage_updates,
         context_compaction_events,
         ..
-    }) = turn_usage
-    else {
-        return;
-    };
-    fields.push(("threadId", json!(thread_id)));
-    fields.push(("turnId", json!(turn_id)));
-    if !token_usage_updates.is_empty() {
-        fields.push(("tokenUsageUpdates", json!(token_usage_updates)));
-    } else {
-        fields.push(("tokenUsage", token_usage_log_value(*usage)));
-    }
+    } = turn_usage;
+    let mut fields = vec![
+        ("id", json!(expectation_id)),
+        ("attempt", json!(attempt)),
+        ("reason", json!(reason)),
+        ("threadId", json!(thread_id)),
+        ("turnId", json!(turn_id)),
+        // [hJ] Persist the normalized turn counters explicitly. Raw app-server
+        // updates remain transport data and are not duplicated in runtime logs.
+        ("tokenUsage", token_usage_log_value(*usage)),
+    ];
     if !context_compaction_events.is_empty() {
         fields.push(("contextCompactionEvents", json!(context_compaction_events)));
     }
+    diagnostic_log.emit_event("info", "agent.token_usage", &fields)
 }
 
 fn append_missing_turn_usage_fields(fields: &mut Vec<(&'static str, Value)>, session_id: &str) {
