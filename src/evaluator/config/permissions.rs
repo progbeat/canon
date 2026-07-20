@@ -45,10 +45,14 @@ fn insert_tree_permission(
     path: &Path,
     permission: &str,
 ) -> EvaluatorConfigResult<()> {
+    let descendants = path_to_config_string(
+        &path.join("**"),
+        "evaluator filesystem permission descendant path",
+    )?;
     let path = path_to_config_string(path, "evaluator filesystem permission path")?;
     let path = path.trim_end_matches('/').to_string();
     insert_filesystem_permission(permissions, path.clone(), permission)?;
-    insert_filesystem_permission(permissions, format!("{}/**", path), permission)?;
+    insert_filesystem_permission(permissions, descendants, permission)?;
     Ok(())
 }
 

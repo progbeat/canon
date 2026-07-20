@@ -22,7 +22,10 @@ fn portable_temp_dir(prefix: &str) -> PathBuf {
         .unwrap()
         .as_nanos();
     let sequence = TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("{prefix}-{unique}-{sequence}"))
+    std::env::temp_dir()
+        .canonicalize()
+        .unwrap()
+        .join(format!("{prefix}-{unique}-{sequence}"))
 }
 
 // xpec: RO,Y8
