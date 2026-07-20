@@ -73,7 +73,7 @@ xpecs:
         The implementation must:
         - preserve every specified behavior;
         - preserve every pseudocode assertion as an explicit assertion;
-        - mark, for every pseudocode `@ref` decorator, the corresponding implementation declaration with a source-comment reference matching the decorator argument (`@ref("#…")` → `[#…]`).
+        - for every pseudocode `@ref` decorator, mark the corresponding implementation declaration with a source-comment reference matching the decorator argument (`@ref("#…")` → `[#…]`).
         Can you find any high-confidence violation?
       a: no
       preset: default+sol
