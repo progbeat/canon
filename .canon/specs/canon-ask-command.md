@@ -1,6 +1,8 @@
 # `canon ask` Command
 
 ```python
+evaluate = import(ref="#evaluate")
+
 def canon_ask(question):
     try:
         evaluate(Xpec(to=AGENT, q=question, a=''))

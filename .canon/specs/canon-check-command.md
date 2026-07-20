@@ -39,6 +39,8 @@ options, defaults, and common examples.*
 The behavior of `canon check` follows this shape:
 
 ```python
+evaluate = import(ref="#evaluate")
+
 def canon_check():
     ... # do everything needed to prepare for evaluation
     try:

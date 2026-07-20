@@ -57,8 +57,13 @@ xpecs:
     - q: |-
         {{ read(path) }}
         ---
-        Can you find any high-confidence violation of this specification in the implementation?
+        The implementation must:
+        - preserve every specified behavior;
+        - preserve every pseudocode assertion as an explicit assertion;
+        - mark the implementation declaration of each pseudocode `@ref("…")` with a matching `[#…]` source-comment reference.
+        Can you find any high-confidence violation?
       a: no
+      preset: default+sol
 
   - !foreach
     - path: ["specs/**.py"]
@@ -66,11 +71,13 @@ xpecs:
         --- # {{ path }}
         {{ read(path) }}
         ---
-        The implementation may differ from the pseudocode in internal structure and control flow, but it must:
+        The implementation must:
         - preserve every specified behavior;
-        - preserve every pseudocode assertion as an explicit assertion.
+        - preserve every pseudocode assertion as an explicit assertion;
+        - mark the implementation declaration of each pseudocode `@ref("…")` with a matching `[#…]` source-comment reference.
         Can you find any high-confidence violation?
       a: no
+      preset: default+sol
 
   # Docker
   - !include docker/general.yml
