@@ -379,7 +379,7 @@ impl GitBlobReader {
                 actual_id
             )
         })?;
-        if delimiter != [b'\n'] {
+        if delimiter != *b"\n" {
             return Err(format!(
                 "git cat-file output missing object delimiter for {}",
                 actual_id
