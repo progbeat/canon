@@ -267,6 +267,8 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         let state_root = crate::state_paths::canon_state_path(root, "").unwrap();
         let state_root_key = path_to_config_string(&state_root, "test state root").unwrap();
+        let state_descendants_key =
+            path_to_config_string(&state_root.join("**"), "test state descendants").unwrap();
         let permissions = evaluator_resolved_state_dir_permissions(&state_root).unwrap();
 
         assert_eq!(
@@ -274,7 +276,7 @@ mod tests {
             Some(&FILESYSTEM_DENY.to_string())
         );
         assert_eq!(
-            permissions.get(&format!("{}/**", state_root_key)),
+            permissions.get(&state_descendants_key),
             Some(&FILESYSTEM_DENY.to_string())
         );
     }
