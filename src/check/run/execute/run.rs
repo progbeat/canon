@@ -282,6 +282,9 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("canon-{name}-{}-{unique}", process::id()))
+        std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("canon-{name}-{}-{unique}", process::id()))
     }
 }
