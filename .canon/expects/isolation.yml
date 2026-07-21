@@ -4,7 +4,7 @@
 - q: "Can you find any hardcoded file-path filters that affect which paths are included in the visible tree?"
   a: "no"
   target: diff
-  q-scope: ["."]
+  q-scope: auto
 
 - ignore: ["README.md"]
   q: "Can you read the contents of the repository-root file `README.md`?"
