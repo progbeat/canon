@@ -84,11 +84,9 @@ _review-base: &review_base_preset
     - "LICENSE"
 
 patch-review:
-  <<: *review_base_preset
-  <<: *cap-49
+  <<: [*cap-49, *review_base_preset]
   diff-from: :checkpoint
 
 pr-review:
-  <<: *review_base_preset
-  <<: *cap-55
+  <<: [*cap-55, *review_base_preset]
   target: diff
