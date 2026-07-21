@@ -57,9 +57,11 @@ If a short-ID mismatch occurs on the evaluator thread's first turn, the interrog
 
 When a turn has full project scope, its schema omits `ScopeTooNarrow` from `error.enum`.
 
-When an evaluation never hides files from evaluator turns, the schemas omit `qScopeSuggestion`, and the interrogation does not perform follow-up turns.
+When an expectation configures `q-scope`, every turn uses it, and each turn's schema omits `ScopeTooNarrow` from `error.enum`.
 
-An interrogation's initial turn uses the `qScope` from the xpec's `last-pass.json`, or full project scope if no last pass result with `qScope` exists.
+When `q-scope` is configured or an evaluation never hides files from evaluator turns, the schemas omit `qScopeSuggestion`, and the interrogation does not perform follow-up turns.
+
+Otherwise, an interrogation's initial turn uses the `qScope` from the xpec's `last-pass.json`, or full project scope if no last pass result with `qScope` exists.
 
 A **follow-up turn** is an additional turn required by this policy after the initial turn produces that interrogation's evaluation response.
 
