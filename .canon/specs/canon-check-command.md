@@ -94,11 +94,25 @@ def emit_feedback(failed, num_pending):
 
 def _repair_instructions(failed):
     assert len(failed) > 0
+    if len(failed) == 1:
+        # `fail_history` is a global chronological (bounded) history of failed xpecs across `canon check` runs.
+        assert fail_history[-1].short_id == failed[0], "the current failed xpec must be appended to `fail_history`"
+        if _emit_recurring_xpec_failures_warning():
+            return
     # These failures were already shown in `canon check` output, so don't show them again to save tokens.
     selectors = ' '.join(f'not:{x}' for x in failed)
     print("❕ Verify that the evidence supports the observed answer and answers the expectation question; treat unsupported evidence as a readability issue.")
     print(f"❕ Plan the repair, then run `canon show {selectors} -- <PATHSPEC>...` for the planned edit paths to identify expectations that may be affected.")
     print("❕ Use the matching expectations to avoid regressions while fixing the issues.")
+
+def _emit_recurring_xpec_failures_warning():
+    last_short_ids = [x.short_id for x in fail_history[-5:] if x.head_tree_oid == head_tree_oid]
+    last_unique_short_ids = set(last_short_ids)
+    if len(last_short_ids) < 5 or len(last_unique_short_ids) > 2:
+        return False
+    last_unique_short_ids_str = ', '.join(sorted(last_unique_short_ids))
+    print(f"▷ The last five recorded failures involve only these xpecs: {last_unique_short_ids_str}. Stop using repeated `canon check` runs as the debugging loop: independently inspect changed files against listed expectations and fix every violation you can find before running the check again!")
+    return True
 ```
 
 ## Token Usage Line

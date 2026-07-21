@@ -101,6 +101,14 @@
   # preset: patch-review
 
 - q: |-
+    Code must follow the usage defined by a public contract.
+    It must not achieve contract-supported behavior through an unsupported workaround.
+    Can you find a high-confidence violation?
+  a: no
+  preset: default + cap-55
+  # preset: patch-review
+
+- q: |-
     The non-canon diff should change project behavior only when the change is required by the canon diff, or when it fixes behavior that did not satisfy the existing canon.
     Refactoring is allowed when it preserves project behavior and keeps or improves correctness, readability, maintainability, and ownership boundaries.
     Can you find any behavior change in the non-canon diff that is not justified by those rules?
