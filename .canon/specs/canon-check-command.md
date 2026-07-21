@@ -107,7 +107,9 @@ def _repair_instructions(failed):
 
 def _emit_recurring_xpec_failures_warning():
     last_short_ids = [x.short_id for x in fail_history[-5:] if x.head_tree_oid == head_tree_oid]
-    last_unique_short_ids = set(last_short_ids)
+    last_unique_short_ids = set(last_short_ids[:-1])
+    if last_short_ids[-1] not in last_unique_short_ids:
+        return False  # no warning if the current failure isn't a repeat
     if len(last_short_ids) < 5 or len(last_unique_short_ids) > 2:
         return False
     last_unique_short_ids_str = ', '.join(sorted(last_unique_short_ids))
