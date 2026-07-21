@@ -68,7 +68,13 @@ class _CallerEvaluator(_Evaluator):
         pass
 
     def on_status(self):
-        print(self.xpec.shortID + str(self.timeline), _STATUS_TO_STR[self.status])
+        if interactive_posix_terminal:
+            # Codex Desktop mishandles ERASE_TO_END alone, so conceal the
+            # erased remainder and reveal after the newline.
+            begin, end = '\r', '\x1b[8m\x1b[K\n\x1b[28m'
+        else:
+            begin, end = '', '\n'
+        print(f'{begin}{self.xpec.shortID}{str(self.timeline)}', _STATUS_TO_STR[self.status], end=end)
 
     def on_wrong_answer(self):
         print('expected:', self.expected)

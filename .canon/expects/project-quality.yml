@@ -94,6 +94,13 @@
   preset: patch-review
 
 - q: |-
+    A representation transformation may change only the semantics that its contract says it owns.
+    It must preserve all other semantics or report failure.
+    Can you find a high-confidence violation?
+  a: no
+  # preset: patch-review
+
+- q: |-
     The non-canon diff should change project behavior only when the change is required by the canon diff, or when it fixes behavior that did not satisfy the existing canon.
     Refactoring is allowed when it preserves project behavior and keeps or improves correctness, readability, maintainability, and ownership boundaries.
     Can you find any behavior change in the non-canon diff that is not justified by those rules?

@@ -41,6 +41,20 @@ The behavior of `canon check` follows this shape:
 ```python
 evaluate = import(ref="#evaluate")
 
+def echo_off(fn):
+    global interactive_posix_terminal
+    interactive_posix_terminal = (platform == POSIX and stdin.is_terminal() and stdout.is_terminal())
+    if not interactive_posix_terminal:
+        return fn
+    def wrapper(*args, **kwargs):
+        ... # disable ECHO & ECHONL
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            ... # restore
+    return wrapper
+
+@echo_off
 def canon_check():
     ... # do everything needed to prepare for evaluation
     try:
@@ -59,6 +73,7 @@ def canon_check():
             and against_tree has its command-default value
         ):
             emit_feedback(...)
+        ...
 
 def emit_feedback(failed, num_pending):
     """
