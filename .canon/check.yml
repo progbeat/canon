@@ -62,7 +62,7 @@ xpecs:
         - preserve every pseudocode assertion as an explicit assertion;
         Can you find any high-confidence violation?
       a: no
-      preset: default + cap-58
+      preset: default
 
   - !foreach
     - path: ["specs/**.py"]
@@ -76,7 +76,7 @@ xpecs:
         - for every pseudocode `@ref` decorator, mark the corresponding implementation declaration with a source-comment reference matching the decorator argument (`@ref("#…")` → `[#…]`).
         Can you find any high-confidence violation?
       a: no
-      preset: default + cap-58
+      preset: default
 
   # Docker
   - !include docker/general.yml
