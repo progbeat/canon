@@ -1,6 +1,43 @@
-default: &default_preset
-  models: ["gpt-5.6-luna", "gpt-5.3-codex-spark"]
-  thinking: medium  # minimal | low | medium | high | xhigh
+# `cap-N` selects a cost-efficient model/effort combination scoring N on the Artificial Analysis Intelligence Index; higher N means greater overall capability.
+
+cap-40: &cap-40
+  models: ["gpt-5.4-mini"]
+  thinking: xhigh
+
+cap-46:
+  models: ["gpt-5.6-luna"]
+  thinking: high
+
+cap-49: &cap-49
+  models: ["gpt-5.6-luna"]
+  thinking: xhigh
+
+cap-51:
+  models: ["gpt-5.6-luna"]
+  thinking: max
+
+cap-52:
+  models: ["gpt-5.6-terra"]
+  thinking: xhigh
+
+cap-55: &cap-55
+  models: ["gpt-5.6-terra"]
+  thinking: max
+
+cap-56:
+  models: ["gpt-5.6-sol"]
+  thinking: high
+
+cap-58:
+  models: ["gpt-5.6-sol"]
+  thinking: xhigh
+
+cap-59:
+  models: ["gpt-5.6-sol"]
+  thinking: max
+
+default: &default
+  <<: *cap-40
   ignore:
     - ".canon/**"  # prevents evaluator agents from reading expected answers and avoids reevaluating full-scope expectations when canon changes
     - ".github/**"
@@ -14,17 +51,17 @@ default: &default_preset
     - "LICENSE"
 
 smart:
-  <<: *default_preset
+  <<: *default
   models: ["gpt-5.6-terra"]
   thinking: xhigh
 
 spark:
-  <<: *default_preset
+  <<: *default
   models: ["gpt-5.3-codex-spark"]
   thinking: high
 
 docker:
-  <<: *default_preset
+  <<: *default
   ignore:  # overrides default_preset.ignore
     - ".canon/**"
     - ".github/**"
@@ -35,17 +72,23 @@ docker:
     - "Cargo.lock"
     - "LICENSE"
 
-sol:
-  models: ["gpt-5.6-sol"]
-
-pr-review:
-  <<: *default_preset
+_review-base: &review_base_preset
+  <<: *default
   target: diff
-  diff-from: master
-  models: ["gpt-5.6-terra"]
+  q-scope: ["."]
   ignore:
     - "docs/ai/**"
     - "skills/**"
     - "AGENTS.md"
     - "Cargo.lock"
     - "LICENSE"
+
+patch-review:
+  <<: *review_base_preset
+  <<: *cap-49
+  diff-from: :checkpoint
+
+pr-review:
+  <<: *review_base_preset
+  <<: *cap-55
+  target: diff
