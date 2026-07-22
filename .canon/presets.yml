@@ -1,43 +1,54 @@
-# `cap-N` selects a cost-efficient model/effort combination scoring N on the Artificial Analysis Intelligence Index; higher N means greater overall capability.
+# Source: https://artificialanalysis.ai/models
+# `cap-N` selects a cost-efficient model/effort combination scoring at least N on the Artificial Analysis Intelligence Index; higher N means greater overall capability.
+# Costs are approximate weighted average costs per Intelligence Index task.
 
-cap-40: &cap-40
-  models: ["gpt-5.4-mini"]
-  thinking: xhigh
-
-cap-46:
-  models: ["gpt-5.6-luna"]
-  thinking: high
-
-cap-49: &cap-49
-  models: ["gpt-5.6-luna"]
-  thinking: xhigh
-
-cap-51:
-  models: ["gpt-5.6-luna"]
-  thinking: max
-
-cap-52:
-  models: ["gpt-5.6-terra"]
-  thinking: xhigh
-
-cap-55: &cap-55
-  models: ["gpt-5.6-terra"]
-  thinking: max
-
-cap-56:
+cap-59: &cap-59
+  # ~$1.04
   models: ["gpt-5.6-sol"]
-  thinking: high
+  thinking: max
 
 cap-58:
+  # ~$0.682
   models: ["gpt-5.6-sol"]
   thinking: xhigh
 
-cap-59:
+cap-56: &cap-56
+  # ~$0.453
   models: ["gpt-5.6-sol"]
-  thinking: max
+  thinking: high
+
+cap-55: *cap-56
+
+cap-54: &cap-54
+  # ~$0.314
+  models: ["gpt-5.6-sol"]
+  thinking: medium
+
+cap-50: &cap-50 { <<: *cap-54 }
+
+cap-49: &cap-49
+  # ~$0.139
+  models: ["gpt-5.6-luna"]
+  thinking: xhigh
+
+cap-46: &cap-46
+  # ~$0.095
+  models: ["gpt-5.6-luna"]
+  thinking: high
+
+cap-45: &cap-45 { <<: *cap-46 }
+
+cap-38:
+  # ~$0.050
+  models: ["gpt-5.6-luna"]
+  thinking: medium
+
+cap-max: *cap-59
+
+#################
 
 default: &default
-  <<: *cap-40
+  <<: *cap-45
   ignore:
     - ".canon/**"  # prevents evaluator agents from reading expected answers and avoids reevaluating full-scope expectations when canon changes
     - ".github/**"
@@ -54,11 +65,6 @@ smart:
   <<: *default
   models: ["gpt-5.6-terra"]
   thinking: xhigh
-
-spark:
-  <<: *default
-  models: ["gpt-5.3-codex-spark"]
-  thinking: high
 
 docker:
   <<: *default
