@@ -62,22 +62,25 @@ class _Evaluator:
 
 class _CallerEvaluator(_Evaluator):
     def interrogate(self):
-        self.response = Response(answer=input(escape_inline(self.xpec.q) + " "))
+        prompt = self._before_q + escape_inline(self.xpec.q) + " "
+        self.response = Response(answer=input(prompt))
 
     def on_start(self):
-        pass
+        if interactive_posix_terminal:
+            self._before_q = CSI_SAVE_CURSOR
+            self._before_status = f'{CSI_RESTORE_CURSOR}{CSI_ERASE_TO_EOS}\r'
+            # Codex's shell-output renderer does not emulate erase-to-EOS.
+            # Its CR handling retains the old suffix after the replacement,
+            # where SGR conceal hides it; reset attributes after the newline.
+            self._end = f'{SGR_CONCEAL}\n{SGR_RESET}'
+        else:
+            self._before_q = self._before_status = ''
+            self._end = '\n'
 
     def on_status(self):
-        if interactive_posix_terminal:
-            # Codex mishandles erase-to-EOL alone, so conceal any retained
-            # remainder and reset the attributes after the newline.
-            begin, end = '\r', f'{CSI_ERASE_TO_EOL}{SGR_CONCEAL}\n{SGR_RESET}'
-        else:
-            begin, end = '', '\n'
         print(
-            f'{begin}{self.xpec.shortID}{str(self.timeline)}',
-            _STATUS_TO_STR[self.status],
-            end=end, flush=True
+            f'{self._before_status}{self.xpec.shortID}{self.timeline}',
+            _STATUS_TO_STR[self.status], end=self._end, flush=True
         )
 
     def on_wrong_answer(self):
