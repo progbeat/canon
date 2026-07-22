@@ -29,8 +29,8 @@ Each displayed expectation is written to stdout as:
 
 ```text
 <short ID>
-<escaped q>
-expected: <a>
+q: <escaped q>
+a: <a>
 ```
 
 The `q` and `a` are escaped the same way as `canon check` stdout.
