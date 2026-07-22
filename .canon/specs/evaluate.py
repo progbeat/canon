@@ -68,7 +68,7 @@ class _CallerEvaluator(_Evaluator):
     def on_start(self):
         if interactive_posix_terminal:
             self._before_q = CSI_SAVE_CURSOR
-            self._before_status = f'{CSI_RESTORE_CURSOR}{CSI_ERASE_TO_EOS}\r'
+            self._before_status = f'{CSI_RESTORE_CURSOR}{CSI_ERASE_TO_EOS}\r{SGR_RESET}'
             # Codex's shell-output renderer does not emulate erase-to-EOS.
             # Its CR handling retains the old suffix after the replacement,
             # where SGR conceal hides it; reset attributes after the newline.

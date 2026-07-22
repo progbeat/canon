@@ -94,26 +94,38 @@ def emit_feedback(failed, num_pending):
 
 def _repair_instructions(failed):
     assert len(failed) > 0
+    print("❕ Verify that the evidence supports the observed answer and answers the expectation question; treat unsupported evidence as a readability issue.")
     if len(failed) == 1:
-        # `fail_history` is a global chronological (bounded) history of failed xpecs across `canon check` runs.
-        assert fail_history[-1].short_id == failed[0], "the current failed xpec must be appended to `fail_history`"
+        # `fail_history` is a global chronological (bounded) history of failure records across `canon check` runs.
+        assert fail_history[-1].xpec.short_id == failed[0], "the current failure record must be appended to `fail_history`"
         if _emit_recurring_xpec_failures_warning():
             return
     # These failures were already shown in `canon check` output, so don't show them again to save tokens.
     selectors = ' '.join(f'not:{x}' for x in failed)
-    print("❕ Verify that the evidence supports the observed answer and answers the expectation question; treat unsupported evidence as a readability issue.")
     print(f"❕ Plan the repair, then run `canon show {selectors} -- <PATHSPEC>...` for the planned edit paths to identify expectations that may be affected.")
     print("❕ Use the matching expectations to avoid regressions while fixing the issues.")
 
 def _emit_recurring_xpec_failures_warning():
-    last_short_ids = [x.short_id for x in fail_history[-5:] if x.head_tree_oid == head_tree_oid]
-    last_unique_short_ids = set(last_short_ids[:-1])
-    if last_short_ids[-1] not in last_unique_short_ids:
-        return False  # no warning if the current failure isn't a repeat
-    if len(last_short_ids) < 5 or len(last_unique_short_ids) > 2:
+    TAIL = 2
+    last_short_ids = []
+    for failure in reversed(fail_history):
+        if (
+            failure.head_tree_oid != head_tree_oid
+            or failure.xpec.to != AGENT
+            or failure.response.error is not None
+        ):
+            if len(last_short_ids) == 0:
+                return False
+            continue
+        last_short_ids.append(failure.xpec.short_id)
+        if len(last_short_ids) == TAIL:
+            break
+    if len(last_short_ids) != TAIL or len(set(last_short_ids)) != 1:
         return False
-    last_unique_short_ids_str = ', '.join(sorted(last_unique_short_ids))
-    print(f"▷ The last five recorded failures involve only these xpecs: {last_unique_short_ids_str}. Stop using repeated `canon check` runs as the debugging loop: independently inspect changed files against listed expectations and fix every violation you can find before running the check again!")
+    print("❕ Repeated `canon check` runs keep failing on the same xpec. Do not run `canon check` again yet.")
+    print("❕ Each time this warning appears, determine why your workflow allowed the recurrence and adapt it to reduce the chance of another one.")
+    print("❕ Emulate the evaluator agent: independently try to disprove the expected answer. Generalize each finding and fix every supported violation.")
+    print("▷ Run `canon check` again only after you can independently justify the expected answer!")
     return True
 ```
 
