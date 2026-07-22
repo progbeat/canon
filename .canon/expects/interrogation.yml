@@ -17,7 +17,7 @@
   a: no
   cooldown: 1h
 
-- q: "Can you find any logic that depends on the content of the evidence provided by the evaluator agent?"
+- q: "Can you find any decision whose outcome depends on the content of evaluator-provided evidence?"
   a: no
   target: diff
 
