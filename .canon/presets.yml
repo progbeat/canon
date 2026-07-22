@@ -17,7 +17,7 @@ cap-56: &cap-56
   models: ["gpt-5.6-sol"]
   thinking: high
 
-cap-55: *cap-56
+cap-55: &cap-55 { <<: *cap-56 }
 
 cap-54: &cap-54
   # ~$0.314

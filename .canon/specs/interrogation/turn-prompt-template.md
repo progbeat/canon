@@ -5,7 +5,7 @@ This is a prompt template for the turn prompt used for evaluator interrogations:
 ````jinja
 {{ {xpec.short_id: xpec.q}|json }}
 {%- if xpec.target == "diff" %}
-Evaluate only changed files; use other visible files as context!
+Evaluate only the visible files affected by the diff; use other visible files as context!
 {%- endif %}
 ````
 
