@@ -70,8 +70,8 @@ class _CallerEvaluator(_Evaluator):
     def on_status(self):
         if interactive_posix_terminal:
             # Codex Desktop mishandles ERASE_TO_END alone, so conceal the
-            # erased remainder and reveal after the newline.
-            begin, end = '\r', '\x1b[K\x1b[8m\t\t\n\x1b[28m'
+            # erased remainder, then reveal and reset after the newline.
+            begin, end = '\r', '\x1b[K\x1b[8m\n\x1b[28m\x1b[0m'
         else:
             begin, end = '', '\n'
         print(f'{begin}{self.xpec.shortID}{str(self.timeline)}', _STATUS_TO_STR[self.status], end=end)
