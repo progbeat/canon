@@ -69,12 +69,16 @@ class _CallerEvaluator(_Evaluator):
 
     def on_status(self):
         if interactive_posix_terminal:
-            # Codex Desktop mishandles ERASE_TO_END alone, so conceal the
-            # erased remainder, then reveal and reset after the newline.
-            begin, end = '\r', '\x1b[K\x1b[8m\n\x1b[28m\x1b[0m'
+            # Codex mishandles erase-to-EOL alone, so conceal any retained
+            # remainder and reset the attributes after the newline.
+            begin, end = '\r', f'{CSI_ERASE_TO_EOL}{SGR_CONCEAL}\n{SGR_RESET}'
         else:
             begin, end = '', '\n'
-        print(f'{begin}{self.xpec.shortID}{str(self.timeline)}', _STATUS_TO_STR[self.status], end=end)
+        print(
+            f'{begin}{self.xpec.shortID}{str(self.timeline)}',
+            _STATUS_TO_STR[self.status],
+            end=end, flush=True
+        )
 
     def on_wrong_answer(self):
         print('expected:', self.expected)
