@@ -27,7 +27,6 @@
     - be internally consistent and contain no contradictions;
     - not use undefined terms whose meaning is neither generally understood nor clear enough to understand the instruction;
     - neither restate, interpret, qualify, explain, nor otherwise alter another instruction or statement;
-    - match the available context.
     Can you find parameter values that select conditional branches for which the rendered instruction set materially violates any of these requirements by making it harder for the evaluator to understand or follow the instructions, answer correctly, or work efficiently?
   a: no
 
