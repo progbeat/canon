@@ -8,7 +8,7 @@ def evaluate(xpec):
     assert evaluator_type is not None, f"Unknown xpec.to: {xpec.to}"
     evaluator = evaluator_type(xpec)
     evaluator()
-    assert xpec.a == "" or evaluator.status in (PASS, FAIL)
+    assert evaluator.status in (PASS, FAIL)
     assert evaluator.response.error is None or evaluator.status == FAIL
     return {
         "status": evaluator.status,
@@ -21,12 +21,15 @@ class _Evaluator:
         self.xpec = xpec
 
     @property
+    def ask_mode(self):
+        return len(self.expected) == 0
+
+    @property
     def expected(self):
         return self.xpec.a
 
-    @property
-    def ask_mode(self):
-        return len(self.expected) == 0
+    def check_answer(self, answer):
+        return answer == self.expected
 
     def __call__(self):
         with progress_timeline() as self.timeline:
@@ -40,7 +43,7 @@ class _Evaluator:
                 raise
             finally:
                 self.timeline.stop()
-                self.status = PASS if self.response.answer == self.expected else FAIL
+                self.status = PASS if self.check_answer(self.response.answer) else FAIL
                 self.on_status()
                 if self.response.error is not None:
                     self.on_error()
@@ -89,7 +92,25 @@ class _CallerEvaluator(_Evaluator):
 
 class _AgentEvaluator(_Evaluator):
     def interrogate(self):
-        self.response = ...  # interrogate according to the interrogation policy
+        initial_q_scope = resolve_q_scope(self.xpec)
+        with interrogation_policy.start(self.xpec) as interrogation:
+            # After a technical evaluator failure, including when an attempt exhausts its
+            # no-progress timeout, `turn` applies any applicable retries of the current
+            # model before trying later configured models in fallback order. The
+            # interrogation fails if no attempt succeeds.
+            response = interrogation.turn(q_scope=initial_q_scope)
+            if ...:  # q-scope is auto and the evaluation may hide files from evaluator turns
+                if response.error == "ScopeTooNarrow":
+                    assert initial_q_scope != FULL_PROJECT_SCOPE, "ScopeTooNarrow error on full project scope"
+                    response = interrogation.turn(q_scope=FULL_PROJECT_SCOPE)
+                elif self.check_answer(response.answer) and response.qScopeSuggestion is not None:
+                    is_narrow_enough = ...  # whether the visible tree induced by the q-scope suggestion has at least 25% fewer files than the current visible tree
+                    if is_narrow_enough:
+                        follow_up_response = interrogation.turn(q_scope=response.qScopeSuggestion)
+                        if follow_up_response.answer is not None:
+                            response = follow_up_response
+            assert len(interrogation.turns) <= 2, "unexpectedly many turns in interrogation"
+        self.response = response
 
     def on_wrong_answer(self):
         xpec = self.xpec
