@@ -21,6 +21,7 @@ def _repair_instructions(failed):
     assert len(failed) > 0
     print("❕ Verify that the evidence supports the observed answer and answers the expectation question; treat unsupported evidence as a readability issue.")
     if len(failed) == 1:
+        # `fail_history` is a global chronological (bounded) history of failure records across `canon check` runs.
         assert fail_history[-1].xpec.short_id == failed[0], "the current failure record must be appended to `fail_history`"
         if _emit_recurring_xpec_failures_warning():
             return
@@ -50,5 +51,11 @@ def _emit_recurring_xpec_failures_warning():
     print("❕ Repeated `canon check` runs keep failing on the same xpec. Do not run `canon check` again yet.")
     print("❕ Each time this warning appears, determine why your workflow allowed the recurrence and adapt it to reduce the chance of another one.")
     print("❕ Emulate the evaluator agent: independently try to disprove the expected answer. Generalize each finding and fix every supported violation.")
+    failed_xpec = fail_history[-1].xpec
+    if failed_xpec.target == "diff":
+        print(
+            f"❕ Xpec `{failed_xpec.short_id}` targets the diff. Look for violations only "
+            f"in files listed by `git diff --cached --numstat {failed_xpec.diff_from_oid}`."
+        )
     print("▷ Run `canon check` again only after you can independently justify the expected answer!")
     return True
