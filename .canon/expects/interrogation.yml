@@ -20,14 +20,12 @@
 
 - q: |-
     The evaluator base instructions, developer instructions, and turn prompt rendered from the same parameter values form a single instruction set and must be considered together.
-    Consider only variations produced by conditional branches in the current template files and only combinations of parameter values that the program can actually pass to the templates; ignore text supplied through template parameters. Only text returned by a direct read or search of the current template files is part of the instruction set; Git diff content and prior versions are not.
-    Before answering yes, quote in the evidence every current instruction that causes the violation exactly as displayed by a direct current-file read or search. If that output does not display the quoted instruction, it cannot support yes.
-    Interpret each instruction as a reasonable evaluator would in its surrounding context. A merely possible literal reading is not a violation when that context makes a compatible practical meaning clear. A contradiction exists only when the same reachable situation requires mutually incompatible actions; different compatible actions, response fields, or stages do not conflict merely because their scopes differ. Compatible statements about the same behavior are not redundant and do not explain one another when each provides distinct information needed to apply the instructions.
+    Consider only variations produced by conditional template branches; ignore text supplied through template parameters.
     This instruction set must:
     - be internally consistent and contain no contradictions;
     - not use undefined terms whose meaning is neither generally understood nor clear enough to understand the instruction;
     - neither restate, interpret, qualify, explain, nor otherwise alter another instruction or statement;
-    Can you find parameter values that select conditional branches for which the rendered instruction set materially violates any of these requirements by making it harder for the evaluator to understand or follow the instructions, answer correctly, or work efficiently?
+    Can you find parameter values that select conditional branches for which the rendered instruction set violates any of these requirements in a way that can reduce the evaluator's ability to answer correctly or efficiently?
   a: no
 
 - q: "Can you find any prompts or instructions for the evaluator agent outside of `resources/prompts/`?"
