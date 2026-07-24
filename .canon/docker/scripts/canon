@@ -17,7 +17,7 @@ project_root="$(git rev-parse --path-format=absolute --show-toplevel)"
 #
 # This wrapper assumes a normal Git repository checkout; Git worktrees are not
 # currently supported.
-exec docker run --rm "-i${tty}" \
+exec docker run --rm -i${tty} \
   --user "$(id -u):$(id -g)" \
   --cap-drop=ALL \
   --security-opt=no-new-privileges \
