@@ -41,9 +41,6 @@
 - q: "Does evaluator prompt template rendering trim leading and trailing whitespace from the rendered output?"
   a: yes
 
-- q: "For expectations with the same `diff-from` whose `target` is `project` or `diff`, can the `target` value affect anything except rendered evaluator prompt template content?"
-  a: no
-
 - q: "Is the q-scope verification follow-up turn the only `canon check` decision logic that may depend on a `qScopeSuggestion` from an evaluation response?"
   a: yes
 
