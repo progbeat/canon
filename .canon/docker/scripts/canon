@@ -3,6 +3,7 @@ set -euo pipefail
 
 image="${CANON_DOCKER_IMAGE:-ghcr.io/progbeat/canon:latest}"
 project_root="$(git rev-parse --path-format=absolute --show-toplevel)"
+[[ -t 0 && -t 1 ]] && tty=t || tty=
 
 # Run Canon's Docker image with this repository root mounted inside the
 # container. Command arguments are passed through unchanged.
@@ -16,7 +17,7 @@ project_root="$(git rev-parse --path-format=absolute --show-toplevel)"
 #
 # This wrapper assumes a normal Git repository checkout; Git worktrees are not
 # currently supported.
-exec docker run --rm -i \
+exec docker run --rm "-i${tty}" \
   --user "$(id -u):$(id -g)" \
   --cap-drop=ALL \
   --security-opt=no-new-privileges \
