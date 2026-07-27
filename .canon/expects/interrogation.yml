@@ -24,6 +24,7 @@
     This instruction set must:
     - be internally consistent and contain no contradictions;
     - not use undefined terms whose meaning is neither generally understood nor clear enough to understand the instruction;
+    - contain no instruction that applies specifically to affirmative or negative answers, or otherwise distinguishes answers by polarity;
     - neither restate, interpret, qualify, explain, nor otherwise alter another instruction or statement;
     Can you find parameter values that select conditional branches for which the rendered instruction set violates any of these requirements in a way that can reduce the evaluator's ability to answer correctly or efficiently?
   a: no
