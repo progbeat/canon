@@ -9,6 +9,7 @@
 - q: "Does the project avoid repeating expensive deterministic operations within a single high-level operation by reusing results keyed by all inputs that can affect them, including repository inspections, filesystem reads, parsed data, and derived hashes?"
   a: yes
   preset: patch-review + cap-49
+  cooldown: 12h
 
 - q: "Are writes under CANON_STATE_DIR amortized O(N) over N newly persisted bytes?"
   a: yes
