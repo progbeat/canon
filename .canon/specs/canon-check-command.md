@@ -23,13 +23,13 @@ Examples:
       Check staged content against all canon expectations.
 
   canon check a7F K9m
-      Check canon expectations selected by ID prefix.
+      Check all expectations whose IDs start with a7F or K9m.
 
   canon check not:a7F not:K9m
       Check all expectations except those whose IDs start with a7F or K9m.
 
   canon check --tree HEAD --against-tree HEAD~1 a7F
-      Check one canon expectation on HEAD with comparison against the previous commit.
+      Check expectations whose IDs start with a7F on HEAD against the previous commit.
 ```
 
 *The `canon check --help` output may differ from this example in wording,
