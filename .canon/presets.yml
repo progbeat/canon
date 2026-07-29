@@ -1,54 +1,54 @@
 # Source: https://artificialanalysis.ai/models
-# `cap-N` selects a cost-efficient model/effort combination scoring at least N on the Artificial Analysis Intelligence Index; higher N means greater overall capability.
+# `cap_N` selects a cost-efficient model/effort combination scoring at least N on the Artificial Analysis Intelligence Index; higher N means greater overall capability.
 # Costs are approximate weighted average costs per Intelligence Index task.
 
-cap-59: &cap-59
+cap_59: &cap_59
   # ~$1.04
   models: ["gpt-5.6-sol"]
   thinking: max
 
-cap-58:
+cap_58:
   # ~$0.682
   models: ["gpt-5.6-sol"]
   thinking: xhigh
 
-cap-56: &cap-56
+cap_56: &cap_56
   # ~$0.453
   models: ["gpt-5.6-sol"]
   thinking: high
 
-cap-55: &cap-55 { <<: *cap-56 }
+cap_55: &cap_55 { <<: *cap_56 }
 
-cap-54: &cap-54
+cap_54: &cap_54
   # ~$0.314
   models: ["gpt-5.6-sol"]
   thinking: medium
 
-cap-50: &cap-50 { <<: *cap-54 }
+cap_50: &cap_50 { <<: *cap_54 }
 
-cap-49: &cap-49
+cap_49: &cap_49
   # ~$0.139
   models: ["gpt-5.6-luna"]
   thinking: xhigh
 
-cap-46: &cap-46
+cap_46: &cap_46
   # ~$0.095
   models: ["gpt-5.6-luna"]
   thinking: high
 
-cap-45: &cap-45 { <<: *cap-46 }
+cap_45: &cap_45 { <<: *cap_46 }
 
-cap-38:
+cap_38:
   # ~$0.050
   models: ["gpt-5.6-luna"]
   thinking: medium
 
-cap-max: *cap-59
+cap_max: *cap_59
 
 #################
 
 default: &default
-  <<: *cap-45
+  <<: *cap_45
   ignore:
     - ".canon/**"  # prevents evaluator agents from reading expected answers and avoids reevaluating full-scope expectations when canon changes
     - ".github/**"
@@ -60,11 +60,6 @@ default: &default
     - "Cargo.lock"
     - "Dockerfile"
     - "LICENSE"
-
-smart:
-  <<: *default
-  models: ["gpt-5.6-terra"]
-  thinking: xhigh
 
 docker:
   <<: *default
@@ -78,7 +73,7 @@ docker:
     - "Cargo.lock"
     - "LICENSE"
 
-_review-base: &review_base_preset
+_review_base: &_review_base
   <<: *default
   target: diff
   q-scope: ["."]
@@ -89,10 +84,13 @@ _review-base: &review_base_preset
     - "Cargo.lock"
     - "LICENSE"
 
-patch-review:
-  <<: [*cap-49, *review_base_preset]
+patch_review:
+  <<: [*cap_49, *_review_base]
   diff-from: :checkpoint
 
-pr-review:
-  <<: [*cap-55, *review_base_preset]
+pr_review:
+  <<: [*cap_55, *_review_base]
   target: diff
+
+full_scope:
+  q-scope: ["."]

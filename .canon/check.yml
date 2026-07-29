@@ -84,6 +84,7 @@ xpecs:
   # Documentation
   - q: "Can you find any inconsistencies between `docs/GLOSSARY.md` and the codebase?"
     a: no
+    preset: default + full_scope
     cooldown: 1d
 
   # FS side effects
@@ -93,7 +94,7 @@ xpecs:
   # Process cleanup
   - q: "Do canon commands that spawn child processes ensure those processes are terminated and reaped on both success and failure?"
     a: "yes"
-    cooldown: 7d
+    cooldown: 1d
 
   # Output and selection
   - q: "Can `canon check <PREFIX>...` select one or more expectations by unique ID prefix, including full IDs?"
