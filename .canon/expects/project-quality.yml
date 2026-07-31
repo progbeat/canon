@@ -1,30 +1,31 @@
 - q: "Can you find any unnecessary copy-pasted code outside tests?"
   a: no
-  preset: patch_review + cap_49
+  preset: patch_review
 
 - q: "Can you find any obsolete, unused, stray, dead-end, duplicated, or redundant project files or code paths that are safe to remove or consolidate without changing intended functionality?"
   a: no
   preset: patch_review
+  cooldown: 4h
 
 - q: "Can you find any hand-written, non-generated source files that are excessively large or mix unrelated responsibilities enough that they should be split into smaller focused modules?"
   a: no
-  preset: patch_review + cap_49
+  preset: patch_review
 
 - q: "Do any source-code boundaries hide dependencies or add indirection without clarifying ownership?"
   a: no
-  preset: patch_review + cap_49
+  preset: patch_review
 
 - q: "Can you find any dirty hacks that can be avoided?"
   a: no
-  preset: patch_review + cap_49
+  preset: patch_review
 
 - q: "Does the project avoid unnecessary unsafe code?"
   a: yes
-  preset: patch_review + cap_49
+  preset: patch_review
 
 - q: "Can you find any naming inconsistencies that would obviously be better to fix?"
   a: no
-  preset: patch_review + cap_49
+  preset: patch_review
 
 - q: "Can you find any data for which its producer and consumer assign incompatible meanings?"
   a: no
