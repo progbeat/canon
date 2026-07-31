@@ -14,9 +14,8 @@
   a: no
   q-scope: ["resources/prompts/"]
 
-- q: "Do your instructions encourage you to make `qScopeSuggestion` as narrow as possible while still enough to justify the answer?"
+- q: "Do your instructions require `qScopeSuggestion` to be a list of repository-relative paths, and encourage you to make that scope as narrow as possible while still enough to justify the answer?"
   a: yes
-  q-scope: ["resources/prompts/"]
 
 - q: |-
     The evaluator base instructions, developer instructions, and turn prompt rendered from the same parameter values form a single instruction set and must be considered together.
