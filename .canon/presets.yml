@@ -85,12 +85,13 @@ _review_base: &_review_base
     - "LICENSE"
 
 patch_review:
-  <<: [*cap_49, *_review_base]
+  <<: [*cap_55, *_review_base]
   diff-from: :checkpoint
 
 pr_review:
   <<: [*cap_55, *_review_base]
-  target: diff
+  diff-from: master
+  rank: 5
 
 full_scope:
   q-scope: ["."]
