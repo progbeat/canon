@@ -18,6 +18,7 @@
 - q: "Can you find any dirty hacks that can be avoided?"
   a: no
   preset: patch_review
+  cooldown: 4h
 
 - q: "Does the project avoid unnecessary unsafe code?"
   a: yes
@@ -26,6 +27,7 @@
 - q: "Can you find any naming inconsistencies that would obviously be better to fix?"
   a: no
   preset: patch_review
+  cooldown: 4h
 
 - q: "Can you find any data for which its producer and consumer assign incompatible meanings?"
   a: no
