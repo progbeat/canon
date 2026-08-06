@@ -1,6 +1,6 @@
 use super::super::windows::{
-    windows_dacl, windows_restore_dacl, windows_restore_parent_dacl,
-    windows_set_materialized_readonly_dacl, windows_set_no_access_dacl,
+    windows_apply_dacl, windows_read_dacl, windows_reset_dacl_to_inherited,
+    windows_set_materialized_readonly_dacl, windows_set_no_access_dacl, WindowsDacl,
 };
 use super::MaterializedFileMode;
 use std::fs;
@@ -66,7 +66,7 @@ pub(in super::super) fn set_private_permissions_with_metadata(
     if metadata.file_type().is_symlink() {
         return Ok(());
     }
-    windows_restore_parent_dacl(path)?;
+    windows_reset_dacl_to_inherited(path)?;
     set_readonly(path, metadata, false)
 }
 
@@ -85,14 +85,14 @@ fn set_readonly(path: &Path, metadata: &fs::Metadata, readonly: bool) -> Result<
 #[derive(Clone)]
 pub(in super::super) struct SecretDirMode {
     permissions: fs::Permissions,
-    dacl: Option<Vec<u8>>,
+    dacl: Option<WindowsDacl>,
 }
 
 pub(in super::super) fn secret_dir_mode(path: &Path) -> Result<SecretDirMode, String> {
     let metadata = secret_dir_metadata(path)?;
     Ok(SecretDirMode {
         permissions: metadata.permissions(),
-        dacl: windows_dacl(path)?,
+        dacl: windows_read_dacl(path)?,
     })
 }
 
@@ -105,7 +105,7 @@ pub(in super::super) fn restore_secret_dir_mode(
     path: &Path,
     mode: &SecretDirMode,
 ) -> Result<(), String> {
-    windows_restore_dacl(path, mode.dacl.as_deref())?;
+    windows_apply_dacl(path, mode.dacl.as_ref())?;
     fs::set_permissions(path, mode.permissions.clone()).map_err(|err| {
         format!(
             "failed to restore secret dir permissions {}: {}",

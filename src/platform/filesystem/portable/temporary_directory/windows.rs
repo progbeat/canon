@@ -1,6 +1,7 @@
 //! Windows temporary-directory parent discovery.
 
 use super::push_unique_path;
+use std::io;
 use std::path::{Path, PathBuf};
 
 pub(super) struct TemporaryParentCandidates {
@@ -35,6 +36,14 @@ impl TemporaryParentCandidates {
     pub(super) fn allows_executables(&self, _parent: &Path) -> bool {
         true
     }
+}
+
+pub(super) fn canonical_temporary_parent(parent: &Path) -> io::Result<PathBuf> {
+    Ok(parent.to_path_buf())
+}
+
+pub(super) fn resolve_standard_temporary_path(path: &Path) -> PathBuf {
+    path.to_path_buf()
 }
 
 fn add_env_temporary_parent_candidates(parents: &mut Vec<PathBuf>, names: &[&str]) {

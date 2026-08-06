@@ -94,6 +94,17 @@ impl OwnedPrivateTemporaryDirectory {
     ) -> Result<OwnedPrivateTemporaryDirectory, String> {
         let mut errors = Vec::new();
         for parent in parents {
+            let parent = match imp::canonical_temporary_parent(parent) {
+                Ok(parent) => parent,
+                Err(err) => {
+                    errors.push(format!(
+                        "failed to resolve temporary directory parent {}: {}",
+                        parent.display(),
+                        err
+                    ));
+                    continue;
+                }
+            };
             for _ in 0..64 {
                 let random = getrandom::u64().map_err(|err| {
                     format!("failed to choose private temporary directory: {err}")
@@ -139,4 +150,8 @@ pub(super) fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
     if !paths.iter().any(|existing| existing == &path) {
         paths.push(path);
     }
+}
+
+pub(crate) fn resolve_standard_temporary_path(path: &Path) -> PathBuf {
+    imp::resolve_standard_temporary_path(path)
 }

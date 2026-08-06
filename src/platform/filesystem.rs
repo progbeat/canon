@@ -4,9 +4,10 @@ pub(crate) use portable::{
     chmod_secret_dir_no_access, create_materialized_symlink, create_private_dir,
     create_private_dir_all, git_path_bytes, hardlink_file_or_copy_symlink,
     make_directory_tree_private, make_hook_executable, mirror_evaluator_codex_home_file, move_path,
-    os_string_from_bytes, path_from_git_stdout, restore_secret_dir_mode, secret_dir_mode,
-    set_materialized_dir_permissions, set_materialized_file_permissions,
-    OwnedPrivateTemporaryDirectory, PrivateTemporaryDirectoryAllocator, SecretDirMode,
+    os_string_from_bytes, path_from_git_stdout, resolve_standard_temporary_path,
+    restore_secret_dir_mode, secret_dir_mode, set_materialized_dir_permissions,
+    set_materialized_file_permissions, OwnedPrivateTemporaryDirectory,
+    PrivateTemporaryDirectoryAllocator, SecretDirMode,
 };
 
 #[cfg(all(test, unix))]

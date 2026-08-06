@@ -7,7 +7,9 @@ use super::{
     CheckExpectationRunContext, CompletedCheckInterrogation,
     TemporaryExpectationInterrogationContext,
 };
-use crate::check::core::{InterrogationAnswer, ResolvedExpectation, ERROR_SCOPE_TOO_NARROW};
+use crate::check::core::{
+    evaluate_final_response, InterrogationAnswer, ResolvedExpectation, ERROR_SCOPE_TOO_NARROW,
+};
 use crate::check::interrogation::InterrogationTurnKind;
 use crate::evaluator::{EvaluatorProgress, EvaluatorRunner};
 use crate::hash::full_scope;
@@ -35,6 +37,14 @@ pub(crate) fn run_temporary_expectation_interrogation<R: EvaluatorRunner>(
     );
     let completed =
         run_started_policy_interrogation(&mut context, expectation, current_q_scope, progress)?;
+    // [Eg] Temporary ask does not expose or persist evaluation status, but
+    // this is its evaluator completion boundary, so enforce evaluate's
+    // status and error postconditions before returning invocation-local data.
+    evaluate_final_response(
+        expectation.expected_answer(),
+        &completed.interrogation.output.answer.observed,
+        completed.interrogation.output.answer.error.as_deref(),
+    );
     Ok(completed.interrogation)
 }
 

@@ -20,7 +20,8 @@ pub(crate) use permissions::{
 };
 pub(crate) use private_directory::{create_private_dir, create_private_dir_all};
 pub(crate) use temporary_directory::{
-    OwnedPrivateTemporaryDirectory, PrivateTemporaryDirectoryAllocator,
+    resolve_standard_temporary_path, OwnedPrivateTemporaryDirectory,
+    PrivateTemporaryDirectoryAllocator,
 };
 
 fn filesystem_error(error: impl std::fmt::Display) -> String {

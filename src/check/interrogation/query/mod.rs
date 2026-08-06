@@ -1,4 +1,4 @@
-use crate::check::core::{evaluate_final_response, QueryResult, ResolvedExpectation};
+use crate::check::core::{QueryResult, ResolvedExpectation};
 use crate::check::interrogation::state::CheckRuntime;
 use crate::check::interrogation::{
     write_query_result_event, write_query_review_required_event, InterrogationSession,
@@ -48,14 +48,6 @@ pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
         &mut current_q_scope,
         query.progress,
     )?;
-    // [Eg] A temporary ask xpec has an empty expected answer. It does not
-    // expose evaluation status, but it still executes evaluate's status and
-    // error postconditions before returning the response.
-    evaluate_final_response(
-        query.expectation.expectation.expected_answer(),
-        &interrogation.output.answer.observed,
-        interrogation.output.answer.error.as_deref(),
-    );
     finish_query_result(
         query.question,
         &mut diagnostic_log,

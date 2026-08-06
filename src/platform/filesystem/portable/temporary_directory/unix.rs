@@ -3,8 +3,10 @@
 use super::push_unique_path;
 use std::ffi::OsString;
 use std::fs;
+use std::io;
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 pub(super) struct TemporaryParentCandidates {
     memory_backed: Vec<PathBuf>,
@@ -56,6 +58,22 @@ impl TemporaryParentCandidates {
             .and_then(|mounts| best_matching_mount(mounts, &parent))
             .is_none_or(|mount| mount.allows_executables)
     }
+}
+
+pub(super) fn canonical_temporary_parent(parent: &Path) -> io::Result<PathBuf> {
+    parent.canonicalize()
+}
+
+pub(super) fn resolve_standard_temporary_path(path: &Path) -> PathBuf {
+    static STANDARD_TEMP_ROOTS: OnceLock<(PathBuf, PathBuf)> = OnceLock::new();
+    let (declared, canonical) = STANDARD_TEMP_ROOTS.get_or_init(|| {
+        let declared = std::env::temp_dir();
+        let canonical = declared.canonicalize().unwrap_or_else(|_| declared.clone());
+        (declared, canonical)
+    });
+    path.strip_prefix(declared)
+        .map(|relative| canonical.join(relative))
+        .unwrap_or_else(|_| path.to_path_buf())
 }
 
 fn add_common_memory_backed_temporary_parent_candidates(parents: &mut Vec<PathBuf>) {
