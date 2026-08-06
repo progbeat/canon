@@ -82,7 +82,7 @@ def canon_check():
 The token usage line is written to stderr as:
 
 ```
-token-usage: ref-cost={:.2}$ total={} input={} (+ {} cached) output={} (reasoning {})
+token-usage: ref-cost={:.2}$ total={} input={} ({} cached) output={} (reasoning {})
 ```
 
 If token usage data is unavailable, every numeric field is `0`.
