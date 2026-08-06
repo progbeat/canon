@@ -1,4 +1,4 @@
-use crate::platform;
+use crate::platform::filesystem;
 use std::fs;
 use std::path::Path;
 
@@ -9,7 +9,7 @@ pub(super) enum HookFile {
 }
 
 pub(super) fn make_executable(path: &Path) -> Result<(), String> {
-    platform::make_hook_executable(path)
+    filesystem::make_hook_executable(path)
 }
 
 pub(super) fn inspect_hook_file(path: &Path) -> HookFile {

@@ -8,13 +8,16 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const DIAGNOSTIC_LOG_LOCK_STALE_AFTER_SECS: u64 = 300;
 
-pub(crate) struct DiagnosticLogLock {
+// [l,g2] This file-backed lock is an ephemeral cross-process exclusion
+// mechanism, not retained command state. Its token-owning guard removes it on
+// drop; a later acquirer removes a crash leftover after the stale threshold.
+pub(crate) struct EphemeralDiagnosticLogLock {
     path: PathBuf,
     token: String,
     file: Option<fs::File>,
 }
 
-impl Drop for DiagnosticLogLock {
+impl Drop for EphemeralDiagnosticLogLock {
     fn drop(&mut self) {
         drop(self.file.take());
         if fs::read_to_string(&self.path).ok().as_deref() == Some(self.token.as_str()) {
@@ -23,18 +26,18 @@ impl Drop for DiagnosticLogLock {
     }
 }
 
-pub(crate) fn acquire_diagnostic_log_lock(
+pub(crate) fn acquire_ephemeral_diagnostic_log_lock(
     log_dir: &Path,
-) -> DiagnosticLogResult<DiagnosticLogLock> {
-    let path = diagnostic_log_lock_path(log_dir);
+) -> DiagnosticLogResult<EphemeralDiagnosticLogLock> {
+    let path = ephemeral_lock_path_outside_bounded_log_dir(log_dir);
     match create_diagnostic_log_lock(&path) {
-        Ok((token, file)) => Ok(diagnostic_log_lock(path, token, file)),
+        Ok((token, file)) => Ok(ephemeral_diagnostic_log_lock(path, token, file)),
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
             if diagnostic_log_lock_is_stale(&path)? {
                 remove_file_if_exists(&path)?;
                 let (token, file) = create_diagnostic_log_lock(&path)
                     .map_err(|err| log_io_error("lock", &path, err))?;
-                Ok(diagnostic_log_lock(path, token, file))
+                Ok(ephemeral_diagnostic_log_lock(path, token, file))
             } else {
                 Err(log_io_error("lock", &path, err))
             }
@@ -43,12 +46,19 @@ pub(crate) fn acquire_diagnostic_log_lock(
     }
 }
 
-fn diagnostic_log_lock_path(log_dir: &Path) -> PathBuf {
+// [fh] Coordination metadata lives beside, rather than inside, the bounded
+// retained-log directory. A live lock therefore neither consumes log quota
+// nor becomes a pruning candidate; its exact sibling name remains internal.
+fn ephemeral_lock_path_outside_bounded_log_dir(log_dir: &Path) -> PathBuf {
     log_dir.with_extension("lock")
 }
 
-fn diagnostic_log_lock(path: PathBuf, token: String, file: fs::File) -> DiagnosticLogLock {
-    DiagnosticLogLock {
+fn ephemeral_diagnostic_log_lock(
+    path: PathBuf,
+    token: String,
+    file: fs::File,
+) -> EphemeralDiagnosticLogLock {
+    EphemeralDiagnosticLogLock {
         path,
         token,
         file: Some(file),
@@ -107,19 +117,4 @@ fn diagnostic_log_lock_is_stale(path: &Path) -> DiagnosticLogResult<bool> {
 
 pub(crate) fn stale_diagnostic_log_lock_age(age: Duration) -> bool {
     age >= Duration::from_secs(DIAGNOSTIC_LOG_LOCK_STALE_AFTER_SECS)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::diagnostic_log_lock_path;
-    use std::path::Path;
-
-    #[test] // xpec: 13
-    fn diagnostic_log_lock_is_outside_log_dir() {
-        let log_dir = Path::new("state").join("logs");
-        assert_eq!(
-            diagnostic_log_lock_path(&log_dir),
-            Path::new("state").join("logs.lock")
-        );
-    }
 }

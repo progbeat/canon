@@ -1,13 +1,19 @@
 mod app_server;
-mod base;
 mod codec;
-mod model_catalog;
 mod permissions;
+mod runtime;
 
-pub(crate) use app_server::{app_server_args_with_no_sandbox, app_server_model_key, AppServerArgs};
-pub(crate) use base::evaluator_thread_config_with_no_sandbox;
+pub(crate) use app_server::{app_server_args, AppServerArgs};
+pub(crate) use runtime::{
+    evaluator_reasoning_effort, evaluator_thread_config_identity,
+    EphemeralEvaluatorThreadPermissionProfile, EvaluatorHostIsolation, EvaluatorProcessIsolation,
+    EvaluatorRuntimeConfigContext, EvaluatorRuntimeConfigSnapshot, EvaluatorThreadConfigIdentity,
+    EvaluatorThreadConfigIdentityContext,
+};
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+const EVALUATOR_PERMISSION_PROFILE: &str = "canon_check";
 
 pub(super) const EVALUATOR_DISABLED_FEATURES: &[&str] = &[
     "apps",
@@ -32,8 +38,6 @@ pub(super) const EVALUATOR_DISABLED_FEATURES: &[&str] = &[
     "unified_exec",
     "workspace_dependencies",
 ];
-pub(super) const EVALUATOR_EXTRA_DISABLED_FEATURES: &[&str] = &["apply_patch_freeform"];
-
 pub(super) type EvaluatorConfigResult<T> = Result<T, EvaluatorConfigError>;
 
 #[derive(Debug)]
@@ -50,9 +54,12 @@ pub(crate) enum EvaluatorConfigError {
         existing: String,
         replacement: String,
     },
-    HomeNotUtf8,
     InvalidPathUtf8 {
         context: &'static str,
+    },
+    RuntimeInputInsideProtectedHostRoot {
+        input: PathBuf,
+        protected_root: PathBuf,
     },
     JsonEncode {
         context: &'static str,
@@ -83,12 +90,18 @@ impl fmt::Display for EvaluatorConfigError {
                 "duplicate evaluator filesystem permission for {}: {} and {}",
                 path, existing, replacement
             ),
-            EvaluatorConfigError::HomeNotUtf8 => {
-                formatter.write_str("HOME must be valid UTF-8 for evaluator runtime permissions")
-            }
             EvaluatorConfigError::InvalidPathUtf8 { context } => {
                 write!(formatter, "{} must be valid UTF-8", context)
             }
+            EvaluatorConfigError::RuntimeInputInsideProtectedHostRoot {
+                input,
+                protected_root,
+            } => write!(
+                formatter,
+                "evaluator runtime input {} must be outside protected host root {}",
+                input.display(),
+                protected_root.display()
+            ),
             EvaluatorConfigError::JsonEncode { context, message } => {
                 write!(formatter, "failed to encode {}: {}", context, message)
             }

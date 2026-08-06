@@ -13,7 +13,7 @@ use serde_json::Value;
 
 pub(super) struct LoggedTurnRequest<'a> {
     pub(super) turn: &'a EvaluatorTurnContext<'a>,
-    pub(super) prompt: &'a str,
+    pub(super) task_input: &'a str,
     pub(super) expectation_id: Option<&'a str>,
     pub(super) attempt: usize,
     pub(super) reason: &'a str,
@@ -33,16 +33,16 @@ pub(super) fn ask_and_log<R: EvaluatorRunner>(
             request.attempt,
             request.reason,
             AgentTurnLogRequest {
-                session_id: request.turn.session_id,
-                prompt: request.prompt,
+                thread_id: request.turn.thread_id,
+                task_input: request.task_input,
                 model: request.turn.model,
                 thinking: request.turn.thinking,
             },
         )
     })?;
     let response = match runner.ask(
-        request.turn.session_id,
-        request.prompt,
+        request.turn.thread_id,
+        request.task_input,
         request.turn.model,
         request.turn.thinking,
         request.output_schema,
@@ -57,14 +57,13 @@ pub(super) fn ask_and_log<R: EvaluatorRunner>(
                     request.expectation_id,
                     request.attempt,
                     request.reason,
-                    request.turn.session_id,
+                    request.turn.thread_id,
                     err.message_str(),
                     turn_usage.as_ref(),
                 )
             }) {
-                return Err(EvaluatorError::message(format!(
-                    "{}; failed to write evaluator failure runtime log: {}",
-                    err.message_str(),
+                return Err(err.with_appended_message(format!(
+                    "failed to write evaluator failure runtime log: {}",
                     log_error
                 )));
             }
@@ -82,7 +81,7 @@ pub(super) fn ask_and_log<R: EvaluatorRunner>(
                 request.expectation_id,
                 request.attempt,
                 request.reason,
-                request.turn.session_id,
+                request.turn.thread_id,
                 &response,
             )
         })?;
@@ -96,7 +95,7 @@ pub(super) fn ask_and_log<R: EvaluatorRunner>(
                 request.expectation_id,
                 request.attempt,
                 request.reason,
-                request.turn.session_id,
+                request.turn.thread_id,
                 &response,
                 turn_usage,
             )
@@ -121,7 +120,7 @@ fn write_optional_diagnostic_log(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     write: impl FnOnce(&mut DiagnosticLogWriter) -> DiagnosticLogResult<()>,
 ) -> Result<(), EvaluatorError> {
-    // [7N] A configured runtime log is part of the check observability
+    // [w] A configured runtime log is part of the check observability
     // contract. Its write failures must become command errors rather than
     // silently omitting evaluator communication. When an evaluator failure
     // already exists, `ask_and_log` reports both errors above.
@@ -144,14 +143,14 @@ pub(crate) fn write_thread_lifecycle_event(
             writer,
             &ThreadLifecycleEventFields {
                 event: lifecycle_log.event,
-                session_id: &lifecycle_log.session_id,
+                thread_id: &lifecycle_log.thread_id,
                 expectation_id,
                 scope: enforced_scope,
                 model,
                 thinking,
                 base_instructions: &lifecycle_log.base_instructions,
                 developer_instructions: &lifecycle_log.developer_instructions,
-                reuse_context: &lifecycle_log.reuse_context,
+                evaluation_context: &lifecycle_log.evaluation_context,
             },
         )
     })
@@ -169,7 +168,7 @@ pub(crate) fn write_thread_restart_event(
         crate::logs::write_thread_restart_event(
             writer,
             &ThreadRestartEventFields {
-                session_id: &lifecycle_log.session_id,
+                thread_id: &lifecycle_log.thread_id,
                 expectation_id,
                 scope: enforced_scope,
                 model,

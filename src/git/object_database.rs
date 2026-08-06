@@ -1,5 +1,7 @@
-use crate::platform::{path_from_git_stdout, OwnedPrivateTemporaryDirectory};
-use crate::project::command_output_trimmed;
+use super::program::write_tree_oid;
+use crate::platform::filesystem::{
+    OwnedPrivateTemporaryDirectory, PrivateTemporaryDirectoryAllocator,
+};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -23,10 +25,16 @@ pub(crate) struct GitPromptObjectArtifacts {
 }
 
 impl GitPromptObjectArtifacts {
-    pub(crate) fn new(root: &Path) -> Result<GitPromptObjectArtifacts, String> {
-        let owner = OwnedPrivateTemporaryDirectory::create(GIT_PROMPT_OBJECT_ARTIFACT_DIR_PREFIX)?;
+    pub(crate) fn new(
+        root: &Path,
+        temporary_directory_allocator: &PrivateTemporaryDirectoryAllocator,
+    ) -> Result<GitPromptObjectArtifacts, String> {
+        let owner = OwnedPrivateTemporaryDirectory::create(
+            temporary_directory_allocator,
+            GIT_PROMPT_OBJECT_ARTIFACT_DIR_PREFIX,
+        )?;
         let object_directory = owner.path().join("objects");
-        crate::platform::create_private_dir(&object_directory).map_err(|err| {
+        crate::platform::filesystem::create_private_dir(&object_directory).map_err(|err| {
             format!(
                 "failed to create temporary Git prompt object directory {}: {}",
                 object_directory.display(),
@@ -42,18 +50,7 @@ impl GitPromptObjectArtifacts {
     }
 
     pub(crate) fn staged_tree_oid(&self, root: &Path) -> Result<String, String> {
-        let output = self
-            .git_command(root)
-            .arg("write-tree")
-            .output()
-            .map_err(|err| format!("failed to run git write-tree: {}", err))?;
-        if !output.status.success() {
-            return Err(format!(
-                "failed to resolve staged tree: {}",
-                command_output_trimmed(&output.stderr, "git write-tree stderr")?
-            ));
-        }
-        command_output_trimmed(&output.stdout, "git write-tree stdout").map(str::to_string)
+        write_tree_oid(self.git_command(root))
     }
 
     pub(crate) fn prompt_environment(&self) -> Vec<(OsString, OsString)> {
@@ -84,24 +81,8 @@ impl GitPromptObjectArtifacts {
 }
 
 fn repository_object_directory(root: &Path) -> Result<PathBuf, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["rev-parse", "--git-path", "objects"])
-        .output()
-        .map_err(|err| format!("failed to locate Git object directory: {}", err))?;
-    if !output.status.success() {
-        return Err(format!(
-            "failed to locate Git object directory: {}",
-            command_output_trimmed(&output.stderr, "git rev-parse stderr")?
-        ));
-    }
-    let path = path_from_git_stdout(output.stdout)?;
-    let path = if path.is_absolute() {
-        path
-    } else {
-        root.join(path)
-    };
+    let path = super::program::resolve_git_path(root, "objects")
+        .map_err(|err| format!("failed to locate Git object directory: {err}"))?;
     fs::canonicalize(&path).map_err(|err| {
         format!(
             "failed to resolve Git object directory {}: {}",
@@ -116,10 +97,10 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test] // xpec: g2,Ky,M
+    #[test] // xpec: g2,l,Mo
     fn staged_tree_prompt_artifact_never_enters_repository_object_database() {
         let root = std::env::temp_dir().join(format!(
-            "canon-invocation-local-git-objects-{}-{}",
+            "canon-prompt-git-object-artifacts-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -130,7 +111,9 @@ mod tests {
         run_git(&root, &["init", "--quiet"]);
         fs::write(root.join("new.txt"), "new staged contents\n").unwrap();
         run_git(&root, &["add", "new.txt"]);
-        let artifacts = GitPromptObjectArtifacts::new(&root).unwrap();
+        let artifacts =
+            GitPromptObjectArtifacts::new(&root, &PrivateTemporaryDirectoryAllocator::new())
+                .unwrap();
 
         let tree_oid = artifacts.staged_tree_oid(&root).unwrap();
 

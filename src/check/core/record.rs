@@ -17,9 +17,6 @@ use serde::Deserialize;
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct CheckRecord {
     pub(crate) timestamp: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    pub(crate) number: usize,
     #[serde(default = "default_check_result")]
     pub(crate) result: CheckResult,
     #[serde(default, skip)]
@@ -34,10 +31,10 @@ pub(crate) struct CheckRecord {
     #[serde(default)]
     pub(crate) error: Option<String>,
     pub(crate) evidence: Option<String>,
-    #[serde(rename = "visibleScope", alias = "qScope", alias = "scope")]
+    #[serde(rename = "qScope", alias = "scope")]
     pub(crate) scope: Vec<String>,
     #[serde(default, rename = "qScopeSuggestion", alias = "suggestedQScope")]
-    pub(crate) question_scope_suggestion: Option<Vec<String>>,
+    pub(crate) q_scope_suggestion: Option<Vec<String>>,
     #[serde(
         default,
         rename = "visibleTreeOid",
@@ -46,8 +43,8 @@ pub(crate) struct CheckRecord {
     )]
     pub(crate) visible_tree_oid: Option<String>,
     // Git-backed evaluator turns attach the resolved diff base used for the
-    // prompt-rendered diff so failed/error stdout can print the public
-    // `Diff-from:` line. Persistent state stores the full OID; stdout uses the
+    // prompt-rendered diff so wrong-answer stdout can print the public
+    // `diff-from:` line. Persistent state stores the full OID; stdout uses the
     // Git-produced abbreviation carried only in memory.
     #[serde(default, rename = "diffFrom")]
     pub(crate) diff_from: Option<String>,
@@ -67,14 +64,37 @@ pub(crate) struct CheckRecordOutcome {
     pub(crate) error: Option<String>,
     pub(crate) evidence: Option<String>,
     pub(crate) scope: Vec<String>,
-    // Invocation-local evaluator feedback used by q-scope verification and
-    // optional stdout hints. Persistent last-result state stores the q-scope
-    // actually used, not this transient suggestion.
-    pub(crate) question_scope_suggestion: Option<Vec<String>>,
+    // Evaluator-response feedback used by q-scope verification and optional
+    // stdout hints. A persisted final response retains this unverified proposal;
+    // its separately stored `qScope` is the scope actually used for that response.
+    pub(crate) q_scope_suggestion: Option<Vec<String>>,
     pub(crate) visible_tree_oid: Option<String>,
     pub(crate) diff_from: Option<String>,
     pub(crate) diff_from_tree_oid: Option<String>,
     pub(crate) diff_from_tree_oid_abbrev: Option<String>,
+}
+
+impl CheckRecordOutcome {
+    pub(crate) fn new(
+        result: CheckResult,
+        observed: String,
+        error: Option<String>,
+        evidence: Option<String>,
+        scope: Vec<String>,
+    ) -> CheckRecordOutcome {
+        CheckRecordOutcome {
+            result,
+            observed,
+            error,
+            evidence,
+            scope,
+            q_scope_suggestion: None,
+            visible_tree_oid: None,
+            diff_from: None,
+            diff_from_tree_oid: None,
+            diff_from_tree_oid_abbrev: None,
+        }
+    }
 }
 
 impl CheckRecord {
@@ -97,20 +117,20 @@ impl CheckRecord {
         expectation: &ResolvedExpectation,
         outcome: CheckRecordOutcome,
     ) -> Result<CheckRecord, String> {
+        let expected_answer = expectation.expected_answer().to_string();
         Ok(CheckRecord {
             timestamp: format_record_timestamp(unix_timestamp()?),
-            id: expectation.id.clone(),
+            id: expectation.require_configured_id()?.to_string(),
             display_id: expectation.display_id.clone(),
-            number: expectation.number,
             result: outcome.result,
             to: expectation.to,
             question: Some(expectation.question.clone()),
-            expected_answer: Some(expectation.expected_answer.clone()),
+            expected_answer: Some(expected_answer),
             observed: outcome.observed,
             error: outcome.error,
             evidence: outcome.evidence,
             scope: outcome.scope,
-            question_scope_suggestion: outcome.question_scope_suggestion,
+            q_scope_suggestion: outcome.q_scope_suggestion,
             visible_tree_oid: outcome.visible_tree_oid,
             diff_from: outcome.diff_from,
             diff_from_tree_oid: outcome.diff_from_tree_oid,
@@ -124,5 +144,31 @@ impl CheckRecord {
 
     pub(crate) fn expected_answer_text(&self) -> Option<&str> {
         self.expected_answer.as_deref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CheckRecord;
+    use serde_json::json;
+
+    #[test] // xpec: gN
+    fn deserialized_record_scope_has_q_scope_semantics() {
+        let record: CheckRecord = serde_json::from_value(json!({
+            "timestamp": "2026-01-01T00:00:00Z",
+            "observed": "yes",
+            "evidence": "evidence",
+            "qScope": ["src"]
+        }))
+        .unwrap();
+
+        assert_eq!(record.scope, ["src"]);
+        assert!(serde_json::from_value::<CheckRecord>(json!({
+            "timestamp": "2026-01-01T00:00:00Z",
+            "observed": "yes",
+            "evidence": "evidence",
+            "visibleScope": ["src"]
+        }))
+        .is_err());
     }
 }

@@ -26,7 +26,7 @@ pub(crate) struct CheckCommandArgs {
     pub(crate) config_path: PathBuf,
     pub(crate) tree: String,
     pub(crate) against_tree: String,
-    // [7N] Feedback eligibility is defined by these resolved values, not by
+    // [w] Feedback eligibility is defined by these resolved values, not by
     // whether the caller spelled an equal value explicitly.
     pub(crate) sources_have_command_default_values: bool,
     pub(crate) in_place: bool,
@@ -40,6 +40,7 @@ pub(crate) struct AskCommandArgs {
     pub(crate) tree: String,
     pub(crate) against_tree: String,
     pub(crate) in_place: bool,
+    pub(crate) no_sandbox: bool,
     pub(crate) question: String,
     pub(crate) default_agent_preset: Option<String>,
 }

@@ -1,8 +1,8 @@
-use crate::check::core::{
-    QueryResult, ResolvedExpectation, ERROR_INVALID_QUESTION, INTERNAL_ERROR_UNPARSABLE,
+use crate::check::core::{evaluate_final_response, QueryResult, ResolvedExpectation};
+use crate::check::interrogation::state::CheckRuntime;
+use crate::check::interrogation::{
+    write_query_result_event, write_query_review_required_event, InterrogationSession,
 };
-use crate::check::interrogation::state::{CheckRuntime, InterrogationRunState};
-use crate::check::interrogation::{write_query_result_event, write_query_review_required_event};
 use crate::check::{
     run_temporary_expectation_interrogation, CheckRunCaches,
     TemporaryExpectationInterrogationContext,
@@ -28,31 +28,41 @@ pub(crate) fn run_query_with_runner<R: EvaluatorRunner>(
     query: QueryRequest<'_>,
     runner: &mut R,
     diagnostic_log: Option<&mut DiagnosticLogWriter>,
-    state: &mut InterrogationRunState,
+    interrogation_session: &mut InterrogationSession,
     caches: &mut CheckRunCaches,
 ) -> Result<QueryResult, String> {
-    // Query lifecycle start/finish events are emitted by
-    // `check::command::execution::query` so they bracket scope parsing and
-    // execution preparation as well as the evaluator turn managed here.
+    // Ask lifecycle start/finish events are emitted by the owning
+    // `check::command::workflow::run::ask::query` boundary so they bracket
+    // scope parsing and execution preparation as well as this evaluator turn.
     let mut diagnostic_log = diagnostic_log;
-    let mut verified_q_scope = query.enforced_scope.to_vec();
+    let mut current_q_scope = query.enforced_scope.to_vec();
     let interrogation = run_temporary_expectation_interrogation(
         TemporaryExpectationInterrogationContext {
             runtime,
             runner,
             diagnostic_log: &mut diagnostic_log,
             caches,
-            interrogation_run_state: state,
+            interrogation_session,
         },
         query.expectation.expectation,
-        &mut verified_q_scope,
+        &mut current_q_scope,
         query.progress,
     )?;
+    // [Eg] A temporary ask xpec has an empty expected answer. It does not
+    // expose evaluation status, but it still executes evaluate's status and
+    // error postconditions before returning the response.
+    evaluate_final_response(
+        query.expectation.expectation.expected_answer(),
+        &interrogation.output.answer.observed,
+        interrogation.output.answer.error.as_deref(),
+    );
     finish_query_result(
         query.question,
         &mut diagnostic_log,
         QueryResult {
-            answer: interrogation.answer,
+            answer: interrogation.output.answer,
+            diff_from: interrogation.output.diff_from,
+            diff_from_tree_oid_abbrev: interrogation.output.diff_from_tree_oid_abbrev,
         },
     )
 }
@@ -62,7 +72,7 @@ fn finish_query_result(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     result: QueryResult,
 ) -> Result<QueryResult, String> {
-    if let Some(reason) = query_human_review_reason(&result) {
+    if let Some(reason) = result.human_review_reason() {
         write_query_review_required_event(question, diagnostic_log, &result.answer, reason)
             .map_err(|err| err.to_string())?;
         return Ok(result);
@@ -72,254 +82,180 @@ fn finish_query_result(
     Ok(result)
 }
 
-pub(crate) fn query_human_review_reason(result: &QueryResult) -> Option<&'static str> {
-    match result.answer.error.as_deref() {
-        Some(ERROR_INVALID_QUESTION) => Some("invalid question"),
-        Some(INTERNAL_ERROR_UNPARSABLE) => Some("unparsable evaluator response"),
-        None => None,
-        Some(_) => Some("unknown evaluator error"),
-    }
+#[cfg(test)]
+mod tests;
+
+#[cfg(test)]
+#[test] // xpec: Eg
+fn turn_timeout_retries_the_current_model_on_a_fresh_thread() {
+    let root = tests::temp_root("turn-timeout-retry");
+    let config = crate::config_types::CheckConfig {
+        version: 1,
+        agent: crate::config_types::AgentConfig::implementation_default(),
+        expectations: Vec::new(),
+    };
+    let runtime = CheckRuntime::in_place(&root, &config, true);
+    let expectation =
+        temporary_query_expectation(&config, "Does timeout retry use a fresh thread?");
+    let enforced_scope = crate::hash::full_scope();
+    let request = QueryRequest {
+        question: &expectation.question,
+        enforced_scope: &enforced_scope,
+        expectation: QueryExpectationContext {
+            expectation: &expectation,
+        },
+        progress: None,
+    };
+    let mut runner = tests::FakeQueryRunner::with_turn_results(vec![
+        Err(crate::evaluator::EvaluatorError::failure(
+            crate::evaluator::EvaluatorFailureKind::TurnTimeout,
+            "no-progress timeout",
+        )),
+        Ok(r#"{"q":{"answer":"yes","evidence":"fresh retry succeeded"}}"#.to_string()),
+    ]);
+    let mut caches = CheckRunCaches::new();
+    let mut interrogation_session =
+        InterrogationSession::new(true, caches.temporary_directory_allocator.clone()).unwrap();
+
+    let result = run_query_with_runner(
+        &runtime,
+        request,
+        &mut runner,
+        None,
+        &mut interrogation_session,
+        &mut caches,
+    )
+    .unwrap();
+
+    assert_eq!(result.answer.observed, "yes");
+    assert_eq!(runner.ask_thread_ids, ["thread-1", "thread-2"]);
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::check::interrogation::state::{CheckRuntime, CheckTreeContext};
-    use crate::config_types::{AgentConfig, CheckConfig, DEFAULT_DIFF_FROM};
-    use crate::git::{staged_tree_oid, TreeSource};
-    use crate::hash::full_scope;
-    use crate::staged::StagedWorktreeView;
-    use crate::token_usage_types::{EvaluatorTurnUsage, TokenUsage};
-    use std::fs;
-    use std::path::{Path, PathBuf};
-    use std::process::Command;
-    use std::time::{SystemTime, UNIX_EPOCH};
+#[test] // xpec: qv
+fn short_id_mismatch_after_a_valid_turn_starts_a_fresh_thread() {
+    let root = tests::temp_root("short-id-retry");
+    let config = crate::config_types::CheckConfig {
+        version: 1,
+        agent: crate::config_types::AgentConfig::implementation_default(),
+        expectations: Vec::new(),
+    };
+    let runtime = CheckRuntime::in_place(&root, &config, true);
+    let expectation = temporary_query_expectation(
+        &config,
+        "Does a short-ID mismatch retry use a fresh thread?",
+    );
+    let enforced_scope = crate::hash::full_scope();
+    let request = QueryRequest {
+        question: &expectation.question,
+        enforced_scope: &enforced_scope,
+        expectation: QueryExpectationContext {
+            expectation: &expectation,
+        },
+        progress: None,
+    };
+    let mut runner = tests::FakeQueryRunner::with_turn_results(vec![
+        Ok(r#"{"q":{"answer":"yes","evidence":"first turn succeeded"}}"#.to_string()),
+        Ok(r#"{"wrong":{"answer":"yes","evidence":"wrong short ID"}}"#.to_string()),
+        Ok(r#"{"q":{"answer":"yes","evidence":"fresh retry succeeded"}}"#.to_string()),
+    ]);
+    let mut caches = CheckRunCaches::new();
+    let mut interrogation_session =
+        InterrogationSession::new(true, caches.temporary_directory_allocator.clone()).unwrap();
 
-    #[test] // xpec: Ky
-    fn ask_temporary_expectation_reports_answer_without_result_record() {
-        let root = temp_root("ask-temporary-expectation");
-        let config = CheckConfig {
-            version: 1,
-            agent: AgentConfig::implementation_default(),
-            expectations: Vec::new(),
-        };
-        let runtime = CheckRuntime::in_place(&root, &config, true);
-        let expectation = ResolvedExpectation {
-            number: 0,
-            id: String::new(),
-            display_id: "q".to_string(),
-            to: crate::config_types::ExpectationTo::Agent,
-            rank: 0,
-            question: "Does ask use a temporary xpec?".to_string(),
-            expected_answer: String::new(),
-            question_context: String::new(),
-            diff_from: DEFAULT_DIFF_FROM.to_string(),
-            target: None,
-            question_answer_only: true,
-            agent: config.agent.clone(),
-            cooldown: None,
-        };
-        let enforced_scope = full_scope();
-        let request = QueryRequest {
-            question: &expectation.question,
-            enforced_scope: &enforced_scope,
-            expectation: QueryExpectationContext {
-                expectation: &expectation,
-            },
-            progress: None,
-        };
-        let mut runner =
-            FakeQueryRunner::new(r#"{"q":{"answer":"yes","evidence":"checked visible files"}}"#);
-        let mut state = InterrogationRunState::new(true).unwrap();
-        let mut caches = CheckRunCaches::new();
+    let first = run_query_with_runner(
+        &runtime,
+        request,
+        &mut runner,
+        None,
+        &mut interrogation_session,
+        &mut caches,
+    )
+    .unwrap();
+    let retry = run_query_with_runner(
+        &runtime,
+        request,
+        &mut runner,
+        None,
+        &mut interrogation_session,
+        &mut caches,
+    )
+    .unwrap();
 
-        let result = run_query_with_runner(
-            &runtime,
-            request,
-            &mut runner,
-            None,
-            &mut state,
-            &mut caches,
-        )
-        .unwrap();
+    assert_eq!(first.answer.observed, "yes");
+    assert_eq!(retry.answer.observed, "yes");
+    assert_eq!(runner.ask_thread_ids, ["thread-1", "thread-1", "thread-2"]);
+    let _ = std::fs::remove_dir_all(&root);
+}
 
-        let _ = fs::remove_dir_all(&root);
-        assert_eq!(runner.ask_count, 1);
-        assert_eq!(result.answer.observed, "yes");
-        assert_eq!(
-            result.answer.evidence.as_deref(),
-            Some("checked visible files")
-        );
-    }
+#[cfg(test)]
+#[test] // xpec: qv
+fn first_turn_short_id_mismatch_returns_an_error_without_retry() {
+    let root = tests::temp_root("first-turn-short-id-mismatch");
+    let config = crate::config_types::CheckConfig {
+        version: 1,
+        agent: crate::config_types::AgentConfig::implementation_default(),
+        expectations: Vec::new(),
+    };
+    let runtime = CheckRuntime::in_place(&root, &config, true);
+    let expectation = temporary_query_expectation(
+        &config,
+        "Does a first-turn short-ID mismatch avoid a retry?",
+    );
+    let enforced_scope = crate::hash::full_scope();
+    let request = QueryRequest {
+        question: &expectation.question,
+        enforced_scope: &enforced_scope,
+        expectation: QueryExpectationContext {
+            expectation: &expectation,
+        },
+        progress: None,
+    };
+    let mut runner = tests::FakeQueryRunner::with_turn_results(vec![Ok(
+        r#"{"wrong":{"answer":"yes","evidence":"wrong short ID"}}"#.to_string(),
+    )]);
+    let mut caches = CheckRunCaches::new();
+    let mut interrogation_session =
+        InterrogationSession::new(true, caches.temporary_directory_allocator.clone()).unwrap();
 
-    #[test] // xpec: Ky
-    fn ask_temporary_expectation_does_not_write_git_backed_xpec_state() {
-        let root = temp_git_root("ask-no-xpec-state");
-        let config = CheckConfig {
-            version: 1,
-            agent: AgentConfig::implementation_default(),
-            expectations: Vec::new(),
-        };
-        let tree_source = TreeSource::Staged;
-        let staged_view =
-            StagedWorktreeView::apply_for_tree_source(&root, tree_source.clone()).unwrap();
-        let checked_tree_oid = staged_tree_oid(&root).unwrap();
-        let tree_context = CheckTreeContext {
-            against_tree_oid: checked_tree_oid.clone(),
-            checked_tree_oid,
-            checked_file_count: 0,
-            prompt_git_environment: Vec::new(),
-        };
-        let runtime = CheckRuntime::materialized(
-            &root,
-            &staged_view,
-            &tree_source,
-            tree_context,
-            &config,
-            true,
-        );
-        let expectation = ResolvedExpectation {
-            number: 0,
-            id: String::new(),
-            display_id: "q".to_string(),
-            to: crate::config_types::ExpectationTo::Agent,
-            rank: 0,
-            question: "Does ask avoid xpec state?".to_string(),
-            expected_answer: String::new(),
-            question_context: String::new(),
-            diff_from: DEFAULT_DIFF_FROM.to_string(),
-            target: None,
-            question_answer_only: true,
-            agent: config.agent.clone(),
-            cooldown: None,
-        };
-        let enforced_scope = full_scope();
-        let request = QueryRequest {
-            question: &expectation.question,
-            enforced_scope: &enforced_scope,
-            expectation: QueryExpectationContext {
-                expectation: &expectation,
-            },
-            progress: None,
-        };
-        let mut runner = FakeQueryRunner::new(
-            r#"{"q":{"answer":"yes","evidence":"checked staged files","qScopeSuggestion":["."]}}"#,
-        );
-        let mut state = InterrogationRunState::new(true).unwrap();
-        let mut caches = CheckRunCaches::new();
+    let result = run_query_with_runner(
+        &runtime,
+        request,
+        &mut runner,
+        None,
+        &mut interrogation_session,
+        &mut caches,
+    )
+    .unwrap();
 
-        let result = run_query_with_runner(
-            &runtime,
-            request,
-            &mut runner,
-            None,
-            &mut state,
-            &mut caches,
-        )
-        .unwrap();
+    assert!(result.answer.error.is_some());
+    assert!(result
+        .answer
+        .evidence
+        .as_deref()
+        .is_some_and(|evidence| evidence.contains("short ID")));
+    assert_eq!(runner.ask_thread_ids, ["thread-1"]);
+    let _ = std::fs::remove_dir_all(&root);
+}
 
-        let xpec_state_dir = root.join(".git").join("canon").join("xpecs");
-        assert_eq!(
-            result.answer.observed, "yes",
-            "{:?}",
-            result.answer.evidence
-        );
-        assert!(!xpec_state_dir.exists());
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    struct FakeQueryRunner {
-        response: String,
-        ask_count: usize,
-    }
-
-    impl FakeQueryRunner {
-        fn new(response: &str) -> FakeQueryRunner {
-            FakeQueryRunner {
-                response: response.to_string(),
-                ask_count: 0,
-            }
-        }
-    }
-
-    impl EvaluatorRunner for FakeQueryRunner {
-        fn start_session(
-            &mut self,
-            _session_cwd: &Path,
-            _template_artifact_directory: &Path,
-            _base_instructions: &str,
-            _developer_instructions: &str,
-            _agent: &AgentConfig,
-            _model: Option<&str>,
-            _thinking: &str,
-            _scope: &[String],
-            _dynamic_tools: &[serde_json::Value],
-        ) -> Result<String, crate::evaluator::EvaluatorError> {
-            Ok("session".to_string())
-        }
-
-        fn ask(
-            &mut self,
-            _session_id: &str,
-            _prompt: &str,
-            _model: Option<&str>,
-            _thinking: &str,
-            _output_schema: &serde_json::Value,
-            _dynamic_tool_handler: Option<&mut dyn crate::evaluator::EvaluatorDynamicToolHandler>,
-        ) -> Result<String, crate::evaluator::EvaluatorError> {
-            self.ask_count += 1;
-            Ok(self.response.clone())
-        }
-
-        fn take_last_turn_usage(&mut self) -> Option<EvaluatorTurnUsage> {
-            Some(EvaluatorTurnUsage {
-                thread_id: "session".to_string(),
-                turn_id: "turn".to_string(),
-                usage: TokenUsage::default(),
-                token_usage_updates: Vec::new(),
-                context_compaction_events: Vec::new(),
-            })
-        }
-
-        fn set_progress_reporter(
-            &mut self,
-            _progress: Option<crate::evaluator::EvaluatorProgress>,
-        ) {
-        }
-    }
-
-    fn temp_root(label: &str) -> PathBuf {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "canon-query-test-{label}-{}-{unique}",
-            std::process::id()
-        ));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        root
-    }
-
-    fn temp_git_root(label: &str) -> PathBuf {
-        let root = temp_root(label);
-        git(&root, &["init", "--quiet"]);
-        root
-    }
-
-    fn git(root: &Path, args: &[&str]) {
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(root)
-            .output()
-            .unwrap();
-        // xpec: Ky
-        assert!(
-            output.status.success(),
-            "git {:?} failed: {}",
-            args,
-            String::from_utf8_lossy(&output.stderr)
-        );
+#[cfg(test)]
+fn temporary_query_expectation(
+    config: &crate::config_types::CheckConfig,
+    question: &str,
+) -> ResolvedExpectation {
+    ResolvedExpectation {
+        kind: crate::check::core::ResolvedExpectationKind::TemporaryQuery,
+        display_id: "q".to_string(),
+        to: crate::config_types::ExpectationTo::Agent,
+        rank: 0,
+        question: question.to_string(),
+        expected_answer: String::new(),
+        question_context: String::new(),
+        diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
+        target: None,
+        agent: config.agent.clone(),
+        cooldown: None,
+        q_scope: Default::default(),
     }
 }

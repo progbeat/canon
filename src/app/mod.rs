@@ -1,7 +1,9 @@
-pub(crate) const APP_SERVER_TURN_TIMEOUT_SECS: u64 = 300;
+//! Codex app-server integration.
+//!
+//! `process` owns child lifecycle and runner assembly, while `protocol` owns
+//! wire values.
 
 mod process;
 mod protocol;
-mod server;
 
-pub(crate) use server::LazyAppServerRunner;
+pub(crate) use process::LazyAppServerRunner;

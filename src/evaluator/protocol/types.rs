@@ -2,7 +2,7 @@ use crate::config_types::AgentConfig;
 use crate::evaluator::turn::EvaluatorFailureKind;
 use crate::evaluator::EvaluatorProgress;
 use crate::logs::DiagnosticLogError;
-use crate::token_usage_types::EvaluatorTurnUsage;
+use crate::token_usage::EvaluatorTurnUsage;
 use serde_json::Value;
 use std::path::Path;
 
@@ -41,27 +41,29 @@ pub(crate) trait EvaluatorDynamicToolHandler {
 }
 
 pub(crate) trait EvaluatorRunner {
-    // Session startup prepares evaluator context but does not send the
-    // expectation prompt. Progress-timeline request kinds belong to `ask`
-    // calls, where a turn starts, and to the higher-level fallback/follow-up
-    // orchestration around those turns.
+    fn evaluator_dynamic_tools(&self) -> Result<Vec<Value>, EvaluatorError> {
+        Ok(Vec::new())
+    }
+
+    // Thread startup receives already-rendered instruction values but does not
+    // send the turn task input. Agent-facing source templates are owned by
+    // `resources/prompts/` and the protocol prompt renderer.
     #[allow(clippy::too_many_arguments)]
-    fn start_session(
+    fn start_thread(
         &mut self,
-        session_cwd: &Path,
+        thread_cwd: &Path,
         template_artifact_directory: &Path,
-        base_instructions: &str,
-        developer_instructions: &str,
+        rendered_base_text: &str,
+        rendered_developer_text: &str,
         agent: &AgentConfig,
         model: Option<&str>,
         thinking: &str,
-        scope: &[String],
         dynamic_tools: &[Value],
     ) -> Result<String, EvaluatorError>;
     fn ask(
         &mut self,
-        session_id: &str,
-        prompt: &str,
+        thread_id: &str,
+        task_input: &str,
         model: Option<&str>,
         thinking: &str,
         output_schema: &Value,
@@ -73,7 +75,7 @@ pub(crate) trait EvaluatorRunner {
     // for failures before an evaluator turn existed.
     fn take_last_turn_usage(&mut self) -> Option<EvaluatorTurnUsage>;
 
-    fn take_retired_sessions(&mut self) -> Vec<String> {
+    fn take_retired_threads(&mut self) -> Vec<String> {
         Vec::new()
     }
 
@@ -102,6 +104,16 @@ impl EvaluatorError {
             kind: Some(kind),
             message: message.into(),
         }
+    }
+
+    pub(crate) fn interrupted() -> EvaluatorError {
+        EvaluatorError::failure(EvaluatorFailureKind::Interrupted, "interrupted")
+    }
+
+    pub(crate) fn with_appended_message(mut self, message: impl std::fmt::Display) -> Self {
+        self.message.push_str("; ");
+        self.message.push_str(&message.to_string());
+        self
     }
 
     pub(crate) fn kind(&self) -> Option<EvaluatorFailureKind> {

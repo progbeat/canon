@@ -56,7 +56,7 @@ fn required_runtime_log_fields(event: &str) -> Option<&'static [&'static str]> {
         "agent.turn_error" => Some(&["id", "attempt", "reason", "response"]),
         "agent.token_usage" => Some(&["id", "attempt", "reason", "threadId", "turnId"]),
         "cache.hit" => Some(&["id", "result", "scope"]),
-        "check.start" => Some(&["selected"]),
+        "check.start" => Some(&["candidates"]),
         "expectation.result" | "interrogation.result" => {
             Some(&["id", "observed", "evidence", "scope", "prompt", "expected"])
         }
@@ -91,7 +91,7 @@ fn required_runtime_log_fields(event: &str) -> Option<&'static [&'static str]> {
             "thinking",
             "baseInstructions",
             "developerInstructions",
-            "reuseContext",
+            "evaluationContext",
         ]),
         "check.finish" => Some(&["query"]),
         "xpec_state.retention" => Some(&["removed", "kept"]),

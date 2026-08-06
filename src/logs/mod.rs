@@ -1,3 +1,9 @@
+//! Bounded diagnostic-log persistence.
+//!
+//! The sibling modules are the focused stages and policies of one facility:
+//! event construction, rendering, locking, rotation, filesystem access, and
+//! writing according to the resolved log configuration.
+
 mod config;
 mod error;
 mod events;

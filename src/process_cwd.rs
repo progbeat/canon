@@ -6,7 +6,7 @@ static PROCESS_CWD_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 pub(crate) fn with_current_dir<T, F>(dir: &Path, f: F) -> Result<T, String>
 where
-    F: FnOnce() -> T,
+    F: FnOnce(&Path) -> T,
 {
     // Process cwd is global, so temporary cwd changes live behind one shared
     // helper instead of component-private locks.
@@ -21,13 +21,23 @@ where
             err
         )
     })?;
-    env::set_current_dir(dir)
-        .map_err(|err| format!("failed to enter current dir {}: {}", dir.display(), err))?;
+    let absolute_dir = if dir.is_absolute() {
+        dir.to_path_buf()
+    } else {
+        previous.join(dir)
+    };
+    env::set_current_dir(&absolute_dir).map_err(|err| {
+        format!(
+            "failed to enter current dir {}: {}",
+            absolute_dir.display(),
+            err
+        )
+    })?;
     let restore = RestoreCurrentDir {
         previous,
         restored: false,
     };
-    let result = f();
+    let result = f(&absolute_dir);
     restore.restore()?;
     Ok(result)
 }

@@ -1,6 +1,6 @@
 //! Identifies the repository view used while expanding check configuration.
 
-use crate::check::config::foreach_paths::expand_staged_foreach_paths_from_listing;
+use crate::check::config::foreach_paths::expand_foreach_paths_from_listing;
 use crate::check::config::foreach_paths::resolve_foreach_read_path;
 use crate::git::TreeSource;
 use crate::repo_inspection::RepoInspectionCache;
@@ -24,7 +24,7 @@ impl CheckConfigSource {
             CheckConfigSource::Tree(source) => cache.tree_blob_paths(root, source)?,
             CheckConfigSource::InPlace => cache.in_place_file_paths(root)?,
         };
-        expand_staged_foreach_paths_from_listing(config_path, glob, &paths)
+        expand_foreach_paths_from_listing(config_path, glob, &paths)
     }
 
     pub(crate) fn file_content(

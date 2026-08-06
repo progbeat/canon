@@ -2,43 +2,80 @@ use super::logging::{ask_and_log, LoggedTurnRequest};
 use super::parse::{parse_visible_evaluator_response, unparsable_response_answer};
 use super::{EvaluatorTurnContext, ParsedTurnResponse};
 use crate::check::EvaluatorResponseSchemaScope;
-use crate::config_types::AgentConfig;
-use crate::evaluator::protocol::response_cache::response_excerpt;
+use crate::evaluator::protocol::response_parse_memo::response_excerpt;
 use crate::evaluator::{
-    EvaluatorDynamicToolHandler, EvaluatorError, EvaluatorFailureKind, EvaluatorResponseParseCache,
-    EvaluatorRunner,
+    EvaluatorDynamicToolHandler, EvaluatorError, EvaluatorFailureKind, EvaluatorRunner,
+    InvocationResponseParseMemo,
 };
 use crate::logs::DiagnosticLogWriter;
 use serde_json::Value;
-use std::path::Path;
 
-#[allow(clippy::too_many_arguments)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EvaluatorAttemptReason {
+    Initial,
+    ModelFallback,
+    ThreadRestart,
+}
+
+impl EvaluatorAttemptReason {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Initial => "initial",
+            Self::ModelFallback => "model-fallback",
+            Self::ThreadRestart => "thread-restart",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct EvaluatorAttempt {
+    number: usize,
+    reason: EvaluatorAttemptReason,
+}
+
+#[derive(Default)]
+pub(crate) struct EvaluatorAttemptSequence {
+    issued: usize,
+}
+
+impl EvaluatorAttemptSequence {
+    pub(crate) fn next(&mut self, reason: EvaluatorAttemptReason) -> EvaluatorAttempt {
+        self.issued += 1;
+        EvaluatorAttempt {
+            number: self.issued,
+            reason,
+        }
+    }
+}
+
+pub(crate) struct EvaluatorAttemptRequest<'a> {
+    pub(crate) attempt: EvaluatorAttempt,
+    pub(crate) turn: &'a EvaluatorTurnContext<'a>,
+    pub(crate) task_input: &'a str,
+    pub(crate) schema_scope: EvaluatorResponseSchemaScope,
+    pub(crate) output_schema: &'a Value,
+    pub(crate) short_id: &'a str,
+    pub(crate) answered_short_ids: &'a [String],
+    pub(crate) expectation_id: Option<&'a str>,
+}
+
 pub(crate) fn ask_once<R: EvaluatorRunner>(
     runner: &mut R,
-    turn: &EvaluatorTurnContext<'_>,
-    prompt: &str,
-    agent: &AgentConfig,
-    schema_scope: EvaluatorResponseSchemaScope,
-    output_schema: &Value,
-    short_id: &str,
-    answered_short_ids: &[String],
-    _visible_scope: &[String],
-    _session_root: &Path,
-    parser_cache: &mut EvaluatorResponseParseCache,
+    response_parse_memo: &mut InvocationResponseParseMemo,
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
-    expectation_id: Option<&str>,
+    request: EvaluatorAttemptRequest<'_>,
     dynamic_tool_handler: Option<&mut dyn EvaluatorDynamicToolHandler>,
 ) -> Result<ParsedTurnResponse, EvaluatorError> {
     let response = ask_and_log(
         runner,
         diagnostic_log,
         LoggedTurnRequest {
-            turn,
-            prompt,
-            expectation_id,
-            attempt: 1,
-            reason: "initial",
-            output_schema,
+            turn: request.turn,
+            task_input: request.task_input,
+            expectation_id: request.expectation_id,
+            attempt: request.attempt.number,
+            reason: request.attempt.reason.label(),
+            output_schema: request.output_schema,
         },
         dynamic_tool_handler,
     )?;
@@ -48,15 +85,17 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
     // future check turn batches multiple requested interrogations, this
     // boundary must change from `short_id` to the requested short-ID set.
     let (parsed, schema_valid) = match parse_visible_evaluator_response(
-        parser_cache,
+        response_parse_memo,
         &response.text,
-        agent,
-        schema_scope,
-        short_id,
-        answered_short_ids,
+        request.schema_scope,
+        request.short_id,
+        request.answered_short_ids,
     ) {
         Ok(answer) => (answer, true),
-        Err(err) if err.is_short_id_response_error() => {
+        // [qv] A ShortIdResponse failure means this evaluator thread already
+        // produced a valid turn. The lifecycle can therefore interpret this
+        // failure kind as an unconditional fresh-thread retry request.
+        Err(err) if err.is_short_id_response_error() && !request.answered_short_ids.is_empty() => {
             return Err(EvaluatorError::failure(
                 EvaluatorFailureKind::ShortIdResponse,
                 format!(
@@ -66,9 +105,15 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
                 ),
             ));
         }
-        // Parse failures become a human-review answer. They do not trigger a
-        // second evaluator request, so there is no repair request kind for the
-        // progress timeline to mark.
+        // [qv,w] A first-turn short-ID mismatch and all other parse failures
+        // become a human-review answer without a thread retry. This turn
+        // boundary has already logged the raw exchange; it deliberately does
+        // not claim the final expectation outcome. Normal check execution
+        // converts the answer to a CheckRecord, then
+        // `check::engine::execute::expectation::finish` writes both the
+        // `expectation.result` and applicable `expectation.review_required`
+        // runtime events. A parse failure does not trigger a second evaluator
+        // request, so there is no repair request kind for the timeline to mark.
         Err(err) => (unparsable_response_answer(&err, &response.text), false),
     };
 
@@ -77,4 +122,36 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
         context_compacted: response.context_compacted,
         schema_valid,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EvaluatorAttempt, EvaluatorAttemptReason, EvaluatorAttemptSequence};
+
+    #[test] // xpec: gN
+    fn attempt_sequence_numbers_distinct_retry_reasons() {
+        let mut attempts = EvaluatorAttemptSequence::default();
+
+        assert_eq!(
+            attempts.next(EvaluatorAttemptReason::Initial),
+            EvaluatorAttempt {
+                number: 1,
+                reason: EvaluatorAttemptReason::Initial,
+            }
+        );
+        assert_eq!(
+            attempts.next(EvaluatorAttemptReason::ThreadRestart),
+            EvaluatorAttempt {
+                number: 2,
+                reason: EvaluatorAttemptReason::ThreadRestart,
+            }
+        );
+        assert_eq!(
+            attempts.next(EvaluatorAttemptReason::ModelFallback),
+            EvaluatorAttempt {
+                number: 3,
+                reason: EvaluatorAttemptReason::ModelFallback,
+            }
+        );
+    }
 }

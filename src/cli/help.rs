@@ -5,7 +5,7 @@ use clap::Command as ClapCommand;
 use std::ffi::OsString;
 use std::io::{self, Write};
 
-pub(super) fn print_help_if_requested(
+pub(crate) fn print_help_if_requested(
     args: &[OsString],
     command: ClapCommand,
 ) -> Result<bool, CommandError> {

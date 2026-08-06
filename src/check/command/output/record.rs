@@ -1,306 +1,59 @@
-use super::escape::{escape_check_output_text, push_escaped_check_output_line};
-use super::shared::{write_stdout_record, SharedCheckOutput};
-use crate::check::core::{CheckRecord, ERROR_SCOPE_TOO_NARROW};
-use crate::config_types::ExpectationTo;
-use crate::evaluator::{EvaluatorProgress, EvaluatorProgressMarker};
-use crate::json_util::compact_json_string_array;
-use std::io::Write;
-use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+mod progress;
+
+use super::escape::{
+    escape_check_output_text, push_diff_from_line, push_error_and_evidence_lines,
+    push_escaped_check_output_line, push_observed_and_evidence_lines,
 };
-use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use super::shared::write_stdout_record;
+#[cfg(test)]
+use super::shared::SharedCheckOutput;
+use crate::check::core::CheckRecord;
+use crate::config_types::ExpectationTo;
+use crate::evaluator::PROGRESS_TIMELINE_MARKER_INTERVAL;
+use std::io::Write;
+use std::time::Duration;
 
-const PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL: Duration = Duration::from_secs(60);
+pub(crate) use progress::{
+    publish_expectation_report, start_query_report_output, LiveProgressOutput,
+};
 
-// Progress timeline ownership:
-// - `start_expectation_report_output` writes and flushes `<short ID>` before
-//   evaluator work starts; that prefix is the started public report for the
-//   expectation, not a timeline marker.
-// - `start_query_report_output` has no prefix. It only performs the required
-//   pre-marker stdout flush for `canon ask`.
-// - the progress worker writes and flushes elapsed markers every minute while
-//   evaluator work is still active.
-// - completion writes the final marker before the result suffix or response
-//   block. The final marker is emitted even when the final interval is 0
-//   seconds.
-// - query completion writes the newline after those markers before the query
-//   response, so completed `canon ask` stdout starts with a standalone progress
-//   timeline line.
-// Event-to-marker priority and symbols live in `src/evaluator/progress.rs`.
-pub(crate) struct StartedExpectationReportOutput {
-    output: SharedCheckOutput,
-    stop: Sender<()>,
-    active: Arc<AtomicBool>,
-    progress: EvaluatorProgress,
-    timeline: Arc<Mutex<ElapsedProgressTimelineState>>,
-    worker: Option<JoinHandle<Result<(), String>>>,
-    prefix_completed: bool,
-}
+const CSI_SAVE_CURSOR: &str = "\u{1b}[s";
+// [Eg] These exact byte sequences are the interactive caller-output protocol
+// for its two consumers: a POSIX terminal and Codex's shell-output renderer.
+// A terminal-control abstraction would reproduce the same bytes while hiding
+// the renderer requirement that makes the final conceal/reset pair necessary.
+// They are compile-time literals appended once to an already rendered result;
+// this output path performs no repository, filesystem, parsing, or hashing work
+// whose result could be reused.
+const INTERACTIVE_CALLER_RESULT_REPLACEMENT_PREFIX: &str = "\u{1b}[u\u{1b}[0J\r\u{1b}[0m";
+const INTERACTIVE_CALLER_RESULT_RENDERER_SAFE_LINE_END: &str = "\u{1b}[8m\n\u{1b}[0m";
 
-pub(crate) struct FinishedExpectationReportOutput {
+pub(crate) struct ExpectationReportWriteOutcome {
     short_id_was_printed: bool,
     result_was_printed: bool,
-    needs_stderr_completion_notice: bool,
+    stdout_result_append_had_problem: bool,
 }
 
-impl FinishedExpectationReportOutput {
-    fn new(
+impl ExpectationReportWriteOutcome {
+    pub(super) fn new(
         short_id_was_printed: bool,
         result_was_printed: bool,
-        needs_stderr_completion_notice: bool,
-    ) -> FinishedExpectationReportOutput {
-        FinishedExpectationReportOutput {
+        stdout_result_append_had_problem: bool,
+    ) -> ExpectationReportWriteOutcome {
+        ExpectationReportWriteOutcome {
             short_id_was_printed,
             result_was_printed,
-            needs_stderr_completion_notice,
+            stdout_result_append_had_problem,
         }
-    }
-
-    pub(crate) fn short_id_was_printed(&self) -> bool {
-        self.short_id_was_printed
     }
 
     pub(crate) fn anything_was_reported(&self) -> bool {
         self.short_id_was_printed || self.result_was_printed
     }
 
-    pub(crate) fn needs_stderr_completion_notice(&self) -> bool {
-        self.needs_stderr_completion_notice
+    pub(crate) fn needs_stderr_result_notice(&self) -> bool {
+        self.stdout_result_append_had_problem || !self.anything_was_reported()
     }
-}
-
-struct ElapsedProgressTimelineState {
-    next_marker_at: Instant,
-    progress_timeline_tail: [Option<EvaluatorProgressMarker>; 2],
-}
-
-pub(crate) fn start_expectation_report_output(
-    output: SharedCheckOutput,
-    display_id: &str,
-) -> StartedExpectationReportOutput {
-    start_progress_report_output(output, display_id, "started expectation report prefix")
-}
-
-pub(crate) fn start_query_report_output(
-    output: SharedCheckOutput,
-) -> StartedExpectationReportOutput {
-    start_progress_report_output(output, "", "started query report timeline")
-}
-
-fn start_progress_report_output(
-    output: SharedCheckOutput,
-    prefix: &str,
-    description: &str,
-) -> StartedExpectationReportOutput {
-    let mut immediate_output = output.clone();
-    let prefix_completed =
-        write_stdout_record(&mut immediate_output, prefix.as_bytes(), description).is_ok();
-
-    let (stop, stop_requested) = mpsc::channel();
-    let active = Arc::new(AtomicBool::new(true));
-    let worker_active = active.clone();
-    let progress = EvaluatorProgress::new();
-    let worker_progress = progress.clone();
-    let first_elapsed_marker_at = Instant::now() + PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL;
-    let elapsed_timeline = Arc::new(Mutex::new(ElapsedProgressTimelineState {
-        next_marker_at: first_elapsed_marker_at,
-        progress_timeline_tail: [None, None],
-    }));
-    let worker_timeline = elapsed_timeline.clone();
-    let mut progress_output = output.clone();
-    let worker = thread::spawn(move || loop {
-        match stop_requested.recv_timeout(wait_for_next_elapsed_marker(&worker_timeline)) {
-            Ok(()) | Err(RecvTimeoutError::Disconnected) => return Ok(()),
-            Err(RecvTimeoutError::Timeout) => {
-                if !worker_active.load(Ordering::Acquire) {
-                    return Ok(());
-                }
-                let marker = elapsed_progress_marker_due(
-                    &worker_progress,
-                    &worker_timeline,
-                    Instant::now(),
-                )?;
-                if let Some(marker) = marker {
-                    record_progress_marker(&worker_timeline, marker)?;
-                    write_stdout_record(
-                        &mut progress_output,
-                        marker.as_str().as_bytes(),
-                        "check live report progress marker",
-                    )?;
-                }
-            }
-        }
-    });
-
-    StartedExpectationReportOutput {
-        output,
-        stop,
-        active,
-        progress,
-        timeline: elapsed_timeline,
-        worker: Some(worker),
-        prefix_completed,
-    }
-}
-
-impl StartedExpectationReportOutput {
-    pub(crate) fn progress(&self) -> EvaluatorProgress {
-        self.progress.clone()
-    }
-
-    pub(crate) fn finish_with_record(
-        mut self,
-        record: &CheckRecord,
-    ) -> FinishedExpectationReportOutput {
-        // Once the report prefix is visible, final result output has priority
-        // over delayed progress-worker cleanup errors.
-        let _ = self.stop_progress_worker();
-        let mut output = self.output.clone();
-        let mut completion_problem = false;
-        if self.prefix_completed {
-            if self.write_completion_markers(&mut output).is_err() {
-                completion_problem = true;
-            }
-            if assert_final_no_progress_turn_timeout_suffix(&self.timeline, record).is_err() {
-                completion_problem = true;
-            }
-        }
-        let result_suffix = if self.prefix_completed {
-            render_check_output_record_status_and_details(record)
-        } else {
-            render_check_output_record_with_initial_marker_timeline(record)
-        };
-        let result_was_printed =
-            write_stdout_record(&mut output, result_suffix.as_bytes(), "check result").is_ok();
-        FinishedExpectationReportOutput::new(
-            self.prefix_completed,
-            result_was_printed,
-            completion_problem || !result_was_printed,
-        )
-    }
-
-    pub(crate) fn finish_with_query_output(mut self, query_output: &str) -> Result<(), String> {
-        let _ = self.stop_progress_worker();
-        if !self.prefix_completed {
-            return Err("failed to flush started query report timeline to stdout".to_string());
-        }
-        let mut output = self.output.clone();
-        self.write_completion_markers(&mut output)?;
-        write_stdout_record(&mut output, b"\n", "query progress timeline newline")?;
-        write_stdout_record(&mut output, query_output.as_bytes(), "query result")
-    }
-
-    fn stop_progress_worker(&mut self) -> Result<(), String> {
-        self.active.store(false, Ordering::Release);
-        let _ = self.stop.send(());
-        let Some(worker) = self.worker.take() else {
-            return Ok(());
-        };
-        worker
-            .join()
-            .map_err(|_| "check live report progress thread panicked".to_string())?
-    }
-
-    fn due_elapsed_progress_markers(&self) -> Result<Vec<EvaluatorProgressMarker>, String> {
-        completion_progress_markers_due(&self.progress, &self.timeline, Instant::now())
-    }
-
-    fn write_completion_markers(&self, output: &mut SharedCheckOutput) -> Result<(), String> {
-        for marker in self.due_elapsed_progress_markers()? {
-            record_progress_marker(&self.timeline, marker)?;
-            write_stdout_record(
-                output,
-                marker.as_str().as_bytes(),
-                "check live report progress marker",
-            )?;
-        }
-        Ok(())
-    }
-}
-
-fn record_progress_marker(
-    timeline: &Arc<Mutex<ElapsedProgressTimelineState>>,
-    marker: EvaluatorProgressMarker,
-) -> Result<(), String> {
-    let mut timeline = timeline
-        .lock()
-        .map_err(|_| "check live report progress state poisoned".to_string())?;
-    let next_tail = [timeline.progress_timeline_tail[1], Some(marker)];
-    timeline.progress_timeline_tail = next_tail;
-    Ok(())
-}
-
-fn assert_final_no_progress_turn_timeout_suffix(
-    timeline: &Arc<Mutex<ElapsedProgressTimelineState>>,
-    record: &CheckRecord,
-) -> Result<(), String> {
-    if !record.requires_human_review() {
-        return Ok(());
-    }
-    let timeline = timeline
-        .lock()
-        .map_err(|_| "check live report progress state poisoned".to_string())?;
-    if timeline.progress_timeline_tail[1] == Some(EvaluatorProgressMarker::TurnTimeout) {
-        assert_progress_timeline_suffix_is_idle_then_timeout(timeline.progress_timeline_tail)?;
-    }
-    Ok(())
-}
-
-fn assert_progress_timeline_suffix_is_idle_then_timeout(
-    progress_timeline_tail: [Option<EvaluatorProgressMarker>; 2],
-) -> Result<(), String> {
-    let expected = [
-        Some(EvaluatorProgressMarker::Idle),
-        Some(EvaluatorProgressMarker::TurnTimeout),
-    ];
-    if progress_timeline_tail == expected {
-        return Ok(());
-    }
-    Err("assert progress_timeline[-2:] == \"~×\" for no-progress turn timeout".to_string())
-}
-
-fn elapsed_progress_marker_due(
-    progress: &EvaluatorProgress,
-    timeline: &Arc<Mutex<ElapsedProgressTimelineState>>,
-    now: Instant,
-) -> Result<Option<EvaluatorProgressMarker>, String> {
-    let mut timeline = timeline
-        .lock()
-        .map_err(|_| "check live report progress state poisoned".to_string())?;
-    progress.elapsed_marker_due(
-        &mut timeline.next_marker_at,
-        now,
-        PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL,
-    )
-}
-
-fn completion_progress_markers_due(
-    progress: &EvaluatorProgress,
-    timeline: &Arc<Mutex<ElapsedProgressTimelineState>>,
-    now: Instant,
-) -> Result<Vec<EvaluatorProgressMarker>, String> {
-    let mut timeline = timeline
-        .lock()
-        .map_err(|_| "check live report progress state poisoned".to_string())?;
-    progress.completion_markers_due(
-        &mut timeline.next_marker_at,
-        now,
-        PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL,
-    )
-}
-
-fn wait_for_next_elapsed_marker(timeline: &Arc<Mutex<ElapsedProgressTimelineState>>) -> Duration {
-    timeline
-        .lock()
-        .map(|timeline| {
-            timeline
-                .next_marker_at
-                .saturating_duration_since(Instant::now())
-        })
-        .unwrap_or(PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL)
 }
 
 // Results that finish before a live evaluation report starts still have the
@@ -316,28 +69,91 @@ pub(crate) fn write_result_output_without_started_report(
     Ok(())
 }
 
-pub(crate) fn write_result_output_with_elapsed_timeline(
+pub(crate) fn write_caller_result_output_with_elapsed_timeline(
     result_output: &mut Option<&mut dyn Write>,
     record: &CheckRecord,
     elapsed: Duration,
 ) -> Result<(), String> {
     if let Some(writer) = result_output.as_mut() {
-        let completed_minutes =
-            elapsed.as_secs() / PROGRESS_TIMELINE_ELAPSED_MARKER_INTERVAL.as_secs();
-        let marker_count = usize::try_from(completed_minutes.saturating_add(1))
-            .map_err(|_| "progress timeline marker count exceeds platform limits".to_string())?;
-        let timeline = ".".repeat(marker_count);
+        let timeline = caller_progress_timeline(elapsed)?;
         let line = render_check_output_record_with_timeline(record, &timeline);
         write_stdout_record(*writer, line.as_bytes(), "check result")?;
     }
     Ok(())
 }
 
+pub(crate) fn render_caller_prompt(question: &str) -> String {
+    let mut prompt = String::new();
+    if crate::platform::process::interactive_check_terminal() {
+        prompt.push_str(CSI_SAVE_CURSOR);
+    }
+    prompt.push_str(&escape_check_output_text(question));
+    prompt.push(' ');
+    prompt
+}
+
+pub(crate) fn write_caller_result_output(
+    result_output: &mut Option<&mut dyn Write>,
+    record: &CheckRecord,
+    elapsed: Duration,
+) -> Result<(), String> {
+    write_caller_result_output_with_interactivity(
+        result_output,
+        record,
+        elapsed,
+        crate::platform::process::interactive_check_terminal(),
+    )
+}
+
+fn write_caller_result_output_with_interactivity(
+    result_output: &mut Option<&mut dyn Write>,
+    record: &CheckRecord,
+    elapsed: Duration,
+    interactive: bool,
+) -> Result<(), String> {
+    if !interactive {
+        return write_caller_result_output_with_elapsed_timeline(result_output, record, elapsed);
+    }
+    let Some(writer) = result_output.as_mut() else {
+        return Ok(());
+    };
+    let timeline = caller_progress_timeline(elapsed)?;
+    let suffix = render_check_output_record_status_and_details(record);
+    let (status, details) = suffix
+        .split_once('\n')
+        .expect("caller result status has a newline");
+    // [Eg] One byte stream must replace the saved prompt in a terminal and
+    // remain unambiguous in Codex's shell renderer. The replacement prefix
+    // restores the cursor and erases the terminal suffix. The renderer-safe
+    // line end hides the suffix retained by renderers that do not emulate
+    // erase-to-end-of-screen, then resets styling for the detail lines.
+    // Terminal-only erasure cannot affect such a renderer, while padding would
+    // require the unavailable display width of potentially Unicode text.
+    let line = format!(
+        "{INTERACTIVE_CALLER_RESULT_REPLACEMENT_PREFIX}{}{timeline}{status}{INTERACTIVE_CALLER_RESULT_RENDERER_SAFE_LINE_END}{details}",
+        record.display_id,
+    );
+    write_stdout_record(*writer, line.as_bytes(), "interactive caller result")
+}
+
+// [2gZ] A caller evaluation waits for human input and starts no evaluator turn,
+// so model-turn timeout and retry events cannot occur on this timeline. Its
+// elapsed full and final partial minutes therefore use the fallback `.` marker.
+fn caller_progress_timeline(elapsed: Duration) -> Result<String, String> {
+    let completed_minutes = elapsed.as_secs() / PROGRESS_TIMELINE_MARKER_INTERVAL.as_secs();
+    let marker_count = usize::try_from(completed_minutes.saturating_add(1))
+        .map_err(|_| "progress timeline marker count exceeds platform limits".to_string())?;
+    Ok(".".repeat(marker_count))
+}
+
 fn render_check_output_record_with_initial_marker_timeline(record: &CheckRecord) -> String {
     render_check_output_record_with_timeline(record, ".")
 }
 
-fn render_check_output_record_with_timeline(record: &CheckRecord, timeline: &str) -> String {
+pub(super) fn render_check_output_record_with_timeline(
+    record: &CheckRecord,
+    timeline: &str,
+) -> String {
     let mut output = record.display_id.clone();
     output.push_str(timeline);
     output.push_str(&render_check_output_record_status_and_details(record));
@@ -345,34 +161,21 @@ fn render_check_output_record_with_timeline(record: &CheckRecord, timeline: &str
 }
 
 pub(super) fn render_check_output_record_status_and_details(record: &CheckRecord) -> String {
-    // Public rendering receives final normalized records, not just evaluator
-    // response payloads. It renders the final CheckRecord as provided;
-    // selected-expectation execution asserts ScopeTooNarrow is never a final
-    // check result before this public-output boundary.
-    // xpec: RC
-    debug_assert_ne!(record.error.as_deref(), Some(ERROR_SCOPE_TOO_NARROW));
-    let expected = record.expected_answer_text().unwrap_or("");
-    let ask_mode = expected.is_empty();
+    let expected = record
+        .expected_answer_text()
+        .filter(|expected| !expected.is_empty())
+        .expect("canon check output requires a non-empty expected answer");
     if record.passed() {
-        return (if ask_mode { "\n" } else { " ok\n" }).to_string();
+        return " OK\n".to_string();
     }
     let mut output = String::new();
-    output.push_str(if ask_mode { "\n" } else { " fail\n" });
+    output.push_str(" FAIL\n");
     if let Some(error) = record.error.as_deref() {
-        output.push_str("error: ");
-        output.push_str(error);
-        output.push('\n');
-        if let Some(evidence) = record.evidence.as_deref() {
-            push_escaped_check_output_line(&mut output, "evidence", evidence);
-        }
+        push_error_and_evidence_lines(&mut output, error, record.evidence.as_deref());
         return output;
     }
     if record.to == ExpectationTo::Caller {
-        push_escaped_check_output_line(
-            &mut output,
-            "expected",
-            record.expected_answer_text().unwrap_or(""),
-        );
+        push_escaped_check_output_line(&mut output, "expected", expected);
         return output;
     }
     if record.to == ExpectationTo::Shell {
@@ -383,209 +186,26 @@ pub(super) fn render_check_output_record_status_and_details(record: &CheckRecord
         }
         output.push_str(&format!(
             "Command exited with code {} (expected {}).\n",
-            record.observed,
-            record.expected_answer_text().unwrap_or("")
+            record.observed, expected
         ));
         return output;
     }
-    if !ask_mode {
-        output.push_str(&escape_check_output_text(record.question_text()));
-        output.push('\n');
-    }
-    // The `Diff-from:` line is part of the failed/error result block only when
-    // the record came from a Git-backed interrogation with a resolved diff
-    // base. Cached records reconstruct the same in-memory abbreviation before
+    output.push_str(&escape_check_output_text(record.question_text()));
+    output.push('\n');
+    // The `diff-from:` line is part of a wrong-answer result only when the
+    // record came from a Git-backed interrogation with a resolved diff base.
+    // Cached records reconstruct the same in-memory abbreviation before
     // reaching this renderer.
     if let (Some(diff_from), Some(diff_from_tree_oid_abbrev)) = (
         record.diff_from.as_deref(),
         record.diff_from_tree_oid_abbrev.as_deref(),
     ) {
-        output.push_str("diff-from: ");
-        output.push_str(diff_from_tree_oid_abbrev);
-        output.push_str(" (");
-        output.push_str(diff_from);
-        output.push_str(")\n");
+        push_diff_from_line(&mut output, diff_from, diff_from_tree_oid_abbrev);
     }
-    if !ask_mode {
-        push_escaped_check_output_line(&mut output, "expected", expected);
-    }
-    push_escaped_check_output_line(&mut output, "observed", &record.observed);
-    if let Some(evidence) = record.evidence.as_deref() {
-        push_escaped_check_output_line(&mut output, "evidence", evidence);
-    }
-    if ask_mode {
-        if let Some(suggestion) = record.question_scope_suggestion.as_deref() {
-            output.push_str("q-scope-suggestion: ");
-            output.push_str(&compact_json_string_array(suggestion));
-            output.push('\n');
-        }
-    }
+    push_escaped_check_output_line(&mut output, "expected", expected);
+    push_observed_and_evidence_lines(&mut output, &record.observed, record.evidence.as_deref());
     output
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        assert_final_no_progress_turn_timeout_suffix, record_progress_marker,
-        start_expectation_report_output, ElapsedProgressTimelineState, SharedCheckOutput,
-    };
-    use crate::check::core::{CheckRecord, CheckResult, INTERNAL_ERROR_UNPARSABLE};
-    use crate::evaluator::EvaluatorProgressMarker;
-    use std::io::{self, Write};
-    use std::sync::{Arc, Mutex};
-    use std::time::Instant;
-
-    #[test] // xpec: Od,sy
-    fn turn_timeout_progress_marker_is_allowed_after_idle() {
-        let timeline = test_timeline();
-
-        record_progress_marker(&timeline, EvaluatorProgressMarker::Idle).unwrap();
-        record_progress_marker(&timeline, EvaluatorProgressMarker::TurnTimeout).unwrap();
-        assert_final_no_progress_turn_timeout_suffix(&timeline, &timeout_error_record()).unwrap();
-    }
-
-    #[test] // xpec: Od,sy
-    fn final_turn_timeout_progress_marker_error_keeps_report_path_alive() {
-        let timeline = test_timeline();
-
-        record_progress_marker(&timeline, EvaluatorProgressMarker::TurnTimeout).unwrap();
-        let err = assert_final_no_progress_turn_timeout_suffix(&timeline, &timeout_error_record())
-            .unwrap_err();
-
-        assert_eq!(
-            err,
-            "assert progress_timeline[-2:] == \"~×\" for no-progress turn timeout"
-        );
-    }
-
-    #[test] // xpec: sy,Od,90
-    fn invalid_turn_timeout_timeline_still_writes_final_result() {
-        let bytes = Arc::new(Mutex::new(Vec::new()));
-        let output = SharedCheckOutput::new(Box::new(CapturedOutput {
-            bytes: bytes.clone(),
-        }));
-        let report = start_expectation_report_output(output, "j");
-        report.progress().record_turn_timeout();
-
-        let _ = report.finish_with_record(&timeout_error_record());
-
-        let output = String::from_utf8(bytes.lock().unwrap().clone()).unwrap();
-        assert!(output.contains("j× fail\n"));
-        assert!(output.contains("error: unparsable\n"));
-    }
-
-    #[test] // xpec: 90
-    fn check_error_output_prints_error_without_inline_escaping() {
-        let bytes = Arc::new(Mutex::new(Vec::new()));
-        let output = SharedCheckOutput::new(Box::new(CapturedOutput {
-            bytes: bytes.clone(),
-        }));
-        let report = start_expectation_report_output(output, "j");
-        let mut record = timeout_error_record();
-        record.error = Some("first\nsecond".to_string());
-
-        let _ = report.finish_with_record(&record);
-
-        assert!(String::from_utf8(bytes.lock().unwrap().clone())
-            .unwrap()
-            .contains("error: first\nsecond\n"));
-    }
-
-    #[test] // xpec: 90
-    fn check_diff_from_output_is_not_inline_escaped() {
-        let bytes = Arc::new(Mutex::new(Vec::new()));
-        let output = SharedCheckOutput::new(Box::new(CapturedOutput {
-            bytes: bytes.clone(),
-        }));
-        let report = start_expectation_report_output(output, "j");
-        let mut record = timeout_error_record();
-        record.error = None;
-        record.observed = "no".to_string();
-        record.diff_from = Some("head\nbase".to_string());
-        record.diff_from_tree_oid_abbrev = Some("abc123".to_string());
-
-        let _ = report.finish_with_record(&record);
-
-        assert!(String::from_utf8(bytes.lock().unwrap().clone())
-            .unwrap()
-            .contains("diff-from: abc123 (head\nbase)\n"));
-    }
-
-    #[test] // xpec: sy
-    fn printed_short_id_remains_report_when_stdout_completion_fails() {
-        let bytes = Arc::new(Mutex::new(Vec::new()));
-        let output = SharedCheckOutput::new(Box::new(FailAfterFirstFlushOutput {
-            bytes: bytes.clone(),
-            first_flush_completed: false,
-        }));
-        let report = start_expectation_report_output(output, "j");
-
-        let _ = report.finish_with_record(&timeout_error_record());
-
-        assert_eq!(*bytes.lock().unwrap(), b"j");
-    }
-
-    struct CapturedOutput {
-        bytes: Arc<Mutex<Vec<u8>>>,
-    }
-
-    impl Write for CapturedOutput {
-        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-            self.bytes.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
-    struct FailAfterFirstFlushOutput {
-        bytes: Arc<Mutex<Vec<u8>>>,
-        first_flush_completed: bool,
-    }
-
-    impl Write for FailAfterFirstFlushOutput {
-        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-            if self.first_flush_completed {
-                return Err(io::Error::other("stdout unavailable after short ID"));
-            }
-            self.bytes.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            self.first_flush_completed = true;
-            Ok(())
-        }
-    }
-
-    fn test_timeline() -> Arc<Mutex<ElapsedProgressTimelineState>> {
-        Arc::new(Mutex::new(ElapsedProgressTimelineState {
-            next_marker_at: Instant::now(),
-            progress_timeline_tail: [None, None],
-        }))
-    }
-
-    fn timeout_error_record() -> CheckRecord {
-        CheckRecord {
-            timestamp: "1970-01-01T00:00:00Z".to_string(),
-            number: 1,
-            result: CheckResult::Fail,
-            to: crate::config_types::ExpectationTo::Agent,
-            question: Some("Does it pass?".to_string()),
-            expected_answer: Some("yes".to_string()),
-            observed: INTERNAL_ERROR_UNPARSABLE.to_string(),
-            error: Some(INTERNAL_ERROR_UNPARSABLE.to_string()),
-            evidence: Some("technical timeout".to_string()),
-            scope: vec![".".to_string()],
-            question_scope_suggestion: None,
-            visible_tree_oid: Some("visible".to_string()),
-            diff_from: None,
-            diff_from_tree_oid: None,
-            diff_from_tree_oid_abbrev: None,
-            id: "11111111111111111111".to_string(),
-            display_id: "j".to_string(),
-        }
-    }
-}
+mod tests;

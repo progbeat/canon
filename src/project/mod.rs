@@ -1,10 +1,9 @@
 use crate::fs_util::ensure_dir_without_symlinks;
+use crate::git::git_project_root;
 use crate::output::write_stdout_line;
-use crate::platform::path_from_git_stdout;
 use crate::project_types::Config;
 use std::env;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 pub(crate) fn print_root(config: &Config) -> Result<(), String> {
     ensure_dir_without_symlinks(&config.root)?;
@@ -44,7 +43,9 @@ impl Config {
         // notes component therefore writes O(N) bytes. Automatic cache cleanup
         // must not delete these user-retained notes.
         Ok(Config {
-            root: state_root.join("codex").join(thread_id),
+            root: state_root
+                .join(crate::state_paths::RETAINED_CODEX_DATA_DIR_NAME)
+                .join(thread_id),
         })
     }
 }
@@ -54,30 +55,4 @@ pub(crate) fn project_root_or_current(start: &Path) -> Result<PathBuf, String> {
         Ok(root) => Ok(root),
         Err(_) => env::current_dir().map_err(|err| format!("failed to read current dir: {}", err)),
     }
-}
-
-pub(crate) fn command_output_trimmed<'a>(
-    bytes: &'a [u8],
-    description: &str,
-) -> Result<&'a str, String> {
-    Ok(std::str::from_utf8(bytes)
-        .map_err(|err| format!("{} must be valid UTF-8: {}", description, err))?
-        .trim())
-}
-
-pub(crate) fn git_project_root(start: &Path) -> Result<PathBuf, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(start)
-        .arg("rev-parse")
-        .arg("--show-toplevel")
-        .output()
-        .map_err(|err| format!("failed to run git rev-parse: {}", err))?;
-    if !output.status.success() {
-        return Err(format!(
-            "failed to find git project root: {}",
-            command_output_trimmed(&output.stderr, "git rev-parse stderr")?
-        ));
-    }
-    path_from_git_stdout(output.stdout)
 }

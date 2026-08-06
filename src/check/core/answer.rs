@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::evaluator_response::ERROR_SCOPE_TOO_NARROW;
+
 pub(crate) const RESULT_PASS: &str = "pass";
 pub(crate) const RESULT_FAIL: &str = "fail";
 
@@ -25,6 +27,50 @@ impl CheckResult {
             CheckResult::Fail
         }
     }
+
+    // [4k] Evaluation status accepts only decision fields, never evidence.
+    pub(crate) fn from_evaluation(
+        expected: &str,
+        observed: &str,
+        error: Option<&str>,
+    ) -> CheckResult {
+        if error.is_some() {
+            CheckResult::Fail
+        } else {
+            CheckResult::from_expected_answer(expected, observed)
+        }
+    }
+}
+
+pub(crate) fn assert_evaluation_postconditions(result: CheckResult, error: Option<&str>) {
+    // xpec: Eg,l
+    assert!(
+        matches!(result, CheckResult::Pass | CheckResult::Fail),
+        "an xpec must finish as PASS or FAIL"
+    );
+    // xpec: Eg,l
+    assert!(
+        error.is_none() || result == CheckResult::Fail,
+        "an xpec response error must produce FAIL"
+    );
+    // ScopeTooNarrow is an internal retry-policy response, never a final
+    // evaluator result.
+    // xpec: RC,l
+    assert_ne!(
+        error,
+        Some(ERROR_SCOPE_TOO_NARROW),
+        "user-visible final evaluator results must not expose ScopeTooNarrow"
+    );
+}
+
+pub(crate) fn evaluate_final_response(
+    expected: &str,
+    observed: &str,
+    error: Option<&str>,
+) -> CheckResult {
+    let result = CheckResult::from_evaluation(expected, observed, error);
+    assert_evaluation_postconditions(result, error);
+    result
 }
 
 pub(super) fn default_check_result() -> CheckResult {
@@ -41,7 +87,7 @@ impl std::fmt::Display for CheckResult {
 mod tests {
     use super::CheckResult;
 
-    #[test] // xpec: k4
+    #[test] // xpec: Eg
     fn observed_answer_must_match_expected_answer_exactly() {
         assert_eq!(
             CheckResult::from_expected_answer("yes", "yes"),

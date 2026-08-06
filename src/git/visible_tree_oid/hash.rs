@@ -1,4 +1,5 @@
-use crate::project::command_output_trimmed;
+use super::super::program::command_output_token;
+use crate::output::command_output_trimmed;
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
 use std::collections::BTreeMap;
@@ -303,7 +304,7 @@ pub(super) fn git_object_hash_algorithm(root: &Path) -> Result<GitObjectHashAlgo
             command_output_trimmed(&output.stderr, "git rev-parse stderr")?
         ));
     }
-    let format = command_output_trimmed(&output.stdout, "git rev-parse stdout")?;
+    let format = command_output_token(&output.stdout, "git rev-parse stdout")?;
     match format {
         "sha1" => Ok(GitObjectHashAlgorithm::Sha1),
         "sha256" => Ok(GitObjectHashAlgorithm::Sha256),

@@ -1,40 +1,133 @@
-use crate::project::command_output_trimmed;
-use std::ffi::OsStr;
-use std::io::{BufRead, BufReader, Read, Write};
-use std::path::Path;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+mod blob_reader;
+mod tracked_files;
 
-#[derive(Clone)]
-pub(crate) struct StagedTrackedFile {
-    pub(crate) path: Vec<u8>,
-    pub(crate) mode: String,
-    pub(crate) object_id: String,
-}
+use crate::output::command_output_trimmed;
+use crate::platform::filesystem::path_from_git_stdout;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
-impl StagedTrackedFile {
-    pub(crate) fn is_blob_file_entry(&self) -> bool {
-        // Canon's lazy materialization policy calls `read_blob` for each
-        // file_entries(git_tree) item. Regular files, executable files, and
-        // Git symlink entries are blob-backed file entries; gitlinks point at
-        // commit objects, so they are not file entries for this policy.
-        matches!(self.mode.as_str(), "100644" | "100755" | "120000")
+pub(crate) use blob_reader::{read_git_blobs, GitBlobReader};
+pub(crate) use tracked_files::{
+    staged_tracked_files, staged_tracked_files_for_pathspecs, tree_tracked_files_for_pathspecs,
+    tree_tracked_files_for_pathspecs_in_environment, TrackedFile,
+};
+
+pub(crate) fn git_project_root(start: &Path) -> Result<PathBuf, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(start)
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .map_err(|err| format!("failed to run git rev-parse: {}", err))?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed to find git project root: {}",
+            command_output_trimmed(&output.stderr, "git rev-parse stderr")?
+        ));
     }
+    path_from_git_stdout(output.stdout)
 }
 
-pub(crate) fn git_head_tree_exists(root: &Path) -> Result<bool, String> {
+pub(crate) fn is_git_worktree(root: &Path) -> Result<bool, String> {
+    let output = match Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .output()
+    {
+        Ok(output) => output,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(format!("failed to run git rev-parse: {}", err)),
+    };
+    Ok(output.status.success()
+        && command_output_token(&output.stdout, "git rev-parse stdout")? == "true")
+}
+
+pub(crate) fn git_common_dir(root: &Path) -> Result<PathBuf, String> {
+    resolve_rev_parse_path(root, &["--git-common-dir"])
+        .map_err(|err| format!("failed to resolve git common dir: {err}"))
+}
+
+pub(crate) fn resolve_git_path(root: &Path, path: &str) -> Result<PathBuf, String> {
+    resolve_rev_parse_path(root, &["--git-path", path])
+}
+
+fn resolve_rev_parse_path(root: &Path, args: &[&str]) -> Result<PathBuf, String> {
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
-        .args(["rev-parse", "--verify", "-q", "HEAD^{tree}"])
+        .arg("rev-parse")
+        .args(args)
         .output()
         .map_err(|err| format!("failed to run git rev-parse: {}", err))?;
-    Ok(output.status.success())
+    if !output.status.success() {
+        return Err(format!(
+            "failed to resolve Git path: {}",
+            command_output_trimmed(&output.stderr, "git rev-parse stderr")?
+        ));
+    }
+    let path = path_from_git_stdout(output.stdout)?;
+    Ok(if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    })
+}
+
+pub(super) fn command_output_token<'a>(
+    bytes: &'a [u8],
+    description: &str,
+) -> Result<&'a str, String> {
+    let bytes = bytes
+        .strip_suffix(b"\r\n")
+        .or_else(|| bytes.strip_suffix(b"\n"))
+        .ok_or_else(|| format!("{} must contain one line-terminated token", description))?;
+    let text = std::str::from_utf8(bytes)
+        .map_err(|err| format!("{} must be valid UTF-8: {}", description, err))?;
+    if text.is_empty() || text.chars().any(char::is_whitespace) {
+        return Err(format!("{} must contain one nonempty token", description));
+    }
+    Ok(text)
+}
+
+pub(crate) fn resolve_tree_oid_if_exists(
+    root: &Path,
+    treeish: &str,
+) -> Result<Option<String>, String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args([
+            "rev-parse",
+            "--verify",
+            "-q",
+            &format!("{treeish}^{{tree}}"),
+        ])
+        .output()
+        .map_err(|err| format!("failed to run git rev-parse: {}", err))?;
+    if output.status.success() {
+        return command_output_token(&output.stdout, "git rev-parse stdout")
+            .map(str::to_string)
+            .map(Some);
+    }
+    if output.status.code() == Some(1) && output.stderr.is_empty() {
+        return Ok(None);
+    }
+    Err(format!(
+        "not a valid Git tree ({})",
+        command_output_trimmed(&output.stderr, "git rev-parse stderr")
+            .unwrap_or("git rev-parse failed")
+    ))
 }
 
 pub(crate) fn staged_tree_oid(root: &Path) -> Result<String, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
+    let mut command = Command::new("git");
+    command.arg("-C").arg(root);
+    write_tree_oid(command)
+}
+
+pub(super) fn write_tree_oid(mut command: Command) -> Result<String, String> {
+    let output = command
         .arg("write-tree")
         .output()
         .map_err(|err| format!("failed to run git write-tree: {}", err))?;
@@ -44,11 +137,11 @@ pub(crate) fn staged_tree_oid(root: &Path) -> Result<String, String> {
             command_output_trimmed(&output.stderr, "git write-tree stderr")?
         ));
     }
-    command_output_trimmed(&output.stdout, "git write-tree stdout").map(str::to_string)
+    command_output_token(&output.stdout, "git write-tree stdout").map(str::to_string)
 }
 
 pub(crate) fn compute_empty_tree_oid(root: &Path) -> Result<String, String> {
-    // [Ky] Deliberately omit `-w`: `hash-object` computes the repository's
+    // [l] Deliberately omit `-UR`: `hash-object` computes the repository's
     // format-specific empty-tree OID without writing the object to its ODB.
     let mut child = Command::new("git")
         .arg("-C")
@@ -68,40 +161,7 @@ pub(crate) fn compute_empty_tree_oid(root: &Path) -> Result<String, String> {
             command_output_trimmed(&output.stderr, "git hash-object stderr")?
         ));
     }
-    command_output_trimmed(&output.stdout, "git hash-object stdout").map(str::to_string)
-}
-
-pub(crate) fn staged_tracked_files(root: &Path) -> Result<Vec<StagedTrackedFile>, String> {
-    tracked_files_for_pathspecs(root, None, &[])
-}
-
-pub(crate) fn staged_tracked_files_for_pathspecs(
-    root: &Path,
-    pathspecs: &[String],
-) -> Result<Vec<StagedTrackedFile>, String> {
-    tracked_files_for_pathspecs(root, None, pathspecs)
-}
-
-pub(crate) fn resolve_tree_oid(root: &Path, treeish: &str) -> Result<String, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args([
-            "rev-parse",
-            "--verify",
-            "-q",
-            &format!("{treeish}^{{tree}}"),
-        ])
-        .output()
-        .map_err(|err| format!("failed to run git rev-parse: {}", err))?;
-    if !output.status.success() {
-        return Err(format!(
-            "not a valid Git tree ({})",
-            command_output_trimmed(&output.stderr, "git rev-parse stderr")
-                .unwrap_or("git rev-parse failed")
-        ));
-    }
-    command_output_trimmed(&output.stdout, "git rev-parse stdout").map(str::to_string)
+    command_output_token(&output.stdout, "git hash-object stdout").map(str::to_string)
 }
 
 pub(crate) fn abbreviate_git_oid(root: &Path, oid: &str) -> Result<String, String> {
@@ -118,7 +178,7 @@ pub(crate) fn abbreviate_git_oid(root: &Path, oid: &str) -> Result<String, Strin
             command_output_trimmed(&output.stderr, "git rev-parse stderr")?
         ));
     }
-    command_output_trimmed(&output.stdout, "git rev-parse stdout").map(str::to_string)
+    command_output_token(&output.stdout, "git rev-parse stdout").map(str::to_string)
 }
 
 pub(crate) fn tree_object_exists(root: &Path, tree_oid: &str) -> Result<bool, String> {
@@ -150,373 +210,36 @@ fn git_cat_file_reports_unusable_tree_object(stderr: &str, tree_oid: &str) -> bo
         ))
 }
 
-pub(crate) fn tree_tracked_files_for_pathspecs(
-    root: &Path,
-    treeish: &str,
-    pathspecs: &[String],
-) -> Result<Vec<StagedTrackedFile>, String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["ls-tree", "-rz", "--full-tree", "-r", treeish, "--"])
-        .args(pathspecs)
-        .output()
-        .map_err(|err| format!("failed to run git ls-tree: {}", err))?;
-    if !output.status.success() {
-        return Err(format!(
-            "failed to inspect Git tree {}: {}",
-            treeish,
-            command_output_trimmed(&output.stderr, "git ls-tree stderr")?
-        ));
-    }
-    parse_tree_tracked_files(&output.stdout)
-}
-
-fn tracked_files_for_pathspecs(
-    root: &Path,
-    index_file: Option<&Path>,
-    pathspecs: &[String],
-) -> Result<Vec<StagedTrackedFile>, String> {
-    let mut command = Command::new("git");
-    command
-        .arg("-C")
-        .arg(root)
-        .args(["ls-files", "-z", "--stage", "--"])
-        .args(pathspecs);
-    if let Some(index_file) = index_file {
-        command.env("GIT_INDEX_FILE", index_file);
-    }
-    let output = command
-        .output()
-        .map_err(|err| format!("failed to run git ls-files: {}", err))?;
-    if !output.status.success() {
-        return Err(format!(
-            "failed to inspect staged files: {}",
-            command_output_trimmed(&output.stderr, "git ls-files stderr")?
-        ));
-    }
-    let mut files = Vec::new();
-    for entry in output.stdout.split(|byte| *byte == 0) {
-        if entry.is_empty() {
-            continue;
-        }
-        if let Some(file) = parse_staged_tracked_file(entry)? {
-            files.push(file);
-        }
-    }
-    Ok(files)
-}
-
-fn parse_tree_tracked_files(stdout: &[u8]) -> Result<Vec<StagedTrackedFile>, String> {
-    let mut files = Vec::new();
-    for entry in stdout.split(|byte| *byte == 0) {
-        if entry.is_empty() {
-            continue;
-        }
-        files.push(parse_tree_tracked_file(entry)?);
-    }
-    Ok(files)
-}
-
-fn parse_tree_tracked_file(entry: &[u8]) -> Result<StagedTrackedFile, String> {
-    let tab = entry
-        .iter()
-        .position(|byte| *byte == b'\t')
-        .ok_or_else(|| "git ls-tree entry missing path separator".to_string())?;
-    let metadata = std::str::from_utf8(&entry[..tab])
-        .map_err(|_| "git ls-tree entry metadata must be valid UTF-8".to_string())?;
-    let mut fields = metadata.split_whitespace();
-    let mode = fields
-        .next()
-        .ok_or_else(|| "git ls-tree entry missing mode".to_string())?;
-    let _kind = fields
-        .next()
-        .ok_or_else(|| "git ls-tree entry missing object type".to_string())?;
-    let object_id = fields
-        .next()
-        .ok_or_else(|| "git ls-tree entry missing object id".to_string())?;
-    Ok(StagedTrackedFile {
-        path: entry[tab + 1..].to_vec(),
-        mode: mode.to_string(),
-        object_id: object_id.to_string(),
-    })
-}
-
-fn parse_staged_tracked_file(entry: &[u8]) -> Result<Option<StagedTrackedFile>, String> {
-    let tab = entry
-        .iter()
-        .position(|byte| *byte == b'\t')
-        .ok_or_else(|| "git ls-files entry missing path separator".to_string())?;
-    let metadata = std::str::from_utf8(&entry[..tab])
-        .map_err(|_| "git ls-files entry metadata must be valid UTF-8".to_string())?;
-    let mut fields = metadata.split_whitespace();
-    let mode = fields
-        .next()
-        .ok_or_else(|| "git ls-files entry missing mode".to_string())?;
-    let object_id = fields
-        .next()
-        .ok_or_else(|| "git ls-files entry missing object id".to_string())?;
-    let stage = fields
-        .next()
-        .ok_or_else(|| "git ls-files entry missing stage".to_string())?;
-    if stage != "0" {
-        return Ok(None);
-    }
-    Ok(Some(StagedTrackedFile {
-        path: entry[tab + 1..].to_vec(),
-        mode: mode.to_string(),
-        object_id: object_id.to_string(),
-    }))
-}
-
-pub(crate) fn read_git_blobs(root: &Path, object_ids: &[String]) -> Result<Vec<Vec<u8>>, String> {
-    read_git_blobs_with_git_program_inner(root, object_ids, OsStr::new("git"))
-}
-
-pub(crate) struct GitBlobReader {
-    child: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
-}
-
-impl GitBlobReader {
-    pub(crate) fn new(root: &Path) -> Result<GitBlobReader, String> {
-        GitBlobReader::new_with_git_program(root, OsStr::new("git"))
-    }
-
-    fn new_with_git_program(root: &Path, git_program: &OsStr) -> Result<GitBlobReader, String> {
-        let mut child = Command::new(git_program)
-            .arg("-C")
-            .arg(root)
-            .args(["cat-file", "--batch"])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|err| format!("failed to run git cat-file: {}", err))?;
-        let stdin = match child.stdin.take() {
-            Some(stdin) => stdin,
-            None => {
-                return Err(cleanup_git_cat_file_child(
-                    child,
-                    "failed to open git cat-file stdin".to_string(),
-                ))
-            }
-        };
-        let stdout = match child.stdout.take() {
-            Some(stdout) => stdout,
-            None => {
-                drop(stdin);
-                return Err(cleanup_git_cat_file_child(
-                    child,
-                    "failed to open git cat-file stdout".to_string(),
-                ));
-            }
-        };
-        Ok(GitBlobReader {
-            child,
-            stdin,
-            stdout: BufReader::new(stdout),
-        })
-    }
-
-    pub(crate) fn read_blobs(&mut self, object_ids: &[String]) -> Result<Vec<Vec<u8>>, String> {
-        let mut blobs = Vec::with_capacity(object_ids.len());
-        for object_id in object_ids {
-            blobs.push(self.read_blob(object_id)?);
-        }
-        Ok(blobs)
-    }
-
-    fn read_blob(&mut self, object_id: &str) -> Result<Vec<u8>, String> {
-        writeln!(self.stdin, "{}", object_id)
-            .map_err(|err| format!("failed to write git cat-file input: {}", err))?;
-        self.stdin
-            .flush()
-            .map_err(|err| format!("failed to write git cat-file input: {}", err))?;
-
-        let mut header = String::new();
-        let bytes_read = self
-            .stdout
-            .read_line(&mut header)
-            .map_err(|err| format!("failed to read git cat-file output: {}", err))?;
-        if bytes_read == 0 {
-            return Err(format!(
-                "git cat-file output missing header for {}",
-                object_id
-            ));
-        }
-        let header = header.trim_end_matches('\n');
-        let mut fields = header.split_whitespace();
-        let actual_id = fields
-            .next()
-            .ok_or_else(|| "git cat-file header missing object id".to_string())?;
-        let object_type = fields
-            .next()
-            .ok_or_else(|| format!("git cat-file header missing type for {}", actual_id))?;
-        if object_type == "missing" {
-            return Err(format!("staged blob {} is missing", actual_id));
-        }
-        if object_type != "blob" {
-            return Err(format!(
-                "staged object {} is {}, not blob",
-                actual_id, object_type
-            ));
-        }
-        let size = fields
-            .next()
-            .ok_or_else(|| format!("git cat-file header missing size for {}", actual_id))?
-            .parse::<usize>()
-            .map_err(|_| format!("git cat-file header has invalid size for {}", actual_id))?;
-        let mut blob = vec![0; size];
-        self.stdout
-            .read_exact(&mut blob)
-            .map_err(|_| format!("git cat-file output truncated for {}", actual_id))?;
-        let mut delimiter = [0u8; 1];
-        self.stdout.read_exact(&mut delimiter).map_err(|_| {
-            format!(
-                "git cat-file output missing object delimiter for {}",
-                actual_id
-            )
-        })?;
-        if delimiter != *b"\n" {
-            return Err(format!(
-                "git cat-file output missing object delimiter for {}",
-                actual_id
-            ));
-        }
-        Ok(blob)
-    }
-}
-
-impl Drop for GitBlobReader {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-fn read_git_blobs_with_git_program_inner(
-    root: &Path,
-    object_ids: &[String],
-    git_program: &OsStr,
-) -> Result<Vec<Vec<u8>>, String> {
-    if object_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut child = Command::new(git_program)
-        .arg("-C")
-        .arg(root)
-        .args(["cat-file", "--batch"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|err| format!("failed to run git cat-file: {}", err))?;
-    let mut stdin = match child.stdin.take() {
-        Some(stdin) => stdin,
-        None => {
-            return Err(cleanup_git_cat_file_child(
-                child,
-                "failed to open git cat-file stdin".to_string(),
-            ))
-        }
-    };
-    for object_id in object_ids {
-        if let Err(err) = writeln!(stdin, "{}", object_id) {
-            drop(stdin);
-            return Err(cleanup_git_cat_file_child(
-                child,
-                format!("failed to write git cat-file input: {}", err),
-            ));
-        }
-    }
-    drop(stdin);
-    let output = child
-        .wait_with_output()
-        .map_err(|err| format!("failed to read git cat-file output: {}", err))?;
-    if !output.status.success() {
-        return Err(format!(
-            "failed to read staged blobs: {}",
-            command_output_trimmed(&output.stderr, "git cat-file stderr")?
-        ));
-    }
-    parse_git_blob_batch(&output.stdout, object_ids)
-}
-
-fn cleanup_git_cat_file_child(child: Child, message: String) -> String {
-    match child.wait_with_output() {
-        Ok(_) => message,
-        Err(err) => format!("{}; failed to reap git cat-file: {}", message, err),
-    }
-}
-
-fn parse_git_blob_batch(output: &[u8], object_ids: &[String]) -> Result<Vec<Vec<u8>>, String> {
-    let mut offset = 0usize;
-    let mut blobs = Vec::with_capacity(object_ids.len());
-    for object_id in object_ids {
-        let header_end = output[offset..]
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .map(|relative| offset + relative)
-            .ok_or_else(|| format!("git cat-file output missing header for {}", object_id))?;
-        let header = std::str::from_utf8(&output[offset..header_end])
-            .map_err(|_| "git cat-file header must be valid UTF-8".to_string())?;
-        let mut fields = header.split_whitespace();
-        let actual_id = fields
-            .next()
-            .ok_or_else(|| "git cat-file header missing object id".to_string())?;
-        let object_type = fields
-            .next()
-            .ok_or_else(|| format!("git cat-file header missing type for {}", actual_id))?;
-        if object_type == "missing" {
-            return Err(format!("staged blob {} is missing", actual_id));
-        }
-        if object_type != "blob" {
-            return Err(format!(
-                "staged object {} is {}, not blob",
-                actual_id, object_type
-            ));
-        }
-        let size = fields
-            .next()
-            .ok_or_else(|| format!("git cat-file header missing size for {}", actual_id))?
-            .parse::<usize>()
-            .map_err(|_| format!("git cat-file header has invalid size for {}", actual_id))?;
-        offset = header_end + 1;
-        let end = offset
-            .checked_add(size)
-            .ok_or_else(|| "git cat-file object size overflowed".to_string())?;
-        if output.len() < end {
-            return Err(format!("git cat-file output truncated for {}", actual_id));
-        }
-        blobs.push(output[offset..end].to_vec());
-        offset = end;
-        if output.get(offset) != Some(&b'\n') {
-            return Err(format!(
-                "git cat-file output missing object delimiter for {}",
-                actual_id
-            ));
-        }
-        offset += 1;
-    }
-    if offset != output.len() {
-        return Err("git cat-file output has trailing data".to_string());
-    }
-    Ok(blobs)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{compute_empty_tree_oid, tree_object_exists};
-    use crate::project::command_output_trimmed;
+    use super::{command_output_token, compute_empty_tree_oid, tree_object_exists};
+    use crate::output::command_output_trimmed;
     use std::fs;
     use std::io::Write;
     use std::path::{Path, PathBuf};
     use std::process::{self, Command, Stdio};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test] // xpec: Ky
+    #[test] // xpec: gO
+    fn command_output_token_accepts_platform_line_terminators() {
+        assert_eq!(
+            command_output_token(b"token\n", "test output").unwrap(),
+            "token"
+        );
+        assert_eq!(
+            command_output_token(b"token\r\n", "test output").unwrap(),
+            "token"
+        );
+    }
+
+    #[test] // xpec: gO
+    fn command_output_token_rejects_changed_or_ambiguous_content() {
+        assert!(command_output_token(b"token", "test output").is_err());
+        assert!(command_output_token(b"first\nsecond\n", "test output").is_err());
+        assert!(command_output_token(b" token \n", "test output").is_err());
+    }
+
+    #[test] // xpec: l
     fn computing_empty_tree_oid_does_not_write_to_repository_object_database() {
         let repo = temp_root("compute-empty-tree");
         run_git(&repo, &["init"]).unwrap();
@@ -560,7 +283,7 @@ mod tests {
         let output = child.wait_with_output().unwrap();
         // xpec: gO
         assert!(output.status.success());
-        command_output_trimmed(&output.stdout, "git hash-object stdout")
+        command_output_token(&output.stdout, "git hash-object stdout")
             .unwrap()
             .to_string()
     }

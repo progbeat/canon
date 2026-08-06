@@ -67,6 +67,12 @@ A 20-character base62 hash derived from the rendered expectation question, its
 addressee, the expected answer, and a deterministic hash of the resolved
 expectation instructions.
 
+## Expectation report
+
+The public `canon check` output for one expectation. Its full short ID identifies
+the expectation, so writing that ID already reports something for it. Progress
+markers and the result suffix add details when execution continues.
+
 ## Expected answer
 
 The answer written in an expectation's `a` field. `canon` compares this value
@@ -83,11 +89,10 @@ field; shell expectations default `a` to `"0"`. An expectation may select
 ## Evaluator thread
 
 An ephemeral evaluator interaction context whose history is not persisted across
-`canon check` invocations. Within one check run, an evaluator thread may only be
-reused for an interrogation with the same evaluator model and the same rendered
-developer instructions. Reuse may also require the same live thread-start
-context inputs that affect evaluator tools, session root, or prompt-rendered
-tree context.
+`canon check` invocations. Within one check run, an evaluator thread may be
+reused only when its effective startup configuration is compatible and its
+rendered base/developer instructions match. Startup compatibility includes the
+effective model, tools, plugins, and current visible workspace.
 
 ## Evaluator Prompt Boundary
 
@@ -95,6 +100,18 @@ The implementation-owned evaluator prompt and instruction templates are the
 resource files under `resources/prompts/`. Config values such as expectation
 `instructions` are human-authored canon data passed into those templates, not
 additional implementation-owned prompt templates or instruction sources.
+Rust code that supplies template data, renders it, or transports the result is
+renderer plumbing, not additional evaluator prompt or instruction content.
+
+## Invocation-local state
+
+Information that `canon` retains and reads within one command invocation to
+coordinate execution or make decisions, such as caches, work queues, and the
+current report. Invocation-local state stays in memory. Temporary
+filesystem-shaped inputs required by external interfaces—materialized evaluator
+trees, prompt artifacts, and the isolated Codex runtime—are artifacts rather
+than invocation-local state. Canon-owned roots have lifetime cleanup; a
+caller-selected shared materialization cache follows its own retention contract.
 
 ## YAML expansion
 
@@ -143,21 +160,23 @@ project scope is written as `.`.
 
 A question scope: a scope complete for a question. If files outside the q-scope
 change while files inside it stay the same, the correct answer to the question
-should not change.
+should not change. The `q-scope` config field is `auto` by default; an explicit
+path list fixes that q-scope for every evaluator turn.
 
 ## Q-scope suggestion
 
 An evaluator-provided scope claiming to be narrow enough to answer the current
-question. It may or may not be a valid q-scope. `canon check` only attempts to
-verify a schema-valid suggestion when its induced visible tree has at least 25%
-fewer files than the current visible tree.
+question. It may or may not be a valid q-scope. For auto-scoped expectations,
+`canon check` only attempts to verify a schema-valid suggestion when its induced
+visible tree has at least 25% fewer files than the current visible tree.
 
 ## Scope narrowing
 
-The runtime process for trying to store a narrower q-scope. When an evaluator
-returns an answer with a q-scope suggestion, `canon check` may run an independent
-interrogation under that suggested scope. The suggestion is stored only when
-that verification produces a valid evaluator response with an answer.
+The runtime process for trying to store a narrower auto q-scope. When an
+evaluator returns an answer with a q-scope suggestion, `canon check` may run an
+independent interrogation under that suggested scope. If that verification
+returns an answer, it becomes the final response under the verified q-scope;
+otherwise the initial answer and scope remain final.
 
 ## Same-tree result
 
@@ -196,11 +215,12 @@ evaluator after the visible scope is applied.
 ## Visible scope
 
 The scope applied to a staged tracked tree for an evaluator interrogation. It is
-formed from the interrogation q-scope plus configured ignore exclusions. A fresh
-interrogation starts from the `qScope` in the expectation's `last-pass.json`, or
-full project scope when no last pass is available. Configured ignore patterns
-are normalized as project-relative pathspec items, converted to excluding
-pathspec items, and applied last.
+formed from the interrogation q-scope plus configured ignore exclusions. A
+fresh auto-scoped interrogation uses the `qScope` in `last-pass.json`, or full
+project scope when no pass with a q-scope exists. An expectation configured with
+a q-scope path list uses that list on every turn. Configured ignore patterns are
+normalized as project-relative pathspec items, converted to excluding pathspec
+items, and applied last.
 
 ## Visible tree
 
@@ -232,33 +252,35 @@ collects the tracked entries induced by a scope, then computes the
 repository-native Git tree object ID for those entries. When a scoped directory
 already has a Git tree object, the implementation can reuse that object ID;
 otherwise it serializes and hashes a synthetic tree object with the
-repository's object hash algorithm. `staged::worktree` uses that same OID when
+repository's object hash algorithm. `materialization` uses that same OID when
 materializing evaluator-visible trees.
 
-`check::interrogation::policy::initial_q_scope_for_fresh_interrogation` forms
-the base q-scope from the expectation's `last-pass.json`, or full project scope
-when no last pass result exists. `xpec_state::last_result` reads and writes the
-status-specific last-result files. `staged::worktree::StagedWorktreeView::materialize_visible_scope`
-then applies the visible scope before creating the evaluator working tree.
+`check::q_scope::initial_q_scope_for_check_run` forms the base q-scope from a
+configured path list, or, for `auto`, from the last pass q-scope with full
+project scope as fallback.
+`xpec_state::last_result` reads and writes the status-specific last-result
+files. `materialization::TreeMaterializer::materialize_visible_scope` then
+applies the visible scope before creating the evaluator working tree.
 
-`check::core::EvaluatorResponseJson` parses evaluator evidence and any
-schema-appropriate `qScopeSuggestion` value. `check::interrogation::policy`
-treats suggestions as unverified claims until an independent verification turn
-accepts them.
+`check::core::parse_evaluator_response_for_short_id` parses evaluator evidence
+and any schema-appropriate `qScopeSuggestion` value.
+`check::interrogation::policy` treats suggestions as unverified claims until an
+independent verification turn accepts them.
 `xpec_state` persists pass/fail last-result files, with `qScope`, `visibleScope`,
-and tree OIDs for Git-backed results. It reads last-pass `qScope` when seeding
-future interrogations and uses only the last pass when checking same-tree or
-cooldown cached results.
+and tree OIDs for Git-backed results. The last pass may seed future auto-scoped
+interrogations and supply a same-tree or cooldown cached result. Its bounded
+global failure history supports same-HEAD recurring-failure feedback without
+reading runtime logs.
 
 `evaluator::protocol::prompt` renders the prompt templates stored under
 `resources/prompts/` with MiniJinja. The developer-instructions template is
 `resources/prompts/evaluator_developer_instructions.txt`; the renderer registers
-the `json`, `shq`, `shargs`, and `sh` filters and runs `sh` blocks from the
-repository root.
+the `json`, `shq`, `shargs`, and `sh` filters. It runs `sh` blocks from the
+repository root outside in-place mode and from the checked directory in
+in-place mode.
 
-`check::interrogation::ask_with_reused_thread` enforces evaluator-thread reuse.
-Its lookup key includes the evaluator model and the runtime inputs that render
-the developer-instructions transcript for the current prompt template. It also
-splits on live thread-start context outside that rendered string, such as
-plugins and the visible-scope/session-tree inputs that determine the evaluator
-working tree.
+`check::interrogation::session::thread` owns evaluator-thread reuse. Its lookup
+keys include the effective evaluator model and the runtime inputs that render
+the evaluator instructions. They also split on live thread-start context
+outside those rendered strings, including plugins, dynamic-tool availability,
+and the current visible workspace.

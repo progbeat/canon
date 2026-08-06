@@ -78,6 +78,7 @@ ENV HOME=/scratch/home \
     TMP=/scratch/tmp \
     CANON_SECRET_DIR=/scratch/secret/ \
     CANON_SANDBOX_DIR=/scratch/sandbox \
+    CANON_NO_SANDBOX=true \
     CODEX_HOME=/scratch/codex-home \
     GIT_CONFIG_COUNT=1 \
     GIT_CONFIG_KEY_0=safe.directory \

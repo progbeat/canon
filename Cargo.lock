@@ -71,7 +71,6 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "getrandom",
- "granit-parser",
  "libc",
  "minijinja",
  "serde",
@@ -79,6 +78,7 @@ dependencies = [
  "serde_json",
  "sha1",
  "sha2",
+ "which",
 ]
 
 [[package]]
@@ -458,6 +458,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4e0100b01e9f0d03189a92b96772a1fb998639d981193d7dbab487302513441"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "which"
+version = "8.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8f3ef584124b911bcc3875c2f1472e80f24361ceb789bd1c62b3e9a3df9ff43c"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
