@@ -73,15 +73,13 @@ const FILE_WRITE_DATA: Dword = 0x0000_0002;
 const FILE_APPEND_DATA: Dword = 0x0000_0004;
 const FILE_WRITE_EA: Dword = 0x0000_0010;
 const FILE_DELETE_CHILD: Dword = 0x0000_0040;
-const FILE_WRITE_ATTRIBUTES: Dword = 0x0000_0100;
 const DELETE: Dword = 0x0001_0000;
 const FILE_ALL_ACCESS: Dword = 0x001F_01FF;
-const MATERIALIZED_WRITE_ACCESS: Dword = FILE_WRITE_DATA
-    | FILE_APPEND_DATA
-    | FILE_WRITE_EA
-    | FILE_DELETE_CHILD
-    | FILE_WRITE_ATTRIBUTES
-    | DELETE;
+// CreateHardLinkW opens the existing file with FILE_WRITE_ATTRIBUTES. Keep
+// that metadata right available while denying content and namespace mutation;
+// the read-only file attribute remains the portable metadata signal.
+const MATERIALIZED_WRITE_ACCESS: Dword =
+    FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_DELETE_CHILD | DELETE;
 const SECURITY_WORLD_RID: Dword = 0;
 const SECURITY_WORLD_SID_AUTHORITY: SidIdentifierAuthority = SidIdentifierAuthority {
     value: [0, 0, 0, 0, 0, 1],
