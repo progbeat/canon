@@ -64,11 +64,16 @@ impl BuiltinCommand {
         }
     }
 
-    pub(super) fn run(self, args: &[OsString]) -> Result<(), CommandError> {
-        if !matches!(
+    fn handles_help_within_command_boundary(self) -> bool {
+        matches!(
             self,
             BuiltinCommand::PreCommit | BuiltinCommand::Ask | BuiltinCommand::Check
-        ) && print_help_if_requested(args, self.help_command())?
+        )
+    }
+
+    pub(super) fn run(self, args: &[OsString]) -> Result<(), CommandError> {
+        if !self.handles_help_within_command_boundary()
+            && print_help_if_requested(args, self.help_command())?
         {
             return Ok(());
         }

@@ -216,7 +216,7 @@ mod tests {
         let escape = handler.handle_dynamic_tool_call(EvaluatorDynamicToolCall {
             namespace: Some(PROJECT_TOOL_NAMESPACE.to_string()),
             tool: "read".to_string(),
-            arguments: json!({ "path": "/etc/passwd" }),
+            arguments: json!({ "path": project.join("src/lib.rs") }),
         });
         let git_admin_aliases = [".git", ".GIT", ".git.", ".git "].map(|alias| {
             handler.handle_dynamic_tool_call(EvaluatorDynamicToolCall {
