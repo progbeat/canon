@@ -1,8 +1,9 @@
 use super::private_directory::create_private_dir;
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 #[cfg(unix)]
 mod unix;
@@ -21,18 +22,33 @@ pub(crate) struct OwnedPrivateTemporaryDirectory {
 #[derive(Clone)]
 pub(crate) struct PrivateTemporaryDirectoryAllocator {
     candidates: Arc<OnceLock<imp::TemporaryParentCandidates>>,
+    canonical_parents: Arc<Mutex<BTreeMap<PathBuf, Result<PathBuf, String>>>>,
 }
 
 impl PrivateTemporaryDirectoryAllocator {
     pub(crate) fn new() -> PrivateTemporaryDirectoryAllocator {
         PrivateTemporaryDirectoryAllocator {
             candidates: Arc::new(OnceLock::new()),
+            canonical_parents: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
     fn candidates(&self) -> &imp::TemporaryParentCandidates {
         self.candidates
             .get_or_init(imp::temporary_parent_candidates)
+    }
+
+    fn canonical_parent(&self, parent: &Path) -> Result<PathBuf, String> {
+        let mut canonical_parents = self
+            .canonical_parents
+            .lock()
+            .map_err(|_| "temporary directory parent cache lock is poisoned".to_string())?;
+        canonical_parents
+            .entry(parent.to_path_buf())
+            .or_insert_with(|| {
+                imp::canonical_temporary_parent(parent).map_err(|err| err.to_string())
+            })
+            .clone()
     }
 }
 
@@ -42,8 +58,10 @@ impl OwnedPrivateTemporaryDirectory {
         prefix: &str,
     ) -> Result<OwnedPrivateTemporaryDirectory, String> {
         Self::create_with_parents(
+            allocator,
             prefix,
             candidate_parents_in_preference_order(allocator.candidates()),
+            |_| true,
         )
     }
 
@@ -60,20 +78,9 @@ impl OwnedPrivateTemporaryDirectory {
             .into_iter()
             .flatten()
             .chain(default_parents.into_iter().flatten());
-        Self::create_with_executable_parents(candidates, prefix, parents)
-    }
-
-    fn create_with_executable_parents<'a>(
-        candidates: &'a imp::TemporaryParentCandidates,
-        prefix: &str,
-        parents: impl IntoIterator<Item = &'a PathBuf>,
-    ) -> Result<OwnedPrivateTemporaryDirectory, String> {
-        Self::create_with_parents(
-            prefix,
-            parents
-                .into_iter()
-                .filter(|parent| candidates.allows_executables(parent)),
-        )
+        Self::create_with_parents(allocator, prefix, parents, |canonical_parent| {
+            candidates.allows_executables(canonical_parent)
+        })
     }
 
     #[cfg(test)]
@@ -82,19 +89,24 @@ impl OwnedPrivateTemporaryDirectory {
         memory_backed_candidates: &[PathBuf],
         fallback_candidates: &[PathBuf],
     ) -> Result<OwnedPrivateTemporaryDirectory, String> {
+        let allocator = PrivateTemporaryDirectoryAllocator::new();
         Self::create_with_parents(
+            &allocator,
             prefix,
             memory_backed_candidates.iter().chain(fallback_candidates),
+            |_| true,
         )
     }
 
     fn create_with_parents<'a>(
+        allocator: &PrivateTemporaryDirectoryAllocator,
         prefix: &str,
         parents: impl IntoIterator<Item = &'a PathBuf>,
+        allows_parent: impl Fn(&Path) -> bool,
     ) -> Result<OwnedPrivateTemporaryDirectory, String> {
         let mut errors = Vec::new();
         for parent in parents {
-            let parent = match imp::canonical_temporary_parent(parent) {
+            let parent = match allocator.canonical_parent(parent) {
                 Ok(parent) => parent,
                 Err(err) => {
                     errors.push(format!(
@@ -105,6 +117,9 @@ impl OwnedPrivateTemporaryDirectory {
                     continue;
                 }
             };
+            if !allows_parent(&parent) {
+                continue;
+            }
             for _ in 0..64 {
                 let random = getrandom::u64().map_err(|err| {
                     format!("failed to choose private temporary directory: {err}")

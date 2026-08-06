@@ -355,7 +355,7 @@ fn windows_dacl_with_deny(
             .checked_sub(mem::size_of::<Acl>())
             .expect("windows_read_dacl always returns an ACL header")
     });
-    let allow_len = existing.is_none().then_some(ace_len).unwrap_or(0);
+    let allow_len = if existing.is_none() { ace_len } else { 0 };
     let acl_len = mem::size_of::<Acl>()
         .checked_add(ace_len)
         .and_then(|len| len.checked_add(existing_ace_bytes))

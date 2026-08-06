@@ -49,13 +49,10 @@ impl TemporaryParentCandidates {
         &self.fallback
     }
 
-    pub(super) fn allows_executables(&self, parent: &Path) -> bool {
-        let Ok(parent) = parent.canonicalize() else {
-            return false;
-        };
+    pub(super) fn allows_executables(&self, canonical_parent: &Path) -> bool {
         self.mounts
             .as_ref()
-            .and_then(|mounts| best_matching_mount(mounts, &parent))
+            .and_then(|mounts| best_matching_mount(mounts, canonical_parent))
             .is_none_or(|mount| mount.allows_executables)
     }
 }
@@ -115,13 +112,15 @@ fn mounts_mounts() -> Option<Vec<Mount>> {
 }
 
 fn read_mounts(path: &str, parse: impl FnMut(&str) -> Option<Mount>) -> Option<Vec<Mount>> {
-    Some(
-        fs::read_to_string(path)
-            .ok()?
-            .lines()
-            .filter_map(parse)
-            .collect(),
-    )
+    // [gN] A partial table would make an omitted `noexec` mount look like no
+    // matching restriction, so the producer succeeds only for a complete,
+    // non-empty parse.
+    let mounts = fs::read_to_string(path)
+        .ok()?
+        .lines()
+        .map(parse)
+        .collect::<Option<Vec<_>>>()?;
+    (!mounts.is_empty()).then_some(mounts)
 }
 
 fn best_matching_mount<'a>(mounts: &'a [Mount], path: &Path) -> Option<&'a Mount> {
