@@ -63,26 +63,61 @@ where
     (receiver, reader)
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
     use super::spawn_app_server_stderr_reader_with_forwarder;
-    use std::io::Write;
-    use std::os::unix::net::UnixStream;
+    use std::collections::VecDeque;
+    use std::io::{self, Read};
     use std::sync::mpsc;
     use std::time::Duration;
 
+    struct ChannelReader {
+        chunks: mpsc::Receiver<Vec<u8>>,
+        pending: VecDeque<u8>,
+    }
+
+    impl ChannelReader {
+        fn new(chunks: mpsc::Receiver<Vec<u8>>) -> Self {
+            Self {
+                chunks,
+                pending: VecDeque::new(),
+            }
+        }
+    }
+
+    impl Read for ChannelReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            while self.pending.is_empty() {
+                match self.chunks.recv() {
+                    Ok(chunk) => self.pending.extend(chunk),
+                    Err(_) => return Ok(0),
+                }
+            }
+
+            let length = buffer.len().min(self.pending.len());
+            for destination in &mut buffer[..length] {
+                if let Some(byte) = self.pending.pop_front() {
+                    *destination = byte;
+                }
+            }
+            Ok(length)
+        }
+    }
+
     #[test] // xpec: 1h
     fn stderr_reader_forwards_before_eof() {
-        let (reader, mut writer) = UnixStream::pair().unwrap();
+        let (input_tx, input_rx) = mpsc::channel();
         let (forwarded_tx, forwarded_rx) = mpsc::channel();
-        let (captured_rx, handle) =
-            spawn_app_server_stderr_reader_with_forwarder(reader, move |bytes| {
+        let (captured_rx, handle) = spawn_app_server_stderr_reader_with_forwarder(
+            ChannelReader::new(input_rx),
+            move |bytes| {
                 forwarded_tx
                     .send(bytes.to_vec())
                     .map_err(|err| err.to_string())
-            });
+            },
+        );
 
-        writer.write_all(b"early stderr\n").unwrap();
+        input_tx.send(b"early stderr\n".to_vec()).unwrap();
 
         assert_eq!(
             forwarded_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
@@ -93,7 +128,7 @@ mod tests {
             b"early stderr\n"
         );
 
-        drop(writer);
+        drop(input_tx);
         handle.join().unwrap();
     }
 }

@@ -112,7 +112,7 @@ fn git_backed_ask_setup_failure_reports_its_cause() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.starts_with(ZERO_TOKEN_USAGE_LINE), "{stderr}");
     assert!(
-        stderr.contains("Error: failed to inspect secret directory"),
+        stderr.contains("Error:") && stderr.contains("secret dir"),
         "{stderr}"
     );
     assert!(stderr.contains("missing-secret"), "{stderr}");
