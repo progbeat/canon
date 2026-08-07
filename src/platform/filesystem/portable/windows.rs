@@ -115,6 +115,8 @@ extern "system" {
         acl_information_class: Dword,
     ) -> Bool;
 
+    fn GetSecurityDescriptorLength(security_descriptor: SecurityDescriptor) -> Dword;
+
     fn InitializeAcl(acl: Pacl, acl_length: Dword, acl_revision: Dword) -> Bool;
 
     fn AddAccessDeniedAceEx(
@@ -252,7 +254,13 @@ pub(super) fn windows_read_dacl(path: &Path) -> Result<Option<WindowsDacl>, Stri
             status,
         ));
     }
-    let _security_descriptor = LocalSecurityDescriptor(security_descriptor);
+    if security_descriptor.is_null() {
+        return Err(format!(
+            "Windows returned a null security descriptor for {}",
+            path_display
+        ));
+    }
+    let _security_descriptor_guard = LocalSecurityDescriptor(security_descriptor);
     if dacl.is_null() {
         return Ok(None);
     }
@@ -282,17 +290,31 @@ pub(super) fn windows_read_dacl(path: &Path) -> Result<Option<WindowsDacl>, Stri
     let allocation_size = bytes_in_use
         .checked_add(info.acl_bytes_free as usize)
         .ok_or_else(|| format!("Windows DACL size overflow for {}", path_display))?;
-    // SAFETY: `dacl` points to the ACL inside the live security descriptor.
-    let declared_size = unsafe { (*dacl).acl_size as usize };
-    if bytes_in_use < mem::size_of::<Acl>()
-        || allocation_size < bytes_in_use
-        || allocation_size != declared_size
-    {
+    if bytes_in_use < mem::size_of::<Acl>() {
         return Err(format!("invalid Windows DACL size for {}", path_display));
     }
-    // SAFETY: GetAclInformation reports the initialized bytes and unused
-    // capacity that together form the allocation declared by the ACL header.
+    // SAFETY: GetNamedSecurityInfoW returned this live security descriptor.
+    let descriptor_size = unsafe { GetSecurityDescriptorLength(security_descriptor) as usize };
+    let descriptor_start = security_descriptor as usize;
+    let descriptor_end = descriptor_start
+        .checked_add(descriptor_size)
+        .ok_or_else(|| format!("Windows security descriptor overflow for {}", path_display))?;
+    let dacl_start = dacl as usize;
+    let dacl_end = dacl_start
+        .checked_add(allocation_size)
+        .ok_or_else(|| format!("Windows DACL range overflow for {}", path_display))?;
+    if dacl_start < descriptor_start || dacl_end > descriptor_end {
+        return Err(format!("invalid Windows DACL range for {}", path_display));
+    }
+    // SAFETY: The checked range lies inside the live security descriptor, and
+    // GetAclInformation accepted `dacl` and reported this allocation size.
     let storage = unsafe { slice::from_raw_parts(dacl as *const u8, allocation_size) }.to_vec();
+    let acl_size_offset = mem::offset_of!(Acl, acl_size);
+    let declared_size =
+        u16::from_ne_bytes([storage[acl_size_offset], storage[acl_size_offset + 1]]) as usize;
+    if allocation_size != declared_size {
+        return Err(format!("invalid Windows DACL size for {}", path_display));
+    }
     Ok(Some(WindowsDacl {
         storage,
         bytes_in_use,
