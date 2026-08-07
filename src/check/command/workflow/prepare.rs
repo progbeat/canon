@@ -93,44 +93,40 @@ pub(crate) fn prepare_git_backed_check_execution(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform::filesystem::{
+        OwnedPrivateTemporaryDirectory, PrivateTemporaryDirectoryAllocator,
+    };
     use std::fs;
-    use std::process::{self, Command};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::process::Command;
 
     #[test] // xpec: Tv
     fn temporary_query_uses_its_frozen_private_tree_after_the_index_changes() {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "canon-prompt-tree-oid-cache-{}-{unique}",
-            process::id()
-        ));
-        fs::create_dir_all(&root).unwrap();
-        run_git(&root, &["init", "--quiet"]);
-        fs::write(root.join("file.txt"), "first\n").unwrap();
-        run_git(&root, &["add", "file.txt"]);
-        let resources = GitBackedCheckResources::temporary_query(
-            &root,
-            &crate::platform::filesystem::PrivateTemporaryDirectoryAllocator::new(),
+        let temporary_directory_allocator = PrivateTemporaryDirectoryAllocator::new();
+        let root_owner = OwnedPrivateTemporaryDirectory::create(
+            &temporary_directory_allocator,
+            "canon-prompt-tree-oid-cache",
         )
         .unwrap();
+        let root = root_owner.path();
+        run_git(root, &["init", "--quiet"]);
+        fs::write(root.join("file.txt"), "first\n").unwrap();
+        run_git(root, &["add", "file.txt"]);
+        let resources =
+            GitBackedCheckResources::temporary_query(root, &temporary_directory_allocator).unwrap();
         let source = resources
-            .freeze_tree_source(&root, TreeSource::Staged)
+            .freeze_tree_source(root, TreeSource::Staged)
             .unwrap();
 
         fs::write(root.join("file.txt"), "second\n").unwrap();
-        run_git(&root, &["add", "file.txt"]);
+        run_git(root, &["add", "file.txt"]);
         let mut repo_inspection = RepoInspectionCache::new();
 
         assert_eq!(
             repo_inspection
-                .tree_file_content(&root, &source, "file.txt")
+                .tree_file_content(root, &source, "file.txt")
                 .unwrap(),
             "first\n"
         );
-        fs::remove_dir_all(root).unwrap();
     }
 
     fn run_git(root: &Path, args: &[&str]) {
