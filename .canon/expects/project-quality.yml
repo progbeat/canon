@@ -110,19 +110,6 @@
   preset: patch_review
 
 - q: |-
-    The non-canon diff should change project behavior only when the change is required by the canon diff, or when it fixes behavior that did not satisfy the existing canon.
-    Refactoring is allowed when it preserves project behavior and keeps or improves correctness, readability, maintainability, and ownership boundaries.
-    Can you find any behavior change in the non-canon diff that is not justified by those rules?
-  a: no
-  preset: pr_review
-
-- q: |-
-    Can you find any non-canon change that could be replaced by a substantially smaller or simpler change while preserving the same canon compliance, project behavior, and code quality?
-    Prefer the smaller diff only when the resulting code would be at least as correct, readable, maintainable, and well-structured. Do not reject a larger diff when it is needed for clear ownership, better abstractions, bug fixes, or existing canon compliance.
-  a: no
-  preset: pr_review
-
-- q: |-
     Every `README.md` change in the provided diff should make `README.md` more accurate relative to repository behavior, including behavior required by the canon.
     Can you find any `README.md` change that does not fix a concrete accuracy issue?
   a: no
@@ -132,23 +119,36 @@
     Can you find any externally visible contract where user input selects behavior for an operation, but the implementation silently applies only a narrower behavior than that selection promises?
     Report only when users would reasonably expect the unimplemented behavior from that same selection and the contract does not allow the narrowing.
   a: no
-  preset: pr_review
+  preset: patch_review
 
 - q: |-
     Can you find any avoidable path where code contains a check intended to reject a forbidden condition, but earlier behavior on that same path makes the condition unobservable to that check?
     Report only when the earlier behavior makes the check less able to reject the condition it is meant to reject.
   a: no
-  preset: pr_review
+  preset: patch_review
 
 - q: |-
     Can you find any avoidable representation workaround where code already knows a canonical domain form, but keeps carrying a less precise representation instead of constructing that form?
     Report only when this forces later code to preserve or recover the known form through compensating logic. Do not report compact representations whose later handling is direct and local, or representations required by the contract.
   a: no
-  preset: pr_review
+  preset: patch_review
 
-- q: >-
+- q: |-
     Every test declaration and assert invocation must have an applicable `xpec: <shortID>(,<shortID>)*` source-comment marker that cites only existing xpecs. Within a test, an assertion inherits the test marker unless it has its own.
     Any test or assertion failure necessarily means that at least one xpec in its applicable marker is violated.
     Can you find any violation of these requirements?
+  a: no
+  preset: patch_review
+
+- q: |-
+    The non-canon diff should change project behavior only when the change is required by the canon diff, or when it fixes behavior that did not satisfy the existing canon.
+    Refactoring is allowed when it preserves project behavior and keeps or improves correctness, readability, maintainability, and ownership boundaries.
+    Can you find any behavior change in the non-canon diff that is not justified by those rules?
+  a: no
+  preset: pr_review
+
+- q: |-
+    Can you find any non-canon change that could be replaced by a substantially smaller or simpler change while preserving the same canon compliance, project behavior, and code quality?
+    Prefer the smaller diff only when the resulting code would be at least as correct, readable, maintainable, and well-structured. Do not reject a larger diff when it is needed for clear ownership, better abstractions, bug fixes, or existing canon compliance.
   a: no
   preset: pr_review
