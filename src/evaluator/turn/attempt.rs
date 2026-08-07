@@ -105,7 +105,7 @@ pub(crate) fn ask_once<R: EvaluatorRunner>(
                 ),
             ));
         }
-        // [qv,w] A first-turn short-ID mismatch and all other parse failures
+        // [qv,kK] A first-turn short-ID mismatch and all other parse failures
         // become a human-review answer without a thread retry. This turn
         // boundary has already logged the raw exchange; it deliberately does
         // not claim the final expectation outcome. Normal check execution

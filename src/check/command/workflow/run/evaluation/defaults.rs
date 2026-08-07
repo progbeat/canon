@@ -23,10 +23,10 @@ fn collect_default_pending_failure_output(
     );
     let mut output = output;
     match collection {
-        // [w] Successful expansion establishes the collected set even when
+        // [kK] Successful expansion establishes the collected set even when
         // subsequent config validation rejects that set.
         Ok(config) => output.mark_collection_complete(config.expectation_count()),
-        // [w] A collection failure is actionable configuration feedback, not
+        // [kK] A collection failure is actionable configuration feedback, not
         // an evaluation that a later invocation can continue unchanged.
         Err(_) => output.mark_collection_failed(),
     }
@@ -55,7 +55,7 @@ pub(in super::super) fn prepare_default_failure_output(
         &inspection.git_resources,
     )
     .ok();
-    // [w,KD] The default snapshot is best-effort after an earlier preparation
+    // [kK,KD] The default snapshot is best-effort after an earlier preparation
     // failure. If it is unavailable, retain the original diagnostic and
     // required trailer instead of turning fallback reporting into a panic.
     match tree_state.as_ref() {

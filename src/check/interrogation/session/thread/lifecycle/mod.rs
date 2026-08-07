@@ -34,15 +34,19 @@ pub(crate) fn ask_thread_turn<R: EvaluatorRunner>(
         &prepared.selection.lifecycle_log,
         &request,
     ) {
-        Ok(response) => response,
-        Err(err) => retry_failed_turn(&mut context, &request, &prepared, err, &thread_id)?,
+        Ok(response) => Ok(response),
+        Err(err) => retry_failed_turn(&mut context, &request, &prepared, err, &thread_id),
     };
+    // [fD,kg] A technical failure can retire the shared app-server process and
+    // every evaluator thread it owned. Synchronize the session registry on
+    // both success and failure so a later model or xpec cannot reuse an ID
+    // whose owner has already been dropped.
     context
         .interrogation_session
         .thread_state_mut()
         .thread_registry_mut()
         .retire_threads_after_turn(context.runner.take_retired_threads());
-    Ok(response)
+    response
 }
 
 fn retry_failed_turn<R: EvaluatorRunner>(

@@ -33,7 +33,7 @@ pub(super) fn append_completed_record(
     total_expectations: usize,
     record: &CheckRecord,
 ) {
-    // [2Z,w] The public result boundary owns progress accounting. Record it
+    // [2Z,kK] The public result boundary owns progress accounting. Record it
     // before later persistence or logging can fail or unwind, then derive the
     // remaining count from the same structured report used by the trailer.
     report.records.push(record.clone());

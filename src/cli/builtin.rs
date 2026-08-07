@@ -64,15 +64,17 @@ impl BuiltinCommand {
         }
     }
 
-    fn handles_help_within_command_boundary(self) -> bool {
+    fn prints_help_before_command_boundary(self) -> bool {
         matches!(
             self,
-            BuiltinCommand::PreCommit | BuiltinCommand::Ask | BuiltinCommand::Check
+            BuiltinCommand::Init | BuiltinCommand::Show | BuiltinCommand::Gate
         )
     }
 
     pub(super) fn run(self, args: &[OsString]) -> Result<(), CommandError> {
-        if !self.handles_help_within_command_boundary()
+        // Commands in this set need project discovery only for real work, so
+        // render their clap help before resolving any project or Git root.
+        if self.prints_help_before_command_boundary()
             && print_help_if_requested(args, self.help_command())?
         {
             return Ok(());

@@ -36,13 +36,13 @@ expectations:
     assert!(stdout.starts_with("Type pass: "));
     // xpec: qc,90
     assert!(stdout.contains(". FAIL\nexpected: pass\n"));
-    // xpec: w
+    // xpec: kK
     assert!(stdout.contains(" 1 failed in "));
     let stderr = String::from_utf8(output.stderr).unwrap();
-    // xpec: w
+    // xpec: kK
     assert_eq!(
         stderr,
-        "token-usage: ref-cost=0.00$ total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n"
+        "token-usage: ref-cost=0.00$ total=0 input=0 (0 cached) output=0 (reasoning 0)\n"
     );
     let _ = fs::remove_dir_all(&repo);
 }
@@ -85,7 +85,7 @@ expectations:
     assert!(stdout.contains(" 1 failed in "), "{stdout}");
 }
 
-// xpec: w
+// xpec: kK
 #[test]
 fn check_stops_after_failure_unless_keep_going_is_requested() {
     let repo = portable_temp_dir("canon-check-stop-after-failure");

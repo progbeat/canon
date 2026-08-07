@@ -61,6 +61,7 @@ impl ElapsedProgressTimeline {
             // output can therefore assert its canonical suffix without
             // depending on a transport implementation detail.
             let suffix_start = state.progress_timeline.len().saturating_sub(2);
+            // xpec: 2gZ,Od
             assert_eq!(
                 &state.progress_timeline[suffix_start..],
                 [

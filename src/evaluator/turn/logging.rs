@@ -120,7 +120,7 @@ fn write_optional_diagnostic_log(
     diagnostic_log: &mut Option<&mut DiagnosticLogWriter>,
     write: impl FnOnce(&mut DiagnosticLogWriter) -> DiagnosticLogResult<()>,
 ) -> Result<(), EvaluatorError> {
-    // [w] A configured runtime log is part of the check observability
+    // [kK] A configured runtime log is part of the check observability
     // contract. Its write failures must become command errors rather than
     // silently omitting evaluator communication. When an evaluator failure
     // already exists, `ask_and_log` reports both errors above.

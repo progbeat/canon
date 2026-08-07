@@ -145,6 +145,38 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[test] // xpec: 0Y
+    fn ignores_checkpoint_commit_object() {
+        let root = git_project("checkpoint-commit");
+        git(
+            &root,
+            &[
+                "-c",
+                "user.name=Canon Test",
+                "-c",
+                "user.email=canon@example.com",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+        let commit_oid = git_output(&root, &["rev-parse", "HEAD"]);
+        let last_pass = last_pass_with_checked_tree_oid(&commit_oid);
+
+        let resolved = checkpoint_diff_base(
+            &root,
+            Some(&last_pass),
+            "against-tree",
+            &mut VisibleTreeOidCache::new(),
+        )
+        .unwrap();
+
+        assert_eq!(resolved.tree_oid.as_deref(), Some("against-tree"));
+        let _ = fs::remove_dir_all(root);
+    }
+
     fn last_pass_with_checked_tree_oid(checked_tree_oid: &str) -> LastResult {
         LastResult {
             response_timestamp: "1970-01-01T00:00:00Z".to_string(),
@@ -179,18 +211,23 @@ mod tests {
     }
 
     fn git(root: &Path, args: &[&str]) {
+        let _ = git_output(root, args);
+    }
+
+    fn git_output(root: &Path, args: &[&str]) -> String {
         let output = Command::new("git")
             .arg("-C")
             .arg(root)
             .args(args)
             .output()
             .unwrap();
-        // xpec: gO
+        // xpec: 0Y,gO
         assert!(
             output.status.success(),
             "git {} failed: {}",
             args.join(" "),
             String::from_utf8_lossy(&output.stderr)
         );
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
     }
 }

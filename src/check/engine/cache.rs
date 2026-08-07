@@ -102,7 +102,7 @@ pub(crate) fn write_cache_hit(
         )
         .map_err(|err| err.to_string());
     let mut diagnostic_log = Some(writer);
-    // [w] Cached expectations still produce the same expectation.result
+    // [kK] Cached expectations still produce the same expectation.result
     // runtime-log events as evaluated expectations. Attempt that required
     // outcome independently so a cache.hit event error cannot suppress it.
     let result_event_result = write_expectation_result_event(&mut diagnostic_log, record);

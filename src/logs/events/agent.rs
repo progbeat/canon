@@ -11,7 +11,7 @@ pub(crate) fn write_agent_request_event(
     reason: &str,
     request: AgentTurnLogRequest<'_>,
 ) -> DiagnosticLogResult<()> {
-    // [w,g2,Yq] The common JSONL renderer adds primary `processId` and
+    // [kK,g2,Yq] The common JSONL renderer adds primary `processId` and
     // `invocationId` correlation fields. These raw expectation and evaluator
     // thread IDs then identify the exchange within that command run.
     let raw_request = serde_json::to_value(request).map_err(|source| DiagnosticLogError::Json {
@@ -143,7 +143,7 @@ fn write_agent_token_usage_event(
     fields.extend([
         ("threadId", json!(thread_id)),
         ("turnId", json!(turn_id)),
-        // [w] Persist the normalized turn counters explicitly. Raw app-server
+        // [kK] Persist the normalized turn counters explicitly. Raw app-server
         // updates remain transport data and are not duplicated in runtime logs.
         ("tokenUsage", token_usage_log_value(*usage)),
     ]);

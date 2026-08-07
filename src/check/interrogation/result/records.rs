@@ -90,7 +90,7 @@ pub(crate) fn write_query_result_event(
     Ok(())
 }
 
-// [w] Result records are only one runtime-log family. Normal check finish and
+// [kK] Result records are only one runtime-log family. Normal check finish and
 // cache paths call this writer after raw evaluator responses have been logged;
 // `DiagnosticLogWriter::write_record_event` emits the parsed expectation
 // outcome and, when applicable, its review-required diagnostic. `canon ask`

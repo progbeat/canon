@@ -73,7 +73,7 @@ fn staged_tree_resolves_to_one_oid_backed_snapshot() -> Result<(), String> {
     Ok(())
 }
 
-#[test] // xpec: d,Tv,w
+#[test] // xpec: d,Tv,kK
 fn symbolic_tree_resolution_is_shared_across_option_labels() -> Result<(), String> {
     let root = test_root("shared-symbolic-tree-resolution");
     for args in [

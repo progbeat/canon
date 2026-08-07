@@ -82,7 +82,11 @@ pub(crate) fn write_caller_result_output_with_elapsed_timeline(
     Ok(())
 }
 
-pub(crate) fn render_caller_prompt(question: &str) -> String {
+// [Eg] `_CallerEvaluator.on_start` overrides the base evaluator method: it
+// configures terminal-control fragments but deliberately does not print the
+// short ID. The ID first appears in `on_status`, where the interactive path
+// replaces this question-only prompt with the final report.
+pub(crate) fn render_caller_question_prompt_without_short_id(question: &str) -> String {
     let mut prompt = String::new();
     if crate::platform::process::interactive_check_terminal() {
         prompt.push_str(CSI_SAVE_CURSOR);

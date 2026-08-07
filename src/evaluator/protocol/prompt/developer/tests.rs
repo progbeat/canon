@@ -31,6 +31,23 @@ fn developer_instructions_omit_git_context_in_in_place_mode() {
     assert!(!rendered.contains("$ exec sandbox-sh"));
 }
 
+#[test] // xpec: Ka,90
+fn in_place_without_xpec_instructions_has_no_developer_instructions() {
+    let rendered =
+        PromptRenderer::new(crate::platform::filesystem::PrivateTemporaryDirectoryAllocator::new())
+            .developer_instructions(DeveloperInstructionsContext {
+                root: Path::new("."),
+                mode: EvaluatorPromptMode::InPlace,
+                question_context: "",
+                visible_scope: &[".".to_string()],
+                num_invisible_files: 0,
+            })
+            .unwrap()
+            .text;
+
+    assert!(rendered.is_empty(), "{rendered}");
+}
+
 #[test] // xpec: hj,90
 fn in_place_prompt_mode_cannot_target_the_diff() {
     assert!(!EvaluatorPromptMode::InPlace.target_is_diff());

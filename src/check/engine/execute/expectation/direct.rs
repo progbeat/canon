@@ -6,7 +6,7 @@ use super::{
     assert_final_check_evaluation_postconditions, CheckExpectationRunContext,
     CheckExpectationRunOutcome,
 };
-use crate::check::command::output::render_caller_prompt;
+use crate::check::command::output::render_caller_question_prompt_without_short_id;
 use crate::check::core::{
     CheckRecord, CheckRecordOutcome, CheckResult, EvaluationAnswer, ResolvedExpectation,
 };
@@ -150,7 +150,7 @@ fn evaluate_caller(
     expectation: &ResolvedExpectation,
 ) -> Result<(EvaluationAnswer, String), String> {
     if let Some(output) = result_output.as_mut() {
-        let prompt = render_caller_prompt(&expectation.question);
+        let prompt = render_caller_question_prompt_without_short_id(&expectation.question);
         crate::check::command::output::write_stdout_record(
             *output,
             prompt.as_bytes(),

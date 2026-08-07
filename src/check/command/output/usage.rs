@@ -2,7 +2,7 @@ use crate::token_usage::TokenUsage;
 
 pub(crate) fn render_token_usage_summary(usage: TokenUsage) -> String {
     format!(
-        "token-usage: ref-cost={:.2}$ total={} input={} (+ {} cached) output={} (reasoning {})",
+        "token-usage: ref-cost={:.2}$ total={} input={} ({} cached) output={} (reasoning {})",
         usage.reference_token_cost(),
         usage.total_tokens,
         usage.input_tokens,
@@ -17,10 +17,10 @@ mod tests {
     use super::render_token_usage_summary;
     use crate::token_usage::TokenUsage;
 
-    #[test] // xpec: w,Uh
+    #[test] // xpec: kK,Uh,gN
     fn token_usage_output_matches_documented_line() {
         let usage = TokenUsage {
-            total_tokens: 9,
+            total_tokens: 6,
             input_tokens: 4,
             cached_input_tokens: 3,
             output_tokens: 2,
@@ -29,7 +29,7 @@ mod tests {
 
         assert_eq!(
             render_token_usage_summary(usage),
-            "token-usage: ref-cost=0.00$ total=9 input=4 (+ 3 cached) output=2 (reasoning 1)"
+            "token-usage: ref-cost=0.00$ total=6 input=4 (3 cached) output=2 (reasoning 1)"
         );
     }
 }

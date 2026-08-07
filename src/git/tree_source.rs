@@ -61,7 +61,7 @@ impl TreeSource {
         if value != DEFAULT_AGAINST_TREE_ARG {
             return TreeSource::resolve_with(root, value, "--against-tree", resolve_oid);
         }
-        // [w] A value equal to the command default has the canonical default
+        // [kK] A value equal to the command default has the canonical default
         // representation whether it came from clap's default or an explicit
         // `--against-tree HEAD`.
         match resolve_oid(root, value)

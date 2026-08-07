@@ -1,6 +1,6 @@
 use super::*;
 
-// xpec: 1h,w
+// xpec: 1h,kK
 #[test]
 fn invalid_check_arguments_still_emit_the_check_trailer() {
     let repo = portable_temp_dir("canon-invalid-check-argument-trailer");
@@ -19,13 +19,13 @@ fn invalid_check_arguments_still_emit_the_check_trailer() {
     assert!(!stdout.contains("✓ All checks passed."));
     assert!(!stdout.contains("▷ Run `canon check`"));
     let stderr = String::from_utf8(output.stderr).unwrap();
-    // xpec: 1h,w
+    // xpec: 1h,kK
     let diagnostic_offset = stderr.find("unexpected argument").unwrap();
     let trailer_offset = stderr.find(ZERO_TOKEN_USAGE_LINE).unwrap();
     assert!(diagnostic_offset < trailer_offset, "{stderr}");
 }
 
-// xpec: 1h,w
+// xpec: 1h,kK
 #[test]
 fn state_root_resolution_failure_still_emits_the_check_trailer() {
     let repo = committed_git_project("canon-state-root-failure-trailer").unwrap();
@@ -47,7 +47,7 @@ fn state_root_resolution_failure_still_emits_the_check_trailer() {
     assert!(diagnostic_offset < trailer_offset, "{stderr}");
 }
 
-// xpec: 2Z,w
+// xpec: 2Z,kK
 #[test]
 fn missing_check_config_requires_a_fix_instead_of_promising_continuation() {
     let repo = committed_git_project("canon-missing-config-feedback").unwrap();
@@ -185,7 +185,7 @@ fn path_with_failing_codex(repo: &std::path::Path) -> std::ffi::OsString {
         .unwrap()
 }
 
-// xpec: 1h,w,KD
+// xpec: 1h,kK,KD
 #[test]
 fn collected_check_failure_reports_pending_count() {
     let repo = portable_temp_dir("canon-collected-check-failure");
@@ -207,13 +207,13 @@ fn collected_check_failure_reports_pending_count() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stdout.contains(" 1 pending in "), "{stdout}\n{stderr}");
-    // xpec: 1h,w
+    // xpec: 1h,kK
     let diagnostic_offset = stderr.find("expectation").unwrap();
     let trailer_offset = stderr.find(ZERO_TOKEN_USAGE_LINE).unwrap();
     assert!(diagnostic_offset < trailer_offset, "{stderr}");
 }
 
-// xpec: 2Z,w
+// xpec: 2Z,kK
 #[test]
 fn identity_validation_failure_reports_pending_and_requires_a_fix() {
     let repo = portable_temp_dir("canon-collected-identity-failure");

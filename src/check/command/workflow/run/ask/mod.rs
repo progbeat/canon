@@ -74,7 +74,7 @@ fn run_prepared_ask_command(
     let command = parse_ask_command_args(args, default_in_place)?;
     let mut check_caches = CheckRunCaches::new();
     let config_optional = !command.config_explicit && command.default_agent_preset.is_none();
-    // [g2,l,w] Both ask modes produce runtime events through one memory-only
+    // [g2,l,kK] Both ask modes produce runtime events through one memory-only
     // temporary-query writer, so neither can reach persistent logging or its
     // coordination state.
     let diagnostic_log = DiagnosticLogWriter::create_temporary_query(diagnostic_log_plan)?;

@@ -49,7 +49,7 @@ pub(super) fn run_check_command_with_writer(
         inspection,
     );
     if result.is_err() && public_output_progress.needs_trailer() {
-        // [w] This outer boundary is the `finally` path for failures that
+        // [kK] This outer boundary is the `finally` path for failures that
         // occur before config selection or diagnostic logging can own the
         // token/summary/feedback trailer.
         public_output_progress.mark_all_attempted();

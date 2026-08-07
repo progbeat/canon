@@ -189,7 +189,7 @@ pub(super) fn run_selected_check_expectation<R: EvaluatorRunner>(
         &record,
         FinishedCheckRecordSource::Interrogation,
     )?;
-    // [w] The selected-expectation loop has one ordinary stop rule: stop
+    // [kK] The selected-expectation loop has one ordinary stop rule: stop
     // after an evaluated FAIL unless --keep-going was requested. Context
     // compaction invalidates reusable evaluator threads but does not truncate
     // the selected queue.

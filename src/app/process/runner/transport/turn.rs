@@ -47,7 +47,7 @@ impl AppServerRunner {
         let mut agent_message_completed_text = String::new();
         let mut last_activity = Instant::now();
         let mut turn_id: Option<String> = None;
-        // [w] Every exit after the app server assigns a turn ID converges on
+        // [kK] Every exit after the app server assigns a turn ID converges on
         // `finish_turn_usage` below, including protocol, timeout, interruption,
         // and app-server error paths.
         let result = (|| {
@@ -153,7 +153,7 @@ impl AppServerRunner {
                 agent_message_completed_text,
             ))
         })();
-        // [2gZ,w] The turn attempt ends with its transport result. Usage
+        // [2gZ,kK] The turn attempt ends with its transport result. Usage
         // cleanup still runs for every exit, but must not extend the active
         // no-progress interval or produce a spurious `~` minute.
         drop(active_turn_progress);

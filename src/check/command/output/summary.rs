@@ -59,7 +59,7 @@ pub(crate) fn summary_outcome_counts(report: &CheckRunReport) -> SummaryOutcomeC
 
 fn pad_summary_line(outcome_text: &str) -> String {
     const PREFERRED_SUMMARY_LINE_WIDTH: usize = 80;
-    // [w] The summary format depicts variable `=` padding around the outcome
+    // [kK] The summary format depicts variable `=` padding around the outcome
     // text, not literal run lengths. Prefer an 80-column line and keep at least
     // one padding character on each side when the outcome text is longer.
     let total_padding_width = PREFERRED_SUMMARY_LINE_WIDTH

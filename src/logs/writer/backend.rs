@@ -145,7 +145,7 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[test] // xpec: Yq,w
+    #[test] // xpec: Yq,kK
     fn persistent_diagnostic_logs_write_under_canonical_state_dir() {
         let root = git_temp_root("diagnostic-logs-canonical-state");
         let path = crate::state_paths::CanonStateRoot::resolve(&root)
@@ -247,7 +247,7 @@ mod tests {
             .arg("init")
             .output()
             .unwrap();
-        // xpec: w,fh,hr,Yq
+        // xpec: kK,fh,hr,Yq
         assert!(
             output.status.success(),
             "git init failed: {}",
@@ -263,7 +263,7 @@ mod tests {
             .args(["config", "canon.logs.maxSize", &max_bytes.to_string()])
             .output()
             .unwrap();
-        // xpec: w,fh,hr,Yq
+        // xpec: kK,fh,hr,Yq
         assert!(configured.status.success());
         DiagnosticLogWriter::create_from_plan(root, DiagnosticLogPlan::prepare(root)).unwrap()
     }

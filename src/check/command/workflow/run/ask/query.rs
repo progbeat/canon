@@ -45,7 +45,7 @@ pub(super) fn run_ask_query_command(command: AskQueryCommand<'_>) -> Result<(), 
     } = command;
     let mut diagnostic_log = diagnostic_log;
     if let Some(writer) = diagnostic_log.as_mut() {
-        // [w,l] Ask event production remains unconditional even though its
+        // [kK,l] Ask event production remains unconditional even though its
         // temporary-query writer retains the rendered events only in memory.
         write_query_lifecycle_start_event(writer).map_err(|err| err.to_string())?;
     }

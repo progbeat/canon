@@ -61,7 +61,7 @@ impl DiagnosticLogWriter {
     pub(crate) fn create_temporary_query(
         git_backed_plan: Option<DiagnosticLogPlan>,
     ) -> DiagnosticLogResult<DiagnosticLogWriter> {
-        // [l,g2,w] Ask validates the command's log configuration and produces
+        // [l,g2,kK] Ask validates the command's log configuration and produces
         // the same runtime events, but its one-off query retains those events
         // only in invocation memory. It therefore cannot reach the persistent
         // backend or its cross-process coordination path.
@@ -130,13 +130,13 @@ impl DiagnosticLogWriter {
     /// every call site; the first failure is returned by
     /// `finish_deferred_writes` after the operation's required effects.
     pub(crate) fn defer_write_errors(&mut self) {
-        debug_assert!(!self.defers_write_errors); // xpec: w,l,Yq
-        debug_assert!(self.deferred_write_error.is_none()); // xpec: w,l,Yq
+        debug_assert!(!self.defers_write_errors); // xpec: kK,l,Yq
+        debug_assert!(self.deferred_write_error.is_none()); // xpec: kK,l,Yq
         self.defers_write_errors = true;
     }
 
     pub(crate) fn finish_deferred_writes(&mut self) -> Result<(), String> {
-        debug_assert!(self.defers_write_errors); // xpec: w,l,Yq
+        debug_assert!(self.defers_write_errors); // xpec: kK,l,Yq
         self.defers_write_errors = false;
         match self.deferred_write_error.take() {
             Some(error) => Err(error),
@@ -150,11 +150,11 @@ impl DiagnosticLogWriter {
         event: &str,
         fields: &[(&str, Value)],
     ) -> DiagnosticLogResult<()> {
-        // [w,hr] Rendering and validating the complete runtime event is
+        // [kK,hr] Rendering and validating the complete runtime event is
         // unconditional. Storage policy is an internal concern and controls
         // only whether that event receives a persistent JSONL representation.
         let rendered = render_runtime_log_process_event(&self.invocation_id, level, event, fields)?;
-        // [g2,w,Yq] Every valid event and its primary invocation correlation
+        // [g2,kK,Yq] Every valid event and its primary invocation correlation
         // ID remain invocation-local. Persistent JSONL history, when
         // configured, receives a separate copy.
         self.invocation_events.push(rendered.line.clone());
@@ -190,7 +190,7 @@ mod memory_tests {
     use std::path::PathBuf;
     use std::process::{self, Command};
 
-    #[test] // xpec: w,l,Yq
+    #[test] // xpec: kK,l,Yq
     fn deferred_write_error_is_reported_after_later_event_attempts() {
         let root = git_temp_root("diagnostic-logs-deferred-error");
         let config = PersistentDiagnosticLogConfig { max_bytes: 1 };
@@ -229,7 +229,7 @@ mod memory_tests {
             .arg("init")
             .output()
             .unwrap();
-        // xpec: w,l,Yq
+        // xpec: kK,l,Yq
         assert!(
             output.status.success(),
             "git init failed: {}",

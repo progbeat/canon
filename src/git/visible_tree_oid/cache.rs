@@ -1,9 +1,8 @@
 use super::{
-    cached_value, git_object_hash_algorithm, path_bytes_in_scope, scope_entry_is_tree,
-    source_scope_cache_key, visible_scope, visible_scope_entries_from_files,
-    visible_tree_oid_from_files, visible_tree_oid_from_files_if_scope_present,
-    GitObjectHashAlgorithm, SourceScopeCacheKey, StoredVisibleScopeOidResolver, TrackedFile,
-    TreeSource, VisibleTreeOidCache,
+    cached_value, git_object_hash_algorithm, path_bytes_in_scope, source_scope_cache_key,
+    visible_scope, visible_scope_entries_from_files, visible_tree_oid_from_files,
+    visible_tree_oid_from_files_if_scope_present, GitObjectHashAlgorithm, SourceScopeCacheKey,
+    StoredVisibleScopeOidResolver, TrackedFile, TreeSource, VisibleTreeOidCache,
 };
 use crate::config_types::AgentConfig;
 use crate::repo_inspection::RepoInspectionCache;
@@ -110,10 +109,7 @@ impl VisibleTreeOidCache {
         // heuristic removes files here.
         let entries =
             self.visible_scope_entries_for_source(root, source, agent, &visible_scope_pathspec)?;
-        Ok(entries
-            .iter()
-            .filter(|entry| !scope_entry_is_tree(entry))
-            .count())
+        Ok(entries.len())
     }
 
     pub(crate) fn visible_scope_intersects_pathspecs(

@@ -104,7 +104,7 @@ fn finish_completed_check(
     public_output_progress: &mut CheckPublicOutputProgress,
     feedback_context: Option<CheckFeedbackContext>,
 ) -> Result<(), CommandError> {
-    // [1h,2Z,KD,w] An engine-side failure can follow a publicly completed
+    // [1h,2Z,KD,kK] An engine-side failure can follow a publicly completed
     // expectation result. Report that command failure before the trailer, and
     // still attempt every remaining output even if its diagnostic write fails.
     let diagnostic_result = completed.error.as_ref().map_or(Ok(()), |error| {
@@ -143,10 +143,9 @@ fn finish_completed_check_outputs(
         let Some(diagnostic_log) = diagnostic_log.as_deref_mut() else {
             return Err(CommandError::from(err));
         };
-        // [2Z,KD,w] The trailer error is another command failure. The common
-        // report finisher keeps repair/continue feedback for failed or pending
-        // reports and emits command-error feedback instead of success/commit
-        // guidance for an otherwise all-passed report.
+        // [2Z,ex,KD,kK] The trailer error is another command failure. Its
+        // diagnostic is separate from the common report finisher, whose
+        // feedback continues to describe the recorded outcomes.
         return finish_check_error_report(CheckErrorReportFinish {
             diagnostic_log,
             result_output,
@@ -161,10 +160,9 @@ fn finish_completed_check_outputs(
         CheckReportFinishContext {
             diagnostic_log,
             result_output,
-            // [ex] This is post-summary feedback, not a success-only message.
-            // The `finally` contract emits it for interrupted default-source
-            // runs too. Failed or pending reports keep their canonical wording;
-            // an otherwise all-passed command failure gets the error action.
+            // [2Z,ex] This is post-summary outcome feedback, independent from
+            // the command-error diagnostic already emitted above. The
+            // `finally` contract emits it for interrupted default-source runs.
             feedback_context,
             failure_history_feedback: completed.failure_history_feedback.as_ref(),
         },

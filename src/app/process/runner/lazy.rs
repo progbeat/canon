@@ -23,6 +23,7 @@ pub(crate) struct LazyAppServerRunner {
     inner: Option<AppServerRunner>,
     progress: Option<EvaluatorProgress>,
     threads: BTreeSet<String>,
+    retired_threads: BTreeSet<String>,
     last_turn_usage: Option<EvaluatorTurnUsage>,
     retired_token_usage: TokenUsage,
     invocation_thread_start_memo: InvocationThreadStartMemo,
@@ -103,6 +104,7 @@ impl LazyAppServerRunner {
             inner: None,
             progress: None,
             threads: BTreeSet::new(),
+            retired_threads: BTreeSet::new(),
             last_turn_usage: None,
             retired_token_usage: TokenUsage::default(),
             invocation_thread_start_memo: InvocationThreadStartMemo::default(),
@@ -165,7 +167,11 @@ impl LazyAppServerRunner {
         } else {
             Ok(())
         };
-        self.threads.clear();
+        // [fD,kg] Retiring the app-server process invalidates every thread it
+        // owned, not only the thread whose turn exposed the technical failure.
+        // Preserve those IDs until the interrogation registry consumes them;
+        // dropping them here would leave stale threads eligible for reuse.
+        self.retired_threads.append(&mut self.threads);
         self.inner = None;
         drain_result
     }
@@ -236,6 +242,7 @@ impl EvaluatorRunner for LazyAppServerRunner {
             params,
         );
         let thread_id = self.finish_with_model_failure_retirement(result)?;
+        self.retired_threads.remove(&thread_id);
         self.threads.insert(thread_id.clone());
         Ok(thread_id)
     }
@@ -266,7 +273,7 @@ impl EvaluatorRunner for LazyAppServerRunner {
             let last_turn_usage = inner.take_last_turn_usage();
             (result, last_turn_usage)
         };
-        // [w] Move per-turn telemetry across the lazy boundary before a
+        // [kK] Move per-turn telemetry across the lazy boundary before a
         // technical failure can retire and drop the inner app-server runner.
         self.last_turn_usage = last_turn_usage;
         self.finish_with_model_failure_retirement(result)
@@ -277,14 +284,14 @@ impl EvaluatorRunner for LazyAppServerRunner {
     }
 
     fn take_retired_threads(&mut self) -> Vec<String> {
-        let Some(inner) = self.inner.as_mut() else {
-            return Vec::new();
-        };
-        let retired = inner.drain_retired_threads();
-        for thread_id in &retired {
-            self.threads.remove(thread_id);
+        let mut retired = std::mem::take(&mut self.retired_threads);
+        if let Some(inner) = self.inner.as_mut() {
+            for thread_id in inner.drain_retired_threads() {
+                self.threads.remove(&thread_id);
+                retired.insert(thread_id);
+            }
         }
-        retired
+        retired.into_iter().collect()
     }
 
     fn set_progress_reporter(&mut self, progress: Option<EvaluatorProgress>) {
@@ -297,3 +304,32 @@ impl EvaluatorRunner for LazyAppServerRunner {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod retirement_tests {
+    use super::*;
+    use crate::evaluator::EvaluatorFailureKind;
+
+    #[test] // xpec: fD,kg
+    fn technical_failure_reports_every_runner_thread_as_retired() {
+        let mut runner = LazyAppServerRunner::new_in_place(
+            false,
+            &AgentConfig::default(),
+            EvaluatorProcessIsolation::CanonManaged,
+        )
+        .unwrap();
+        runner
+            .threads
+            .extend(["thread-a".to_string(), "thread-b".to_string()]);
+        let error = EvaluatorError::failure(EvaluatorFailureKind::TurnTimeout, "turn timed out");
+
+        runner.retire_inner_after_model_failure(&error).unwrap();
+
+        assert!(runner.threads.is_empty());
+        assert_eq!(
+            runner.take_retired_threads(),
+            vec!["thread-a".to_string(), "thread-b".to_string()]
+        );
+        assert!(runner.take_retired_threads().is_empty());
+    }
+}

@@ -11,7 +11,7 @@ pub(crate) struct TokenUsageSummary {
 impl TokenUsageSummary {
     pub(crate) fn unavailable() -> TokenUsageSummary {
         TokenUsageSummary {
-            // [w] The public summary contract represents unavailable usage
+            // [kK] The public summary contract represents unavailable usage
             // with zero in every numeric field.
             rendered_usage: TokenUsage::default(),
         }
@@ -51,7 +51,7 @@ pub(crate) fn run_with_token_usage_panic_capture<T>(
     match caught_result {
         Ok(result) => result,
         Err(payload) => {
-            // [w,l] The public command boundary owns the usage line, while the
+            // [kK,l] The public command boundary owns the usage line, while the
             // runner is local to the prepared evaluation path. Snapshot usage
             // before unwinding drops it; a secondary collection panic must not
             // replace the original evaluation panic.

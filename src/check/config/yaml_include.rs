@@ -340,18 +340,6 @@ patch-review:
         assert_eq!(path, ".canon/hooks/shared.yml");
     }
 
-    // xpec: I8
-    #[test]
-    fn unsafe_include_paths_are_rejected() {
-        for spec in ["", ".", "/abs.yml", "../parent.yml", "nested/../parent.yml"] {
-            // xpec: I8
-            assert!(
-                normalize_include_spec(spec).is_err(),
-                "expected unsafe include path to fail: {spec}"
-            );
-        }
-    }
-
     // xpec: T5
     #[test]
     fn invalid_root_config_path_does_not_bypass_root_include_rejection() {

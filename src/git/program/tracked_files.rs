@@ -4,6 +4,8 @@ use std::path::Path;
 use std::process::Command;
 
 #[derive(Clone)]
+// Both producers return leaf entries only: `ls-files --stage` lists index
+// entries, and `ls-tree -r` is intentionally used without `-t`.
 pub(crate) struct TrackedFile {
     pub(crate) path: Vec<u8>,
     pub(crate) mode: String,

@@ -9,6 +9,7 @@ use serde_json::Value;
 pub(crate) struct TokenUsage {
     pub(crate) total_tokens: u64,
     pub(crate) input_tokens: u64,
+    // Cached input is the cached subset of `input_tokens`, not an additional count.
     pub(crate) cached_input_tokens: u64,
     pub(crate) output_tokens: u64,
     pub(crate) reasoning_output_tokens: u64,

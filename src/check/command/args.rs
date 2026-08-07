@@ -45,7 +45,7 @@ mod tests {
         }
     }
 
-    #[test] // xpec: w,sw
+    #[test] // xpec: kK,sw
     fn check_accepts_expectation_id_selectors() {
         let command = parse(&["a7F", "0123456789abcdefghij"]).unwrap();
 
@@ -58,7 +58,7 @@ mod tests {
         );
     }
 
-    #[test] // xpec: w,l
+    #[test] // xpec: kK,l
     fn check_rejects_old_query_flag() {
         let err = match parse(&["-q", "Can this pass?"]) {
             Ok(_) => panic!("expected old query flag to fail"),
@@ -67,7 +67,7 @@ mod tests {
         assert!(err.contains("unexpected argument"));
     }
 
-    #[test] // xpec: w,l
+    #[test] // xpec: kK,l
     fn check_help_excludes_ask_only_options() {
         let mut help = Vec::new();
         check_help_command().write_long_help(&mut help).unwrap();
@@ -118,7 +118,7 @@ mod tests {
         assert!(parse(&["--in-place"]).unwrap().in_place);
     }
 
-    #[test] // xpec: w
+    #[test] // xpec: kK
     fn explicit_default_source_values_remain_command_defaults() {
         let command = parse(&[
             "--config",
@@ -132,7 +132,7 @@ mod tests {
         assert!(command.sources_have_command_default_values);
     }
 
-    #[test] // xpec: w
+    #[test] // xpec: kK
     fn non_default_source_value_is_not_a_command_default() {
         assert!(
             !parse(&["--tree", "HEAD"])
@@ -172,7 +172,7 @@ mod tests {
         assert_eq!(parse_ask(&[""]).unwrap().question, "");
     }
 
-    #[test] // xpec: w,l
+    #[test] // xpec: kK,l
     fn ask_rejects_check_run_options() {
         let err = ask_error(parse_ask(&["Can this pass?", "--keep-going"]));
         assert!(err.contains("unexpected argument"));

@@ -94,7 +94,7 @@ pub(super) fn record_finished_check_expectation<R: EvaluatorRunner>(
     record: &CheckRecord,
     source: FinishedCheckRecordSource,
 ) -> Result<(), String> {
-    // [w] This is the terminal runtime-log boundary for every finished check
+    // [kK] This is the terminal runtime-log boundary for every finished check
     // record, including evaluator parse failures normalized into human-review
     // records. `write_expectation_result_event` emits `expectation.result` and
     // additionally `expectation.review_required` when the record has a review

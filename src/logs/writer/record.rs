@@ -25,7 +25,7 @@ impl DiagnosticRecordEvent {
 }
 
 impl DiagnosticLogWriter {
-    // [w] One completed record produces its parsed result event and, when its
+    // [kK] One completed record produces its parsed result event and, when its
     // normalized error requires human review, the accompanying diagnostic.
     // Callers therefore cannot accidentally log the outcome without the
     // review-required event.

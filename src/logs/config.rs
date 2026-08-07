@@ -49,7 +49,7 @@ fn diagnostic_log_config_from_value(
     configured_value: Result<Option<String>, GitConfigGetError>,
 ) -> DiagnosticLogResult<DiagnosticLogConfig> {
     let max_bytes = configured_log_max_size(configured_value)?;
-    // [w,fh,hr,Yq] Command code always constructs applicable runtime events
+    // [kK,fh,hr,Yq] Command code always constructs applicable runtime events
     // through `DiagnosticLogWriter`. This configuration controls persistent
     // storage: zero stores none, while a positive bound uses bounded JSONL.
     Ok(if max_bytes == 0 {
@@ -144,7 +144,7 @@ mod tests {
     use std::process::{self, Command};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[test] // xpec: w,hr,Yq
+    #[test] // xpec: kK,hr,Yq
     fn zero_limit_renders_events_without_persisting_runtime_logs() {
         let root = git_temp_root("diagnostic-logs-disabled");
         let state_root = crate::state_paths::CanonStateRoot::resolve(&root).unwrap();
@@ -214,7 +214,7 @@ mod tests {
             .arg("init")
             .output()
             .unwrap();
-        // xpec: w,hr,Yq
+        // xpec: kK,hr,Yq
         assert!(
             output.status.success(),
             "git init failed: {}",

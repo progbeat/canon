@@ -9,14 +9,14 @@ const USE_EXPECTATIONS_MESSAGE: &str =
 const FIX_ISSUES_MESSAGE: &str = "▷ Fix the issues and run `canon check` again!";
 const FIX_REPORTED_ERROR_MESSAGE: &str = "▷ Fix the reported error and run `canon check` again!";
 const CONTINUE_EVALUATION_MESSAGE: &str = "▷ Run `canon check` to continue evaluation.";
-const RECURRING_FAILURE_MESSAGE: &str =
+const REPEATED_XPEC_FAILURE_MESSAGE: &str =
     "❕ Repeated `canon check` runs keep failing on the same xpec. Do not run `canon check` again yet.";
-const ADAPT_RECURRING_WORKFLOW_MESSAGE: &str =
+const ADAPT_REPEATED_XPEC_FAILURE_WORKFLOW_MESSAGE: &str =
     "❕ Each time this warning appears, determine why your workflow allowed the recurrence and adapt it to reduce the chance of another one.";
 // [UZ,ex] This is post-evaluation CLI feedback addressed to the human reviewer.
 // It asks that reviewer to emulate the evaluator as an independent check; it
 // is never part of the instructions sent to an evaluator agent.
-const HUMAN_REVIEWER_DISPROVE_RECURRING_FAILURE_MESSAGE: &str =
+const HUMAN_REVIEWER_DISPROVE_REPEATED_XPEC_FAILURE_MESSAGE: &str =
     "❕ Emulate the evaluator agent: independently try to disprove the expected answer. Generalize each finding and fix every supported violation.";
 const RETRY_AFTER_JUSTIFICATION_MESSAGE: &str =
     "▷ Run `canon check` again only after you can independently justify the expected answer!";
@@ -26,7 +26,7 @@ pub(crate) fn continue_evaluation_message() -> String {
 }
 
 pub(crate) fn command_error_feedback_messages(context: CheckFeedbackContext) -> Vec<String> {
-    // [2Z,KD,w] A command can fail after every collected expectation passed.
+    // [2Z,KD,kK] A command can fail after every collected expectation passed.
     // Keep its next action distinct from the canonical outcome-count branches
     // so the summary remains accurate without emitting success/commit advice.
     context.assert_default_against_head();
@@ -59,7 +59,7 @@ impl CheckFeedbackContext {
     }
 
     pub(crate) fn assert_default_against_head(self) {
-        // xpec: w,ex
+        // xpec: kK,ex
         assert!(
             self.against_tree_is_head,
             "check feedback requires against-tree OID to equal HEAD tree OID"
@@ -100,7 +100,7 @@ fn repair_instruction_messages(
     failed: &[String],
     failure_history_feedback: Option<&FailureHistoryFeedback>,
 ) -> Vec<String> {
-    // xpec: w
+    // xpec: kK
     assert!(
         !failed.is_empty(),
         "repair instructions require at least one failed xpec"
@@ -115,11 +115,11 @@ fn repair_instruction_messages(
         );
         let feedback = failure_history_feedback
             .expect("the explicit failure-history assertion established feedback");
-        if feedback.recurring {
+        if feedback.repeated_xpec_failure {
             messages.extend([
-                RECURRING_FAILURE_MESSAGE.to_string(),
-                ADAPT_RECURRING_WORKFLOW_MESSAGE.to_string(),
-                HUMAN_REVIEWER_DISPROVE_RECURRING_FAILURE_MESSAGE.to_string(),
+                REPEATED_XPEC_FAILURE_MESSAGE.to_string(),
+                ADAPT_REPEATED_XPEC_FAILURE_WORKFLOW_MESSAGE.to_string(),
+                HUMAN_REVIEWER_DISPROVE_REPEATED_XPEC_FAILURE_MESSAGE.to_string(),
             ]);
             if let Some(diff_from_oid) = feedback.diff_from_oid.as_deref() {
                 messages.push(format!(
@@ -155,13 +155,13 @@ fn plan_repair_message(failed: &[String]) -> String {
 mod tests {
     use super::*;
 
-    #[test] // xpec: ex,w
+    #[test] // xpec: ex,kK
     fn feedback_messages_cover_documented_actions() {
         let changed = feedback_context(true);
         let unchanged = feedback_context(false);
         let single_failure_history = FailureHistoryFeedback {
             short_id: "a".to_string(),
-            recurring: false,
+            repeated_xpec_failure: false,
             diff_from_oid: None,
         };
         let repair_messages =
@@ -204,10 +204,10 @@ mod tests {
     }
 
     #[test] // xpec: ex
-    fn recurring_diff_failure_replaces_general_repair_steps() {
-        let recurring = FailureHistoryFeedback {
+    fn repeated_diff_xpec_failure_replaces_general_repair_steps() {
+        let repeated_failure = FailureHistoryFeedback {
             short_id: "x".to_string(),
-            recurring: true,
+            repeated_xpec_failure: true,
             diff_from_oid: Some("abc123".to_string()),
         };
 
@@ -215,7 +215,7 @@ mod tests {
             &issues(&["x"]),
             0,
             feedback_context(false),
-            Some(&recurring),
+            Some(&repeated_failure),
         );
 
         assert!(has_action(&messages, "keep failing on the same xpec"));

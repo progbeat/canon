@@ -30,7 +30,7 @@ pub(crate) fn run_check_with_runner_and_caches<R: EvaluatorRunner>(
         caches,
         resolve_selected_diff_from_tree_oids,
     } = side_effects;
-    // xpec: w
+    // xpec: kK
     // Config expansion establishes the collected set. CLI selectors choose
     // candidates from that set; they do not remove unselected xpecs from it,
     // so every collected xpec without a result remains pending.

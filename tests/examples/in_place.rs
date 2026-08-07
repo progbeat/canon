@@ -1,6 +1,6 @@
 use super::*;
 
-// xpec: 1g,90,g2,qc
+// xpec: 1g,90,g2
 #[test]
 fn non_git_in_place_check_without_state_namespace_stays_memory_backed() {
     let repo = portable_temp_dir("canon-in-place-without-state-namespace");
@@ -137,7 +137,7 @@ fn wait_for_later_record_timestamp_second() {
     }
 }
 
-// xpec: 1h,w,90
+// xpec: 1h,kK,90
 #[test]
 fn selected_in_place_prohibited_expectation_fields_fail_before_evaluation() {
     let repo = portable_temp_dir("canon-in-place-invalid-config-before-evaluation");
@@ -169,9 +169,9 @@ expectations:
     assert!(!output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
-    // xpec: w,90
+    // xpec: kK,90
     assert!(stdout.contains(" 1 pending in "), "{stdout}\n{stderr}");
-    // xpec: 1h,w,90
+    // xpec: 1h,kK,90
     assert_eq!(
         stderr,
         format!(

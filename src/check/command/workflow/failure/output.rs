@@ -89,7 +89,7 @@ impl CheckFailureOutput {
     }
 
     fn pending_count(self) -> usize {
-        // [w] Before config collection, or when collection itself fails, there
+        // [kK] Before config collection, or when collection itself fails, there
         // are zero collected xpecs. After collection, every xpec without a
         // result is pending. Keep those states and the later
         // evaluation-readiness transition explicit instead of fabricating
@@ -121,13 +121,13 @@ impl CheckFailureOutput {
                 feedback_context.assert_default_against_head();
                 vec![continue_evaluation_message()]
             }
-            // [w] A collection error is the reported command error; rerunning
+            // [kK] A collection error is the reported command error; rerunning
             // cannot continue evaluation until the user fixes that error.
             CheckFailureCollection::CollectionFailed | CheckFailureCollection::Collected { .. } => {
                 command_error_feedback_messages(feedback_context)
             }
             CheckFailureCollection::ReadyForEvaluation { .. } => {
-                check_feedback_messages(report, feedback_context, None, true)
+                check_feedback_messages(report, feedback_context, None)
             }
         }
     }
@@ -150,7 +150,7 @@ pub(in crate::check::command::workflow) fn requested_check_output(
 pub(in crate::check::command::workflow) fn write_unconditional_check_trailer_and_feedback(
     output: CheckFailureOutput,
 ) -> Result<(), CommandError> {
-    // [w] The check contract makes these three `finally` effects unconditional
+    // [kK] The check contract makes these three `finally` effects unconditional
     // and independent of the command-specific diagnostic already flushed at
     // the failure boundary. Command examples such as [D8] specify those
     // diagnostic and feedback lines without overriding this shared trailer.
@@ -174,7 +174,7 @@ pub(in crate::check::command::workflow) fn write_unconditional_check_trailer_and
     report: &CheckRunReport,
     token_usage_summary: TokenUsageSummary,
 ) -> Result<(), CommandError> {
-    // [2Z,w] A panic after evaluation has started uses the caller-owned
+    // [2Z,kK] A panic after evaluation has started uses the caller-owned
     // progress report, so completed and cached outcomes are not relabeled as
     // pending by the unconditional trailer and feedback path.
     let [token_usage_result, summary_result, feedback_result] =
@@ -195,7 +195,7 @@ pub(in crate::check::command::workflow) fn write_check_failure_feedback(
     output: CheckFailureOutput,
     report: &CheckRunReport,
 ) -> Result<(), CommandError> {
-    // [2Z,w] Feedback is an independent `finally` effect for a selected
+    // [2Z,kK] Feedback is an independent `finally` effect for a selected
     // default-source run. Collection that has not been attempted uses the
     // canonical continuation action without inventing xpec counts; collection
     // failure or a collected config that fails before evaluation readiness

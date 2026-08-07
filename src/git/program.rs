@@ -185,15 +185,16 @@ pub(crate) fn tree_object_exists(root: &Path, tree_oid: &str) -> Result<bool, St
     let output = Command::new("git")
         .arg("-C")
         .arg(root)
-        .args(["cat-file", "-e", &format!("{tree_oid}^{{tree}}")])
+        .args(["cat-file", "-t", tree_oid])
         .output()
         .map_err(|err| format!("failed to run git cat-file: {}", err))?;
     if output.status.success() {
-        return Ok(true);
+        let object_type = command_output_token(&output.stdout, "git cat-file stdout")?;
+        return Ok(object_type == "tree");
     }
     let stderr = command_output_trimmed(&output.stderr, "git cat-file stderr")
         .unwrap_or("git cat-file failed");
-    if git_cat_file_reports_unusable_tree_object(stderr, tree_oid) {
+    if git_cat_file_reports_missing_object(stderr) {
         return Ok(false);
     }
     Err(format!(
@@ -202,12 +203,8 @@ pub(crate) fn tree_object_exists(root: &Path, tree_oid: &str) -> Result<bool, St
     ))
 }
 
-fn git_cat_file_reports_unusable_tree_object(stderr: &str, tree_oid: &str) -> bool {
-    let tree_name = format!("{tree_oid}^{{tree}}");
-    stderr.contains(&format!("Not a valid object name {tree_name}"))
-        || stderr.contains(&format!(
-            "{tree_name}: expected tree type, but the object dereferences to"
-        ))
+fn git_cat_file_reports_missing_object(stderr: &str) -> bool {
+    stderr.contains("git cat-file: could not get object info")
 }
 
 #[cfg(test)]

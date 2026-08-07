@@ -24,7 +24,7 @@ pub(in crate::check::command::workflow) fn finish_check_error_report(
     context: CheckErrorReportFinish<'_>,
 ) -> Result<(), CommandError> {
     let error = context.error;
-    // [w] This path follows a failed `write_check_trailer`, which already
+    // [kK] This path follows a failed `write_check_trailer`, which already
     // attempted both unconditional trailer parts independently. Finish the
     // remaining feedback and lifecycle-log parts without duplicating either
     // trailer line.
@@ -47,7 +47,7 @@ pub(in crate::check::command::workflow) fn fail_check_before_selection(
     output: &mut CheckFailureOutput,
     err: String,
 ) -> Result<(), CommandError> {
-    // [w] Failed runtime-log storage must not suppress the public `finally`
+    // [kK] Failed runtime-log storage must not suppress the public `finally`
     // output. Preserve the start-log failure in the command error, then
     // continue through the common trailer and finish-log path.
     let err = match write_check_lifecycle_start_event(diagnostic_log, None, Vec::new()) {
@@ -94,7 +94,7 @@ pub(in crate::check::command::workflow) fn start_check_with_candidates_or_fail(
     public_output_progress: &mut CheckPublicOutputProgress,
     output: &mut CheckFailureOutput,
 ) -> Result<(), CommandError> {
-    // [w,gN] Candidate resolution establishes the command lifecycle boundary;
+    // [kK,gN] Candidate resolution establishes the command lifecycle boundary;
     // cache filtering establishes the canonical Selected set later. If
     // start-event storage itself fails, the command still traverses the same
     // public trailer and best-effort finish-event path as every later failure.
@@ -118,7 +118,7 @@ pub(in crate::check::command::workflow) fn fail_check_after_selection(
     output: &mut CheckFailureOutput,
     err: String,
 ) -> Result<(), CommandError> {
-    // [2Z,w] Preserve the collected pending count for the summary. Feedback
+    // [2Z,kK] Preserve the collected pending count for the summary. Feedback
     // remains the reported-error action until the run reaches evaluation
     // readiness; after that boundary, failed or pending outcomes take priority.
     // Earlier failures reach this finisher with as much default tree context as
@@ -130,7 +130,7 @@ pub(in crate::check::command::workflow) fn fail_check_before_lifecycle(
     output: CheckFailureOutput,
     err: String,
 ) -> Result<(), CommandError> {
-    write_check_failure_public_effects(output, &err)?;
+    write_check_failure_public_effects(None, output, &err)?;
     Err(CommandError::Reported(ReportedCommandFailure::Check))
 }
 
@@ -153,9 +153,9 @@ fn finish_check_failure(
     output: CheckFailureOutput,
     err: String,
 ) -> Result<(), CommandError> {
-    public_output_progress.mark_all_attempted();
-    let public_result = write_check_failure_public_effects(output, &err);
-    // [w] The public trailer and lifecycle logging are independent failure
+    let public_result =
+        write_check_failure_public_effects(Some(public_output_progress), output, &err);
+    // [kK] The public trailer and lifecycle logging are independent failure
     // effects. Attempt the log even when public output fails, and never let a
     // logging failure suppress the unconditional check trailer.
     let finish_result =
@@ -165,22 +165,44 @@ fn finish_check_failure(
 }
 
 fn write_check_failure_public_effects(
+    public_output_progress: Option<&mut CheckPublicOutputProgress>,
     output: CheckFailureOutput,
     err: &str,
+) -> Result<(), CommandError> {
+    attempt_failure_diagnostic_then_public_finally(
+        public_output_progress,
+        || {
+            write_command_error_line(&CommandError::from(err.to_owned()))
+                .map_err(CommandError::from)
+        },
+        || write_unconditional_check_trailer_and_feedback(output),
+    )
+}
+
+fn attempt_failure_diagnostic_then_public_finally(
+    public_output_progress: Option<&mut CheckPublicOutputProgress>,
+    write_diagnostic: impl FnOnce() -> Result<(), CommandError>,
+    write_protected_finally: impl FnOnce() -> Result<(), CommandError>,
 ) -> Result<(), CommandError> {
     // [1h,D8] Once a check-specific failure is known, its diagnostic is
     // eligible immediately. Flush it before unrelated `finally` effects, then
     // return a sentinel so the outer command boundary does not print it twice.
-    let diagnostic_result =
-        write_command_error_line(&CommandError::from(err.to_owned())).map_err(CommandError::from);
-    // [2Z,w] This check-only `finally` path always attempts token usage, a
+    let diagnostic_result = write_diagnostic();
+    // [2Z,kK] This check-only `finally` path always attempts token usage, a
     // summary, and eligible feedback. Collected xpecs without results remain
     // pending in the summary. Feedback uses the reported-error action until the
     // run is ready for evaluation, then preserves failed or pending actions.
     // Before a collection attempt, it uses the continuation action when tree
     // context is available. A failed collection uses the reported-error
     // action; without tree context, any command error uses the generic action.
-    let trailer_result = write_unconditional_check_trailer_and_feedback(output);
+    // Transfer ownership only after the diagnostic attempt returns. A
+    // diagnostic panic therefore leaves every finally effect eligible for the
+    // outer panic fallback. The transferred operation protects token usage,
+    // summary, and feedback independently before it resumes any panic.
+    if let Some(progress) = public_output_progress {
+        progress.mark_all_attempted();
+    }
+    let trailer_result = write_protected_finally();
     combine_failure_effect_results([diagnostic_result, trailer_result])
 }
 
@@ -210,4 +232,32 @@ pub(super) fn write_check_error_finish_event(
 ) -> Result<(), String> {
     write_check_lifecycle_finish_event(diagnostic_log, false, Some(err))
         .map_err(|err| err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test] // xpec: kK
+    fn diagnostic_panic_leaves_public_finally_effects_for_outer_fallback() {
+        let mut progress = CheckPublicOutputProgress::default();
+        let mut protected_finally_started = false;
+
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = attempt_failure_diagnostic_then_public_finally(
+                Some(&mut progress),
+                || -> Result<(), CommandError> { panic!("diagnostic panicked") },
+                || {
+                    protected_finally_started = true;
+                    Ok(())
+                },
+            );
+        }))
+        .unwrap_err();
+
+        assert!(!protected_finally_started);
+        assert!(progress.needs_trailer());
+        assert!(progress.needs_feedback());
+        assert_eq!(panic.downcast_ref::<&str>(), Some(&"diagnostic panicked"));
+    }
 }

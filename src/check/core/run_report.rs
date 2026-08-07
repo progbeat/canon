@@ -72,7 +72,7 @@ impl CachedPassRecord {
 pub(crate) struct CheckRunReport {
     // Structured result records produced by evaluator work in this run.
     pub(crate) records: Vec<CheckRecord>,
-    // [m,w] Cached Result is pass-only by definition. Keep that invariant in
+    // [m,kK] Cached Result is pass-only by definition. Keep that invariant in
     // the element type so feedback and failure history cannot observe a
     // representable cached failure.
     pub(crate) cached_passes: Vec<CachedPassRecord>,

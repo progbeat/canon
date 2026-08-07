@@ -41,7 +41,7 @@ pub(super) fn resume_panicked_check(
         diagnostic_log,
         inspection,
     } = context;
-    // [w] Evaluation assertions are allowed to panic, but the command's
+    // [kK] Evaluation assertions are allowed to panic, but the command's
     // `finally` effects still run. Preserve the original panic after
     // attempting any missing public trailer or feedback effects, lifecycle
     // finish, and deferred runtime-log writes. Secondary panics in fallback
@@ -73,7 +73,7 @@ fn attempt_panicked_check_public_output(
     prepare: impl FnOnce() -> CheckFailureOutput,
     write: impl FnOnce(CheckFailureOutput),
 ) -> CheckFailureOutput {
-    // [w] Preparation and output are independent panic boundaries. If default
+    // [kK] Preparation and output are independent panic boundaries. If default
     // tree context cannot be prepared, token usage and summary still run from
     // the original progress state before any feedback assertion can fail.
     let prepared_output = catch_unwind(AssertUnwindSafe(prepare)).unwrap_or(original_output);
@@ -85,7 +85,7 @@ fn finish_panicked_check_lifecycle(
     diagnostic_log: &mut DiagnosticLogWriter,
     lifecycle_started: bool,
 ) {
-    // [w] A panic before candidate collection still gets a complete empty
+    // [kK] A panic before candidate collection still gets a complete empty
     // lifecycle bracket. A later panic reuses the recorded start and appends
     // exactly one failed finish before deferred log errors are collected.
     if !lifecycle_started {

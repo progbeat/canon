@@ -13,7 +13,7 @@ mod hash;
 mod scope_entries;
 
 pub(crate) use hash::git_object_oid_has_known_shape;
-use hash::{git_object_hash_algorithm, scope_entry_is_tree, GitObjectHashAlgorithm};
+use hash::{git_object_hash_algorithm, GitObjectHashAlgorithm};
 use scope_entries::{
     visible_scope_entries_from_files, visible_tree_oid_from_files,
     visible_tree_oid_from_files_if_scope_present,

@@ -26,7 +26,7 @@ fn elapsed_caller_result_output_contains_each_due_default_marker() {
     assert_eq!(String::from_utf8(bytes).unwrap(), "j... OK\n");
 }
 
-#[test] // xpec: w
+#[test] // xpec: kK
 fn summary_output_matches_documented_line() {
     let report = CheckRunReport {
         records: vec![passing_record()],

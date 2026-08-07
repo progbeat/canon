@@ -33,7 +33,7 @@ pub(super) fn write_check_trailer(
     public_output_progress: &mut CheckPublicOutputProgress,
 ) -> Result<(), String> {
     let token_usage_summary = collect_token_usage_for_summary(runner);
-    // [w] Collection may panic while the outer fallback still owns every
+    // [kK] Collection may panic while the outer fallback still owns every
     // public effect. Transfer ownership only when the independently protected
     // token-usage and summary attempts are about to start.
     public_output_progress.mark_trailer_attempted();
@@ -61,7 +61,7 @@ pub(super) fn write_required_trailer_parts(
     write_token_usage: impl FnOnce() -> Result<(), String>,
     write_summary: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
-    // [w] These are independent `finally` outputs. Attempt both after either
+    // [kK] These are independent `finally` outputs. Attempt both after either
     // an ordinary write error or a panic, then resume the first panic so
     // fallback handling cannot replace the original failure.
     let [token_usage_result, summary_result] =
@@ -97,7 +97,7 @@ pub(in crate::check::command::workflow) fn attempt_independent_finally_effects<
     if let Some(payload) = first_panic {
         resume_unwind(payload);
     }
-    // [w] Without a captured panic, every effect returned exactly one result.
+    // [kK] Without a captured panic, every effect returned exactly one result.
     match results.try_into() {
         Ok(results) => results,
         Err(_) => unreachable!("every non-panicking finally effect must return a result"),
@@ -110,21 +110,21 @@ mod tests {
     use crate::check::command::args::parse_check_command_args;
     use std::ffi::OsString;
 
-    #[test] // xpec: w
+    #[test] // xpec: kK
     fn feedback_allows_normalized_default_config_path() {
         let command = command_with_config_path("./.canon/check.yml");
 
         assert!(check_command_emits_feedback(&command));
     }
 
-    #[test] // xpec: w
+    #[test] // xpec: kK
     fn feedback_rejects_non_default_config_path() {
         let command = command_with_config_path(".canon/other.yml");
 
         assert!(!check_command_emits_feedback(&command));
     }
 
-    #[test] // xpec: w
+    #[test] // xpec: kK
     fn feedback_rejects_in_place_checks() {
         let mut command = command_with_config_path(".canon/check.yml");
         command.in_place = true;
@@ -132,7 +132,7 @@ mod tests {
         assert!(!check_command_emits_feedback(&command));
     }
 
-    #[test] // xpec: w
+    #[test] // xpec: kK
     fn feedback_allows_explicit_selectors_with_default_command_sources() {
         let mut command = command_with_config_path(".canon/check.yml");
         command.options.selectors.push("a7F".into());
@@ -153,7 +153,7 @@ mod tests {
         assert!(!check_report_passed(&report));
     }
 
-    #[test] // xpec: w
+    #[test] // xpec: kK
     fn trailer_attempts_summary_after_token_usage_failure() {
         let mut token_usage_attempted = false;
         let mut summary_attempted = false;
@@ -175,7 +175,7 @@ mod tests {
         assert_eq!(error, "token usage failed");
     }
 
-    #[test] // xpec: w
+    #[test] // xpec: kK
     fn trailer_attempts_summary_after_token_usage_panic() {
         let mut token_usage_attempted = false;
         let mut summary_attempted = false;
@@ -199,7 +199,7 @@ mod tests {
         assert_eq!(panic.downcast_ref::<&str>(), Some(&"token usage panicked"));
     }
 
-    #[test] // xpec: w
+    #[test] // xpec: kK
     fn finally_effects_attempt_feedback_after_trailer_panic() {
         let mut token_usage_attempted = false;
         let mut summary_attempted = false;

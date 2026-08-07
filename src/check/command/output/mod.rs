@@ -32,8 +32,9 @@ pub(crate) use query::finish_query_output;
 #[cfg(test)]
 pub(crate) use record::write_caller_result_output_with_elapsed_timeline;
 pub(crate) use record::{
-    publish_expectation_report, render_caller_prompt, start_query_report_output,
-    write_caller_result_output, write_result_output_without_started_report, LiveProgressOutput,
+    publish_expectation_report, render_caller_question_prompt_without_short_id,
+    start_query_report_output, write_caller_result_output,
+    write_result_output_without_started_report, LiveProgressOutput,
 };
 pub(crate) use shared::{write_stdout_message_lines, write_stdout_record, SharedCheckOutput};
 pub(crate) use summary::{summary_outcome_counts, write_summary_line};

@@ -53,7 +53,7 @@ pub(super) fn record_collected_expectations(
     failure_output: &mut CheckFailureOutput,
     progress_report: &mut CheckRunReport,
 ) {
-    // [w,2Z] Failure state and the live report describe the same collected
+    // [kK,2Z] Failure state and the live report describe the same collected
     // outcome domain. Update them together so every check mode presents the
     // same pending count before evaluation starts.
     failure_output.mark_collection_complete(expectation_count);

@@ -28,7 +28,7 @@ pub(crate) fn render_runtime_log_process_event(
     event: &str,
     fields: &[(&str, Value)],
 ) -> DiagnosticLogResult<RenderedRuntimeLogEvent> {
-    // [w,g2,Yq] Native process and invocation IDs are primary correlation
+    // [kK,g2,Yq] Native process and invocation IDs are primary correlation
     // fields for concurrent processes and sequential command runs. They link
     // events without deriving a second representation from event timestamps.
     render_runtime_log_event_with_process(
@@ -72,7 +72,7 @@ mod tests {
     use super::render_runtime_log_event;
     use serde_json::{json, Value};
 
-    #[test] // xpec: w,Yq
+    #[test] // xpec: kK,Yq
     fn agent_token_usage_accepts_aggregate_with_turn_context() {
         let fields = vec![
             ("id", json!("id")),

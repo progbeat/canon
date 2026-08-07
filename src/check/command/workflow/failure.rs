@@ -25,8 +25,9 @@ impl CheckPublicOutputProgress {
     }
 
     pub(super) fn mark_feedback_attempted(&mut self) {
-        // [w] Normal completion attempts feedback only after the trailer
-        // attempt returned. Failure paths transfer both effects together.
+        // [kK] Normal completion attempts feedback only after the trailer
+        // attempt returned. Failure paths transfer both effects together only
+        // after their preceding diagnostic attempt returned.
         match self {
             Self::None => {
                 unreachable!("feedback cannot precede the public check trailer")
@@ -59,7 +60,7 @@ pub(super) use output::{
 mod tests {
     use super::CheckPublicOutputProgress;
 
-    #[test] // xpec: w
+    #[test] // xpec: kK
     fn public_output_progress_keeps_feedback_eligible_after_trailer_attempt() {
         let mut progress = CheckPublicOutputProgress::default();
 

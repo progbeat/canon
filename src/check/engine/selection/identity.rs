@@ -115,7 +115,7 @@ mod tests {
         assert_eq!(selected[0].configured_id(), Some(identities[1].id.as_str()));
     }
 
-    #[test] // xpec: w,sw
+    #[test] // xpec: kK,sw
     fn include_selector_selects_every_matching_id_prefix() {
         let config = two_expectation_config();
         let identities = vec![
@@ -136,7 +136,7 @@ mod tests {
         assert_eq!(configured_ids(&selected), ["sharedalpha", "sharedbeta"]);
     }
 
-    #[test] // xpec: w,sw
+    #[test] // xpec: kK,sw
     fn overlapping_include_selectors_do_not_duplicate_expectations() {
         let config = two_expectation_config();
         let identities = vec![

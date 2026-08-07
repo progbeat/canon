@@ -42,7 +42,7 @@ pub(super) fn prepare_git_backed_configuration(
         progress_report,
         persistent_state,
     } = context;
-    // [w] If config collection fails, the required summary reports the empty
+    // [kK] If config collection fails, the required summary reports the empty
     // collected outcome domain and feedback requires the reported error to be
     // fixed. This state must be recorded before the failure boundary writes
     // the trailer.

@@ -37,7 +37,7 @@ pub(crate) fn write_thread_restart_event(
 }
 
 fn thread_restart_event_fields(event: &ThreadRestartEventFields<'_>) -> [(&'static str, Value); 7] {
-    // [w] Restart is a distinct event from the following fresh-thread start.
+    // [kK] Restart is a distinct event from the following fresh-thread start.
     // Its effective instruction pair is assembled exactly once here.
     [
         ("threadId", json!(event.thread_id)),

@@ -13,9 +13,9 @@ use std::io::Write;
 // `command::workflow` orchestrates their order before calling
 // `finish_check_report`. This module owns only the post-summary feedback plus
 // finish logging. Success and error reports share both when allowed by the
-// command form. The optional error changes the finish log payload and replaces
-// success/commit guidance with command-error feedback for an otherwise
-// all-passed report; the workflow caller owns the final command result.
+// command form. The workflow reports a command error separately, preserves the
+// outcome feedback specified by `emit_check_feedback`, and then appends the
+// command-error next action so it is the last guidance shown to the user.
 pub(crate) struct CheckReportFinishContext<'b> {
     pub(crate) diagnostic_log: Option<&'b mut crate::logs::DiagnosticLogWriter>,
     pub(crate) result_output: &'b mut dyn Write,
@@ -63,7 +63,7 @@ fn write_check_feedback(
     failure_history_feedback: Option<&crate::xpec_state::FailureHistoryFeedback>,
     command_failed: bool,
 ) -> Result<(), CommandError> {
-    let messages = check_feedback_messages(
+    let messages = completion_feedback_messages(
         report,
         feedback_context,
         failure_history_feedback,
@@ -72,25 +72,37 @@ fn write_check_feedback(
     write_stdout_message_lines(output, messages, "check feedback").map_err(CommandError::from)
 }
 
-pub(crate) fn check_feedback_messages(
+fn completion_feedback_messages(
     report: &CheckRunReport,
     feedback_context: CheckFeedbackContext,
     failure_history_feedback: Option<&crate::xpec_state::FailureHistoryFeedback>,
     command_failed: bool,
 ) -> Vec<String> {
-    let issue_ids = report_issue_display_ids(report);
-    // [2Z,3k,ex,KD,w] Evaluation outcomes and command completion are
-    // independent: a persistence or trailer failure does not rewrite result
-    // records. A sole failed xpec requires its just-appended history entry for
-    // canonical repair feedback, though, so a failed history append routes to
-    // recoverable command-error guidance instead of entering that assertion.
-    let missing_required_failure_history =
-        issue_ids.len() == 1 && failure_history_feedback.is_none();
-    if command_failed
-        && ((issue_ids.is_empty() && report.pending == 0) || missing_required_failure_history)
-    {
-        return command_error_feedback_messages(feedback_context);
+    let mut messages = check_feedback_messages(report, feedback_context, failure_history_feedback);
+    if command_failed {
+        // [2Z,ex] `emit_check_feedback` still describes the recorded xpec
+        // outcomes exactly. A later command failure gets its own final action,
+        // preventing success or commit guidance from being the user's next
+        // step while preserving both independently true facts.
+        messages.extend(command_error_feedback_messages(feedback_context));
     }
+    messages
+}
+
+pub(crate) fn check_feedback_messages(
+    report: &CheckRunReport,
+    feedback_context: CheckFeedbackContext,
+    failure_history_feedback: Option<&crate::xpec_state::FailureHistoryFeedback>,
+) -> Vec<String> {
+    let issue_ids = report_issue_display_ids(report);
+    // [2Z,3k,ex,KD,kK] Evaluation outcomes and command completion are
+    // independent: a persistence or trailer failure does not rewrite result
+    // records or their canonical feedback. The workflow emits a separate
+    // command-error diagnostic before this outcome-only feedback. A sole
+    // failed xpec enters the renderer's explicit history assertion.
+    // [ex,kK] Violating this invariant deliberately panics; the outer check
+    // lifecycle catches that panic, independently attempts every remaining
+    // `finally` effect, and then resumes the original assertion panic.
     render_check_feedback_messages(
         &issue_ids,
         report.pending,
@@ -114,8 +126,9 @@ mod tests {
     use super::*;
     use crate::check::core::{CheckRecord, CheckResult};
 
-    #[test] // xpec: 2Z,3k,ex
-    fn failed_history_persistence_uses_recoverable_command_error_feedback() {
+    #[test] // xpec: ex
+    #[should_panic(expected = "the current failure record must be appended to fail history")]
+    fn canonical_history_assertion_rejects_an_unrecorded_single_failure() {
         let report = CheckRunReport {
             records: vec![failed_record("x")],
             cached_passes: Vec::new(),
@@ -123,14 +136,27 @@ mod tests {
         };
         let context = CheckFeedbackContext::from_tree_oids("checked", "head", "head");
 
-        let messages = check_feedback_messages(&report, context, None, true);
+        check_feedback_messages(&report, context, None);
+    }
 
-        assert!(messages
-            .iter()
-            .any(|message| message.contains("Fix the reported error")));
-        assert!(!messages
-            .iter()
-            .any(|message| message.contains("canon show not:x")));
+    #[test] // xpec: 2Z,ex
+    fn command_failure_action_follows_canonical_outcome_feedback() {
+        let report = CheckRunReport {
+            records: Vec::new(),
+            cached_passes: Vec::new(),
+            pending: 0,
+        };
+        let context = CheckFeedbackContext::from_tree_oids("checked", "head", "head");
+
+        let messages = completion_feedback_messages(&report, context, None, true);
+
+        assert_eq!(
+            messages,
+            vec![
+                "✓ All checks passed. Commit the staged changes!".to_string(),
+                "▷ Fix the reported error and run `canon check` again!".to_string(),
+            ]
+        );
     }
 
     fn failed_record(display_id: &str) -> CheckRecord {

@@ -33,7 +33,7 @@ mod tests {
         assert!(serde_saphyr::from_str::<CooldownConfig>("pass: 7d").is_err());
     }
 
-    #[test] // xpec: a,w
+    #[test] // xpec: a,kK
     fn invalid_expected_answer_error_uses_expectation_block_format() {
         let question = "What\nlanguage?";
         let agent = AgentConfig::default();

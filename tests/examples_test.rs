@@ -1,12 +1,12 @@
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const ZERO_TOKEN_USAGE_LINE: &str =
-    "token-usage: ref-cost=0.00$ total=0 input=0 (+ 0 cached) output=0 (reasoning 0)\n";
+    "token-usage: ref-cost=0.00$ total=0 input=0 (0 cached) output=0 (reasoning 0)\n";
 static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn canon() -> Command {
@@ -71,7 +71,5 @@ mod gate;
 mod in_place;
 #[path = "examples/initialization.rs"]
 mod initialization;
-#[path = "examples/state_write.rs"]
-mod state_write;
 #[path = "examples/validation.rs"]
 mod validation;

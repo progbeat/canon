@@ -109,7 +109,7 @@ fn is_expectation_diagnostic_block(message: &str) -> bool {
 mod tests {
     use super::{render_command_error, CommandError};
 
-    #[test] // xpec: w
+    #[test] // xpec: kK
     fn expectation_diagnostic_block_is_not_prefixed_with_generic_error() {
         let rendered = render_command_error(&CommandError::from(
             "x. ERROR\nQuestion?\nError: detail\nEvidence: value".to_string(),
@@ -121,7 +121,7 @@ mod tests {
         );
     }
 
-    #[test] // xpec: w
+    #[test] // xpec: kK
     fn ordinary_error_keeps_generic_error_prefix() {
         let rendered = render_command_error(&CommandError::from("ordinary failure".to_string()));
 
