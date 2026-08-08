@@ -3,6 +3,10 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Component, Path, PathBuf};
 
 pub(crate) fn ensure_dir_without_symlinks(path: &Path) -> Result<(), String> {
+    // macOS exposes its standard temporary directory through the system-owned
+    // `/var` alias. Resolve that trusted prefix once, while retaining the
+    // no-symlink walk for every caller-controlled component beneath it.
+    let path = crate::platform::filesystem::resolve_standard_temporary_path(path);
     let mut current = PathBuf::new();
     for component in path.components() {
         match component {

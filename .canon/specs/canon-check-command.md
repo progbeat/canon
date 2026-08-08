@@ -23,13 +23,13 @@ Examples:
       Check staged content against all canon expectations.
 
   canon check a7F K9m
-      Check canon expectations selected by ID prefix.
+      Check all expectations whose IDs start with a7F or K9m.
 
   canon check not:a7F not:K9m
       Check all expectations except those whose IDs start with a7F or K9m.
 
   canon check --tree HEAD --against-tree HEAD~1 a7F
-      Check one canon expectation on HEAD with comparison against the previous commit.
+      Check expectations whose IDs start with a7F on HEAD against the previous commit.
 ```
 
 *The `canon check --help` output may differ from this example in wording,
@@ -39,12 +39,29 @@ options, defaults, and common examples.*
 The behavior of `canon check` follows this shape:
 
 ```python
+evaluate = import(ref="#evaluate")
+emit_check_feedback = import(ref="#emit_check_feedback")
+
+def echo_off(fn):
+    global interactive_posix_terminal
+    interactive_posix_terminal = (platform == POSIX and stdin.is_terminal() and stdout.is_terminal())
+    if not interactive_posix_terminal:
+        return fn
+    def wrapper(*args, **kwargs):
+        ... # disable ECHO & ECHONL
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            ... # restore
+    return wrapper
+
+@echo_off
 def canon_check():
     ... # do everything needed to prepare for evaluation
     try:
         for xpec in check_order_policy(selected_expectations):
             evaluation = evaluate(xpec)
-            ...
+            ... # perform any other required work
             if evaluation["status"] == FAIL and not keep_going:
                 break
     finally:
@@ -56,32 +73,8 @@ def canon_check():
             and tree has its command-default value
             and against_tree has its command-default value
         ):
-            emit_feedback(...)
-
-def emit_feedback(failed, num_pending):
-    """
-    :param failed: Short IDs of failed expectations.
-    :param num_pending: Number of pending expectations.
-    """
-    assert against_tree_oid == head_tree_oid
-    if len(failed) > 0:
-        _repair_instructions(failed)
-        return print(f"▷ Fix the issues and run `canon check` again!")
-    if num_pending > 0:
-        return print("▷ Run `canon check` to continue evaluation.")
-    need_to_commit = (checked_tree_oid != against_tree_oid)
-    print(
-        "✓ All checks passed." +
-        (" Commit the staged changes!" if need_to_commit else "")
-    )
-
-def _repair_instructions(failed):
-    assert len(failed) > 0
-    # These failures were already shown in `canon check` output, so don't show them again to save tokens.
-    selectors = ' '.join(f'not:{x}' for x in failed)
-    print("❕ Verify that the evidence supports the observed answer and answers the expectation question; treat unsupported evidence as a readability issue.")
-    print(f"❕ Plan the repair, then run `canon show {selectors} -- <PATHSPEC>...` for the planned edit paths to identify expectations that may be affected.")
-    print("❕ Use the matching expectations to avoid regressions while fixing the issues.")
+            emit_check_feedback(...)
+        ...
 ```
 
 ## Token Usage Line
@@ -89,7 +82,7 @@ def _repair_instructions(failed):
 The token usage line is written to stderr as:
 
 ```
-token-usage: ref-cost={:.2}$ total={} input={} (+ {} cached) output={} (reasoning {})
+token-usage: ref-cost={:.2}$ total={} input={} ({} cached) output={} (reasoning {})
 ```
 
 If token usage data is unavailable, every numeric field is `0`.

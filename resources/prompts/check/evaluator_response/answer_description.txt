@@ -1,0 +1,1 @@
+The minimal substantive answer directly supported by the evidence. It must not contradict the evidence. When a displayed change is part of the evaluation, describe the resulting state and effect, not a prior condition that the change removes.

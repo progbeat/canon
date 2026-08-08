@@ -7,21 +7,20 @@ use crate::check::{
     show_help_command,
 };
 use crate::gate::run_gate_command;
+use crate::git::git_project_root;
 use crate::hooks::run_pre_commit_command;
 use crate::init::run_init;
-use crate::logs::DiagnosticLogPlan;
-use crate::project::{git_project_root, project_root_or_current};
+use crate::project::project_root_or_current;
 use clap::Command as ClapCommand;
-use std::env;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BuiltinCommand {
     // Keep this enum aligned with the public command surface. `ask` and
     // `pre-commit` are public builtins; the old `hook` command is not.
-    // `Ask` is dispatched to `run_ask_command` below, not routed through
-    // `Check`, because `canon ask` has its own response-output contract.
+    // `Ask` and `Check` dispatch to distinct command boundaries because their
+    // public response-output contracts differ.
     Init,
     PreCommit,
     Ask,
@@ -65,8 +64,18 @@ impl BuiltinCommand {
         }
     }
 
+    fn prints_help_before_command_boundary(self) -> bool {
+        matches!(
+            self,
+            BuiltinCommand::Init | BuiltinCommand::Show | BuiltinCommand::Gate
+        )
+    }
+
     pub(super) fn run(self, args: &[OsString]) -> Result<(), CommandError> {
-        if self != BuiltinCommand::PreCommit && print_help_if_requested(args, self.help_command())?
+        // Commands in this set need project discovery only for real work, so
+        // render their clap help before resolving any project or Git root.
+        if self.prints_help_before_command_boundary()
+            && print_help_if_requested(args, self.help_command())?
         {
             return Ok(());
         }
@@ -89,33 +98,8 @@ impl BuiltinCommand {
                 let root = git_project_root(Path::new("."))?;
                 run_pre_commit_command(&root, args).map_err(CommandError::from)
             }
-            BuiltinCommand::Ask => {
-                let diagnostic_log_plan = DiagnosticLogPlan::prepare(Path::new("."));
-                let (root, default_in_place) = check_like_root(args)?;
-                run_ask_command(&root, args, default_in_place, diagnostic_log_plan)
-            }
-            BuiltinCommand::Check => {
-                // [B,cg] Command diagnostics capture their configuration before
-                // `check_like_root` chooses Git-backed or in-place evaluation.
-                let diagnostic_log_plan = DiagnosticLogPlan::prepare(Path::new("."));
-                let (root, default_in_place) = check_like_root(args)?;
-                let in_place =
-                    default_in_place || args_include_option_before_separator(args, "--in-place");
-                // [1g,I4,cg] In-place may use an explicit output namespace, but
-                // never discovers one from repository metadata.
-                let command_persistent_state_root = if in_place {
-                    crate::state_paths::CanonStateRoot::resolve_explicit_if_configured()?
-                } else {
-                    crate::state_paths::CanonStateRoot::resolve_if_available(&root)?
-                };
-                run_check_command(
-                    &root,
-                    args,
-                    default_in_place,
-                    command_persistent_state_root,
-                    diagnostic_log_plan,
-                )
-            }
+            BuiltinCommand::Ask => run_ask_command(args),
+            BuiltinCommand::Check => run_check_command(args),
             BuiltinCommand::Show => {
                 let root = git_project_root(Path::new("."))?;
                 run_show_command(&root, args)
@@ -127,62 +111,5 @@ impl BuiltinCommand {
                 run_gate_command(&root, args)
             }
         }
-    }
-}
-
-fn check_like_root(args: &[OsString]) -> Result<(std::path::PathBuf, bool), CommandError> {
-    let current_dir =
-        env::current_dir().map_err(|err| format!("failed to read current dir: {err}"))?;
-    let explicit_in_place = args_include_option_before_separator(args, "--in-place");
-    // [I4] An explicit in-place invocation selects the checked directory
-    // without Git-backed check-root discovery.
-    if explicit_in_place {
-        return Ok((current_dir, false));
-    }
-    let git_root = git_project_root(&current_dir).ok();
-    let default_in_place = git_root.is_none();
-    // This is only the in-place root-selection rule. The rest of the in-place
-    // contract is split across command parsing (`src/check/command/args.rs`),
-    // config validation (`src/check/config/validation.rs`), orchestration
-    // (`src/check/command/execution/run.rs`), runtime
-    // scope/session behavior (`src/check/interrogation/state.rs`), and config
-    // expansion (`src/repo_inspection/mod.rs`).
-    let root = if default_in_place {
-        current_dir
-    } else {
-        git_root.expect("git_root is present when default_in_place is false")
-    };
-    Ok((root, default_in_place))
-}
-
-fn args_include_option_before_separator(args: &[OsString], option: &str) -> bool {
-    args.iter()
-        .take_while(|arg| arg.as_os_str() != OsStr::new("--"))
-        .any(|arg| arg == option)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::args_include_option_before_separator;
-    use std::ffi::OsString;
-
-    fn os_args(args: &[&str]) -> Vec<OsString> {
-        args.iter().map(OsString::from).collect()
-    }
-
-    #[test] // xpec: 9b
-    fn option_scan_stops_at_separator() {
-        assert!(!args_include_option_before_separator(
-            &os_args(&["--", "--in-place"]),
-            "--in-place"
-        ));
-    }
-
-    #[test] // xpec: 9b
-    fn option_scan_finds_option_before_separator() {
-        assert!(args_include_option_before_separator(
-            &os_args(&["--in-place", "--", "--ignored"]),
-            "--in-place"
-        ));
     }
 }

@@ -1,23 +1,37 @@
 - q: "Are you instructed to format evidence references as project-relative refs enclosed in backticks?"
   a: yes
+  q-scope: ["resources/prompts/"]
 
 - q: "Do your instructions before this question explicitly prohibit proxy evidence?"
   a: yes
+  q-scope: ["resources/prompts/"]
 
 - q: "Are you instructed to use the minimum evidence sufficient to answer correctly, cite it precisely, then stop?"
   a: yes
+  q-scope: ["resources/prompts/"]
 
-- q: "Do your instructions encourage you to make `qScopeSuggestion` as narrow as possible while still enough to justify the answer?"
+- q: "Do your base instructions contain any answer directive whose condition depends on the topic of a substantive project claim? Treat answer directive as any instruction that affects the semantic value of the final `answer`."
+  a: no
+  q-scope: ["resources/prompts/"]
+
+- q: "Do your instructions require `qScopeSuggestion` to be a list of repository-relative paths, and encourage you to make that scope as narrow as possible while still enough to justify the answer?"
   a: yes
+
+- q: |-
+    The evaluator base instructions, developer instructions, and turn prompt rendered from the same parameter values form a single instruction set and must be considered together.
+    Consider only variations produced by conditional template branches; ignore text supplied through template parameters.
+    This instruction set must:
+    - be internally consistent and contain no contradictions;
+    - not use undefined terms whose meaning is neither generally understood nor clear enough to understand the instruction;
+    - contain no instruction that applies specifically to affirmative or negative answers, or otherwise distinguishes answers by polarity;
+    - neither restate, interpret, qualify, explain, nor otherwise alter another instruction or statement;
+    Can you find parameter values that select conditional branches for which the rendered instruction set violates any of these requirements in a way that can reduce the evaluator's ability to answer correctly or efficiently?
+  a: no
 
 - q: "Can you find any prompts or instructions for the evaluator agent outside of `resources/prompts/`?"
   a: no
 
-- q: "Do your base instructions contain any answer directive whose condition depends on the topic of a substantive project claim? Treat answer directive as any instruction that affects the semantic value of the final `answer`."
-  a: no
-  cooldown: 1h
-
-- q: "Can you find any logic that depends on the content of the evidence provided by the evaluator agent?"
+- q: "Can you find any decision whose outcome depends on the content of evaluator-provided evidence?"
   a: no
   target: diff
 
@@ -26,9 +40,6 @@
 
 - q: "Does evaluator prompt template rendering trim leading and trailing whitespace from the rendered output?"
   a: yes
-
-- q: "For expectations with the same `diff-from` whose `target` is `project` or `diff`, can the `target` value affect anything except rendered evaluator prompt template content?"
-  a: no
 
 - q: "Is the q-scope verification follow-up turn the only `canon check` decision logic that may depend on a `qScopeSuggestion` from an evaluation response?"
   a: yes

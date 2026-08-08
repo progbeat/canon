@@ -14,4 +14,4 @@ The evaluator agent is started in the checked directory.
 `--tree`, `--against-tree` are rejected in in-place mode.
 
 Selected expectations must be valid without Git-tree, diff, cache, or path-hiding behavior.
-Configured `diff-from`, `target`, `cooldown`, and `ignore` are invalid in in-place mode.
+Configured `diff-from`, `target`, `cooldown`, `q-scope`, and `ignore` are invalid in in-place mode.

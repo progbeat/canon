@@ -1,0 +1,76 @@
+[
+  {
+    "type": "namespace",
+    "name": "project",
+    "description": "Inspect files in the current visible project through read-only operations without shell, network, or write access.",
+    "tools": [
+      {
+        "type": "function",
+        "name": "files",
+        "description": "List file and symbolic-link entries recursively below a project-relative path. Symbolic links are listed but never followed.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "description": "Project-relative file or directory path. Defaults to the project root.",
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      {
+        "type": "function",
+        "name": "read",
+        "description": "Read a regular file, or the target path stored in a symbolic-link entry, from the visible project or an absolute Canon prompt-artifact path. Symbolic links are never followed. Output includes line numbers and is bounded.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "description": "Project-relative path or absolute prompt-artifact path.",
+              "type": "string"
+            },
+            "startLine": {
+              "description": "First one-based line to return. Defaults to 1.",
+              "type": "integer",
+              "minimum": 1
+            },
+            "endLine": {
+              "description": "Last one-based line to return, inclusive.",
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "type": "function",
+        "name": "search",
+        "description": "Search visible project files and stored symbolic-link target paths for a literal string. Symbolic links are never followed. Results use project-relative path:line references and are bounded.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "description": "Literal text to find, from 1 through 1024 Unicode characters.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024
+            },
+            "path": {
+              "description": "Project-relative file or directory path. Defaults to the project root.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
+        }
+      }
+    ]
+  }
+]

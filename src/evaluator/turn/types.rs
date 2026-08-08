@@ -2,21 +2,21 @@ use crate::check::ParsedAnswer;
 use serde::Serialize;
 
 pub(crate) struct EvaluatorTurnContext<'a> {
-    pub(crate) session_id: &'a str,
+    pub(crate) thread_id: &'a str,
     pub(crate) model: Option<&'a str>,
     pub(crate) thinking: &'a str,
 }
 
 pub(crate) struct ThreadLifecycleLog {
     pub(crate) event: &'static str,
-    pub(crate) session_id: String,
+    pub(crate) thread_id: String,
     pub(crate) base_instructions: String,
     pub(crate) developer_instructions: String,
-    pub(crate) reuse_context: ThreadReuseLogContext,
+    pub(crate) evaluation_context: ThreadEvaluationLogContext,
 }
 
 #[derive(Clone, Serialize)]
-pub(crate) struct ThreadReuseLogContext {
+pub(crate) struct ThreadEvaluationLogContext {
     #[serde(rename = "inPlace")]
     pub(crate) in_place: bool,
     #[serde(rename = "visibleTreeOid", skip_serializing_if = "Option::is_none")]
@@ -25,8 +25,8 @@ pub(crate) struct ThreadReuseLogContext {
     pub(crate) diff_base_tree_oid: Option<String>,
     #[serde(rename = "checkedTreeOid", skip_serializing_if = "Option::is_none")]
     pub(crate) checked_tree_oid: Option<String>,
-    #[serde(rename = "turnPrompt")]
-    pub(crate) turn_prompt: String,
+    #[serde(rename = "taskInput")]
+    pub(crate) task_input: String,
     #[serde(rename = "questionContext")]
     pub(crate) question_context: String,
     pub(crate) plugins: Vec<String>,

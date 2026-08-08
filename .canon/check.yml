@@ -57,8 +57,12 @@ xpecs:
     - q: |-
         {{ read(path) }}
         ---
-        Can you find any high-confidence violation of this specification in the implementation?
+        The implementation must:
+        - preserve every specified behavior;
+        - preserve every pseudocode assertion as an explicit assertion;
+        Can you find any high-confidence violation?
       a: no
+      preset: default
 
   - !foreach
     - path: ["specs/**.py"]
@@ -66,11 +70,13 @@ xpecs:
         --- # {{ path }}
         {{ read(path) }}
         ---
-        The implementation may differ from the pseudocode in internal structure and control flow, but it must:
+        The implementation must:
         - preserve every specified behavior;
-        - preserve every pseudocode assertion as an explicit assertion.
+        - preserve every pseudocode assertion as an explicit assertion;
+        - for every pseudocode `@ref` decorator, mark the corresponding implementation declaration with a source-comment reference matching the decorator argument (`@ref("#…")` → `[#…]`).
         Can you find any high-confidence violation?
       a: no
+      preset: default
 
   # Docker
   - !include docker/general.yml
@@ -78,6 +84,7 @@ xpecs:
   # Documentation
   - q: "Can you find any inconsistencies between `docs/GLOSSARY.md` and the codebase?"
     a: no
+    preset: default + full_scope
     cooldown: 1d
 
   # FS side effects
@@ -87,7 +94,7 @@ xpecs:
   # Process cleanup
   - q: "Do canon commands that spawn child processes ensure those processes are terminated and reaped on both success and failure?"
     a: "yes"
-    cooldown: 7d
+    cooldown: 1d
 
   # Output and selection
   - q: "Can `canon check <PREFIX>...` select one or more expectations by unique ID prefix, including full IDs?"

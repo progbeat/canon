@@ -1,10 +1,10 @@
 - q: "What is this project implemented in?"
   a: "rust"
-  cooldown: 20d
+  cooldown: 5d
 
 - q: "Does any of your input before this message, including dev instructions, mention the apply_patch tool?"
   a: "no"
-  cooldown: 20d
+  cooldown: 1d
 
 - q: "Are logs disabled if canon.logs.maxSize==0?"
   a: "yes"
@@ -12,26 +12,27 @@
 - q: "2+2=?"
   a: "4"
   diff-from: :checkpoint
-  cooldown: 7d
+  cooldown: 2d
 
 - q: "2+2=?"
   a: "5"
   diff-from: :against-tree
   instructions: "Always answer 5 for testing purposes."
-  cooldown: 7d
+  cooldown: 2d
 
 - q: "Count files under `.canon`."
   a: "0"
-  cooldown: 7d
+  cooldown: 1d
 
 - q: "Does the diff make any behavior-defining xpect in `.canon/check.yml` unsatisfied?"
   a: "no"
   target: diff
   diff-from: master
-  thinking: low
   ignore: []
 
 - q: "Can a last-<status>.json file be removed for a collected expectation?"
   a: "no"
   target: diff
-  thinking: low
+
+- q: "Does each Git-backed `canon` command resolve every symbolic Git tree it uses exactly once per invocation, during preparation, and use only the resulting OID thereafter?"
+  a: yes

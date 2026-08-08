@@ -9,17 +9,14 @@ pub(crate) enum CommandError {
     PwdDoesNotAcceptArguments,
     UnknownOption(String),
     UnknownCommand(String),
-    AskFailed(AskFailure),
-    CheckFailed,
-    GateFailed,
+    Reported(ReportedCommandFailure),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AskFailure {
-    Query,
-    ReviewRequired,
-    Output,
-    TokenUsage,
+pub(crate) enum ReportedCommandFailure {
+    Ask,
+    Check,
+    Gate,
 }
 
 impl From<String> for CommandError {
@@ -54,9 +51,15 @@ impl std::fmt::Display for CommandError {
             CommandError::UnknownCommand(command) => {
                 write!(formatter, "unknown command: {command}")
             }
-            CommandError::AskFailed(_) => formatter.write_str("canon ask failed"),
-            CommandError::CheckFailed => formatter.write_str("canon check failed"),
-            CommandError::GateFailed => formatter.write_str("canon gate failed"),
+            CommandError::Reported(ReportedCommandFailure::Ask) => {
+                formatter.write_str("canon ask failed")
+            }
+            CommandError::Reported(ReportedCommandFailure::Check) => {
+                formatter.write_str("canon check failed")
+            }
+            CommandError::Reported(ReportedCommandFailure::Gate) => {
+                formatter.write_str("canon gate failed")
+            }
         }
     }
 }
@@ -71,10 +74,7 @@ pub(super) fn report_command_error(err: CommandError) -> CommandError {
 fn command_error_has_public_diagnostic(err: &CommandError) -> bool {
     // These commands already wrote their public diagnostics before returning a
     // sentinel error for the process exit status.
-    !matches!(
-        err,
-        CommandError::AskFailed(_) | CommandError::CheckFailed | CommandError::GateFailed
-    )
+    !matches!(err, CommandError::Reported(_))
 }
 
 pub(crate) fn write_command_error_line(err: &CommandError) -> Result<(), String> {
@@ -109,7 +109,7 @@ fn is_expectation_diagnostic_block(message: &str) -> bool {
 mod tests {
     use super::{render_command_error, CommandError};
 
-    #[test] // xpec: 9b
+    #[test] // xpec: kK
     fn expectation_diagnostic_block_is_not_prefixed_with_generic_error() {
         let rendered = render_command_error(&CommandError::from(
             "x. ERROR\nQuestion?\nError: detail\nEvidence: value".to_string(),
@@ -121,17 +121,10 @@ mod tests {
         );
     }
 
-    #[test] // xpec: 9b
+    #[test] // xpec: kK
     fn ordinary_error_keeps_generic_error_prefix() {
         let rendered = render_command_error(&CommandError::from("ordinary failure".to_string()));
 
         assert_eq!(rendered, "Error: ordinary failure\n");
-    }
-
-    #[test] // xpec: Ky
-    fn ask_failed_has_no_extra_public_diagnostic() {
-        assert!(!super::command_error_has_public_diagnostic(
-            &CommandError::AskFailed(super::AskFailure::Query)
-        ));
     }
 }

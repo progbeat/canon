@@ -31,6 +31,11 @@ new privileges, uses a read-only container filesystem, keeps Codex credentials
 read-only on the host, and only gives the container the repository access needed
 for `canon` commands.
 
+The image sets `CANON_NO_SANDBOX=true` so every evaluator command uses the
+container as its external isolation boundary. `canon check` additionally exposes
+the public `--no-sandbox` option, which the entrypoint injects while forwarding
+the user-supplied arguments unchanged.
+
 Before installing, review the Docker
 [wrapper](https://github.com/progbeat/canon/tree/master/.canon/docker/scripts/canon)
 on GitHub. Install it only if you are comfortable trusting that wrapper as the
@@ -55,7 +60,9 @@ After that, `command -v canon` should print a path under `$HOME/.local/bin`.
 
 ### Cargo
 
-Requires Git, Rust/Cargo, and the Codex CLI.
+Requires Git, Rust/Cargo, and the Codex CLI. Host-native Linux installations
+also require [Bubblewrap](https://github.com/containers/bubblewrap) on `PATH`
+with user namespaces available.
 
 ```sh
 cargo install --git https://github.com/progbeat/canon
@@ -122,8 +129,7 @@ selectors are expectation IDs, not 1-based expectation numbers.
 canon ask "Can you find any practically exploitable security vulnerability?"
 ```
 
-Ask one uncached ad-hoc question. Add one or more `-s`/`--scope` paths to debug
-the same question under a narrower evaluator scope.
+Ask one uncached ad-hoc question.
 
 ```sh
 canon gate

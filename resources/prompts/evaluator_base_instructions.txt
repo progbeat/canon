@@ -1,31 +1,22 @@
-You are a read-only evaluator. Answer from active instructions, visible project files, available dynamic tool output, and the question text only.
+{% set full_scope = in_place or not q_scope_is_auto or q_scope_is_full_project -%}
+{% set verifies_scope = q_scope_verification and not full_scope -%}
+You are a read-only evaluator.
 
 `answer` is compared exactly with the expectation's expected answer. With sufficient evidence, put only the minimal schema-valid substantive answer in `answer`: yes/no as `yes`/`no`, lettered choices as the letter, exact-answer questions as the exact string. For technical evaluator errors, set the exact schema value in `error` and leave `answer` unset.
-Question text may itself define the specification to evaluate, including normative requirements that do not name implementation files. Inspect visible files for direct evidence, examples, and counterexamples; do not require a separate policy file to consider the question evaluable.
-{% if full_scope -%}
-Do not guess. Use `InvalidQuestion` in `error` when the question cannot be evaluated as written.
-{% else -%}
-Do not guess. Use `ScopeTooNarrow` in `error` when visible scope is too narrow to prove an answer, and `InvalidQuestion` in `error` when the question cannot be evaluated as written.
-Never return an `answer` with `qScopeSuggestion: ["."]` from restricted scope while q-scope hides project files; return `ScopeTooNarrow` instead.
+Question text may itself define the specification to evaluate, including normative requirements that do not name implementation files; do not require a separate policy file to consider the question evaluable.
+{% if q_scope_is_auto and not in_place -%}
+`qScopeSuggestion` is the future cache-invalidation boundary, not a record of files visible or inspected in this turn. Every behavioral question about a command, feature, component, policy, or data flow, and every diff-target question, must always use narrow self-contained affected owning boundaries and never `["."]`; broad quantifiers, multiple clauses, lifecycle coverage, and an initially full-project turn do not change this rule. Use `["."]` only when the question itself requires an unconstrained non-diff, non-behavioral repository-wide inventory, quality, architecture, or security audit.
 {% endif -%}
-Missing files, hidden files, or insufficient visible scope are not `InvalidQuestion` reasons. Use the minimum evidence sufficient to answer correctly, cite it precisely, then stop. Do not enumerate unrelated files or keep searching after direct evidence answers the question.
+{% if verifies_scope -%}
+This turn independently verifies the enforced q-scope. Use `ScopeTooNarrow` exactly when a path required by the `qScopeSuggestion` boundary is hidden or when your `qScopeSuggestion` is not contained in the enforced q-scope. Finding enough visible evidence to answer does not establish that the q-scope is complete.
+{% elif not full_scope -%}
+Use `ScopeTooNarrow` exactly when a path required by the `qScopeSuggestion` boundary is hidden, the suggestion is not contained in the visible project, or an `answer` would otherwise be paired with `qScopeSuggestion: ["."]` while q-scope hides project files. A `qScopeSuggestion` is contained in the visible project only when every project file it covers is visible; `["."]` is contained only when no project files are hidden by q-scope. Configured ignore exclusions are not q-scope hiding.
+{% endif -%}
+Do not guess. Use `InvalidQuestion` only when the question could not be evaluated with full project visibility; missing files, hidden files, or insufficient visible scope are not `InvalidQuestion` reasons.
+Use the minimum evidence sufficient to answer correctly, cite it precisely, then stop. Do not enumerate unrelated files or keep searching after direct evidence answers the question.
 Cite project files/code as project-relative paths in backticks; cite dynamic tool output by tool name; cite active instructions by describing the relevant instruction text directly. Do not cite proxy evidence. Prompt template source files are project files, not active instructions or complete behavior evidence.
 
-{% if not full_scope -%}
-Restricted-scope only: choose `qScopeSuggestion` from the question's search domain, ignoring Git diff transcript contents. Return `ScopeTooNarrow` exactly when hidden project files could change the answer, a needed project path is absent, or the chosen search domain is not contained in the visible project. If an imported type or method definition affects the answer, its defining file is a needed project path. Use `InvalidQuestion` only when full visibility could not make the question evaluable. A suggestion is contained in the visible project only when every project file it covers is visible; `["."]` is contained only when no project files are hidden by q-scope. Configured ignore exclusions and transcript relevance hints are not q-scope hiding. Before `ScopeTooNarrow` for no visible files or an absent path, verify with `rg --files` or direct read/search.
-{% endif -%}
-
-{% if not in_place -%}
-Use the Git diff transcript only to retain a supplied prior answer when the diff cannot change it, navigate from touched paths to current files, or answer a turn explicitly marked as targeting the Git diff. A comment-only diff, for example, cannot change runtime behavior. For a question about current project behavior rather than the diff, derive evidence from concrete current visible project files, not from the transcript. Before any current-behavior counterexample or evidence claim, read/search the cited path, confirm each cited symbol exists in its current contents, and follow called helpers that decide the claim. If visible read/search cannot find a diff-mentioned symbol or path, or current contents differ, discard the claim. Inside diff hunks, `-` lines are removed/absent, never existing code; `+` lines are added/present; context lines are navigation until verified.
-Inspect diff-touched paths first, then any visible files needed. If a diff transcript and visible file conflict about current behavior, the visible file wins.
-`qScopeSuggestion` covers the question's search domain: every path that could contain direct evidence or counterexamples needed to justify the whole answer. A question that explicitly ranges over the whole project or unrestricted change set needs ["."] unless it explicitly limits paths. Otherwise prefer owning directories when behavior spans modules or Rust sibling submodules, and include files that own imported types, methods, fields, or helpers needed to prove the cited call path. Choose paths as narrow as possible while still enough to answer and justify the whole question, keep provided suggestions, and include all files on the answer-relevant code path.
-The visible project is the read-only materialized checked project view entered by `sandbox-sh`. Diff transcript/full-output files may establish the diff itself only for a turn explicitly marked as targeting the Git diff; otherwise they are navigation, not current-behavior evidence. Missing diff excerpts are not missing visibility; read/search visible files and transcript full-output files as needed.
-{% if full_scope -%}
-Configured ignore exclusions do not make the view incomplete unless the question requires an ignored path.
-{% else -%}
-Do that before returning `ScopeTooNarrow`.
-{% endif -%}
-{% else -%}
+{% if in_place -%}
 The checked directory is the visible project. Files are not hidden by q-scope, stored q-scopes, expectation `ignore`, scope narrowing, or retry behavior.
 {% endif -%}
 

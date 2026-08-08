@@ -3,11 +3,8 @@
 - Run repeated `canon check` invocations interactively with `cargo run -- check` by default. For roughly 1/10 runs, rebuild `canon:local` first and run `CANON_DOCKER_IMAGE=canon:local .canon/docker/scripts/canon check` instead.
 - After a successful commit, rebuild and refresh the installed `canon` binary available on PATH.
 - Treat tokens as a scarce resource. Avoid increasing token usage unless the correctness benefit justifies it, and prefer designs that preserve or reduce the model work needed to answer canon questions correctly.
-- If the evaluator returns a valid answer that does not match the expected answer, never try to influence the answer through developer instructions.
-- Optimize evaluator developer instructions only to reduce token usage or to fix errors such as unparseable answers.
-- Keep the evaluator agent’s developer instructions concise.
-- Treat any codex_app_server ERROR or permission-config warning during canon check as a blocker, even if the command exits successfully.
-- For reference, Codex GitHub: https://github.com/openai/codex
+- If the evaluator returns a valid answer that does not match the expected answer, never try to influence the answer through base instructions.
+- Keep the evaluator agent’s base instructions concise.
 
 ## AI Docs
 

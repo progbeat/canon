@@ -44,12 +44,13 @@ fi
 # --user, so Canon's chmod-based secret-dir isolation cannot manage it here.
 # For canon check, Docker is the outer isolation boundary. --no-sandbox avoids
 # Codex's nested OS sandbox launcher while Canon still materializes the filtered
-# evaluator tree under /scratch/sandbox.
+# evaluator tree under the configured sandbox directory.
 unset CANON_SECRET_DIR
 if [ "${1:-}" = "check" ]; then
   shift
-  # Preserve the user-supplied check arguments and insert Canon's container-only
-  # sandbox mode before any selectors or `--` separator.
+  # CANON_NO_SANDBOX is the image default for every evaluator command. Keep the
+  # check CLI flag explicit so this entrypoint still forces the container
+  # boundary when that image environment is overridden at runtime.
   set -- check --no-sandbox "$@"
 fi
 exec canon "$@"

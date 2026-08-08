@@ -5,7 +5,7 @@ mod note;
 
 use builtin::BuiltinCommand;
 use error::report_command_error;
-use help::{print_clap_help, print_help_if_requested, root_help_command};
+use help::{print_clap_help, root_help_command};
 use note::{run_note_command, NoteCommand};
 use std::env;
 use std::ffi::OsString;
@@ -15,7 +15,8 @@ use crate::notes::arg_to_string;
 use crate::project::print_root;
 use crate::project_types::Config;
 
-pub(crate) use error::{write_command_error_line, AskFailure, CommandError};
+pub(crate) use error::{write_command_error_line, CommandError, ReportedCommandFailure};
+pub(crate) use help::print_help_if_requested;
 
 pub(crate) fn main() {
     if run(env::args_os().skip(1).collect()).is_err() {

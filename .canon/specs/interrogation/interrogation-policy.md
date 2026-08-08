@@ -57,24 +57,12 @@ If a short-ID mismatch occurs on the evaluator thread's first turn, the interrog
 
 When a turn has full project scope, its schema omits `ScopeTooNarrow` from `error.enum`.
 
-When an evaluation never hides files from evaluator turns, the schemas omit `qScopeSuggestion`, and the interrogation does not perform follow-up turns.
+When an expectation's `q-scope` is a path list, every turn uses it, and each turn's schema omits `ScopeTooNarrow` from `error.enum`.
 
-An interrogation's initial turn uses the `qScope` from the xpec's `last-pass.json`, or full project scope if no last pass result with `qScope` exists.
+When an expectation's `q-scope` is a path list or an evaluation never hides files from evaluator turns, the schemas omit `qScopeSuggestion`.
 
-A **follow-up turn** is an additional turn required by this policy after the initial turn produces that interrogation's evaluation response.
-
-An interrogation has at most one follow-up turn.
-
-When a restricted-scope initial turn returns `error: "ScopeTooNarrow"`, the follow-up turn retries with full project scope, where `ScopeTooNarrow` is disabled.
-
-When the final evaluation response has `error`, human review is required.
-
-When the initial turn produces a passing answer, the follow-up turn verifies the suggested q-scope only when the visible tree induced by that suggestion contains at least 25% fewer files than the current visible tree.
-The narrowed scope is accepted only when that verification returns an answer.
+When an expectation's `q-scope` is `auto` (default), its initial turn uses the `qScope` from the xpec's `last-pass.json`, or full project scope if no last pass result with `qScope` exists.
 
 An invalid `qScopeSuggestion` returned by the evaluator agent is not used for narrowing.
-
-The xpec's `models` setting configures evaluator models in fallback order.
-A later model may be tried only after a technical evaluator failure and any applicable retries of the current model.
 
 The xpec's `thinking` setting configures evaluator thinking effort and is applied to each turn.

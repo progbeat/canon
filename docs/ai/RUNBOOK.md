@@ -25,6 +25,15 @@ verify, not as truth to copy into the code.
 First look for an interpretation where the expectations are compatible. Stop
 only when files under `.canon/` prove a real contradiction.
 
+## Scalar Answer Sources Versus Agent JSON
+
+Do not make agent-turn JSON accept non-string `answer` values. The selected
+interrogation schema requires `answer.type: string`; a JSON number is a schema
+error and never becomes an evaluation response. The xpec scalar-normalization
+rule applies at actual non-string producer boundaries: YAML `a` scalars become
+expected-answer strings during config resolution, and shell exit codes become
+answer strings when the shell response is constructed.
+
 ## `InvalidQuestion`
 
 Treat it as a signal that the canon question is malformed, the evaluator input
@@ -59,11 +68,11 @@ For evaluator-facing `target: diff` xpec text, avoid Git-side names like
 `diff-from`; the question should talk about the provided diff and
 repository/canon behavior.
 
-## Diff-target Fast Path
+## Diff-target Prompt
 
-For `target: diff`, do not force file reads before reusing the turn prompt's
-previous valid response. Require reads only to prove a new answer or
-`ScopeTooNarrow`.
+The turn prompt contains only the question plus the diff-target hint. It does
+not carry a previous response or the expected answer; verify claims from the
+visible checked files and use the diff transcript only as instructed.
 
 ## Diff Transcript Leakage
 
@@ -81,9 +90,9 @@ code.
 
 ## Logs Stop After `agent.request`
 
-Check whether a later `agent.response`, `model.failure`, or `check.finish`
-appeared before calling it a hang. A long gap can be a slow evaluator turn, and
-current logs may not show intermediate app-server activity.
+Check whether a later `agent.response`, `agent.turn_error`, `model.failure`, or
+`check.finish` appeared before calling it a hang. A long gap can be a slow
+evaluator turn, and current logs may not show intermediate app-server activity.
 
 ## Evaluator Says Only Template Output Is Visible
 
@@ -96,6 +105,12 @@ visibility/prompt contract problem rather than an implementation problem.
 Inspect last-pass `qScope`, recent `thread.start` scopes, and the actual
 response schema first. Git-backed full-project scope still hides ignored files
 and should not be treated as no-hidden-files/in-place mode.
+An explicit q-scope path list is fixed for every turn: its schemas omit
+`ScopeTooNarrow` and `qScopeSuggestion`, and it does not enter auto-scope retry
+or narrowing logic.
+The pseudocode's optional `qScopeSuggestion` models the union of response
+modes, not an optional field in every selected schema: both auto-q-scope
+schemas require it, while fixed-q-scope and no-hidden-files schemas omit it.
 For restricted-scope absence checks, `no` requires the visible scope to cover
 the search domain; otherwise expect `ScopeTooNarrow` or a wider retry.
 Spec-compliance questions usually search the implementation as a whole; a
@@ -104,9 +119,9 @@ For q-scope verification, `ScopeTooNarrow` rejects the proposed narrower scope;
 it is not the final response when the initial answer is kept.
 When diagnosing noisy `↘` markers, compare `last-pass.json` fields:
 `qScope` is the accepted scope for future runs, while `response.qScopeSuggestion` is only the evaluator proposal.
-A full-project `qScope` paired with a narrower suggestion often means narrowing was attempted but not accepted; confirm with `scope.narrowing accepted:false` near `interrogation.review_required reason=ScopeTooNarrow` in runtime logs.
-One-off query q-scope verification has no expected-answer pass/fail matrix;
-accept the narrowed result only when the answer string is unchanged.
+A full-project `qScope` paired with a narrower suggestion often means narrowing
+was attempted but its verification returned an error; confirm with
+`scope.narrowing accepted:false` in runtime logs.
 For in-place compatibility, reject configured in-place-only-invalid fields before evaluator work.
 Canon-check-order sorts remaining selected work; cached-failure default
 selection can clear the evaluate queue before ordering applies.
@@ -115,16 +130,6 @@ change set as broad unless the question names paths; stale narrow q-scopes can
 survive selector reruns.
 For reproducible global diff-quality q-scope cases, use
 `research/qscope-diff-quality/README.md`.
-
-## Scope Retry Can Lose The Useful Finding
-
-A restricted turn can correctly return `ScopeTooNarrow` with evidence naming a
-missing production edge, then a fresh full-scope retry can ignore that finding
-and return an unsupported answer. Inspect both `agent.response` events. Treat
-model/token comparisons as noisy unless repeated, and do not count a final
-answer as correct when its evidence proves a different property. A possible
-future improvement is to pass the restricted turn's evidence and needed paths
-to the full-scope retry.
 
 ## Missing Progress Timeline Timeout Markers
 
@@ -156,7 +161,9 @@ It still follows normal selected-expectation ordering, but it does not use
 persistent state for cache reuse, last-pass q-scope seeding, or follow-up
 interrogations. It does persist completed status-specific last results without
 Git-tree fields and reads latest-fail history for ordering when the canonical
-state namespace exists. These records are status history, not checkpoints:
+state namespace exists. These records update the canonical status files, while
+the xpec-state component keeps a bounded per-ID cache of Git-backed results for
+the fast gate. They are status history, not checkpoints:
 without `checkedTreeOid`, an in-place pass cannot define the glossary's
 Git-tree checkpoint. The CLI resolves the command-wide canon-owned output
 namespace before selecting Git-backed or in-place execution and passes the
@@ -176,10 +183,12 @@ Filesystem-shaped evaluator inputs are temporary artifacts, not execution
 state. Materialized read-only trees, oversized prompt-command output, and a
 staged tree object exposed to evaluator-run Git commands require paths.
 Canon-owned directories follow the common memory-backed-preferred/fallback
-policy and disappear with their owners. An invocation-local materialization in
-an existing caller-selected tree-cache root journals its replacements in
-memory, removes its new trees, and restores prior lazy entries on drop. These
-artifacts never enter repository or `CANON_STATE_DIR` state.
+policy and disappear with their owners. A configured tree-cache path is a
+caller-selected shared namespace even when absent at command startup; never
+claim or remove that root based on an initial existence check. Materializers
+hold its cross-process lifetime lock, while temporary queries journal their
+replacements in memory, remove their new trees, and restore prior lazy entries
+on drop. These artifacts never enter repository or `CANON_STATE_DIR` state.
 
 For the project-wide persistent-state bound, treat `CANON_STATE_DIR` as the
 caller-selected storage namespace, not as a project configuration generation
@@ -195,6 +204,9 @@ Check thread reuse before trusting the answer. A reused evaluator thread carries
 conversation state, so the reuse key must include every input that can change
 the evaluator task. This is an answer-correctness check, not evidence that
 `canon check` failed to report a started expectation.
+Use the current visible tree for thread workspace identity and lifecycle logs.
+A last-pass tree is historical input only while resolving a checkpoint diff
+base; do not carry it into thread startup or reuse state.
 
 ## Before `canon check`
 

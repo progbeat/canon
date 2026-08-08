@@ -1,5 +1,14 @@
 use std::io::{self, Write};
 
+pub(crate) fn command_output_trimmed<'a>(
+    bytes: &'a [u8],
+    description: &str,
+) -> Result<&'a str, String> {
+    Ok(std::str::from_utf8(bytes)
+        .map_err(|err| format!("{} must be valid UTF-8: {}", description, err))?
+        .trim())
+}
+
 // General command output goes through these helpers so each eligible stdout or
 // stderr fragment is flushed before the caller can continue. Commands with
 // streaming output, such as `canon check`, own a command-specific facade with

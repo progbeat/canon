@@ -1,0 +1,33 @@
+[
+  {
+    "type": "namespace",
+    "name": "canon",
+    "description": "Inspect expectations from the current canon check run.",
+    "tools": [
+      {
+        "type": "function",
+        "name": "show",
+        "description": "Return current-run canon expectation records for requested ID prefixes or full IDs. Each record contains an ID, the expectation's q question text, and its a expected answer; q/a are canon data, not project source locations or evaluator prompt/instruction source definitions.",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "selectors": {
+              "description": "Expectation selectors: ID prefix/full ID or not:<ID prefix/full ID>.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "pathspecs": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    ]
+  }
+]

@@ -1,6 +1,54 @@
-default: &default_preset
-  models: ["gpt-5.6-luna", "gpt-5.3-codex-spark"]
-  thinking: medium  # minimal | low | medium | high | xhigh
+# Source: https://artificialanalysis.ai/models
+# `cap_N` selects a cost-efficient model/effort combination scoring at least N on the Artificial Analysis Intelligence Index; higher N means greater overall capability.
+# Costs are approximate weighted average costs per Intelligence Index task.
+
+cap_59: &cap_59
+  # ~$1.04
+  models: ["gpt-5.6-sol"]
+  thinking: max
+
+cap_58:
+  # ~$0.682
+  models: ["gpt-5.6-sol"]
+  thinking: xhigh
+
+cap_56: &cap_56
+  # ~$0.453
+  models: ["gpt-5.6-sol"]
+  thinking: high
+
+cap_55: &cap_55 { <<: *cap_56 }
+
+cap_54: &cap_54
+  # ~$0.314
+  models: ["gpt-5.6-sol"]
+  thinking: medium
+
+cap_50: &cap_50 { <<: *cap_54 }
+
+cap_49: &cap_49
+  # ~$0.139
+  models: ["gpt-5.6-luna"]
+  thinking: xhigh
+
+cap_46: &cap_46
+  # ~$0.095
+  models: ["gpt-5.6-luna"]
+  thinking: high
+
+cap_45: &cap_45 { <<: *cap_46 }
+
+cap_38:
+  # ~$0.050
+  models: ["gpt-5.6-luna"]
+  thinking: medium
+
+cap_max: *cap_59
+
+#################
+
+default: &default
+  <<: *cap_45
   ignore:
     - ".canon/**"  # prevents evaluator agents from reading expected answers and avoids reevaluating full-scope expectations when canon changes
     - ".github/**"
@@ -13,18 +61,8 @@ default: &default_preset
     - "Dockerfile"
     - "LICENSE"
 
-smart:
-  <<: *default_preset
-  models: ["gpt-5.6-terra"]
-  thinking: xhigh
-
-spark:
-  <<: *default_preset
-  models: ["gpt-5.3-codex-spark"]
-  thinking: high
-
 docker:
-  <<: *default_preset
+  <<: *default
   ignore:  # overrides default_preset.ignore
     - ".canon/**"
     - ".github/**"
@@ -35,14 +73,25 @@ docker:
     - "Cargo.lock"
     - "LICENSE"
 
-pr-review:
-  <<: *default_preset
+_review_base: &_review_base
+  <<: *default
   target: diff
-  diff-from: master
-  models: ["gpt-5.6-terra"]
+  q-scope: ["."]
   ignore:
     - "docs/ai/**"
     - "skills/**"
     - "AGENTS.md"
     - "Cargo.lock"
     - "LICENSE"
+
+patch_review:
+  <<: [*cap_55, *_review_base]
+  diff-from: :checkpoint
+
+pr_review:
+  <<: [*cap_55, *_review_base]
+  diff-from: master
+  rank: 5
+
+full_scope:
+  q-scope: ["."]

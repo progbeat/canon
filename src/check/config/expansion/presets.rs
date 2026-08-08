@@ -1,7 +1,7 @@
 //! Resolves named preset inheritance and expectation field defaults.
 
 use crate::check::config::validation::{
-    normalize_agent_ignore_pattern_for_config, validate_agent_config,
+    normalize_agent_ignore_pattern_for_config, validate_resolved_agent_config,
 };
 use crate::config_types::{
     AgentConfig, ConfiguredValue, RawExpectationSettings, RawLegacyAgentConfig, RawPresetConfig,
@@ -42,21 +42,24 @@ pub(super) fn resolve_presets(
     Ok(resolved)
 }
 
+pub(super) fn resolve_preset_closure(
+    raw_presets: &BTreeMap<String, RawPresetConfig>,
+    selected_preset: &str,
+) -> Result<BTreeMap<String, ResolvedPresetConfig>, String> {
+    if !raw_presets.contains_key("default") {
+        return Err("check.yml presets must contain default".to_string());
+    }
+    let mut resolved = BTreeMap::new();
+    let mut resolving = BTreeSet::new();
+    resolve_preset(selected_preset, raw_presets, &mut resolved, &mut resolving)?;
+    Ok(resolved)
+}
+
 pub(super) fn apply_expectation_settings(
     agent: &mut AgentConfig,
     settings: &RawExpectationSettings,
 ) -> Result<(), String> {
-    if let Some(models) = &settings.models.value {
-        agent.models = models.clone();
-    }
-    if let Some(thinking) = &settings.thinking.value {
-        agent.thinking = thinking.clone();
-    }
-    agent.ignore = settings.ignore.value.clone();
-    agent.ignore_configured = settings.ignore.configured;
-    if let Some(plugins) = &settings.plugins.value {
-        agent.plugins = plugins.clone();
-    }
+    settings.apply_to_agent(agent);
     normalize_agent_config(agent)
 }
 
@@ -75,6 +78,7 @@ fn raw_preset_from_legacy_agent(agent: RawLegacyAgentConfig) -> RawPresetConfig 
         diff_from: Default::default(),
         target: Default::default(),
         cooldown: Default::default(),
+        q_scope: Default::default(),
         preset: None,
         models: ConfiguredValue::from_option((!models.is_empty()).then_some(models)),
         thinking: ConfiguredValue::from_option(agent.thinking),
@@ -117,54 +121,29 @@ fn apply_raw_preset(preset: &mut ResolvedPresetConfig, raw: &RawPresetConfig) {
     if let Some(a) = &raw.a {
         preset.a = Some(a.clone());
     }
-    let common = &mut preset.common;
-    if raw.question_context.configured {
-        common.question_context = raw.question_context.clone();
-    }
-    if raw.diff_from.configured {
-        common.git_backed.diff_from = raw.diff_from.clone();
-    }
-    if raw.target.configured {
-        common.git_backed.target = raw.target.clone();
-    }
-    if raw.cooldown.configured {
-        common.git_backed.cooldown = raw.cooldown.clone();
-    }
-    if raw.to.configured {
-        common.to = raw.to.clone();
-    }
-    if raw.rank.configured {
-        common.rank = raw.rank.clone();
-    }
-    if raw.models.configured {
-        common.settings.models = raw.models.clone();
-    }
-    if raw.thinking.configured {
-        common.settings.thinking = raw.thinking.clone();
-    }
-    if raw.ignore.configured {
-        common.settings.ignore = raw.ignore.clone();
-    }
-    if raw.plugins.configured {
-        common.settings.plugins = raw.plugins.clone();
-    }
+    let mut common = raw.expectation_common();
+    common.fill_missing_from(&preset.common);
+    preset.common = common;
 }
 
 fn normalize_preset_config(name: &str, preset: &mut ResolvedPresetConfig) -> Result<(), String> {
-    if let Some(ignore) = &mut preset.common.settings.ignore.value {
-        for pattern in ignore {
-            *pattern = normalize_agent_ignore_pattern_for_config(pattern)?;
-        }
-    }
-    validate_agent_config(&preset.agent_config(), &format!("presets.{}", name))?;
+    normalize_ignore_patterns(&mut preset.common.settings.ignore.value)?;
+    validate_resolved_agent_config(&preset.agent_config(), &format!("presets.{}", name))?;
     Ok(())
 }
 
 fn normalize_agent_config(agent: &mut AgentConfig) -> Result<(), String> {
-    if let Some(ignore) = &mut agent.ignore {
+    normalize_ignore_patterns(&mut agent.ignore)
+}
+
+fn normalize_ignore_patterns(ignore: &mut Option<Vec<String>>) -> Result<(), String> {
+    if let Some(ignore) = ignore {
         for pattern in ignore {
             *pattern = normalize_agent_ignore_pattern_for_config(pattern)?;
         }
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

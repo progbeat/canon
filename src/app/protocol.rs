@@ -1,289 +1,139 @@
-use crate::app::APP_SERVER_TURN_TIMEOUT_SECS;
-use crate::evaluator::{
-    EvaluatorDynamicToolCall, EvaluatorDynamicToolResult, EvaluatorError, EvaluatorFailureKind,
+mod dynamic_tool;
+mod failure;
+mod text;
+mod usage;
+
+pub(crate) use dynamic_tool::{dynamic_tool_call_response, take_dynamic_tool_call};
+pub(crate) use failure::{app_server_error_value, app_server_failure_from_value};
+pub(crate) use text::turn_text;
+pub(crate) use usage::{
+    context_compaction_event, token_usage_update, turn_started_id,
+    UnsequencedContextCompactionEvent, UnsequencedTokenUsageUpdate,
 };
-use crate::token_usage_types::{ContextCompactionEvent, TokenUsage, TokenUsageUpdate};
-use serde::Deserialize;
-use serde_json::{json, Value};
-use std::time::{Duration, Instant};
 
-// This module owns app-server protocol parsing. Transport and usage handling
-// call these helpers from src/app/transport.rs and src/app/usage.rs.
-pub(crate) fn turn_idle_timed_out(last_activity: Instant, now: Instant) -> bool {
-    now.duration_since(last_activity) >= Duration::from_secs(APP_SERVER_TURN_TIMEOUT_SECS)
+use serde_json::Value;
+
+// Each incoming Value is one protocol event. This component performs every
+// deterministic interpretation once for that event, and transport and usage
+// consumers reuse the resulting AppServerMessage. It does not inspect
+// repositories or filesystems or derive hashes.
+#[derive(Debug)]
+pub(crate) struct AppServerMessage<'a> {
+    pub(crate) raw: &'a Value,
+    pub(crate) request_id: Option<u64>,
+    pub(crate) response_id: Option<u64>,
+    pub(crate) method: Option<&'a str>,
+    pub(crate) kind: AppServerEventKind,
+    pub(crate) params: Option<&'a Value>,
+    pub(crate) result: Option<&'a Value>,
+    pub(crate) error: Option<&'a Value>,
+    dynamic_tool_call: Option<Result<dynamic_tool::ParsedDynamicToolCall, String>>,
+    // Normalize text payloads as part of the single message parse so every
+    // consumer reuses the parsed view instead of inspecting the JSON again.
+    pub(crate) agent_message_delta_text: Option<&'a str>,
+    pub(crate) agent_message_completed_text: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-pub(crate) struct AppServerMessage {
-    pub(crate) id: Option<u64>,
-    pub(crate) method: Option<String>,
-    #[serde(default)]
-    pub(crate) result: Option<Value>,
-    #[serde(default)]
-    pub(crate) error: Option<Value>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AppServerEventKind {
+    AgentMessageCompleted,
+    AgentMessageDelta,
+    ContextCompaction,
+    DynamicToolCall,
+    Error,
+    ItemCompleted,
+    TokenUsageUpdated,
+    TurnCompleted,
+    TurnError,
+    TurnFailed,
+    TurnStarted,
+    Unclassified,
 }
 
-pub(crate) fn app_server_message(value: &Value) -> Result<AppServerMessage, String> {
-    let message = serde_json::from_value::<AppServerMessage>(value.clone())
-        .map_err(|err| format!("failed to parse app-server message envelope: {}", err))?;
-    if message.id.is_none() && message.method.is_none() {
+impl AppServerEventKind {
+    fn from_method(method: Option<&str>) -> Self {
+        match method {
+            Some("item/agentMessage/completed") => Self::AgentMessageCompleted,
+            Some("item/agentMessage/delta") => Self::AgentMessageDelta,
+            Some(
+                "thread/contextCompaction/created"
+                | "thread/contextCompaction/updated"
+                | "thread/contextCompaction/completed"
+                | "turn/contextCompaction/created"
+                | "turn/contextCompaction/completed"
+                | "contextCompaction/created"
+                | "contextCompaction/completed",
+            ) => Self::ContextCompaction,
+            Some("item/tool/call") => Self::DynamicToolCall,
+            Some("error") => Self::Error,
+            Some("item/completed") => Self::ItemCompleted,
+            Some("thread/tokenUsage/updated") => Self::TokenUsageUpdated,
+            Some("turn/completed") => Self::TurnCompleted,
+            Some("turn/error") => Self::TurnError,
+            Some("turn/failed") => Self::TurnFailed,
+            Some("turn/started") => Self::TurnStarted,
+            _ => Self::Unclassified,
+        }
+    }
+}
+
+pub(crate) fn app_server_message(value: &Value) -> Result<AppServerMessage<'_>, String> {
+    value.as_object().ok_or_else(|| {
+        "failed to parse app-server message envelope: expected object".to_string()
+    })?;
+    let method = optional_str_field(value, "method")?;
+    let kind = AppServerEventKind::from_method(method);
+    let params = optional_value_field(value, "params");
+    let agent_text = text::parse_agent_text(kind, params);
+    let dynamic_tool_call = dynamic_tool::parse_dynamic_tool_call(kind, params);
+    let id = optional_u64_field(value, "id")?;
+    let (request_id, response_id) = if method.is_some() {
+        (id, None)
+    } else {
+        (None, id)
+    };
+    let message = AppServerMessage {
+        raw: value,
+        request_id,
+        response_id,
+        method,
+        kind,
+        params,
+        result: optional_value_field(value, "result"),
+        error: optional_value_field(value, "error"),
+        dynamic_tool_call,
+        agent_message_delta_text: agent_text.agent_message_delta_text,
+        agent_message_completed_text: agent_text.agent_message_completed_text,
+    };
+    if id.is_none() && message.method.is_none() {
         return Err("app-server message envelope missing both id and method".to_string());
     }
     Ok(message)
 }
 
-#[derive(Debug, Deserialize)]
-struct DynamicToolCallMessage {
-    method: Option<String>,
-    params: DynamicToolCallParams,
-}
-
-#[derive(Debug, Deserialize)]
-struct DynamicToolCallParams {
-    #[serde(rename = "threadId")]
-    _thread_id: String,
-    #[serde(rename = "turnId")]
-    _turn_id: String,
-    #[serde(rename = "callId")]
-    _call_id: String,
-    namespace: Option<String>,
-    tool: String,
-    #[serde(default)]
-    arguments: Value,
-}
-
-pub(crate) fn dynamic_tool_call(value: &Value) -> Result<EvaluatorDynamicToolCall, String> {
-    let message = serde_json::from_value::<DynamicToolCallMessage>(value.clone())
-        .map_err(|err| format!("failed to parse dynamic tool call: {}", err))?;
-    if message.method.as_deref() != Some("item/tool/call") {
-        return Err("app-server message is not a dynamic tool call".to_string());
-    }
-    Ok(EvaluatorDynamicToolCall {
-        namespace: message.params.namespace,
-        tool: message.params.tool,
-        arguments: message.params.arguments,
+fn optional_u64_field(value: &Value, key: &str) -> Result<Option<u64>, String> {
+    let Some(field) = optional_value_field(value, key) else {
+        return Ok(None);
+    };
+    field.as_u64().map(Some).ok_or_else(|| {
+        format!("failed to parse app-server message envelope: `{key}` must be an unsigned integer")
     })
 }
 
-pub(crate) fn dynamic_tool_call_response(result: EvaluatorDynamicToolResult) -> Value {
-    json!({
-        "contentItems": [
-            {
-                "type": "inputText",
-                "text": result.text
-            }
-        ],
-        "success": result.success
+fn optional_str_field<'a>(value: &'a Value, key: &str) -> Result<Option<&'a str>, String> {
+    let Some(field) = optional_value_field(value, key) else {
+        return Ok(None);
+    };
+    field.as_str().map(Some).ok_or_else(|| {
+        format!("failed to parse app-server message envelope: `{key}` must be a string")
     })
 }
 
-#[derive(Deserialize)]
-struct AgentMessageDeltaMessage {
-    method: Option<String>,
-    params: Option<AgentMessageDeltaParams>,
+fn optional_value_field<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
+    value.get(key).filter(|field| !field.is_null())
 }
 
-#[derive(Deserialize)]
-struct AgentMessageDeltaParams {
-    delta: Option<String>,
-}
-
-pub(crate) fn agent_message_delta(value: &Value) -> Option<String> {
-    let message = serde_json::from_value::<AgentMessageDeltaMessage>(value.clone()).ok()?;
-    if message.method.as_deref() != Some("item/agentMessage/delta") {
-        return None;
-    }
-    message.params?.delta
-}
-
-pub(crate) fn app_server_failure_kind(error: &Value) -> EvaluatorFailureKind {
-    let code = serde_json::from_value::<AppServerErrorFields>(error.clone())
-        .ok()
-        .and_then(AppServerErrorFields::code);
-    code.as_deref()
-        .map(app_server_failure_kind_from_code)
-        .unwrap_or(EvaluatorFailureKind::UnknownAppServer)
-}
-
-pub(crate) fn app_server_failure_from_value(method: &str, error: &Value) -> EvaluatorError {
-    let failure = format!("app-server {} failed: {}", method, error);
-    EvaluatorError::failure(app_server_failure_kind(error), failure)
-}
-
-pub(crate) fn app_server_failure_kind_from_code(code: &str) -> EvaluatorFailureKind {
-    match code {
-        "usageLimitExceeded" | "usage_limit_exceeded" => EvaluatorFailureKind::UsageLimit,
-        "rateLimitExceeded" | "rate_limit_exceeded" => EvaluatorFailureKind::RateLimit,
-        "modelUnavailable" | "model_unavailable" => EvaluatorFailureKind::ModelUnavailable,
-        "contextWindowExceeded" | "context_window_exceeded" | "context_length_exceeded" => {
-            EvaluatorFailureKind::ContextWindow
-        }
-        _ => EvaluatorFailureKind::UnknownAppServer,
-    }
-}
-
-#[derive(Deserialize)]
-struct AppServerErrorFields {
-    code: Option<String>,
-    #[serde(rename = "type")]
-    kind: Option<String>,
-    #[serde(rename = "codexErrorInfo")]
-    codex_error_info: Option<String>,
-}
-
-impl AppServerErrorFields {
-    fn code(self) -> Option<String> {
-        self.code.or(self.kind).or(self.codex_error_info)
-    }
-}
-
-impl TokenUsage {
-    pub(crate) fn add(self, other: TokenUsage) -> TokenUsage {
-        TokenUsage {
-            total_tokens: self.total_tokens + other.total_tokens,
-            input_tokens: self.input_tokens + other.input_tokens,
-            cached_input_tokens: self.cached_input_tokens + other.cached_input_tokens,
-            output_tokens: self.output_tokens + other.output_tokens,
-            reasoning_output_tokens: self.reasoning_output_tokens + other.reasoning_output_tokens,
-        }
-    }
-}
-
-pub(crate) fn token_usage_update(message: &Value) -> Option<TokenUsageUpdate> {
-    if message.get("method").and_then(Value::as_str) != Some("thread/tokenUsage/updated") {
-        return None;
-    }
-    let params = message.get("params")?;
-    let thread_id = params.get("threadId").and_then(Value::as_str)?.to_string();
-    let turn_id = params.get("turnId").and_then(Value::as_str)?.to_string();
-    let token_usage = params.get("tokenUsage")?.clone();
-    let last_usage = parse_token_usage(token_usage.get("last")?)?;
-    parse_token_usage(token_usage.get("total")?)?;
-    Some(TokenUsageUpdate {
-        sequence: 0,
-        thread_id,
-        turn_id,
-        token_usage,
-        last_usage,
-    })
-}
-
-pub(crate) fn context_compaction_event(message: &Value) -> Option<ContextCompactionEvent> {
-    let method = message.get("method").and_then(Value::as_str)?;
-    let params = message.get("params")?;
-    let is_compaction_item = params
-        .get("item")
-        .and_then(|item| item.get("type"))
-        .and_then(Value::as_str)
-        .is_some_and(is_compaction_item_type);
-    if !is_compaction_item && !is_context_compaction_method(method) {
-        return None;
-    }
-    let thread_id = string_at_path(params, &["threadId"])
-        .or_else(|| string_at_path(params, &["thread", "id"]))?
-        .to_string();
-    let turn_id = string_at_path(params, &["turnId"])
-        .or_else(|| string_at_path(params, &["turn", "id"]))?
-        .to_string();
-    Some(ContextCompactionEvent {
-        sequence: 0,
-        thread_id,
-        turn_id,
-        method: method.to_string(),
-        event: message.clone(),
-    })
-}
-
-fn is_compaction_item_type(kind: &str) -> bool {
-    matches!(kind, "contextCompaction" | "compacted")
-}
-
-fn is_context_compaction_method(method: &str) -> bool {
-    matches!(
-        method,
-        "thread/contextCompaction/created"
-            | "thread/contextCompaction/updated"
-            | "thread/contextCompaction/completed"
-            | "turn/contextCompaction/created"
-            | "turn/contextCompaction/completed"
-            | "contextCompaction/created"
-            | "contextCompaction/completed"
-    )
-}
-
-pub(crate) fn turn_started_id(message: &Value) -> Option<String> {
-    if message.get("method").and_then(Value::as_str) != Some("turn/started") {
-        return None;
-    }
-    message
-        .get("params")?
-        .get("turn")?
-        .get("id")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-}
-
-pub(crate) fn parse_token_usage(value: &Value) -> Option<TokenUsage> {
-    // This only parses app-server usage payloads. The public `canon check`
-    // output contract is implemented in `check_output`:
-    // per-expectation stdout records, the token-usage stderr line, and the
-    // final summary line. This protocol module intentionally has no
-    // `render_token_usage_summary` or `format_number`; `check_output` renders
-    // token counts as raw decimal integers with no thousands separators.
-    // `check_command` owns the command-level write order.
-    Some(TokenUsage {
-        total_tokens: value.get("totalTokens").and_then(Value::as_u64)?,
-        input_tokens: value.get("inputTokens").and_then(Value::as_u64)?,
-        cached_input_tokens: value
-            .get("cachedInputTokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
-        output_tokens: value.get("outputTokens").and_then(Value::as_u64)?,
-        reasoning_output_tokens: value
-            .get("reasoningOutputTokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
-    })
-}
-
-pub(crate) fn app_server_error_value(message: &Value) -> Option<Value> {
-    let method = message.get("method").and_then(Value::as_str)?;
-    if method == "error" && app_server_error_will_retry(message) {
-        return None;
-    }
-    if method != "error" && method != "turn/failed" && method != "turn/error" {
-        if method == "turn/completed"
-            && string_at_path(message, &["params", "turn", "status"]) == Some("failed")
-        {
-            return message
-                .get("params")?
-                .get("turn")?
-                .get("error")
-                .cloned()
-                .or_else(|| Some(json!({ "message": "turn failed" })));
-        }
-        return None;
-    }
-    value_at_path(message, &["params", "error"])
-        .or_else(|| value_at_path(message, &["error"]))
-        .cloned()
-        .or_else(|| string_at_path(message, &["params", "message"]).map(message_error_value))
-        .or_else(|| string_at_path(message, &["message"]).map(message_error_value))
-        .or_else(|| Some(message_error_value(method)))
-}
-
-fn app_server_error_will_retry(message: &Value) -> bool {
-    value_at_path(message, &["params", "willRetry"])
-        .or_else(|| value_at_path(message, &["params", "will_retry"]))
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-}
-
-pub(crate) fn message_error_value(message: &str) -> Value {
-    json!({ "message": message })
-}
-
-pub(crate) fn value_at_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
+fn value_at_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a Value> {
     let mut current = value;
     for key in path {
         current = current.get(*key)?;
@@ -291,240 +141,29 @@ pub(crate) fn value_at_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a V
     Some(current)
 }
 
-pub(crate) fn string_at_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {
+fn string_at_path<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {
     value_at_path(value, path).and_then(Value::as_str)
-}
-
-pub(crate) fn turn_text(delta_text: String, completed_text: String) -> String {
-    if completed_text.trim().is_empty() {
-        delta_text
-    } else {
-        completed_text
-    }
-}
-
-pub(crate) fn append_completed_agent_text(message: &Value, output: &mut String) {
-    let Some(params) = message.get("params") else {
-        return;
-    };
-    let payload = if let Some(item) = params.get("item") {
-        if is_assistant_message_item(item) {
-            Some(item)
-        } else {
-            None
-        }
-    } else if message.get("method").and_then(Value::as_str) == Some("item/agentMessage/completed") {
-        Some(params)
-    } else {
-        None
-    };
-    let Some(payload) = payload else {
-        return;
-    };
-    let mut text = String::new();
-    append_message_payload_text(payload, &mut text);
-    if !text.trim().is_empty() {
-        *output = text;
-    }
-}
-
-pub(crate) fn is_assistant_message_item(item: &Value) -> bool {
-    item.get("role").and_then(Value::as_str) == Some("assistant")
-        || item
-            .get("type")
-            .and_then(Value::as_str)
-            .is_some_and(is_assistant_message_type)
-}
-
-fn is_assistant_message_type(kind: &str) -> bool {
-    matches!(
-        kind,
-        "agentMessage" | "agent_message" | "assistantMessage" | "assistant_message"
-    )
-}
-
-pub(crate) fn append_message_payload_text(payload: &Value, output: &mut String) {
-    if let Some(text) = payload.get("text").and_then(Value::as_str) {
-        output.push_str(text);
-    }
-    if let Some(content) = payload.get("content").and_then(Value::as_array) {
-        append_content_text_parts(content, output);
-    }
-}
-
-pub(crate) fn append_content_text_parts(parts: &[Value], output: &mut String) {
-    for part in parts {
-        let Some(kind) = part.get("type").and_then(Value::as_str) else {
-            continue;
-        };
-        if matches!(kind, "output_text" | "text") {
-            if let Some(text) = part.get("text").and_then(Value::as_str) {
-                output.push_str(text);
-            }
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
-    #[test] // xpec: w
-    fn context_compaction_event_requires_exact_method_or_item_type() {
-        let unrelated = json!({
-            "method": "thread/compactDisc/updated",
-            "params": {
-                "threadId": "thread",
-                "turnId": "turn"
-            }
-        });
-        assert!(context_compaction_event(&unrelated).is_none());
-
-        let method_event = json!({
-            "method": "thread/contextCompaction/updated",
-            "params": {
-                "threadId": "thread",
-                "turnId": "turn"
-            }
-        });
-        assert!(context_compaction_event(&method_event).is_some());
-
-        let item_event = json!({
-            "method": "item/completed",
-            "params": {
-                "threadId": "thread",
-                "turnId": "turn",
-                "item": { "type": "contextCompaction" }
-            }
-        });
-        assert!(context_compaction_event(&item_event).is_some());
-    }
-
-    // xpec: F
-    #[test]
-    fn dynamic_tool_call_parses_namespaced_tool_request() {
-        let call = dynamic_tool_call(&json!({
+    #[test] // xpec: gN
+    fn request_and_response_ids_keep_distinct_protocol_meanings() {
+        let response_value = json!({"id": 7, "result": {}});
+        let request_value = json!({
+            "id": 7,
             "method": "item/tool/call",
-            "params": {
-                "threadId": "thread",
-                "turnId": "turn",
-                "callId": "call",
-                "namespace": "canon",
-                "tool": "show",
-                "arguments": {
-                    "selectors": ["abc"]
-                }
-            }
-        }))
-        .unwrap();
-
-        assert_eq!(call.namespace.as_deref(), Some("canon"));
-        assert_eq!(call.tool, "show");
-        assert_eq!(call.arguments["selectors"], json!(["abc"]));
-    }
-
-    // xpec: F
-    #[test]
-    fn dynamic_tool_call_response_uses_app_server_content_items() {
-        let response =
-            dynamic_tool_call_response(EvaluatorDynamicToolResult::success("show output"));
-
-        assert_eq!(
-            response,
-            json!({
-                "contentItems": [
-                    {
-                        "type": "inputText",
-                        "text": "show output"
-                    }
-                ],
-                "success": true
-            })
-        );
-    }
-
-    #[test] // xpec: w
-    fn assistant_message_item_type_uses_exact_names() {
-        assert!(is_assistant_message_item(&json!({"type": "agentMessage"})));
-        assert!(is_assistant_message_item(&json!({"role": "assistant"})));
-        assert!(!is_assistant_message_item(
-            &json!({"type": "agent_status_message"})
-        ));
-    }
-
-    #[test] // xpec: w
-    fn completed_agent_text_keeps_last_assistant_message() {
-        let mut output = String::new();
-        append_completed_agent_text(
-            &json!({
-                "method": "item/completed",
-                "params": {
-                    "item": {
-                        "type": "agentMessage",
-                        "content": [{"type": "output_text", "text": "status"}]
-                    }
-                }
-            }),
-            &mut output,
-        );
-        append_completed_agent_text(
-            &json!({
-                "method": "item/completed",
-                "params": {
-                    "item": {
-                        "type": "agentMessage",
-                        "content": [{"type": "output_text", "text": "{\"answer\":\"no\"}"}]
-                    }
-                }
-            }),
-            &mut output,
-        );
-
-        assert_eq!(output, "{\"answer\":\"no\"}");
-    }
-
-    #[test] // xpec: w
-    fn turn_text_prefers_completed_message_over_delta_stream() {
-        assert_eq!(
-            turn_text(
-                "status{\"answer\":\"yes\"}".to_string(),
-                "{\"answer\":\"yes\"}".to_string()
-            ),
-            "{\"answer\":\"yes\"}"
-        );
-    }
-
-    #[test] // xpec: w
-    fn retrying_app_server_error_notification_is_not_final_error() {
-        let message = json!({
-            "method": "error",
-            "params": {
-                "willRetry": true,
-                "error": {
-                    "message": "Reconnecting... 5/5",
-                    "additionalDetails": "request timed out"
-                }
-            }
+            "params": {}
         });
+        let response = app_server_message(&response_value).unwrap();
+        let request = app_server_message(&request_value).unwrap();
 
-        assert_eq!(app_server_error_value(&message), None);
-    }
-
-    #[test] // xpec: w
-    fn non_retry_app_server_error_notification_is_final_error() {
-        let message = json!({
-            "method": "error",
-            "params": {
-                "willRetry": false,
-                "error": {
-                    "message": "request failed"
-                }
-            }
-        });
-
-        assert_eq!(
-            app_server_error_value(&message),
-            Some(json!({ "message": "request failed" }))
-        );
+        assert_eq!(response.response_id, Some(7));
+        assert_eq!(response.request_id, None);
+        assert_eq!(request.response_id, None);
+        assert_eq!(request.request_id, Some(7));
     }
 }

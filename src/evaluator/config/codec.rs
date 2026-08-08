@@ -61,41 +61,30 @@ impl ConfigEntryValue {
 }
 
 pub(super) fn config_entries_to_json(entries: Vec<ConfigEntry>) -> EvaluatorConfigResult<Value> {
-    let mut root = Value::Object(serde_json::Map::new());
+    let mut root = serde_json::Map::new();
     for entry in entries {
-        insert_json_config_entry(&mut root, &entry.path, entry.value)?;
+        insert_json_config_override(&mut root, &entry.path, entry.value.to_json_value())?;
     }
-    Ok(root)
+    Ok(Value::Object(root))
 }
 
-fn insert_json_config_entry(
-    root: &mut Value,
+pub(super) fn insert_json_config_override(
+    root: &mut serde_json::Map<String, Value>,
     path: &[String],
-    value: ConfigEntryValue,
+    value: Value,
 ) -> EvaluatorConfigResult<()> {
-    let Some((last, parents)) = path.split_last() else {
+    if path.is_empty() {
         return Err(EvaluatorConfigError::Message(
             "evaluator config entry path must not be empty".to_string(),
         ));
-    };
-    let mut cursor = root;
-    for part in parents {
-        let object = cursor
-            .as_object_mut()
-            .ok_or_else(|| format!("evaluator config path conflicts before {}", part))?;
-        cursor = object
-            .entry(part.clone())
-            .or_insert_with(|| Value::Object(serde_json::Map::new()));
     }
-    let object = cursor
-        .as_object_mut()
-        .ok_or_else(|| format!("evaluator config path conflicts at {}", last))?;
-    if object.contains_key(last) {
+    let key = toml_dotted_key(path);
+    if root.contains_key(&key) {
         return Err(EvaluatorConfigError::DuplicateConfigEntry {
             path: path.join("."),
         });
     }
-    object.insert(last.clone(), value.to_json_value());
+    root.insert(key, value);
     Ok(())
 }
 
@@ -116,7 +105,15 @@ pub(super) fn push_config_arg(args: &mut Vec<String>, value: &str) {
 }
 
 pub(super) fn toml_key_segment(value: &str) -> String {
-    toml_string(value)
+    if !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        value.to_string()
+    } else {
+        toml_string(value)
+    }
 }
 
 pub(super) fn toml_string(value: &str) -> String {
@@ -131,4 +128,42 @@ pub(super) fn toml_string(value: &str) -> String {
         encoded = encoded.replace(ch, &format!("\\u{:04X}", ch as u32));
     }
     encoded
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test] // xpec: hQ
+    fn config_override_paths_keep_structural_segments_bare() {
+        let path = ["permissions".to_string(), "canon_check".to_string()];
+
+        assert_eq!(toml_dotted_key(&path), "permissions.canon_check");
+        assert_eq!(toml_key_segment("/tmp/**"), r#""/tmp/**""#);
+    }
+
+    #[test] // xpec: gN,hQ
+    fn app_server_config_uses_flat_override_keys() {
+        let config = config_entries_to_json(vec![
+            ConfigEntry::string(["history", "persistence"], "none"),
+            ConfigEntry::bool_path(
+                vec![
+                    "plugins".to_string(),
+                    "plugin.with.dots".to_string(),
+                    "enabled".to_string(),
+                ],
+                true,
+            ),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            config,
+            json!({
+                "history.persistence": "none",
+                r#"plugins."plugin.with.dots".enabled"#: true
+            })
+        );
+    }
 }

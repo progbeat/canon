@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 
 pub(crate) fn scope_narrowing_log_fields(
-    id: &str,
+    id: Option<&str>,
     original_scope: &[String],
     proposed_scope: &[String],
     accepted: bool,

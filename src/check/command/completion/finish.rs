@@ -1,4 +1,7 @@
-use crate::check::command::output::{render_check_agent_messages, write_stdout_record};
+use crate::check::command::output::{
+    command_error_feedback_messages, render_check_feedback_messages, write_stdout_message_lines,
+    CheckFeedbackContext,
+};
 use crate::check::core::{for_each_unique_report_record, CheckRunReport};
 use crate::check::interrogation::write_check_lifecycle_finish_event;
 use crate::cli::CommandError;
@@ -6,18 +9,18 @@ use std::io::Write;
 
 // This module is deliberately not the public check-output renderer. The
 // per-expectation stdout records and summary line live in `command::output`,
-// token usage stderr output lives in `command::reporting`, and
-// `command::execution`
-// orchestrates their order before calling `finish_check_report`. This module
-// owns only the post-summary agent message plus finish logging. Success and
-// error reports share finish logging and the post-summary message to the agent
-// when allowed by the command form. The optional error only changes the finish
-// log payload and final command result.
+// token usage stderr output lives in `command::completion::usage`, and
+// `command::workflow` orchestrates their order before calling
+// `finish_check_report`. This module owns only the post-summary feedback plus
+// finish logging. Success and error reports share both when allowed by the
+// command form. The workflow reports a command error separately, preserves the
+// outcome feedback specified by `emit_check_feedback`, and then appends the
+// command-error next action so it is the last guidance shown to the user.
 pub(crate) struct CheckReportFinishContext<'b> {
     pub(crate) diagnostic_log: Option<&'b mut crate::logs::DiagnosticLogWriter>,
     pub(crate) result_output: &'b mut dyn Write,
-    pub(crate) write_agent_message: bool,
-    pub(crate) need_to_commit: bool,
+    pub(crate) feedback_context: Option<CheckFeedbackContext>,
+    pub(crate) failure_history_feedback: Option<&'b crate::xpec_state::FailureHistoryFeedback>,
 }
 
 pub(crate) fn finish_check_report(
@@ -25,17 +28,21 @@ pub(crate) fn finish_check_report(
     report: &CheckRunReport,
     error: Option<&str>,
 ) -> Result<(), CommandError> {
-    // No eligible public output piece is pending here: per-expectation output
-    // and the public trailer have already been rendered, written, and flushed
-    // by their own writers. This post-trailer step cannot delay stdout/stderr
-    // that was eligible earlier; it computes only the agent message and finish
-    // lifecycle log.
+    // The writers for per-expectation output and both public trailer parts have
+    // already attempted to write and flush their output before this step. A
+    // writer may have reported a write or flush failure, but this step neither
+    // retries nor buffers those earlier pieces; it only attempts the agent
+    // feedback and finish lifecycle log.
     let mut post_finish_error = None;
     let mut finish_error = error.map(str::to_string);
-    if context.write_agent_message {
-        if let Err(err) =
-            write_check_agent_message(report, context.result_output, context.need_to_commit)
-        {
+    if let Some(feedback_context) = context.feedback_context {
+        if let Err(err) = write_check_feedback(
+            report,
+            context.result_output,
+            feedback_context,
+            context.failure_history_feedback,
+            error.is_some(),
+        ) {
             finish_error.get_or_insert_with(|| err.to_string());
             post_finish_error.get_or_insert(err);
         }
@@ -49,28 +56,64 @@ pub(crate) fn finish_check_report(
     Ok(())
 }
 
-fn write_check_agent_message(
+fn write_check_feedback(
     report: &CheckRunReport,
     output: &mut dyn Write,
-    need_to_commit: bool,
+    feedback_context: CheckFeedbackContext,
+    failure_history_feedback: Option<&crate::xpec_state::FailureHistoryFeedback>,
+    command_failed: bool,
 ) -> Result<(), CommandError> {
-    let messages = check_agent_messages(report, need_to_commit);
-    for message in messages {
-        let mut line = message;
-        line.push('\n');
-        write_stdout_record(output, line.as_bytes(), "check agent message")?;
-    }
-    Ok(())
+    let messages = completion_feedback_messages(
+        report,
+        feedback_context,
+        failure_history_feedback,
+        command_failed,
+    );
+    write_stdout_message_lines(output, messages, "check feedback").map_err(CommandError::from)
 }
 
-pub(crate) fn check_agent_messages(report: &CheckRunReport, need_to_commit: bool) -> Vec<String> {
+fn completion_feedback_messages(
+    report: &CheckRunReport,
+    feedback_context: CheckFeedbackContext,
+    failure_history_feedback: Option<&crate::xpec_state::FailureHistoryFeedback>,
+    command_failed: bool,
+) -> Vec<String> {
+    let mut messages = check_feedback_messages(report, feedback_context, failure_history_feedback);
+    if command_failed {
+        // [2Z,ex] `emit_check_feedback` still describes the recorded xpec
+        // outcomes exactly. A later command failure gets its own final action,
+        // preventing success or commit guidance from being the user's next
+        // step while preserving both independently true facts.
+        messages.extend(command_error_feedback_messages(feedback_context));
+    }
+    messages
+}
+
+pub(crate) fn check_feedback_messages(
+    report: &CheckRunReport,
+    feedback_context: CheckFeedbackContext,
+    failure_history_feedback: Option<&crate::xpec_state::FailureHistoryFeedback>,
+) -> Vec<String> {
     let issue_ids = report_issue_display_ids(report);
-    render_check_agent_messages(&issue_ids, report.pending, need_to_commit)
+    // [2Z,3k,ex,KD,kK] Evaluation outcomes and command completion are
+    // independent: a persistence or trailer failure does not rewrite result
+    // records or their canonical feedback. The workflow emits a separate
+    // command-error diagnostic before this outcome-only feedback. A sole
+    // failed xpec enters the renderer's explicit history assertion.
+    // [ex,kK] Violating this invariant deliberately panics; the outer check
+    // lifecycle catches that panic, independently attempts every remaining
+    // `finally` effect, and then resumes the original assertion panic.
+    render_check_feedback_messages(
+        &issue_ids,
+        report.pending,
+        feedback_context,
+        failure_history_feedback,
+    )
 }
 
 fn report_issue_display_ids(report: &CheckRunReport) -> Vec<String> {
     let mut issue_ids = Vec::new();
-    for_each_unique_report_record(&report.records, &report.cached, |record| {
+    for_each_unique_report_record(&report.records, &report.cached_passes, |record| {
         if !record.passed() {
             issue_ids.push(record.display_id.clone());
         }
@@ -81,183 +124,59 @@ fn report_issue_display_ids(report: &CheckRunReport) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::check::core::{CheckRecord, CheckResult, CheckRunReport, ResolvedExpectation};
-    use crate::config_types::{AgentConfig, CheckConfig, Expectation};
-    use crate::git::{TreeSource, VisibleTreeOidCache};
-    use crate::hash::full_scope;
-    use crate::time::format_record_timestamp;
-    use std::fs;
-    use std::path::PathBuf;
-    use std::process;
-    use std::process::Command;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use crate::check::core::{CheckRecord, CheckResult};
 
-    #[test] // xpec: 9b
-    fn changed_tree_emits_commit_message() {
-        let root = git_project("new-pass-emits-commit-message");
-        let agent = AgentConfig::default();
-        let config = test_config(&agent);
-        let expectation = test_expectation_from_config(&config);
-        let scope = full_scope();
-        let report = passing_report_for_staged_scope(&root, &expectation, &scope);
-
-        let messages = check_agent_messages(&report, true);
-
-        assert!(messages
-            .iter()
-            .any(|message| message.contains("Commit the staged changes")));
-        assert!(!messages
-            .iter()
-            .any(|message| message.contains("Fix the issues")));
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test] // xpec: 9b
-    fn unchanged_tree_emits_plain_success_message() {
-        let root = git_project("prior-pass-is-not-a-new-pass");
-        let agent = AgentConfig::default();
-        let config = test_config(&agent);
-        let expectation = test_expectation_from_config(&config);
-        let scope = full_scope();
-        let report = passing_report_for_staged_scope(&root, &expectation, &scope);
-        let messages = check_agent_messages(&report, false);
-
-        assert!(messages
-            .iter()
-            .any(|message| message.contains("All checks passed")));
-        assert!(!messages
-            .iter()
-            .any(|message| message.contains("Commit the staged changes")));
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test] // xpec: 9b
-    fn failed_report_repairs_instead_of_committing() {
-        let root = git_project("prior-pass-regression-agent-message");
-        let agent = AgentConfig::default();
-        let config = test_config(&agent);
-        let expectation = test_expectation_from_config(&config);
-        let scope = full_scope();
+    #[test] // xpec: ex
+    #[should_panic(expected = "the current failure record must be appended to fail history")]
+    fn canonical_history_assertion_rejects_an_unrecorded_single_failure() {
         let report = CheckRunReport {
-            records: vec![staged_scope_record(&root, &expectation, &scope, "no")],
-            cached: Vec::new(),
+            records: vec![failed_record("x")],
+            cached_passes: Vec::new(),
             pending: 0,
         };
-        let messages = check_agent_messages(&report, true);
+        let context = CheckFeedbackContext::from_tree_oids("checked", "head", "head");
 
-        assert!(messages
-            .iter()
-            .any(|message| message.contains("Fix the issues")));
-        assert!(!messages
-            .iter()
-            .any(|message| message.contains("Commit the staged changes")));
-        let _ = fs::remove_dir_all(root);
+        check_feedback_messages(&report, context, None);
     }
 
-    fn passing_report_for_staged_scope(
-        root: &std::path::Path,
-        expectation: &ResolvedExpectation,
-        scope: &[String],
-    ) -> CheckRunReport {
-        CheckRunReport {
-            records: vec![staged_scope_record(root, expectation, scope, "yes")],
-            cached: Vec::new(),
+    #[test] // xpec: 2Z,ex
+    fn command_failure_action_follows_canonical_outcome_feedback() {
+        let report = CheckRunReport {
+            records: Vec::new(),
+            cached_passes: Vec::new(),
             pending: 0,
-        }
+        };
+        let context = CheckFeedbackContext::from_tree_oids("checked", "head", "head");
+
+        let messages = completion_feedback_messages(&report, context, None, true);
+
+        assert_eq!(
+            messages,
+            vec![
+                "✓ All checks passed. Commit the staged changes!".to_string(),
+                "▷ Fix the reported error and run `canon check` again!".to_string(),
+            ]
+        );
     }
 
-    fn staged_scope_record(
-        root: &std::path::Path,
-        expectation: &ResolvedExpectation,
-        scope: &[String],
-        observed: &str,
-    ) -> CheckRecord {
-        let mut visible_tree_oid_cache = VisibleTreeOidCache::new();
-        let visible_tree_oid = visible_tree_oid_cache
-            .visible_tree_oid(root, &TreeSource::Staged, &expectation.agent, scope)
-            .unwrap();
+    fn failed_record(display_id: &str) -> CheckRecord {
         CheckRecord {
-            timestamp: format_record_timestamp(0),
-            number: expectation.number,
-            result: CheckResult::from_expected_answer(&expectation.expected_answer, observed),
+            timestamp: "1970-01-01T00:00:00Z".to_string(),
+            result: CheckResult::Fail,
             to: crate::config_types::ExpectationTo::Agent,
-            question: Some(expectation.question.clone()),
-            expected_answer: Some(expectation.expected_answer.clone()),
-            observed: observed.to_string(),
+            question: Some("Does it pass?".to_string()),
+            expected_answer: Some("yes".to_string()),
+            observed: "no".to_string(),
             error: None,
             evidence: Some("test evidence".to_string()),
-            scope: scope.to_vec(),
-            question_scope_suggestion: None,
-            visible_tree_oid: Some(visible_tree_oid),
+            scope: vec!["src".to_string()],
+            q_scope_suggestion: None,
+            visible_tree_oid: Some("visible".to_string()),
             diff_from: None,
             diff_from_tree_oid: None,
             diff_from_tree_oid_abbrev: None,
-            id: expectation.id.clone(),
-            display_id: expectation.display_id.clone(),
+            id: "11111111111111111111".to_string(),
+            display_id: display_id.to_string(),
         }
-    }
-
-    fn test_config(agent: &AgentConfig) -> CheckConfig {
-        CheckConfig {
-            version: 1,
-            agent: agent.clone(),
-            expectations: vec![Expectation {
-                to: crate::config_types::ExpectationTo::Agent,
-                rank: 0,
-                q: "Does it pass?".to_string(),
-                a: "yes".to_string(),
-                question_context: String::new(),
-                diff_from: crate::config_types::DEFAULT_DIFF_FROM.to_string(),
-                target: None,
-                question_answer_only: false,
-                agent: agent.clone(),
-                cooldown: None,
-                in_place_compatibility: Default::default(),
-            }],
-        }
-    }
-
-    fn test_expectation_from_config(config: &CheckConfig) -> ResolvedExpectation {
-        let identities = crate::check::expectation_identities(config).unwrap();
-        crate::check::select_expectations_with_identities(config, &identities, &[])
-            .unwrap()
-            .remove(0)
-    }
-
-    fn git_project(name: &str) -> PathBuf {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0);
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join("test-tmp")
-            .join(format!("canon-test-{}-{}-{}", name, process::id(), unique));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        git(&root, &["init"]);
-        git(&root, &["config", "core.autocrlf", "false"]);
-        git(&root, &["config", "core.eol", "lf"]);
-        git(&root, &["config", "user.name", "Canon Test"]);
-        git(&root, &["config", "user.email", "canon-test@example.com"]);
-        fs::write(root.join("README.md"), "hello\n").unwrap();
-        git(&root, &["add", "."]);
-        git(&root, &["commit", "-m", "initial"]);
-        root
-    }
-
-    fn git(root: &std::path::Path, args: &[&str]) {
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(root)
-            .output()
-            .unwrap();
-        // xpec: 9b
-        assert!(
-            output.status.success(),
-            "git {} failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr)
-        );
     }
 }

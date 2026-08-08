@@ -28,7 +28,7 @@ pub(crate) fn render_runtime_log_process_event(
     event: &str,
     fields: &[(&str, Value)],
 ) -> DiagnosticLogResult<RenderedRuntimeLogEvent> {
-    // [7N,g2,m8,R1] Native process and invocation IDs are primary correlation
+    // [kK,g2,Yq] Native process and invocation IDs are primary correlation
     // fields for concurrent processes and sequential command runs. They link
     // events without deriving a second representation from event timestamps.
     render_runtime_log_event_with_process(
@@ -72,7 +72,7 @@ mod tests {
     use super::render_runtime_log_event;
     use serde_json::{json, Value};
 
-    #[test] // xpec: hJ,7N,m8
+    #[test] // xpec: kK,Yq
     fn agent_token_usage_accepts_aggregate_with_turn_context() {
         let fields = vec![
             ("id", json!("id")),
@@ -86,20 +86,20 @@ mod tests {
         render_runtime_log_event("info", "agent.token_usage", &fields).unwrap();
     }
 
-    #[test] // xpec: m8
+    #[test] // xpec: Yq
     fn agent_response_allows_missing_usage_when_unavailable() {
         let fields = vec![
             ("id", json!("id")),
             ("attempt", json!(1)),
             ("reason", json!("initial")),
             ("error", json!("missing evaluator turn usage")),
-            ("response", json!({"sessionId": "thread", "text": "{}"})),
+            ("response", json!({"threadId": "thread", "text": "{}"})),
         ];
 
         render_runtime_log_event("error", "agent.turn_error", &fields).unwrap();
     }
 
-    #[test] // xpec: m8
+    #[test] // xpec: Yq
     fn review_required_record_events_include_reason() {
         let fields = vec![
             ("id", json!("id")),
@@ -114,14 +114,31 @@ mod tests {
         render_runtime_log_event("warn", "expectation.review_required", &fields).unwrap();
     }
 
-    #[test] // xpec: m8
+    #[test] // xpec: Yq
     fn check_finish_does_not_require_derived_status() {
         let fields = vec![("query", json!(false))];
 
         render_runtime_log_event("info", "check.finish", &fields).unwrap();
     }
 
-    #[test] // xpec: m8
+    #[test] // xpec: gN,Yq
+    fn check_start_schema_names_preselection_candidates() {
+        render_runtime_log_event(
+            "info",
+            "check.start",
+            &[("candidates", json!(["candidate-id"]))],
+        )
+        .unwrap();
+        let error = render_runtime_log_event("info", "check.start", &[("selected", json!(["id"]))])
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "runtime log field \"candidates\" is missing for event schema"
+        );
+    }
+
+    #[test] // xpec: Yq
     fn runtime_log_common_fields_are_single_line_labels() {
         let level_error = render_runtime_log_event("warn\nnext", "check.start", &[]).unwrap_err();
         let event_error = render_runtime_log_event("warn", "check.start\rnext", &[]).unwrap_err();
@@ -152,8 +169,8 @@ mod tests {
         );
     }
 
-    #[test] // xpec: m8
-    fn thread_lifecycle_events_include_reuse_context() {
+    #[test] // xpec: Yq
+    fn thread_lifecycle_events_include_evaluation_context() {
         let fields = vec![
             ("threadId", json!("thread")),
             ("id", json!("id")),
@@ -163,12 +180,12 @@ mod tests {
             ("baseInstructions", json!("base")),
             ("developerInstructions", json!("developer")),
             (
-                "reuseContext",
+                "evaluationContext",
                 json!({
                     "visibleTreeOid": "visible",
                     "diffBaseTreeOid": "base-tree",
                     "checkedTreeOid": "checked-tree",
-                    "turnPrompt": "prompt",
+                    "taskInput": "task input",
                     "questionContext": "context",
                     "plugins": ["plugin"],
                     "ignore": ["target/**"],

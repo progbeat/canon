@@ -1,4 +1,5 @@
-use crate::project::command_output_trimmed;
+use super::super::program::command_output_token;
+use crate::output::command_output_trimmed;
 use sha1::{Digest, Sha1};
 use sha2::Sha256;
 use std::collections::BTreeMap;
@@ -43,12 +44,9 @@ pub(super) fn visible_tree_oid_from_entries(
     // tree from Git-reported modes/object IDs, then hash the canonical `tree
     // <len>\0<body>` bytes with the repository's object hash algorithm.
     //
-    // The entries come from `git ls-tree -r -t`, so fully covered directories
-    // carry Git's existing tree object ID. `TreeNode::insert` preserves those as
-    // `DirectoryOid` and ignores redundant descendants, reusing Git's subtree
-    // OIDs whenever the visible tree contains a complete directory. Only the
-    // synthetic root or ancestors that Git does not already report are serialized
-    // and hashed here.
+    // The entries are leaf paths from `git ls-files --stage` or `git ls-tree
+    // -r` without `-t`. Directory nodes are always synthesized from the scoped
+    // leaves, so excluded descendants cannot affect the resulting tree OID.
     let mut tree = TreeNode::default();
     for entry in entries {
         let parsed = parse_visible_tree_entry(entry)?;
@@ -65,9 +63,6 @@ struct TreeNode {
 enum TreeEntry {
     File { mode: String, object_id: String },
     Directory(TreeNode),
-    // Fully covered directories reuse the tree object ID that Git reports.
-    // Child entries under this directory are redundant for the scoped tree.
-    DirectoryOid { object_id: String },
 }
 
 pub(super) struct VisibleTreeEntry {
@@ -82,12 +77,11 @@ impl TreeNode {
             return Err("visible tree entry path must not be empty".to_string());
         };
         if rest.is_empty() {
-            let entry = if is_git_tree_mode(&mode) {
-                TreeEntry::DirectoryOid { object_id }
-            } else {
-                TreeEntry::File { mode, object_id }
-            };
-            self.entries.insert(name.clone(), entry);
+            if is_git_tree_mode(&mode) {
+                return Err("visible tree entries must be leaf paths".to_string());
+            }
+            self.entries
+                .insert(name.clone(), TreeEntry::File { mode, object_id });
             return Ok(());
         }
         let entry = self
@@ -96,7 +90,6 @@ impl TreeNode {
             .or_insert_with(|| TreeEntry::Directory(TreeNode::default()));
         match entry {
             TreeEntry::Directory(directory) => directory.insert(rest, mode, object_id),
-            TreeEntry::DirectoryOid { .. } => Ok(()),
             TreeEntry::File { .. } => Err(format!(
                 "visible tree path conflicts with file: {}",
                 String::from_utf8_lossy(name)
@@ -140,12 +133,6 @@ impl TreeEntry {
                 name: name.to_vec(),
                 mode: "40000".to_string(),
                 object_id: hex_object_id_bytes(&directory.oid(object_hash_algorithm)?)?,
-                is_directory: true,
-            }),
-            TreeEntry::DirectoryOid { object_id } => Ok(EncodedTreeEntry {
-                name: name.to_vec(),
-                mode: "40000".to_string(),
-                object_id: hex_object_id_bytes(object_id)?,
                 is_directory: true,
             }),
         }
@@ -249,7 +236,7 @@ fn hex_object_id_bytes(object_id: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-pub(super) fn is_git_tree_mode(mode: &str) -> bool {
+fn is_git_tree_mode(mode: &str) -> bool {
     mode == "40000" || mode == "040000"
 }
 
@@ -303,19 +290,12 @@ pub(super) fn git_object_hash_algorithm(root: &Path) -> Result<GitObjectHashAlgo
             command_output_trimmed(&output.stderr, "git rev-parse stderr")?
         ));
     }
-    let format = command_output_trimmed(&output.stdout, "git rev-parse stdout")?;
+    let format = command_output_token(&output.stdout, "git rev-parse stdout")?;
     match format {
         "sha1" => Ok(GitObjectHashAlgorithm::Sha1),
         "sha256" => Ok(GitObjectHashAlgorithm::Sha256),
         other => Err(format!("unsupported git object hash algorithm: {}", other)),
     }
-}
-
-pub(super) fn scope_entry_is_tree(entry: &str) -> bool {
-    let metadata = entry.split_once('\t').map(|(metadata, _)| metadata);
-    metadata
-        .and_then(|metadata| metadata.split_whitespace().next())
-        .is_some_and(is_git_tree_mode)
 }
 
 pub(super) fn scope_entry_path(path: &[u8]) -> String {
@@ -329,5 +309,21 @@ pub(super) fn scope_entry_path(path: &[u8]) -> String {
             }
             output
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{visible_tree_oid_from_entries, GitObjectHashAlgorithm};
+
+    #[test] // xpec: A8,UH
+    fn visible_tree_hash_rejects_non_leaf_directory_entries() {
+        let error = visible_tree_oid_from_entries(
+            &["40000 0123456789012345678901234567890123456789\tdir".to_string()],
+            GitObjectHashAlgorithm::Sha1,
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "visible tree entries must be leaf paths");
     }
 }

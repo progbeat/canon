@@ -1,9 +1,11 @@
-use super::hash::{scope_entry_path, visible_tree_oid_from_entries, GitObjectHashAlgorithm};
-use crate::git::program::StagedTrackedFile;
+use super::{
+    hash::{scope_entry_path, visible_tree_oid_from_entries, GitObjectHashAlgorithm},
+    TrackedFile,
+};
 use crate::scope::{path_bytes_in_scope, pathspec_is_exclude};
 
 pub(super) fn visible_scope_entries_from_files(
-    files: &[StagedTrackedFile],
+    files: &[TrackedFile],
     scope: &[String],
 ) -> Result<Vec<String>, String> {
     // This is the visible tree entry selection step: apply the complete
@@ -18,7 +20,7 @@ pub(super) fn visible_scope_entries_from_files(
 }
 
 pub(super) fn visible_tree_oid_from_files_if_scope_present(
-    files: &[StagedTrackedFile],
+    files: &[TrackedFile],
     scope: &[String],
     object_hash_algorithm: GitObjectHashAlgorithm,
 ) -> Result<Option<String>, String> {
@@ -32,7 +34,7 @@ pub(super) fn visible_tree_oid_from_files_if_scope_present(
 }
 
 pub(super) fn visible_tree_oid_from_files(
-    files: &[StagedTrackedFile],
+    files: &[TrackedFile],
     scope: &[String],
     object_hash_algorithm: GitObjectHashAlgorithm,
 ) -> Result<String, String> {
@@ -41,7 +43,7 @@ pub(super) fn visible_tree_oid_from_files(
 }
 
 fn visible_scope_has_present_include_term(
-    files: &[StagedTrackedFile],
+    files: &[TrackedFile],
     scope: &[String],
 ) -> Result<bool, String> {
     let mut has_include_term = false;
@@ -64,7 +66,7 @@ fn visible_scope_has_present_include_term(
     Ok(!has_include_term)
 }
 
-fn tracked_files_scope_entries(files: &[&StagedTrackedFile]) -> Vec<String> {
+fn tracked_files_scope_entries(files: &[&TrackedFile]) -> Vec<String> {
     let mut entries = files
         .iter()
         .map(|file| {

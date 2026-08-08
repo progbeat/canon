@@ -5,19 +5,7 @@ This is a prompt template for the turn prompt used for evaluator interrogations:
 ````jinja
 {{ {xpec.short_id: xpec.q}|json }}
 {%- if xpec.target == "diff" %}
-# This question targets the Git diff. Evaluate whether the diff changes the answer. Use this prior evaluation if it still holds: `{% if xpec.diff_from == ":checkpoint" and last_pass -%}
-{{ {
-  "answer": last_pass.response.answer,
-  "evidence": last_pass.response.evidence,
-  "qScopeSuggestion": ["."]
-}|json }}
-{%- else -%}
-{{ {
-  "answer": xpec.a,
-  "evidence": "",
-  "qScopeSuggestion": ["."]
-}|json }}
-{%- endif %}`
+Evaluate only the visible files affected by the diff; use other visible files as context!
 {%- endif %}
 ````
 
