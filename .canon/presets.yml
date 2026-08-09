@@ -2,48 +2,63 @@
 # `cap_N` selects a cost-efficient model/effort combination scoring at least N on the Artificial Analysis Intelligence Index; higher N means greater overall capability.
 # Costs are approximate weighted average costs per Intelligence Index task.
 
-cap_59: &cap_59
-  # ~$1.04
+cap_61: &cap_61
+  # ~$1.23
   models: ["gpt-5.6-sol"]
   thinking: max
 
-cap_58:
-  # ~$0.682
+cap_59: &cap_59
+  # ~$0.81
   models: ["gpt-5.6-sol"]
   thinking: xhigh
 
-cap_56: &cap_56
-  # ~$0.453
+cap_58:
+  <<: *cap_59
+
+cap_57: &cap_57
+  # ~$0.55
   models: ["gpt-5.6-sol"]
   thinking: high
+
+cap_56: &cap_56
+  # ~$0.37
+  models: ["gpt-5.6-sol"]
+  thinking: medium
 
 cap_55: &cap_55 { <<: *cap_56 }
 
-cap_54: &cap_54
-  # ~$0.314
-  models: ["gpt-5.6-sol"]
-  thinking: medium
+cap_54: &cap_54 { <<: *cap_56 }
 
-cap_50: &cap_50 { <<: *cap_54 }
+cap_53: &cap_53
+  # ~$0.31
+  models: ["gpt-5.6-terra"]
+  thinking: xhigh
 
-cap_49: &cap_49
-  # ~$0.139
+cap_50: &cap_50
+  # ~$0.03
   models: ["gpt-5.6-luna"]
   thinking: xhigh
 
-cap_46: &cap_46
-  # ~$0.095
+cap_49: &cap_49 { <<: *cap_50 }
+
+cap_47: &cap_47
+  # ~$0.02
   models: ["gpt-5.6-luna"]
   thinking: high
 
-cap_45: &cap_45 { <<: *cap_46 }
+cap_46: &cap_46 { <<: *cap_47 }
 
-cap_38:
-  # ~$0.050
+cap_45: &cap_45 { <<: *cap_47 }
+
+cap_39: &cap_39
+  # ~$0.01
   models: ["gpt-5.6-luna"]
   thinking: medium
 
-cap_max: *cap_59
+cap_38:
+  <<: *cap_39
+
+cap_max: *cap_61
 
 #################
 
@@ -77,12 +92,6 @@ _review_base: &_review_base
   <<: *default
   target: diff
   q-scope: ["."]
-  ignore:
-    - "docs/ai/**"
-    - "skills/**"
-    - "AGENTS.md"
-    - "Cargo.lock"
-    - "LICENSE"
 
 patch_review:
   <<: [*cap_55, *_review_base]
@@ -92,6 +101,12 @@ pr_review:
   <<: [*cap_55, *_review_base]
   diff-from: master
   rank: 5
+  ignore:
+    - "docs/ai/**"
+    - "skills/**"
+    - "AGENTS.md"
+    - "Cargo.lock"
+    - "LICENSE"
 
 full_scope:
   q-scope: ["."]

@@ -1,13 +1,13 @@
 presets:
   default: &default_preset
-    models: ["gpt-5.4-mini", "gpt-5.3-codex-spark"]
+    models: ["gpt-5.6-luna"]
     thinking: medium  # minimal | low | medium | high | xhigh
     ignore:
       - ".canon/**"  # prevents evaluator agents from reading expected answers and avoids reevaluating full-scope expectations when canon changes
       - "AGENTS.md"
   smart:
     <<: *default_preset
-    models: ["gpt-5.5"]
+    models: ["gpt-5.6-sol"]
     thinking: xhigh
 
 expectations:
@@ -28,6 +28,11 @@ expectations:
     target: diff
     thinking: high
 
+  - q: "Can you find any DRY violation where the same knowledge is independently maintained in more than one source-code location?"
+    a: "no"
+    target: diff
+    thinking: high
+
   - q: "Does the project avoid repeating expensive deterministic operations within a single high-level operation by reusing results keyed by all inputs that can affect them, including repository inspections, filesystem reads, parsed data, and derived hashes?"
     a: "yes"
     target: diff
@@ -42,6 +47,11 @@ expectations:
     thinking: high
 
   - q: "Can you find any source-code boundaries that hide dependencies or add indirection without clarifying ownership?"
+    a: "no"
+    target: diff
+    thinking: high
+
+  - q: "Can you find any unnecessary indirection: an implementation boundary whose removal would preserve behavior while making ownership and dependencies at least as clear?"
     a: "no"
     target: diff
     thinking: high

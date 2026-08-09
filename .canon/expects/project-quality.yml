@@ -2,6 +2,10 @@
   a: no
   preset: patch_review
 
+- q: "Can you find any DRY violation where the same knowledge is independently maintained in more than one source-code location?"
+  a: no
+  preset: patch_review
+
 - q: "Can you find any obsolete, unused, stray, dead-end, duplicated, or redundant project files or code paths that are safe to remove or consolidate without changing intended functionality?"
   a: no
   preset: patch_review
@@ -12,6 +16,10 @@
   preset: patch_review
 
 - q: "Do any source-code boundaries hide dependencies or add indirection without clarifying ownership?"
+  a: no
+  preset: patch_review
+
+- q: "Can you find any unnecessary indirection: an implementation boundary whose removal would preserve behavior while making ownership and dependencies at least as clear?"
   a: no
   preset: patch_review
 
@@ -66,10 +74,6 @@
   preset: patch_review
 
 - q: "Can you find code structure that is overly flat?"
-  a: no
-  preset: patch_review
-
-- q: "Can you find tests that assert incidental implementation details instead of stable observable behavior through a public or component interface?"
   a: no
   preset: patch_review
 
@@ -132,10 +136,14 @@
   a: no
   preset: patch_review
 
+- q: "Can you find a test declaration or assertion outside test code that is not marked by an `xpec: <shortID>(,<shortID>)*` source comment citing only existing xpecs?"
+  a: no
+  preset: patch_review
+
 - q: |-
-    Every test declaration and assert invocation must have an applicable `xpec: <shortID>(,<shortID>)*` source-comment marker that cites only existing xpecs. Within a test, an assertion inherits the test marker unless it has its own.
-    Any test or assertion failure necessarily means that at least one xpec in its applicable marker is violated.
-    Can you find any violation of these requirements?
+    Every test failure must imply that at least one xpec cited by the `xpec:` source-comment marker of the test declaration is violated.
+    Every failure of an assertion outside test code must imply that at least one xpec cited by the `xpec:` source-comment marker of that assertion is violated.
+    Can you find a concrete violation?
   a: no
   preset: patch_review
 
