@@ -67,10 +67,11 @@ impl EvaluatorProgressState {
         at: Instant,
         marker_interval: Duration,
     ) {
-        // [2gZ,Od] `TurnTimeout` is part of the progress component's public
+        // `TurnTimeout` is part of the progress component's public
         // marker contract. Two continuously accumulating intervals guarantee
         // a completed idle window immediately before the terminal partial
         // window regardless of the turn start's phase within the timeline.
+        // xpec: EL
         assert!(
             self.active_no_progress_since
                 .and_then(|started_at| at.checked_duration_since(started_at))

@@ -6,6 +6,13 @@ use super::{
 };
 use serde::Deserialize;
 
+/// Yields selected preset names from highest to lowest field precedence.
+pub(crate) fn preset_names_in_precedence_order(
+    selected_presets: &str,
+) -> impl Iterator<Item = &str> {
+    selected_presets.rsplit('+').map(str::trim)
+}
+
 #[derive(Debug, Deserialize, Clone, Default)]
 pub(crate) struct RawPresetConfig {
     #[serde(default, deserialize_with = "deserialize_optional_string")]

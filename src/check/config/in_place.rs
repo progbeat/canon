@@ -7,7 +7,8 @@
 //! module for the separate mode contract.
 
 use crate::config_types::{
-    CheckConfig, Expectation, InPlaceIncompatibleField, RawExpectationItem, RawPresetConfig,
+    preset_names_in_precedence_order, CheckConfig, Expectation, InPlaceIncompatibleField,
+    RawExpectationItem, RawPresetConfig,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -71,7 +72,7 @@ pub(super) fn validate_raw_in_place_expectations(
         );
         let selected_presets = common.settings.preset.as_deref().unwrap_or("default");
         let mut visited_presets = BTreeSet::new();
-        for preset in selected_presets.rsplit('+').map(str::trim) {
+        for preset in preset_names_in_precedence_order(selected_presets) {
             collect_preset_incompatible_fields(
                 preset,
                 presets,

@@ -21,10 +21,11 @@ impl GitBackedCheckResources {
     }
 
     pub(crate) fn share_persistent(&self) -> GitBackedCheckResources {
+        // xpec: d
         assert!(
             matches!(self.kind, GitBackedCheckResourceKind::Persistent),
             "only persistent check resources may span command stages"
-        ); // xpec: d
+        );
         GitBackedCheckResources {
             kind: GitBackedCheckResourceKind::Persistent,
             tree_oid_cache: Rc::clone(&self.tree_oid_cache),

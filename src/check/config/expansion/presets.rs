@@ -4,8 +4,8 @@ use crate::check::config::validation::{
     normalize_agent_ignore_pattern_for_config, validate_resolved_agent_config,
 };
 use crate::config_types::{
-    AgentConfig, ConfiguredValue, RawExpectationSettings, RawLegacyAgentConfig, RawPresetConfig,
-    ResolvedPresetConfig,
+    preset_names_in_precedence_order, AgentConfig, ConfiguredValue, RawExpectationSettings,
+    RawLegacyAgentConfig, RawPresetConfig, ResolvedPresetConfig,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -44,14 +44,16 @@ pub(super) fn resolve_presets(
 
 pub(super) fn resolve_preset_closure(
     raw_presets: &BTreeMap<String, RawPresetConfig>,
-    selected_preset: &str,
+    selected_presets: &str,
 ) -> Result<BTreeMap<String, ResolvedPresetConfig>, String> {
     if !raw_presets.contains_key("default") {
         return Err("check.yml presets must contain default".to_string());
     }
     let mut resolved = BTreeMap::new();
     let mut resolving = BTreeSet::new();
-    resolve_preset(selected_preset, raw_presets, &mut resolved, &mut resolving)?;
+    for preset_name in preset_names_in_precedence_order(selected_presets) {
+        resolve_preset(preset_name, raw_presets, &mut resolved, &mut resolving)?;
+    }
     Ok(resolved)
 }
 

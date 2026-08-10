@@ -54,6 +54,7 @@ impl NaiveIsolationPolicy {
     pub(crate) fn isolate(&mut self, path: &Path) -> Result<NaiveIsolationGuard, String> {
         let original_path = path.to_path_buf();
         if let Some(secret_dir) = self.secret_dir.boundary() {
+            // xpec: Hj
             assert!(
                 is_subpath(&original_path, secret_dir)?,
                 "cannot isolate path {} outside of secret dir {}",
@@ -94,6 +95,7 @@ impl NaiveIsolationPolicy {
         // therefore absent to this assertion, leaving the subsequent move to
         // apply its ordinary platform behavior.
         self.counter += 1;
+        // xpec: Hj
         assert!(
             !isolated_path.exists(),
             "counter collision in sandbox isolation: {}",

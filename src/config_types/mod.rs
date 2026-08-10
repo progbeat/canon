@@ -14,7 +14,7 @@ pub(crate) use expectation::{
     RawExpectationFields, RawExpectationItem, RawGitBackedExpectationConfig,
     AGAINST_TREE_DIFF_FROM, DEFAULT_DIFF_FROM,
 };
-pub(crate) use preset::{RawPresetConfig, ResolvedPresetConfig};
+pub(crate) use preset::{preset_names_in_precedence_order, RawPresetConfig, ResolvedPresetConfig};
 
 #[derive(Debug, Clone)]
 // Resolved runtime config for check execution. `RawCheckConfig` is the parsed
