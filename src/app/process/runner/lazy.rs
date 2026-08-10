@@ -228,9 +228,9 @@ impl EvaluatorRunner for LazyAppServerRunner {
                 dynamic_tools,
                 codex_executable: &codex_executable,
             })?;
-        // xpec: bP,KD,hQ
         let project_tools_advertised =
             ReadOnlyProjectInspectionPlan::advertises_project_tools(dynamic_tools);
+        // xpec: bP,KD,hQ
         assert!(
             project_tools_advertised,
             "thread dynamic tools must preserve the read-only project inspection plan"

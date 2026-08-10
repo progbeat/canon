@@ -19,7 +19,7 @@ pub(crate) struct UnvalidatedAgentResultJson {
     #[serde(
         default,
         rename = "answer",
-        deserialize_with = "deserialize_optional_answer_candidate"
+        deserialize_with = "deserialize_optional_selected_schema_answer"
     )]
     pub(crate) unvalidated_answer: Option<String>,
     #[serde(default, deserialize_with = "deserialize_optional_error")]
@@ -188,15 +188,20 @@ impl UnvalidatedAgentResultJson {
     }
 }
 
-fn deserialize_optional_answer_candidate<'de, D>(
+/// Deserializes the already-constructed agent response at its selected-schema boundary.
+///
+/// [MH,qv] Scalar answer sources are normalized before response construction.
+/// They do not relax the agent response schema: its raw JSON `answer` member is
+/// already in the resolved string domain and must therefore be a JSON string.
+fn deserialize_optional_selected_schema_answer<'de, D>(
     deserializer: D,
 ) -> Result<Option<String>, D::Error>
 where
     D: de::Deserializer<'de>,
 {
-    struct SelectedSchemaAnswerCandidateVisitor;
+    struct SelectedSchemaAnswerVisitor;
 
-    impl de::Visitor<'_> for SelectedSchemaAnswerCandidateVisitor {
+    impl de::Visitor<'_> for SelectedSchemaAnswerVisitor {
         type Value = String;
 
         fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -220,7 +225,7 @@ where
     }
 
     deserializer
-        .deserialize_string(SelectedSchemaAnswerCandidateVisitor)
+        .deserialize_string(SelectedSchemaAnswerVisitor)
         .map(Some)
 }
 

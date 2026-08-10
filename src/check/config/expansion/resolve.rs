@@ -60,10 +60,17 @@ pub(crate) fn expand_raw_check_config_for_command(
             resolved_presets
         }
     };
-    let resolved_default_agent_preset = resolved_presets
-        .get(default_agent_preset)
-        .ok_or_else(|| format!("unknown preset: {}", default_agent_preset))?;
-    let default_agent = resolved_default_agent_preset.agent_config();
+    let default_agent = match options.ask_question {
+        Some(_) => runtime_expectations
+            .first()
+            .expect("canonical ask expansion must produce one xpec")
+            .agent
+            .clone(),
+        None => resolved_presets
+            .get(default_agent_preset)
+            .ok_or_else(|| format!("unknown preset: {}", default_agent_preset))?
+            .agent_config(),
+    };
     // `canon ask` supplies its canonical `Xpec(to=AGENT, q=question, a='')`
     // through the same typed item expansion used by check. Its explicit fields
     // keep precedence and the selected preset supplies only omitted fields.
@@ -114,11 +121,12 @@ expectations:
     }
 
     #[test] // xpec: l,nK,1H
-    fn canonical_ask_xpec_keeps_explicit_fields_and_resolves_preset_defaults() {
+    fn canonical_ask_xpec_keeps_explicit_fields_and_composes_preset_defaults() {
         let raw: RawCheckConfig = serde_saphyr::from_str(
             r#"
 presets:
-  default: {}
+  default:
+    ignore: ["ignored/**"]
   smart:
     q: "Preset question"
     a: "yes"
@@ -138,7 +146,7 @@ expectations:
         let config = expand_raw_check_config_for_command(
             raw,
             CheckConfigExpansionOptions {
-                default_agent_preset: Some("smart"),
+                default_agent_preset: Some("default+smart"),
                 ask_question: Some("Does preset ask work?"),
                 in_place: false,
             },
@@ -155,6 +163,11 @@ expectations:
         assert_eq!(expectation.diff_from, "HEAD~1");
         assert_eq!(expectation.target, Some(ExpectationTarget::Diff));
         assert_eq!(expectation.agent.models, vec!["smart-model".to_string()]);
+        assert_eq!(
+            expectation.agent.ignore,
+            Some(vec!["ignored/**".to_string()])
+        );
+        assert_eq!(config.agent, expectation.agent);
     }
 
     #[test] // xpec: l

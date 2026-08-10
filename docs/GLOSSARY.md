@@ -52,6 +52,15 @@ configured cooldown duration and the pass timestamp is still inside that window.
 The evaluator's explanation for an observed answer, usually citing the files or
 code that support it.
 
+## Evaluation response
+
+The domain result produced by an expectation's addressee. Its answer, when
+present, is always a string. A producer normalizes any native scalar source
+before constructing this result; for example, the shell evaluator converts an
+integer exit code to decimal text. An agent turn's JSON result is already the
+serialized evaluation response, not an answer source, so its `answer` must
+already be a JSON string accepted by the selected response schema.
+
 ## Expectation Instructions
 
 The resolved `instructions` config value for an expectation, or empty text when
@@ -186,13 +195,13 @@ current `visibleTreeOid` for that result's visible scope.
 ## Runtime log history
 
 Every applicable runtime event is constructed through the command's diagnostic
-writer. A positive `canon.logs.maxSize` and a persistent state namespace retain
+writer. A Git-backed `canon check` with a positive `canon.logs.maxSize` retains
 JSON Lines copies as bounded cross-invocation history under `LOGS_DIR`
-(`${CANON_STATE_DIR}/logs`).
-Otherwise, the writer keeps the current invocation's events in memory. The
-zero-size configuration also removes previously retained runtime log files when
-a persistent state namespace is available. Persistent history is intentional
-command output, not invocation-local working state.
+(`${CANON_STATE_DIR}/logs`). A zero-size configuration removes previously
+retained runtime log files. `canon ask` and in-place checks keep events only in
+memory; an in-place check also removes retained runtime logs when a persistent
+state namespace is available. Persistent history is intentional command
+output, not invocation-local working state.
 
 ## Selected expectations
 
@@ -234,9 +243,9 @@ An in-place check treats the current directory as filesystem contents, not as
 a Git-backed checked tree. Repository-derived evaluation inputs—tree and object
 IDs, refs, rendered diffs, tracking state, Git-root discovery, and file
 hiding—are therefore absent from its evaluator context. Command-wide canon
-configuration and canon-owned output paths are control-plane inputs; using them
-for runtime-event retention does not make repository information part of the
-checked subject or evaluator context.
+configuration and canon-owned output paths are control-plane inputs; using the
+output namespace for status history or runtime-log cleanup does not make
+repository information part of the checked subject or evaluator context.
 
 `config_types::Expectation` and `check::core::ResolvedExpectation` carry
 expectation questions, addressees, ranks, expected answers, the resolved
@@ -248,12 +257,10 @@ forms visible scopes by appending configured ignore patterns as excluding
 pathspec items, and matches tracked paths against those pathspec lists.
 
 `git::visible_tree_oid` implements scoped tree and visible tree identity. It
-collects the tracked entries induced by a scope, then computes the
-repository-native Git tree object ID for those entries. When a scoped directory
-already has a Git tree object, the implementation can reuse that object ID;
-otherwise it serializes and hashes a synthetic tree object with the
-repository's object hash algorithm. `materialization` uses that same OID when
-materializing evaluator-visible trees.
+collects the tracked leaf entries induced by a scope, synthesizes directory
+nodes from those leaves, then serializes and hashes the resulting Git tree
+objects with the repository's object hash algorithm. `materialization` uses
+that same OID when materializing evaluator-visible trees.
 
 `check::q_scope::initial_q_scope_for_check_run` forms the base q-scope from a
 configured path list, or, for `auto`, from the last pass q-scope with full

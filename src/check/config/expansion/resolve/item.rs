@@ -7,8 +7,9 @@ use crate::check::config::expansion::presets::apply_expectation_settings;
 use crate::check::config::expansion::rank::resolve_expectation_rank;
 use crate::check::config::validation::parse_cooldown_config;
 use crate::config_types::{
-    AgentConfig, Expectation, RawExpectationCommonConfig, RawExpectationItem,
-    RawExpectationSettings, RawGitBackedExpectationConfig, ResolvedPresetConfig,
+    preset_names_in_precedence_order, AgentConfig, Expectation, RawExpectationCommonConfig,
+    RawExpectationItem, RawExpectationSettings, RawGitBackedExpectationConfig,
+    ResolvedPresetConfig,
 };
 use std::collections::BTreeMap;
 
@@ -103,7 +104,7 @@ impl RawExpectationExpansion<'_> {
         // [1H] Missing fields are filled once, so visiting the selection from
         // right to left preserves item > rightmost preset > ... > leftmost
         // preset > implementation-default precedence.
-        for preset_name in preset_selection.rsplit('+').map(str::trim) {
+        for preset_name in preset_names_in_precedence_order(&preset_selection) {
             let preset = self
                 .presets
                 .get(preset_name)
