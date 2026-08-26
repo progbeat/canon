@@ -183,7 +183,7 @@ The **pending row** follows the separator, begins with `› `, and joins remaini
 It greedily retains complete leading IDs that fit and never uses an ellipsis.
 It appends `  🏁` only when every remaining ID and the complete marker fit, treating `🏁` as two cells.
 
-Between evaluations, the recent rows still render and the current row is `◆ Waiting for evaluation`.
+Between evaluations, the most recently completed evaluation remains the displayed evaluation; if none has completed, the current row is `◆ Waiting for evaluation`.
 Pending then includes every unfinished short ID.
 
 Implementations may substitute a fallback for the ANSI visual profile.
