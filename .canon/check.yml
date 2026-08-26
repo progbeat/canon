@@ -15,7 +15,7 @@ xpecs:
     cooldown: 30m
 
   - to: caller
-    q: "Across all Canon work you can recall, have you either observed no user-visible differences between Docker and native `canon check`, or resolved every observed difference by fixing it or confirming it as intentional? [y/n]"
+    q: "Across all Canon work you can recall, have you either found no credible evidence that Docker-backed and host-native `canon check` differ in user-visible behavior, or resolved every evidenced difference by fixing it or confirming it as intentional? [y/n]"
     a: y
     rank: -10
     cooldown: 30m
