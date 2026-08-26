@@ -55,6 +55,8 @@ class _Evaluator:
         self.timeline.on_symbol(lambda c: print(c, end=''))
 
     def on_error(self):
+        if not self.ask_mode:
+            print(escape_inline(self.xpec.q))
         print('error:', self.response.error)
         if self.response.evidence is not None:
             print('evidence:', escape_inline(self.response.evidence))

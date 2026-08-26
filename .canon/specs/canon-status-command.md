@@ -21,7 +21,7 @@ The operating system releases it when the holder exits.
 
 ## Append-only status log
 
-Only `canon check` writes status logs, creating one append-only **status log** per invocation using this layout:
+Only Git-backed `canon check` writes status logs, creating one append-only **status log** per invocation using this layout:
 
 ```text
 runs/
@@ -30,28 +30,25 @@ runs/
 ```
 
 Each line is one complete structured JSON event that is flushed when appended.
-A reader ignores an incomplete final line.
 
-The writer adds a timestamp to every event's common envelope.
-Status logs contain only the events below.
+Status logs contain only records matching this schema; angle brackets denote JSON values, square brackets denote optional fields, and object key order is irrelevant:
 
-The **initial event** contains every **Selected** expectation's full ID in evaluation order.
-The expectations displayed by `canon status` are exactly this ordered set.
-Each entry also contains the status from its pre-run `last.json`, or `null` when absent, reusing the state already loaded by `canon check`.
-The initial event also records what `canon status` needs to obtain the same **Collected** expectations without copying expectation definitions into the status log.
-After flushing this event, `canon check` atomically replaces the symbolic link `runs/latest.jsonl` with one pointing to the new file.
+```text
+timestamp          := <non-negative Unix-millisecond integer>
+status             := "pass" | "fail"
+previousStatus     := status | null
+initial            := {"event":"initial","timestamp":timestamp,"selected":[{"id":<full-ID string>,"previousStatus":previousStatus},...],"collectedCount":<non-negative integer>,"reusedPassCount":<non-negative integer>,"configPath":<repository-relative string>,"treeOid":<string>}
+evaluationStart    := {"event":"evaluation-start","timestamp":timestamp,"id":<full-ID string>}
+evaluationPass     := {"event":"evaluation-finish","timestamp":timestamp,"id":<full-ID string>,"status":"pass"}
+evaluationFail     := {"event":"evaluation-finish","timestamp":timestamp,"id":<full-ID string>,"status":"fail"[,"observed":<string>][,"evidence":<string>]}
+evaluationError    := {"event":"evaluation-finish","timestamp":timestamp,"id":<full-ID string>,"status":"fail","error":<string>[,"evidence":<string>]}
+checkFinish        := {"event":"check-finish","timestamp":timestamp,"result":status}
+```
 
-An **evaluation-start event** identifies the expectation whose evaluation began by full ID.
-
-An **evaluation-finish event** identifies the expectation by full ID, records its current status as `pass` or `fail`, and, for `fail`, includes only the observed answer and evidence fields that exist.
-
-A **check-finish event** marks the normal end of evaluation, after which no further evaluation starts in that run.
-
-The initial ordered list determines the total count.
-The number of evaluation-finish events determines completed progress.
-Before a check-finish event, `canon status` displays the run as running.
-After it, the run succeeds if every initial ID has a `pass` evaluation-finish event and fails otherwise.
-Timestamps are not displayed as wall-clock times.
+`selected` is exactly the ordered **Selected** set, with `previousStatus` read before the run; `collectedCount` counts **Collected** expectations.
+After `initial` is flushed, `latest.jsonl` is atomically replaced with a symlink whose relative target is exactly the new log file name.
+Completed progress is `reusedPassCount` plus the number of `evaluationPass`, `evaluationFail`, and `evaluationError` records; its total is `collectedCount`.
+The run is running before `checkFinish`, whose `result` is its explicit final result.
 
 Old status logs are removed automatically according to a bounded retention policy.
 Cleanup never removes the file currently being written or the target of `runs/latest.jsonl`.
@@ -72,7 +69,7 @@ All shown spaces are significant, and unused cells contain default-style spaces 
 ### Running at 64 columns
 
 ```text
-18 / 40  ━━━━━━━━━━━━━━━━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━  4m 12s
+18 / 40  ━━━━━━━━━━━━━━━━━━━━╸━━━━━━━━━━━━━━━━━━━━━━━━━  4m 12s
 ✓ V       43s
 × K9m  1m 11s
 ◆ KD   2m 27s
@@ -85,10 +82,10 @@ All shown spaces are significant, and unused cells contain default-style spaces 
 ### Failure at 88 columns
 
 ```text
-19 / 40  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╸━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  4m 12s
+19 / 40  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  4m 12s
 ✓ V       43s
 ✓ K9m  1m 11s
-◆ KD   2m 27s
+× KD   2m 27s
   Can you find a critical high-confidence bug with a concrete failing scenario?
   expected: no
   observed: yes
@@ -101,7 +98,7 @@ All shown spaces are significant, and unused cells contain default-style spaces 
 ### Success at 88 columns
 
 ```text
-40 / 40  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  4m 18s
+40 / 40  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  4m 18s
 ✓ All checks passed.
 ```
 
@@ -125,7 +122,7 @@ The golden-frame spans use these styles:
 | pending after previous pass | bright blue | normal |
 | pending after previous failure | bright red | normal |
 | pending without previous result | gray | normal |
-| failed progress, `◆`, and observed mismatch | bright red | normal |
+| failed progress, failed current `×`, error, and observed mismatch | bright red | normal |
 | failed current short ID | bright red | bold |
 | successful progress | bright green | normal |
 | successful final `✓` | bright green | bold |
@@ -147,7 +144,7 @@ The progress row follows this calculation, where `paint` applies a semantic styl
 ```text
 count_text = right_align(completed, digits(total)) + " / " + total
 time_text = duration(run_endpoint - run_started)
-width = terminal_width - cells(count_text) - cells(time_text) - 4
+width = terminal_width - cells(count_text) - cells(time_text) - 5
 halves = 2 * width if total == 0 else floor(2 * width * completed / total)
 full = floor(halves / 2)
 fill = successful progress if successful
@@ -159,7 +156,7 @@ else if halves is odd:  bar = paint(fill, "━" * full + "╸") + paint(unfilled
 else if full > 0:       bar = paint(fill, "━" * full) + paint(unfilled progress, "╺" + "━" * (width - full - 1))
 else:                   bar = paint(unfilled progress, "━" * width)
 
-progress = paint(count, count_text) + "  " + bar + "  " + paint(duration, time_text)
+progress = paint(count, count_text) + "  " + bar + "  " + paint(duration, time_text) + " "
 ```
 
 Before layout, every tab, line break, escape, or other control character in displayed data becomes one space.
@@ -176,9 +173,10 @@ Those rows and the current row share a short-ID field whose width is the widest 
 Short IDs are left-aligned in that field.
 Their duration field is as wide as the longest displayed duration and is right-aligned.
 Each row consists of its marker, one space, the short-ID field, two spaces, and the duration field.
-The current row keeps `◆` and the complete short ID.
+The current row keeps the complete short ID.
+Its marker is `◆` while no result exists, then `✓` for `pass` or `×` for `fail`.
 
-The question and expected answer follow the current row, and a failed evaluation additionally shows the observed and evidence fields that exist.
+The question and expected answer follow the current row, and a failed evaluation additionally shows the error or observed answer and evidence fields that exist.
 A full-width muted `─` separator follows the context.
 
 The **pending row** follows the separator, begins with `› `, and joins remaining short IDs with exactly two spaces.
