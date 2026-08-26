@@ -5,8 +5,8 @@
 `canon gate` decides pass/fail using the following logic:
 
 ```
-def gate(num_regressions):
-    if num_regressions > 0:
+def gate(num_failed, num_pending):
+    if num_failed + num_pending > 0:
         return Fail
     if any staged path is under .canon/**:
         if every staged path is under .canon/**:
