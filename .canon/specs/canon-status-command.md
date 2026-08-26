@@ -142,7 +142,7 @@ Evaluation duration uses its evaluation-start and evaluation-finish timestamps, 
 The progress row follows this calculation, where `paint` applies a semantic style from the table above:
 
 ```text
-count_text = right_align(completed, digits(total)) + " / " + total
+count_text = completed + " / " + total
 time_text = duration(run_endpoint - run_started)
 width = terminal_width - cells(count_text) - cells(time_text) - 5
 halves = 2 * width if total == 0 else floor(2 * width * completed / total)
