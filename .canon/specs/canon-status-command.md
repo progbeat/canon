@@ -55,8 +55,8 @@ Cleanup never removes the file currently being written or the target of `runs/la
 
 ## Status display
 
-`canon status` resolves `runs/latest.jsonl` once and opens its target.
-All subsequent event reads use that opened file until the command exits.
+`canon status` opens the target of `runs/latest.jsonl`.
+Events for that run are read from the opened file.
 If no run has been recorded, it prints a short plain message saying so.
 
 The interactive display is an inline terminal UI rather than a full-screen application.
@@ -189,17 +189,18 @@ Pending then includes every unfinished short ID.
 Implementations may substitute a fallback for the ANSI visual profile.
 Exact cell-buffer snapshots target the ANSI visual profile.
 
-Cursor control is used only when stdout is interactive.
+`canon status` changes terminal state only when stdout is interactive, hides the cursor while watching, and restores the prior terminal state before returning.
 
 ## Snapshot and watch behavior
 
 `canon status` first renders the current state of the opened status log.
 Without `--watch`, it then exits.
 
-With `--watch` on a running status log, appended events update the display.
+With `--watch`, `canon status` continuously follows `runs/latest.jsonl` across successive runs.
+If successive runs are discovered by polling `runs/latest.jsonl`, at least 10 seconds elapse between polling attempts.
+Appended events update the display.
 When cursor control is available, it redraws the inline frame in place without accumulating repeated frames in terminal scrollback.
 Run and evaluation durations advance locally without new events.
 Terminal resize affects the next frame, and triggers an immediate responsive redraw when cursor control is available.
 
-`canon status --watch` exits after rendering the final successful or failed state.
-The final rendered state remains in normal terminal output after exit.
+A completed run's final state remains displayed until a later run is available.
