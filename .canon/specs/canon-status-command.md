@@ -109,13 +109,13 @@ The **line-break marker** `↵` replaces each line break in displayed data, and 
 
 The golden-frame spans use these styles:
 
-| Span | ANSI foreground | Weight |
+| Span | ANSI foreground | ANSI attribute |
 | --- | --- | --- |
 | ordinary text and values | terminal default | normal |
 | count | terminal default | bold |
 | duration | gray | normal |
 | labels | gray | bold |
-| line-break and truncation markers | dark gray | normal |
+| line-break and truncation markers | dark gray | dim |
 | unfilled progress, separator, and `›` | dark gray | normal |
 | active progress | cyan | normal |
 | active `◆` | bright yellow | normal |
