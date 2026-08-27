@@ -90,7 +90,7 @@ All shown spaces are significant, and unused cells contain default-style spaces 
   expected: no
   observed: yes
   evidence: A failed evaluator result is omitted from the completed count, so the final
-            result can appear successful.
+    result can appear successful.
 ───────────────────────────────────────────────────────────────────────────────────────
 › g2  L  nO  r8  UH  0Y  kK  kg  d  8  Yg  Sh  3n  4W  2g  u  t  3a  NR  l  UZ  🏁
 ```
@@ -115,7 +115,7 @@ The golden-frame spans use these styles:
 | count | terminal default | bold |
 | duration | gray | normal |
 | labels | gray | bold |
-| line-break and truncation markers | dark gray | dim |
+| line-break and truncation markers | cyan | dim |
 | unfilled progress, separator, and `›` | dark gray | normal |
 | active progress | cyan | normal |
 | active `◆` | bright yellow | normal |
@@ -165,8 +165,8 @@ Before layout, control characters other than line breaks become one space.
 Question, expected, observed, and generated status text retain the longest complete grapheme prefix that leaves one cell for the truncation marker when their row would overflow the display width.
 A one-cell truncation result is the truncation marker, and a zero-cell result is empty.
 Evidence is never truncated.
-It wraps at word boundaries within the cells left after `  evidence: `, splitting an overlong word only at a grapheme boundary.
-Every continuation row begins with twelve spaces so its text aligns with the first evidence value cell.
+Its first row follows `  evidence: `; continuation rows begin with four spaces and use the remaining width.
+It wraps at word boundaries, splitting an overlong word only at a grapheme boundary.
 
 Up to two of the most recent evaluations completed before the displayed evaluation appear above it.
 They retain evaluation order and use the corresponding table style for their status.
