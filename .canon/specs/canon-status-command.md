@@ -69,20 +69,20 @@ All shown spaces are significant, and unused cells contain default-style spaces 
 ### Running at 64 columns
 
 ```text
-18 / 40  ━━━━━━━━━━━━━━━━━━━━╸━━━━━━━━━━━━━━━━━━━━━━━━━  4m 12s
+18 / 40 ━━━━━━━━━━━━━━━━━━━━╸━━━━━━━━━━━━━━━━━━━━━━━━ 1h 4m 12s
 ✓ V       43s
 × K9m  1m 11s
 ◆ KD   2m 27s
   Can you find a critical high-confidence bug with a concrete f…
   expected: no
-────────────────────────────────────────────────────────────────
+───────────────────────────────────────────────────────────────
 › g2  L  nO  r8  UH  0Y  kK  kg  d  8  Yg  Sh  3n  4W  2g  u  t
 ```
 
 ### Failure at 88 columns
 
 ```text
-19 / 40  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  4m 12s
+19 / 40 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4m 12s
 ✓ V       43s
 ✓ K9m  1m 11s
 × KD   2m 27s
@@ -91,19 +91,21 @@ All shown spaces are significant, and unused cells contain default-style spaces 
   observed: yes
   evidence: A failed evaluator result is omitted from the completed count, so the final
             result can appear successful.
-────────────────────────────────────────────────────────────────────────────────────────
+───────────────────────────────────────────────────────────────────────────────────────
 › g2  L  nO  r8  UH  0Y  kK  kg  d  8  Yg  Sh  3n  4W  2g  u  t  3a  NR  l  UZ  🏁
 ```
 
 ### Success at 88 columns
 
 ```text
-40 / 40  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  4m 18s
+40 / 40 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4m 18s
 ✓ All checks passed.
 ```
 
 Running and failed frames reserve no empty detail rows.
 A successful frame contains only its two shown rows.
+
+The **line-break marker** `↵` replaces each line break in displayed data, and the **truncation marker** `…` marks truncated text; identical source characters retain their surrounding data style.
 
 The golden-frame spans use these styles:
 
@@ -113,6 +115,7 @@ The golden-frame spans use these styles:
 | count | terminal default | bold |
 | duration | gray | normal |
 | labels | gray | bold |
+| line-break and truncation markers | dark gray | normal |
 | unfilled progress, separator, and `›` | dark gray | normal |
 | active progress | cyan | normal |
 | active `◆` | bright yellow | normal |
@@ -132,10 +135,9 @@ Active styles remain until a check-finish event even if an earlier evaluation fa
 ## Adaptive rendering
 
 `terminal_width` is the current usable width of stdout, has no fixed maximum, and is combined with displayed grapheme widths for every layout.
+Every row uses **display width**, which is `terminal_width - 1` at widths of at least 64 columns and `terminal_width` otherwise; the reserved final cell remains a default-style space.
 
-Durations below one minute use `Ss` with unpadded seconds.
-Longer durations use `Xm SSs`, with unpadded minutes and two-digit seconds.
-Duration deltas are clamped at zero and floored to whole seconds.
+Durations are clamped at zero, floored to whole seconds, and rendered by `humantime::format_duration`.
 Run duration uses `now` before a check-finish event and that event's timestamp afterward.
 Evaluation duration uses its evaluation-start and evaluation-finish timestamps, or `now` while active.
 
@@ -144,7 +146,7 @@ The progress row follows this calculation, where `paint` applies a semantic styl
 ```text
 count_text = completed + " / " + total
 time_text = duration(run_endpoint - run_started)
-width = terminal_width - cells(count_text) - cells(time_text) - 5
+width = display_width - cells(count_text) - cells(time_text) - 2
 halves = 2 * width if total == 0 else floor(2 * width * completed / total)
 full = floor(halves / 2)
 fill = successful progress if successful
@@ -156,12 +158,12 @@ else if halves is odd:  bar = paint(fill, "━" * full + "╸") + paint(unfilled
 else if full > 0:       bar = paint(fill, "━" * full) + paint(unfilled progress, "╺" + "━" * (width - full - 1))
 else:                   bar = paint(unfilled progress, "━" * width)
 
-progress = paint(count, count_text) + "  " + bar + "  " + paint(duration, time_text) + " "
+progress = paint(count, count_text) + " " + bar + " " + paint(duration, time_text)
 ```
 
-Before layout, every tab, line break, escape, or other control character in displayed data becomes one space.
-Question, expected, observed, and generated status text retain the longest complete grapheme prefix that leaves one cell for `…` when their row would overflow.
-A one-cell truncation result is `…`, and a zero-cell result is empty.
+Before layout, control characters other than line breaks become one space.
+Question, expected, observed, and generated status text retain the longest complete grapheme prefix that leaves one cell for the truncation marker when their row would overflow the display width.
+A one-cell truncation result is the truncation marker, and a zero-cell result is empty.
 Evidence is never truncated.
 It wraps at word boundaries within the cells left after `  evidence: `, splitting an overlong word only at a grapheme boundary.
 Every continuation row begins with twelve spaces so its text aligns with the first evidence value cell.
@@ -173,14 +175,14 @@ Those rows and the current row share a short-ID field whose width is the widest 
 Short IDs are left-aligned in that field.
 Their duration field is as wide as the longest displayed duration and is right-aligned.
 Each row consists of its marker, one space, the short-ID field, two spaces, and the duration field.
-The current row keeps the complete short ID.
+The current row keeps the complete short ID when it fits within the display width.
 Its marker is `◆` while no result exists, then `✓` for `pass` or `×` for `fail`.
 
 The question and expected answer follow the current row, and a failed evaluation additionally shows the error or observed answer and evidence fields that exist.
-A full-width muted `─` separator follows the context.
+A muted `─` separator spans the display width.
 
 The **pending row** follows the separator, begins with `› `, and joins remaining short IDs with exactly two spaces.
-It greedily retains complete leading IDs that fit and never uses an ellipsis.
+It greedily retains complete leading IDs that fit within the display width and never uses an ellipsis.
 It appends `  🏁` only when every remaining ID and the complete marker fit, treating `🏁` as two cells.
 
 Between evaluations, the most recently completed evaluation remains the displayed evaluation; if none has completed, the current row is `◆ Waiting for evaluation`.
