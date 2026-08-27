@@ -1,10 +1,8 @@
 # Humanize
 
-The internal `humanize` crate provides compact human-readable formatting.
-
 ## Duration
 
-`humanize::format_duration(std::time::Duration) -> String` floors its input to whole seconds.
+`humanize::compact_duration(std::time::Duration) -> String` floors its input to whole seconds.
 
 It renders at most the two highest adjacent units according to this table:
 

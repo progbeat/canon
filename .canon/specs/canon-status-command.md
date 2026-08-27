@@ -137,7 +137,7 @@ Active styles remain until a check-finish event even if an earlier evaluation fa
 `terminal_width` is the current usable width of stdout, has no fixed maximum, and is combined with displayed grapheme widths for every layout.
 Every row uses **display width**, which is `terminal_width - 1` at widths of at least 64 columns and `terminal_width` otherwise; the reserved final cell remains a default-style space.
 
-Duration differences are clamped at zero and rendered by `humanize::format_duration`.
+Duration differences are clamped at zero and rendered by `humanize::compact_duration`.
 Run duration uses `now` before a check-finish event and that event's timestamp afterward.
 Evaluation duration uses its evaluation-start and evaluation-finish timestamps, or `now` while active.
 
