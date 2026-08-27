@@ -189,7 +189,8 @@ Pending then includes every unfinished short ID.
 Implementations may substitute a fallback for the ANSI visual profile.
 Exact cell-buffer snapshots target the ANSI visual profile.
 
-`canon status` changes terminal state only when stdout is interactive, hides the cursor while watching, and restores the prior terminal state before returning.
+`canon status` changes terminal state only when stdout is interactive and hides the cursor while watching.
+Before returning, it leaves the cursor immediately after the displayed frame, restores its prior visibility, and restores every terminal mode it changed.
 
 ## Snapshot and watch behavior
 
@@ -199,7 +200,9 @@ Without `--watch`, it then exits.
 With `--watch`, `canon status` continuously follows `runs/latest.jsonl` across successive runs.
 If successive runs are discovered by polling `runs/latest.jsonl`, at least 10 seconds elapse between polling attempts.
 Appended events update the display.
-When cursor control is available, it redraws the inline frame in place without accumulating repeated frames in terminal scrollback.
+When cursor control is available, the **redraw origin** is the active cursor position at the first cell of the displayed inline frame.
+`canon status` establishes the redraw origin before writing the first watch frame and returns the hidden cursor to it after every frame write that precedes another wait.
+Each redraw begins at the redraw origin, erases from there through the end of the display, and writes the complete current frame without accumulating earlier frames in terminal scrollback.
 Run and evaluation durations advance locally without new events.
 Terminal resize affects the next frame, and triggers an immediate responsive redraw when cursor control is available.
 
