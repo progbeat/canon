@@ -69,11 +69,11 @@ All shown spaces are significant, and unused cells contain default-style spaces 
 ### Running at 64 columns
 
 ```text
-18 / 40 ━━━━━━━━━━━━━━━━━━━━╸━━━━━━━━━━━━━━━━━━━━━━━━ 1h 4m 12s
+18 / 40 ━━━━━━━━━━━━━━━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━ 1h 4m 12s
 ✓ V       43s
 × K9m  1m 11s
 ◆ KD   2m 27s
-  Can you find a critical high-confidence bug with a concrete f…
+  Can you find a critical high-confidence bug with a concrete …
   expected: no
 ───────────────────────────────────────────────────────────────
 › g2  L  nO  r8  UH  0Y  kK  kg  d  8  Yg  Sh  3n  4W  2g  u  t
