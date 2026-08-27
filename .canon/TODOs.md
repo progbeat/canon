@@ -13,3 +13,4 @@
 - [ ] When the result is FAIL, retry with a smarter model to reduce false negatives.
 - [ ] Forbid feedback in `error` being not constructive, e.g. "unparsable".
 - [ ] Ask if there's user facing lie.
+- [ ] Each source location that creates an evaluation error assigns it a distinct stable **error identifier**. The identifier is preserved while the error is propagated and uniquely identifies its creation site.
