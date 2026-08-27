@@ -37,18 +37,24 @@ Status logs contain only records matching this schema; angle brackets denote JSO
 timestamp          := <non-negative Unix-millisecond integer>
 status             := "pass" | "fail"
 previousStatus     := status | null
+ticker             := [<string>,...]
 initial            := {"event":"initial","timestamp":timestamp,"selected":[{"id":<full-ID string>,"previousStatus":previousStatus},...],"collectedCount":<non-negative integer>,"reusedPassCount":<non-negative integer>,"configPath":<repository-relative string>,"treeOid":<string>}
-evaluationStart    := {"event":"evaluation-start","timestamp":timestamp,"id":<full-ID string>}
+evaluationStart    := {"event":"evaluation-start","timestamp":timestamp,"id":<full-ID string>[,"ticker":ticker]}
+evaluationUpdate   := {"event":"evaluation-update","timestamp":timestamp,"id":<full-ID string>[,"ticker":ticker]}
 evaluationPass     := {"event":"evaluation-finish","timestamp":timestamp,"id":<full-ID string>,"status":"pass"}
 evaluationFail     := {"event":"evaluation-finish","timestamp":timestamp,"id":<full-ID string>,"status":"fail"[,"observed":<string>][,"evidence":<string>]}
 evaluationError    := {"event":"evaluation-finish","timestamp":timestamp,"id":<full-ID string>,"status":"fail","error":<string>[,"evidence":<string>]}
 checkFinish        := {"event":"check-finish","timestamp":timestamp,"result":status}
 ```
 
+A **ticker** is an evaluation's ordered list of auxiliary display strings.
+
 `selected` is exactly the ordered **Selected** set, with `previousStatus` read before the run; `collectedCount` counts **Collected** expectations.
 After `initial` is flushed, `latest.jsonl` is atomically replaced with a symlink whose relative target is exactly the new log file name.
 Completed progress is `reusedPassCount` plus the number of `evaluationPass`, `evaluationFail`, and `evaluationError` records; its total is `collectedCount`.
 The run is running before `checkFinish`, whose `result` is its explicit final result.
+
+`canon check` shows the number of diff-affected files in each evaluator agent turn's visible scope in the evaluation's ticker as `1 changed file` or `<count> changed files`.
 
 Old status logs are removed automatically according to a bounded retention policy.
 Cleanup never removes the file currently being written or the target of `runs/latest.jsonl`.
@@ -72,7 +78,7 @@ All shown spaces are significant, and unused cells contain default-style spaces 
 18 / 40 ━━━━━━━━━━━━━━━━━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━ 1h 4m
 ✓ V       43s
 × K9m  1m 11s
-▷ KD   2m 27s
+▷ KD   2m 27s                                  18 changed files
   Can you find a critical high-confidence bug with a concrete …
   expected: no
 ───────────────────────────────────────────────────────────────
@@ -115,8 +121,9 @@ The golden-frame spans use these styles:
 | count | terminal default | bold |
 | duration | gray | normal |
 | labels | gray | bold |
+| ticker items | gray | dim |
 | line-break and truncation markers | cyan | dim |
-| unfilled progress, separator, and `›` | dark gray | normal |
+| unfilled progress, separators, and `›` | dark gray | normal |
 | active progress | cyan | normal |
 | active `▷` | bright yellow | normal |
 | active current short ID | bright yellow | bold |
@@ -177,6 +184,14 @@ Their duration field is as wide as the longest displayed duration and is right-a
 Each row consists of its marker, one space, the short-ID field, two spaces, and the duration field.
 The current row keeps the complete short ID when it fits within the display width.
 Its marker is `▷` while no result exists, then `✓` for `pass` or `×` for `fail`.
+
+An unfinished current evaluation shows its latest `ticker`.
+Ticker items are joined by `  ·  `.
+If the joined ticker fits after the duration with at least two spaces between them, it is right-aligned within the display width.
+Otherwise, those two spaces are followed by a viewport using the remaining cells.
+The viewport continuously moves the cyclic sequence of ticker items and separators from right to left; the last and first items have the same separator between them.
+Complete grapheme clusters are preserved.
+When its ticker is updated, the viewport finishes the current item and resumes at the first item whose value did not occur in the previous ticker.
 
 The question and expected answer follow the current row, and a failed evaluation additionally shows the error or observed answer and evidence fields that exist.
 A muted `─` separator spans the display width.
