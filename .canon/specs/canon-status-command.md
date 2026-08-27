@@ -96,7 +96,7 @@ All shown spaces are significant, and unused cells contain default-style spaces 
   expected: no
   observed: yes
   evidence: A failed evaluator result is omitted from the completed count, so the final
-    result can appear successful.
+  ┆ result can appear successful.
 ───────────────────────────────────────────────────────────────────────────────────────
 › g2  L  nO  r8  UH  0Y  kK  kg  d  8  Yg  Sh  3n  4W  2g  u  t  3a  NR  l  UZ  🏁
 ```
@@ -172,7 +172,7 @@ Before layout, control characters other than line breaks become one space.
 Question, expected, observed, and generated status text retain the longest complete grapheme prefix that leaves one cell for the truncation marker when their row would overflow the display width.
 A one-cell truncation result is the truncation marker, and a zero-cell result is empty.
 Evidence is never truncated.
-Its first row follows `  evidence: `; continuation rows begin with four spaces and use the remaining width.
+Its first row follows `  evidence: `; continuation rows begin with `  ┆ ` and use the remaining width.
 It wraps at word boundaries, splitting an overlong word only at a grapheme boundary.
 
 Up to two of the most recent evaluations completed before the displayed evaluation appear above it.
