@@ -5,7 +5,7 @@ All functionality specific to terminal user interfaces belongs to the `tui` name
 ## Terminal operations
 
 `tui` provides terminal operations including those below.
-`tui::is_interactive()` reports whether the application's current terminal supports interactive terminal control.
+`tui::is_terminal()` reports whether the application is attached to a terminal.
 `tui` automatically restores every terminal-state change on every exit where cleanup can run.
 `tui::hide_cursor()` hides the cursor, prevents terminal input from being echoed or controlling its position, and gives `tui` exclusive control of it.
 `tui::show_cursor()` makes the cursor visible and gives the user control of its position.

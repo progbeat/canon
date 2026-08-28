@@ -206,7 +206,7 @@ While watching, it keeps the cursor hidden through `tui::hide_cursor()` from bef
 ## Snapshot and watch behavior
 
 Without `--watch`, `canon status` renders the current state of the opened status log and then exits.
-With `--watch`, it exits without rendering when `tui::is_interactive()` is false.
+With `--watch`, it exits without rendering when `tui::is_terminal()` is false.
 Otherwise, it renders the current state and continuously follows `runs/latest.jsonl` across successive runs.
 If successive runs are discovered by polling `runs/latest.jsonl`, at least 10 seconds elapse between polling attempts.
 Appended events update the display.
