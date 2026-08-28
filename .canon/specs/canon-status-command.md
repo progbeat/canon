@@ -78,7 +78,7 @@ All shown spaces are significant, and unused cells contain default-style spaces 
 18 / 40 ━━━━━━━━━━━━━━━━━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━ 1h 4m
 ✓ V       43s
 × K9m  1m 11s
-▷ KD   2m 27s                                  18 changed files
+▻ KD   2m 27s                                  18 changed files
   Can you find a critical high-confidence bug with a concrete …
   expected: no
 ───────────────────────────────────────────────────────────────
@@ -125,7 +125,7 @@ The golden-frame spans use these styles:
 | line-break and truncation markers | cyan | dim |
 | unfilled progress, separators, and `›` | dark gray | normal |
 | active progress | cyan | normal |
-| active `▷` | bright yellow | normal |
+| active `▻` | bright yellow | normal |
 | active current short ID | bright yellow | bold |
 | recent successful `✓` and short ID | bright green | normal |
 | recent failed `×` and short ID | bright red | normal |
@@ -183,7 +183,7 @@ Short IDs are left-aligned in that field.
 Their duration field is as wide as the longest displayed duration and is right-aligned.
 Each row consists of its marker, one space, the short-ID field, two spaces, and the duration field.
 The current row keeps the complete short ID when it fits within the display width.
-Its marker is `▷` while no result exists, then `✓` for `pass` or `×` for `fail`.
+Its marker is `▻` while no result exists, then `✓` for `pass` or `×` for `fail`.
 
 An unfinished current evaluation shows its latest `ticker`.
 Ticker items are joined by `  ·  `.
@@ -200,7 +200,7 @@ The **pending row** follows the separator, begins with `› `, and joins remaini
 It greedily retains complete leading IDs that fit within the display width and never uses an ellipsis.
 It appends `  🏁` only when every remaining ID and the complete marker fit, treating `🏁` as two cells.
 
-Between evaluations, the most recently completed evaluation remains the displayed evaluation; if none has completed, the current row is `▷ Waiting for evaluation`.
+Between evaluations, the most recently completed evaluation remains the displayed evaluation; if none has completed, the current row is `▻ Waiting for evaluation`.
 Pending then includes every unfinished short ID.
 
 Implementations may substitute a fallback for the ANSI visual profile.
