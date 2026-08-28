@@ -4,10 +4,11 @@ An expectation's `diff-from` value selects the left-hand tree used for prompt-re
 
 The default value is `:checkpoint`.
 
-`:checkpoint` resolves to the expectation's usable checkpoint, or to the check run's against tree when no usable checkpoint exists.
+`:checkpoint` resolves using the first matching rule:
 
-A checkpoint is usable only when the stored `checkedTreeOid` resolves to an existing Git tree in the repository object database.
-If a stored checkpoint references a missing tree, the checkpoint is treated as corrupt stale state and the no-checkpoint behavior is used instead of failing with an error.
+1. If the expectation has no checkpoint whose stored `checkedTreeOid` resolves to an existing Git tree, use the check run's against tree.
+2. If the expectation has a path-list `q-scope` and the files changed within it relative to the checkpoint are not a subset of those changed relative to HEAD, use HEAD.
+3. Otherwise, use that checkpoint tree.
 
 `:against-tree` resolves to the check run's against tree.
 

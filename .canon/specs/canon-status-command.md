@@ -65,11 +65,9 @@ Cleanup never removes the file currently being written or the target of `runs/la
 Events for that run are read from the opened file.
 If no run has been recorded, it prints a short plain message saying so.
 
-The interactive display is an inline terminal UI rather than a full-screen application.
-It does not enter the alternate screen.
+`canon status` renders its display through `tui`; with `--watch`, it uses inline mode.
 
-The **ANSI visual profile** uses the user's standard terminal palette rather than fixed RGB values.
-The following **golden frames** define its exact information order, terminal-cell geometry, and spacing at their stated widths.
+The following **golden frames** define the display's exact information order, terminal-cell geometry, and spacing at their stated widths.
 All shown spaces are significant, and unused cells contain default-style spaces through the stated width.
 
 ### Running at 64 columns
@@ -113,9 +111,9 @@ A successful frame contains only its two shown rows.
 
 The **line-break marker** `↵` replaces each line break in displayed data, and the **truncation marker** `…` marks truncated text; identical source characters retain their surrounding data style.
 
-The golden-frame spans use these styles:
+The golden-frame spans use these `tui` styles:
 
-| Span | ANSI foreground | ANSI attribute |
+| Span | Foreground | Attribute |
 | --- | --- | --- |
 | ordinary text and values | terminal default | normal |
 | count | terminal default | bold |
@@ -141,7 +139,7 @@ Active styles remain until a check-finish event even if an earlier evaluation fa
 
 ## Adaptive rendering
 
-`terminal_width` is the current usable width of stdout, has no fixed maximum, and is combined with displayed grapheme widths for every layout.
+`terminal_width` is the current usable width provided by `tui`, has no fixed maximum, and is combined with displayed grapheme widths for every layout.
 Every row uses **display width**, which is `terminal_width - 1` at widths of at least 64 columns and `terminal_width` otherwise; the reserved final cell remains a default-style space.
 
 Duration differences are clamped at zero and rendered by `humanize::compact_duration`.
@@ -203,24 +201,16 @@ It appends `  🏁` only when every remaining ID and the complete marker fit, tr
 Between evaluations, the most recently completed evaluation remains the displayed evaluation; if none has completed, the current row is `▻ Waiting for evaluation`.
 Pending then includes every unfinished short ID.
 
-Implementations may substitute a fallback for the ANSI visual profile.
-Exact cell-buffer snapshots target the ANSI visual profile.
-
-`canon status` changes terminal state only when stdout is interactive and hides the cursor while watching.
-Before returning, it leaves the cursor immediately after the displayed frame, restores its prior visibility, and restores every terminal mode it changed.
+While watching, it keeps the cursor hidden through `tui::hide_cursor()` from before the first frame until inline output ends.
 
 ## Snapshot and watch behavior
 
-`canon status` first renders the current state of the opened status log.
-Without `--watch`, it then exits.
-
-With `--watch`, `canon status` continuously follows `runs/latest.jsonl` across successive runs.
+Without `--watch`, `canon status` renders the current state of the opened status log and then exits.
+With `--watch`, it exits without rendering when `tui::is_interactive()` is false.
+Otherwise, it renders the current state and continuously follows `runs/latest.jsonl` across successive runs.
 If successive runs are discovered by polling `runs/latest.jsonl`, at least 10 seconds elapse between polling attempts.
 Appended events update the display.
-When cursor control is available, the **redraw origin** is the active cursor position at the first cell of the displayed inline frame.
-`canon status` establishes the redraw origin before writing the first watch frame and returns the hidden cursor to it after every frame write that precedes another wait.
-Each redraw begins at the redraw origin, erases from there through the end of the display, and writes the complete current frame without accumulating earlier frames in terminal scrollback.
 Run and evaluation durations advance locally without new events.
-Terminal resize affects the next frame, and triggers an immediate responsive redraw when cursor control is available.
+While watching, terminal resize immediately renders a frame for the new terminal geometry.
 
 A completed run's final state remains displayed until a later run is available.
