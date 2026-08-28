@@ -18,16 +18,16 @@ A restricted-scope turn uses this response schema:
   "additionalProperties": {
     "type": "object",
     "properties": {
-      "error": {
-        "type": "string",
-        "enum": ["ScopeTooNarrow", "InvalidQuestion"]
+      "evidence": {
+        "type": "string"
       },
       "answer": {
         "type": "string",
         "pattern": "^[-_a-z0-9]+$"
       },
-      "evidence": {
-        "type": "string"
+      "error": {
+        "type": "string",
+        "enum": ["ScopeTooNarrow", "InvalidQuestion"]
       },
       "qScopeSuggestion": {
         "type": "array",
@@ -39,10 +39,10 @@ A restricted-scope turn uses this response schema:
         }
       }
     },
-    "required": ["qScopeSuggestion"],
+    "required": ["evidence", "qScopeSuggestion"],
     "oneOf": [
-      {"required": ["answer", "evidence"], "not": { "required": ["error"] }},
-      {"required": ["error"], "not": { "anyOf": [{"required": ["answer"]}, {"required": ["evidence"]}] }}
+      {"required": ["answer"]},
+      {"required": ["error"]}
     ],
     "additionalProperties": false
   }

@@ -6,7 +6,7 @@
 
 **short ID** is the shortest prefix of an expectation's **ID** that uniquely identifies that expectation among the collected expectations.
 
-**evidence** is evaluator-provided text that directly justifies an answer.
+**evidence** is evaluator-provided text that directly justifies an answer or, when no answer is provided, explains why the evaluator cannot provide one.
 
 **expectation instructions** are the resolved `instructions` value for an expectation, or empty text when none is configured.
 
