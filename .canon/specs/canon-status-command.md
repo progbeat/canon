@@ -122,8 +122,8 @@ The golden-frame spans use these styles:
 | duration | gray | normal |
 | labels | gray | bold |
 | ticker items | gray | dim |
-| line-break and truncation markers | cyan | dim |
-| unfilled progress, separators, and `›` | dark gray | normal |
+| line-break and truncation markers | blue | normal |
+| unfilled progress, separators, and `›` | dark gray | bold |
 | active progress | cyan | normal |
 | active `▻` | bright yellow | normal |
 | active current short ID | bright yellow | bold |
