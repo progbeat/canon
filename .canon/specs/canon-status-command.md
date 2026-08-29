@@ -121,7 +121,8 @@ The golden-frame spans use these `tui` styles:
 | labels | gray | bold |
 | ticker items | gray | dim |
 | line-break and truncation markers | blue | normal |
-| unfilled progress, separators, and `‥` | dark gray | bold |
+| unfilled progress, ticker separators, and `─` | dark gray | bold |
+| `‥` and evidence continuation `┆` | dark gray | normal |
 | active progress | cyan | normal |
 | active `▻` | bright yellow | normal |
 | active current short ID | bright yellow | bold |
