@@ -106,7 +106,7 @@ xpecs:
   - q: "Can `canon check <PREFIX>...` select one or more expectations by unique ID prefix, including full IDs?"
     a: yes
 
-  - q: "Are expectation ID prefixes limited to human-readable output and CLI selection, with all non-temporary persistent state under CANON_STATE_DIR storing expectation references by full ID rather than minimal or user-provided prefixes?"
+  - q: "Are expectation references in non-temporary persistent state under CANON_STATE_DIR stored by full ID rather than minimal or user-provided prefixes?"
     a: yes
 
   - q: "Does every `canon` command flush stdout and stderr incrementally once output becomes eligible to be emitted, without holding it until unrelated later work or command completion?"
