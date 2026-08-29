@@ -65,7 +65,7 @@ Cleanup never removes the file currently being written or the target of `runs/la
 Events for that run are read from the opened file.
 If no run has been recorded, it prints a short plain message saying so.
 
-`canon status` renders its display through `tui`; with `--watch`, it uses inline mode.
+`canon status` renders its display through `tui`.
 
 The following **golden frames** define the display's exact information order, terminal-cell geometry, and spacing at their stated widths.
 All shown spaces are significant, and unused cells contain default-style spaces through the stated width.
@@ -80,7 +80,7 @@ All shown spaces are significant, and unused cells contain default-style spaces 
   Can you find a critical high-confidence bug with a concrete …
   expected: no
 ───────────────────────────────────────────────────────────────
-› g2  L  nO  r8  UH  0Y  kK  kg  d  8  Yg  Sh  3n  4W  2g  u  t
+‥ g2  L  nO  r8  UH  0Y  kK  kg  d  8  Yg  Sh  3n  4W  2g  u  t
 ```
 
 ### Failure at 88 columns
@@ -96,7 +96,7 @@ All shown spaces are significant, and unused cells contain default-style spaces 
   evidence: A failed evaluator result is omitted from the completed count, so the final
   ┆ result can appear successful.
 ───────────────────────────────────────────────────────────────────────────────────────
-› g2  L  nO  r8  UH  0Y  kK  kg  d  8  Yg  Sh  3n  4W  2g  u  t  3a  NR  l  UZ  🏁
+‥ g2  L  nO  r8  UH  0Y  kK  kg  d  8  Yg  Sh  3n  4W  2g  u  t  3a  NR  l  UZ  🏁
 ```
 
 ### Success at 88 columns
@@ -121,7 +121,7 @@ The golden-frame spans use these `tui` styles:
 | labels | gray | bold |
 | ticker items | gray | dim |
 | line-break and truncation markers | blue | normal |
-| unfilled progress, separators, and `›` | dark gray | bold |
+| unfilled progress, separators, and `‥` | dark gray | bold |
 | active progress | cyan | normal |
 | active `▻` | bright yellow | normal |
 | active current short ID | bright yellow | bold |
@@ -139,8 +139,8 @@ Active styles remain until a check-finish event even if an earlier evaluation fa
 
 ## Adaptive rendering
 
-`terminal_width` is the current usable width provided by `tui`, has no fixed maximum, and is combined with displayed grapheme widths for every layout.
-Every row uses **display width**, which is `terminal_width - 1` at widths of at least 64 columns and `terminal_width` otherwise; the reserved final cell remains a default-style space.
+All layout calculations use grapheme display widths and preserve complete grapheme clusters.
+At frame widths of at least 64 columns, **display width** is one less than frame width and the reserved final cell is a default-style space; otherwise, display width equals frame width.
 
 Duration differences are clamped at zero and rendered by `humanize::compact_duration`.
 Run duration uses `now` before a check-finish event and that event's timestamp afterward.
@@ -167,11 +167,11 @@ progress = paint(count, count_text) + " " + bar + " " + paint(duration, time_tex
 ```
 
 Before layout, control characters other than line breaks become one space.
-Question, expected, observed, and generated status text retain the longest complete grapheme prefix that leaves one cell for the truncation marker when their row would overflow the display width.
+Question, expected, observed, and generated status text retain the longest prefix that leaves one cell for the truncation marker when their row would overflow the display width.
 A one-cell truncation result is the truncation marker, and a zero-cell result is empty.
 Evidence is never truncated.
 Its first row follows `  evidence: `; continuation rows begin with `  ┆ ` and use the remaining width.
-It wraps at word boundaries, splitting an overlong word only at a grapheme boundary.
+It wraps at word boundaries and splits overlong words as needed.
 
 Up to two of the most recent evaluations completed before the displayed evaluation appear above it.
 They retain evaluation order and use the corresponding table style for their status.
@@ -188,29 +188,24 @@ Ticker items are joined by `  ·  `.
 If the joined ticker fits after the duration with at least two spaces between them, it is right-aligned within the display width.
 Otherwise, those two spaces are followed by a viewport using the remaining cells.
 The viewport continuously moves the cyclic sequence of ticker items and separators from right to left; the last and first items have the same separator between them.
-Complete grapheme clusters are preserved.
 When its ticker is updated, the viewport finishes the current item and resumes at the first item whose value did not occur in the previous ticker.
 
 The question and expected answer follow the current row, and a failed evaluation additionally shows the error or observed answer and evidence fields that exist.
 A muted `─` separator spans the display width.
 
-The **pending row** follows the separator, begins with `› `, and joins remaining short IDs with exactly two spaces.
+The **pending row** follows the separator, begins with `‥ `, and joins remaining short IDs with exactly two spaces.
 It greedily retains complete leading IDs that fit within the display width and never uses an ellipsis.
 It appends `  🏁` only when every remaining ID and the complete marker fit, treating `🏁` as two cells.
 
 Between evaluations, the most recently completed evaluation remains the displayed evaluation; if none has completed, the current row is `▻ Waiting for evaluation`.
 Pending then includes every unfinished short ID.
 
-While watching, it keeps the cursor hidden through `tui::hide_cursor()` from before the first frame until inline output ends.
-
 ## Snapshot and watch behavior
 
-Without `--watch`, `canon status` renders the current state of the opened status log and then exits.
-With `--watch`, it exits without rendering when `tui::is_terminal()` is false.
-Otherwise, it renders the current state and continuously follows `runs/latest.jsonl` across successive runs.
+Without `--watch`, `canon status` presents one frame for the current state of the opened status log and then exits.
+With `--watch`, it uses inline mode to render the current state and continuously follows `runs/latest.jsonl` across successive runs.
 If successive runs are discovered by polling `runs/latest.jsonl`, at least 10 seconds elapse between polling attempts.
 Appended events update the display.
 Run and evaluation durations advance locally without new events.
-While watching, terminal resize immediately renders a frame for the new terminal geometry.
 
 A completed run's final state remains displayed until a later run is available.
