@@ -7,7 +7,7 @@ The default value is `:checkpoint`.
 `:checkpoint` resolves using the first matching rule:
 
 1. If the expectation has no checkpoint whose stored `checkedTreeOid` resolves to an existing Git tree, use the check run's against tree.
-2. If the expectation has a path-list `q-scope` and the files changed within it relative to the checkpoint are not a subset of those changed relative to HEAD, use HEAD.
+2. If the expectation's `q-scope` is not `auto` and the files changed within its visible scope relative to the checkpoint are not a subset of those changed relative to HEAD, use HEAD.
 3. Otherwise, use that checkpoint tree.
 
 `:against-tree` resolves to the check run's against tree.
