@@ -38,9 +38,10 @@ timestamp          := <non-negative Unix-millisecond integer>
 status             := "pass" | "fail"
 previousStatus     := status | null
 ticker             := [<string>,...]
+qScope             := [<string>,...]
 initial            := {"event":"initial","timestamp":timestamp,"selected":[{"id":<full-ID string>,"previousStatus":previousStatus},...],"collectedCount":<non-negative integer>,"reusedPassCount":<non-negative integer>,"configPath":<repository-relative string>,"treeOid":<string>}
-evaluationStart    := {"event":"evaluation-start","timestamp":timestamp,"id":<full-ID string>[,"ticker":ticker]}
-evaluationUpdate   := {"event":"evaluation-update","timestamp":timestamp,"id":<full-ID string>[,"ticker":ticker]}
+evaluationStart    := {"event":"evaluation-start","timestamp":timestamp,"id":<full-ID string>,"qScope":qScope[,"ticker":ticker]}
+evaluationUpdate   := {"event":"evaluation-update","timestamp":timestamp,"id":<full-ID string>[,"qScope":qScope][,"ticker":ticker]}
 evaluationPass     := {"event":"evaluation-finish","timestamp":timestamp,"id":<full-ID string>,"status":"pass"}
 evaluationFail     := {"event":"evaluation-finish","timestamp":timestamp,"id":<full-ID string>,"status":"fail"[,"observed":<string>][,"evidence":<string>]}
 evaluationError    := {"event":"evaluation-finish","timestamp":timestamp,"id":<full-ID string>,"status":"fail","error":<string>[,"evidence":<string>]}
@@ -48,6 +49,7 @@ checkFinish        := {"event":"check-finish","timestamp":timestamp,"result":sta
 ```
 
 A **ticker** is an evaluation's ordered list of auxiliary display strings.
+`qScope` is the current evaluator agent turn's q-scope; `evaluationUpdate` includes it whenever it changes.
 
 `selected` is exactly the ordered **Selected** set, with `previousStatus` read before the run; `collectedCount` counts **Collected** expectations.
 After `initial` is flushed, `latest.jsonl` is atomically replaced with a symlink whose relative target is exactly the new log file name.
@@ -77,6 +79,8 @@ All shown spaces are significant, and unused cells contain default-style spaces 
 × K9m  1m 11s
 ▻ KD   2m 27s                                  18 changed files
   Can you find a critical high-confidence bug with a concrete …
+  scope: ["src/check/**", "src/tui/**",
+  ┆ "resources/prompts/**"]
   expected: no
 ───────────────────────────────────────────────────────────────
 ‥ g2  L  nO  r8  UH  0Y  kK  kg  d  8  Yg  Sh  3n  4W  2g  u  t
@@ -90,6 +94,7 @@ All shown spaces are significant, and unused cells contain default-style spaces 
 ✓ K9m  1m 11s
 × KD   2m 27s                                                          18 changed files
   Can you find a critical high-confidence bug with a concrete failing scenario?
+  scope: ["src/check/**", "src/tui/**", "resources/prompts/**"]
   expected: no
   observed: yes
   evidence: A failed evaluator result increases the displayed number of passes, so the
@@ -114,14 +119,15 @@ The golden-frame spans use these `tui` styles:
 
 | Span | Foreground | Attribute |
 | --- | --- | --- |
-| ordinary text and values | terminal default | normal |
+| all other spans | terminal default | normal |
 | count | terminal default | bold |
 | duration | gray | normal |
 | labels | gray | bold |
+| JSON strings, including quotes | green | normal |
 | ticker items | gray | dim |
 | line-break and truncation markers | blue | normal |
 | unfilled progress, ticker separators, and `─` | bright black | bold |
-| `‥` and evidence continuation `┆` | bright black | normal |
+| `‥` and continuation `┆` | bright black | normal |
 | active progress | cyan | normal |
 | active `▻` | bright yellow | normal |
 | active current short ID | bright yellow | bold |
@@ -169,9 +175,9 @@ progress = paint(count, count_text) + " " + bar + " " + paint(duration, time_tex
 Before layout, control characters other than line breaks become one space.
 Question, expected, observed, and generated status text retain the longest prefix that leaves one cell for the truncation marker when their row would overflow the display width.
 A one-cell truncation result is the truncation marker, and a zero-cell result is empty.
-Evidence is never truncated.
-Its first row follows `  evidence: `; continuation rows begin with `  ┆ ` and use the remaining width.
-It wraps at word boundaries and splits overlong words as needed.
+Evidence and q-scope are never truncated; continuation rows begin with `  ┆ ` and use the remaining width.
+Evidence follows `  evidence: `, wrapping at word boundaries and splitting overlong words as needed.
+The q-scope follows `  scope: ` as a JSON array with elements separated by `, `, wrapping between elements and splitting an overlong string as needed.
 
 Up to two of the most recent evaluations completed before the displayed evaluation appear above it.
 They retain evaluation order and use the corresponding table style for their status.
@@ -190,7 +196,7 @@ Otherwise, those two spaces are followed by a viewport using the remaining cells
 The viewport continuously moves the cyclic sequence of ticker items and separators from right to left; the last and first items have the same separator between them.
 When its ticker is updated, the viewport finishes the current item and resumes at the first item whose value did not occur in the previous ticker.
 
-The question and expected answer follow the current row, and a failed evaluation additionally shows the error or observed answer and evidence fields that exist.
+The question, current q-scope, and expected answer follow the current row, and a failed evaluation additionally shows the error or observed answer and evidence fields that exist.
 A muted `─` separator spans the display width.
 
 The **pending row** follows the separator, begins with `‥ `, and joins remaining short IDs with exactly two spaces.
