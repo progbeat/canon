@@ -51,7 +51,6 @@ A **ticker** is an evaluation's ordered list of auxiliary display strings.
 
 `selected` is exactly the ordered **Selected** set, with `previousStatus` read before the run; `collectedCount` counts **Collected** expectations.
 After `initial` is flushed, `latest.jsonl` is atomically replaced with a symlink whose relative target is exactly the new log file name.
-Completed progress is `reusedPassCount` plus the number of `evaluationPass`, `evaluationFail`, and `evaluationError` records; its total is `collectedCount`.
 The run is running before `checkFinish`, whose `result` is its explicit final result.
 
 `canon check` shows the number of diff-affected files in each evaluator agent turn's visible scope in the evaluation's ticker as `1 changed file` or `<count> changed files`.
@@ -73,7 +72,7 @@ All shown spaces are significant, and unused cells contain default-style spaces 
 ### Running at 64 columns
 
 ```text
-18 / 40 ━━━━━━━━━━━━━━━━━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━ 1h 4m
+17 / 40 ━━━━━━━━━━━━━━━━━━━━╸━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1h 4m
 ✓ V       43s
 × K9m  1m 11s
 ▻ KD   2m 27s                                  18 changed files
@@ -86,15 +85,15 @@ All shown spaces are significant, and unused cells contain default-style spaces 
 ### Failure at 88 columns
 
 ```text
-19 / 40 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4m 12s
+18 / 40 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4m 12s
 ✓ V       43s
 ✓ K9m  1m 11s
 × KD   2m 27s                                                          18 changed files
   Can you find a critical high-confidence bug with a concrete failing scenario?
   expected: no
   observed: yes
-  evidence: A failed evaluator result is omitted from the completed count, so the final
-  ┆ result can appear successful.
+  evidence: A failed evaluator result increases the displayed number of passes, so the
+  ┆ final result can appear successful.
 ───────────────────────────────────────────────────────────────────────────────────────
 ‥ g2  L  nO  r8  UH  0Y  kK  kg  d  8  Yg  Sh  3n  4W  2g  u  t  3a  NR  l  UZ  🏁
 ```
@@ -150,10 +149,10 @@ Evaluation duration uses its evaluation-start and evaluation-finish timestamps, 
 The progress row follows this calculation, where `paint` applies a semantic style from the table above:
 
 ```text
-count_text = completed + " / " + total
+count_text = passed + " / " + collectedCount
 time_text = duration(run_endpoint - run_started)
 width = display_width - cells(count_text) - cells(time_text) - 2
-halves = 2 * width if total == 0 else floor(2 * width * completed / total)
+halves = 2 * width if collectedCount == 0 else floor(2 * width * passed / collectedCount)
 full = floor(halves / 2)
 fill = successful progress if successful
        else failed progress if failed
