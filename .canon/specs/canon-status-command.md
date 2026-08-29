@@ -89,7 +89,7 @@ All shown spaces are significant, and unused cells contain default-style spaces 
 19 / 40 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╺━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4m 12s
 ✓ V       43s
 ✓ K9m  1m 11s
-× KD   2m 27s
+× KD   2m 27s                                                          18 changed files
   Can you find a critical high-confidence bug with a concrete failing scenario?
   expected: no
   observed: yes
@@ -183,7 +183,7 @@ Each row consists of its marker, one space, the short-ID field, two spaces, and 
 The current row keeps the complete short ID when it fits within the display width.
 Its marker is `▻` while no result exists, then `✓` for `pass` or `×` for `fail`.
 
-An unfinished current evaluation shows its latest `ticker`.
+An evaluation shows its latest `ticker` whenever its question is displayed.
 Ticker items are joined by `  ·  `.
 If the joined ticker fits after the duration with at least two spaces between them, it is right-aligned within the display width.
 Otherwise, those two spaces are followed by a viewport using the remaining cells.
