@@ -105,13 +105,13 @@ class _AgentEvaluator(_Evaluator):
                 if response.error == "ScopeTooNarrow":
                     assert initial_q_scope != FULL_PROJECT_SCOPE, "ScopeTooNarrow error on full project scope"
                     response = interrogation.turn(q_scope=FULL_PROJECT_SCOPE)
-                elif self.check_answer(response.answer) and response.qScopeSuggestion is not None:
+                if self.check_answer(response.answer) and response.qScopeSuggestion is not None:
                     is_narrow_enough = ...  # whether the visible tree induced by the q-scope suggestion has at least 25% fewer files than the current visible tree
                     if is_narrow_enough:
                         follow_up_response = interrogation.turn(q_scope=response.qScopeSuggestion)
                         if follow_up_response.answer is not None:
                             response = follow_up_response
-            assert len(interrogation.turns) <= 2, "unexpectedly many turns in interrogation"
+            assert len(interrogation.turns) <= 3, "unexpectedly many turns in interrogation"
         self.response = response
 
     def on_wrong_answer(self):
