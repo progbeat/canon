@@ -13,3 +13,4 @@
 - [ ] Ask whether there is a user-facing lie.
 - [ ] Assign a distinct, stable **error identifier** at each source location that creates an evaluation error. Preserve the identifier while the error is propagated so that it uniquely identifies its creation site.
 - [ ] Add a setting to specify a branch that is always supposed to pass `canon check`. It can be used for optimizations.
+- [ ] Add an expectation for visibility of system status: while a command is running, the user should be able to tell what it is currently doing or waiting for.
