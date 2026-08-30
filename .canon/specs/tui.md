@@ -1,7 +1,6 @@
 # TUI
 
-The sole responsibility of the `tui` namespace is providing general-purpose terminal user interface functionality.
-It must not own or implement any behavior whose responsibility belongs to the application rather than the terminal interface itself.
+The sole responsibility of `tui` is to expose a unified contract for terminal interaction and reusable TUI mechanics; callers remain responsible for application state and its mapping to TUI content.
 
 ## Terminal operations
 
