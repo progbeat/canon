@@ -1,6 +1,7 @@
 # TUI
 
-All functionality specific to terminal user interfaces belongs to the `tui` namespace.
+The sole responsibility of the `tui` namespace is providing general-purpose terminal user interface functionality.
+It must not own or implement any behavior whose responsibility belongs to the application rather than the terminal interface itself.
 
 ## Terminal operations
 
