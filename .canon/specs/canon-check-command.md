@@ -14,7 +14,7 @@ Options:
       --tree <TREE>            Check this Git tree [default: :staged]
       --against-tree <TREE>    Compare against this Git tree [default: HEAD]
       --in-place               Check the current directory directly
-      --keep-going             Continue after failures
+      --max-failures <COUNT>   Stop after COUNT failures; 0 means unlimited [default: 1]
       --no-sandbox             Disable canon-managed sandboxing; caller is responsible for isolation
   -h, --help                   Print help
 
@@ -35,6 +35,8 @@ Examples:
 *The `canon check --help` output may differ from this example in wording,
 wrapping, spacing, and option order, while preserving the same command usage,
 options, defaults, and common examples.*
+
+`--max-failures` accepts a non-negative integer.
 
 The behavior of `canon check` follows this shape:
 
@@ -59,11 +61,14 @@ def echo_off(fn):
 def canon_check():
     ... # do everything needed to prepare for evaluation
     try:
+        num_failures = 0
         for xpec in check_order_policy(selected_expectations):
             evaluation = evaluate(xpec)
             ... # perform any other required work
-            if evaluation["status"] == FAIL and not keep_going:
-                break
+            if evaluation["status"] == FAIL:
+                num_failures += 1
+                if num_failures == max_failures:
+                    break
     finally:
         emit_token_usage()
         emit_summary()
