@@ -25,7 +25,7 @@ Every configured field is resolved before evaluation regardless of `to`, even wh
 
 `a` is required unless `to` is `shell`.
 For `to: shell`, an absent or empty `a` resolves to `"0"`.
-Resolved expected answers and answers in evaluation responses are strings, even when their source values are integers or other non-string scalar types.
+Resolved expected answers are strings, even when configured `a` values are integers or other non-string scalar types.
 
 For `to: shell`, Unix-like platforms use `/bin/sh -c`, and Windows uses `cmd.exe /D /S /C`.
 
