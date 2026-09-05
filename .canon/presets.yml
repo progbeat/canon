@@ -1,69 +1,107 @@
 # Source: https://artificialanalysis.ai/models
-# `cap_N` selects a cost-efficient model/effort combination scoring at least N on the Artificial Analysis Intelligence Index; higher N means greater overall capability.
-# Costs are approximate weighted average costs per Intelligence Index task.
+# Updated: 2026-09-05
+# `cap_aa_N` selects a cost-efficient model/effort combination scoring at least N on the Artificial Analysis Intelligence Index v4.2; higher N means greater overall capability.
+# Costs are approximate weighted average costs per Intelligence Index task reported by AA, unless extrapolated below.
 
-cap_61: &cap_61
-  # ~$1.23
-  models: ["gpt-5.6-sol"]
+cap_aa_55: &cap_aa_55
+  # ~$2.57
+  models: ["gpt-6-astra"]
   thinking: max
 
-cap_59: &cap_59
-  # ~$0.81
+cap_aa_54: &cap_aa_54
+  # ~$1.85
+  models: ["gpt-6-astra"]
+  thinking: xhigh
+
+cap_aa_53: &cap_aa_53
+  # ~$1.41
+  models: ["gpt-6-astra"]
+  thinking: high
+
+cap_aa_52: &cap_aa_52
+  # ~$1.16
+  models: ["gpt-6-astra"]
+  thinking: medium
+
+cap_aa_50: &cap_aa_50
+  # ~$0.89
   models: ["gpt-5.6-sol"]
   thinking: xhigh
 
-cap_58:
-  <<: *cap_59
+cap_aa_49: &cap_aa_49
+  # ~$0.63
+  models: ["gpt-6-astra"]
+  thinking: low
 
-cap_57: &cap_57
-  # ~$0.55
+cap_aa_48: &cap_aa_48
+  # ~$0.61
   models: ["gpt-5.6-sol"]
   thinking: high
 
-cap_56: &cap_56
+cap_aa_47: &cap_aa_47 { <<: *cap_aa_48 }
+
+cap_aa_46: &cap_aa_46
   # ~$0.37
   models: ["gpt-5.6-sol"]
   thinking: medium
 
-cap_55: &cap_55 { <<: *cap_56 }
+cap_aa_45: &cap_aa_45 { <<: *cap_aa_46 }
 
-cap_54: &cap_54 { <<: *cap_56 }
+cap_aa_43: &cap_aa_43 { <<: *cap_aa_46 }
 
-cap_53: &cap_53
-  # ~$0.31
-  models: ["gpt-5.6-terra"]
-  thinking: xhigh
-
-cap_50: &cap_50
-  # ~$0.03
+cap_aa_42: &cap_aa_42
+  # ~$0.06
   models: ["gpt-5.6-luna"]
   thinking: xhigh
 
-cap_49: &cap_49 { <<: *cap_50 }
+cap_aa_39: &cap_aa_39 { <<: *cap_aa_42 }
 
-cap_47: &cap_47
-  # ~$0.02
+cap_aa_38:
+  <<: *cap_aa_42
+
+# The next two costs use previous high/medium estimates ($0.02/$0.01) multiplied by 2,
+# matching this model's xhigh change ($0.03 -> $0.06). Equal scaling across efforts
+# is assumed; these are extrapolations, with unknown prediction error, not AA measurements.
+cap_aa_37: &cap_aa_37
+  # ~$0.04
   models: ["gpt-5.6-luna"]
   thinking: high
 
-cap_46: &cap_46 { <<: *cap_47 }
-
-cap_45: &cap_45 { <<: *cap_47 }
-
-cap_39: &cap_39
-  # ~$0.01
+cap_aa_30: &cap_aa_30
+  # ~$0.02
   models: ["gpt-5.6-luna"]
   thinking: medium
 
-cap_38:
-  <<: *cap_39
+cap_aa_max: *cap_aa_55
 
-cap_max: *cap_61
+# Difficulty-based capability presets.
+cap_expert_plus : &cap_expert_plus { <<: *cap_aa_54 }
+cap_expert      : &cap_expert      { <<: *cap_aa_50 }
+cap_hard_plus   : &cap_hard_plus   { <<: *cap_aa_48 }
+cap_hard        : &cap_hard        { <<: *cap_aa_46 }
+cap_normal_plus : &cap_normal_plus { <<: *cap_aa_42 }
+cap_normal      : &cap_normal      { <<: *cap_aa_37 }
+cap_easy        : &cap_easy        { <<: *cap_aa_30 }
+
+# Legacy presets preserve their original model/effort combinations.
+cap_59: *cap_aa_50
+cap_58: *cap_aa_50
+cap_57: *cap_aa_48
+cap_56: *cap_aa_46
+cap_55: *cap_aa_46
+cap_54: *cap_aa_46
+cap_50: *cap_aa_42
+cap_49: *cap_aa_42
+cap_47: *cap_aa_37
+cap_46: *cap_aa_37
+cap_45: *cap_aa_37
+cap_39: *cap_aa_30
+cap_38: *cap_aa_30
 
 #################
 
 default: &default
-  <<: *cap_45
+  <<: *cap_normal
   ignore:
     - ".canon/**"  # prevents evaluator agents from reading expected answers and avoids reevaluating full-scope expectations when canon changes
     - ".github/**"
@@ -94,11 +132,11 @@ _review_base: &_review_base
   q-scope: ["."]
 
 patch_review:
-  <<: [*cap_55, *_review_base]
+  <<: [*cap_hard, *_review_base]
   diff-from: :checkpoint
 
 pr_review:
-  <<: [*cap_55, *_review_base]
+  <<: [*cap_hard, *_review_base]
   diff-from: master
   rank: 5
   ignore:
