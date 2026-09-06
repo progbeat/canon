@@ -1,4 +1,4 @@
-# `canon ask` Command
+# CLI / commands / `canon ask`
 
 ```python
 evaluate = import(ref="#evaluate")
