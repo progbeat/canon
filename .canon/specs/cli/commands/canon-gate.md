@@ -1,4 +1,4 @@
-# CLI / commands / `canon gate`
+# cli / commands / `canon gate`
 
 `canon gate` is the fast pre-commit check for staged changes.
 

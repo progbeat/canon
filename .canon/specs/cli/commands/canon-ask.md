@@ -1,4 +1,6 @@
-# CLI / commands / `canon ask`
+# cli / commands / `canon ask`
+
+The command installs logging handlers for the evaluation output and token usage specified below.
 
 ```python
 evaluate = import(ref="#evaluate")

@@ -1,4 +1,4 @@
-# CLI / commands / `canon show`
+# cli / commands / `canon show`
 
 ```sh
 $ canon show --help
