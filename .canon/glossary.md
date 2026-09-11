@@ -42,11 +42,3 @@ It may or may not be a valid q-scope.
 **new pass** is a check-run classification for an xpec whose current result is `pass` and for which no persisted `pass` result existed when the check run started.
 
 **regression** is a check-run classification for an xpec whose current result is `fail` and for which a persisted `pass` result existed when the check run started.
-
----
-
-**CANON_STATE_DIR** is the root directory for all canon-owned non-temporary persistent state.
-It is set by the `CANON_STATE_DIR` environment variable. If the variable is unset, it defaults to `$(git rev-parse --git-path canon)`.
-Every canon command stores canon-owned non-temporary persistent state only under `CANON_STATE_DIR`.
-
-**XPECS_DIR** is `${CANON_STATE_DIR}/xpecs`.

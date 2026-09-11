@@ -1,3 +1,9 @@
+# After start, owners log newly known or changed evaluation data:
+#   log.info('xpec.evaluation.update', id=xpec.id, ...)
+
+log = import(ref="#log")
+
+
 @ref("#evaluate")
 def evaluate(xpec):
     evaluator_type = {
@@ -7,89 +13,43 @@ def evaluate(xpec):
     }.get(xpec.to)
     assert evaluator_type is not None, f"Unknown xpec.to: {xpec.to}"
     evaluator = evaluator_type(xpec)
-    evaluator()
-    assert evaluator.status in (PASS, FAIL)
-    assert evaluator.response.error is None or evaluator.status == FAIL
-    return {
-        "status": evaluator.status,
-        "response": evaluator.response,
-    }
+    evaluator.before_start()
+    log.info('xpec.evaluation.start', id=xpec.id, ...)
+    with progress_timeline(xpec.id, ...) as timeline:
+        try:
+            response = evaluator.interrogate()
+        except Exception:
+            response = Response(error=...)  # `error` must identify the kind of failure
+        except BaseException:
+            response = Response(error=...)
+            raise
+        finally:
+            timeline.stop()
+            status = PASS if response.error is None and evaluator.check_answer(response.answer) else FAIL
+            log.info('xpec.evaluation.finish', id=xpec.id, ...)
+    return {"status": status, "response": response}
 
 
 class _Evaluator:
     def __init__(self, xpec):
         self.xpec = xpec
 
-    @property
-    def ask_mode(self):
-        return len(self.expected) == 0
-
-    @property
-    def expected(self):
-        return self.xpec.a
-
     def check_answer(self, answer):
-        return answer == self.expected
+        return answer == self.xpec.a
 
-    def __call__(self):
-        with progress_timeline() as self.timeline:
-            self.on_start()
-            try:
-                self.interrogate()
-            except Exception:
-                self.response = Response(error=...)
-            except BaseException:
-                self.response = Response(error=...)
-                raise
-            finally:
-                self.timeline.stop()
-                self.status = PASS if self.check_answer(self.response.answer) else FAIL
-                self.on_status()
-                if self.response.error is not None:
-                    self.on_error()
-                elif self.status == FAIL:
-                    self.on_wrong_answer()
-
-    def on_start(self):
-        print(self.xpec.shortID, end='')
-        self.timeline.on_symbol(lambda c: print(c, end=''))
-
-    def on_error(self):
-        if not self.ask_mode:
-            print(escape_inline(self.xpec.q))
-        print('error:', self.response.error)
-        if self.response.evidence is not None:
-            print('evidence:', escape_inline(self.response.evidence))
-
-    def on_status(self):
-        print('' if self.ask_mode else (' ' + _STATUS_TO_STR[self.status]))
+    def before_start(self):
+        pass
 
 
 class _CallerEvaluator(_Evaluator):
-    def interrogate(self):
-        prompt = self._before_q + escape_inline(self.xpec.q) + " "
-        self.response = Response(answer=input(prompt))
-
-    def on_start(self):
+    def before_start(self):
         if interactive_posix_terminal:
-            self._before_q = CSI_SAVE_CURSOR
-            self._before_status = f'{CSI_RESTORE_CURSOR}{CSI_ERASE_TO_EOS}\r{SGR_RESET}'
-            # Codex's shell-output renderer does not emulate erase-to-EOS.
-            # Its CR handling retains the old suffix after the replacement,
-            # where SGR conceal hides it; reset attributes after the newline.
-            self._end = f'{SGR_CONCEAL}\n{SGR_RESET}'
+            print(_hide_from_human(self.xpec.q), end='', flush=True)
         else:
-            self._before_q = self._before_status = ''
-            self._end = '\n'
+            print(escape_inline(self.xpec.q), end=' ', flush=True)
 
-    def on_status(self):
-        print(
-            f'{self._before_status}{self.xpec.shortID}{self.timeline}',
-            _STATUS_TO_STR[self.status], end=self._end, flush=True
-        )
-
-    def on_wrong_answer(self):
-        print('expected:', self.expected)
+    def interrogate(self):
+        return Response(answer=input())
 
 
 class _AgentEvaluator(_Evaluator):
@@ -112,22 +72,7 @@ class _AgentEvaluator(_Evaluator):
                         if follow_up_response.answer is not None:
                             response = follow_up_response
             assert len(interrogation.turns) <= 3, "unexpectedly many turns in interrogation"
-        self.response = response
-
-    def on_wrong_answer(self):
-        xpec = self.xpec
-        if not self.ask_mode:
-            print(escape_inline(xpec.q))
-        if xpec.diff_from is not None:
-            short_diff_from_oid = ...  # Git-abbreviated resolved diff-from tree OID
-            print('diff-from:', short_diff_from_oid, f'({xpec.diff_from})')
-        if self.expected:
-            print('expected:', self.expected)
-        print('observed:', self.response.answer)
-        if self.response.evidence is not None:
-            print('evidence:', escape_inline(self.response.evidence))
-        if self.ask_mode and self.response.qScopeSuggestion is not None:
-            print('q-scope-suggestion:', compact_json(self.response.qScopeSuggestion))
+        return response
 
 
 class _ShellEvaluator(_Evaluator):
@@ -135,16 +80,12 @@ class _ShellEvaluator(_Evaluator):
         transcript = StringIO()
         transcript.write(f'$ {self.xpec.q}\n')
         exit_code = shell.run(self.xpec.q, stdin=CLOSED, stdout=transcript, stderr=transcript)
-        self.response = Response(
+        return Response(
             answer=str(exit_code),
             evidence=transcript.getvalue(),
         )
 
-    def on_wrong_answer(self):
-        xpec = self.xpec
-        for line in self.response.evidence.splitlines():
-            print('│', line)
-        print(f'Command exited with code {self.response.answer} (expected {self.expected}).')
 
-
-_STATUS_TO_STR = {PASS: 'OK', FAIL: 'FAIL'}
+def _hide_from_human(text):
+    one_line_text = text.replace('\n', '\r').strip()
+    return f'{one_line_text}\r{CSI_ERASE_LINE}'

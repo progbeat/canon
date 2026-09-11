@@ -1,9 +1,7 @@
 @ref("#emit_check_feedback")
-def emit_check_feedback(failed, num_pending):
-    """
-    :param failed: Short IDs of failed expectations.
-    :param num_pending: Number of pending expectations.
-    """
+def emit_check_feedback(event):
+    failed = [xpec['shortId'] for xpec in event['failures']]
+    num_pending = event['summary']['pending']
     assert against_tree_oid == head_tree_oid
     if len(failed) > 0:
         _repair_instructions(failed)

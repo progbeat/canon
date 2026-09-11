@@ -1,27 +1,26 @@
 # Progress Timeline
 
-A **progress timeline** is the sequence of symbols recorded while an xpec is being evaluated.
+A **progress timeline** logs ordered heartbeat events after each full elapsed minute and once for the final interval when evaluation is ready to report, even if that interval is zero seconds.
+It continues while the evaluator waits for input or other operations.
 
-A symbol is added after each full elapsed minute, and one final symbol is added for the final, possibly partial minute when the evaluation is ready to report.
+For each interval, the timeline logs:
 
-The final minute may have an elapsed duration of 0 seconds.
-
-Thus a completed timeline contains exactly `1 + floor(elapsed_seconds / 60)` symbols.
-
-The symbol is chosen by the first matching rule for the minute:
-
-```
-×  a minute during which a turn attempt failed after exhausting its no-progress timeout
-~  a minute during which the active turn attempt's no-progress timeout was accumulating
-⇄  a minute during which an evaluator model fallback started
-↻  a minute during which a short-ID mismatch triggered a fresh-thread retry
-↗  a minute during which a full-scope retry started
-⤡  a minute during which a q-scope verification started and that same verification returned `ScopeTooNarrow`
-↖  a minute during which a q-scope verification returned `ScopeTooNarrow`
-↘  a minute during which a q-scope verification started
-.  a minute during which no higher-priority rule applied
+```python
+log.info('xpec.evaluation.heartbeat', id=xpec.id, activity=activity, marker=marker)
 ```
 
-`~` is chosen only when the no-progress timeout accumulated continuously for that entire full minute.
+The **progress activity** and its marker come from the first matching rule for the interval:
 
-If that timeout is exhausted, the attempt fails and `×` is chosen.
+| Activity | Marker | Condition |
+| --- | --- | --- |
+| `timeout` | `×` | A turn attempt failed after exhausting its no-progress timeout |
+| `no_progress` | `~` | The no-progress timeout accumulated continuously for the entire full minute |
+| `model_fallback` | `⇄` | An evaluator model fallback started |
+| `short_id_mismatch_retry` | `↻` | A short-ID mismatch triggered a fresh-thread retry |
+| `full_scope_retry` | `↗` | A full-scope retry started |
+| `scope_verification_started_and_rejected` | `⤡` | A q-scope verification started and that same verification returned `ScopeTooNarrow` |
+| `scope_too_narrow` | `↖` | A q-scope verification returned `ScopeTooNarrow` |
+| `scope_verification` | `↘` | A q-scope verification started |
+| `running` | `.` | No higher-priority rule applied |
+
+`stop()` completes the final update and all logging callbacks before returning; no later updates occur.

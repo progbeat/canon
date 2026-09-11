@@ -9,7 +9,7 @@ The updated status-specific file is chosen from the final evaluation status:
 
 When a **same-tree result** is reused, `last-pass.json` is updated.
 
-`$XPECS_DIR/$ID/last.json` stores the same JSON object as the most recently updated status-specific file. When possible, it is a hardlink to that file; otherwise it is a copy.
+`XPECS_DIR / ID / 'last.json'` stores the same JSON object as the most recently updated status-specific file. When possible, it is a hardlink to that file; otherwise it is a copy.
 
 Each `last-<status>.json` file stores a JSON object with this schema:
 
